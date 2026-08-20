@@ -1,0 +1,11 @@
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+*.egg-info/
+dist/
+build/
+
+# FL Studio SDK — proprietary Image-Line code, fetched not vendored
+native/sdk/
+native/build/
