@@ -62,3 +62,16 @@ set_target_properties(spike1 PROPERTIES
     SUFFIX ".dylib"
     CXX_VISIBILITY_PRESET hidden
 )
+
+# --- FL MCP Bridge -----------------------------------------------------------
+# The real thing: reads the same spool the MCP server writes, so note edits
+# apply with no user action. Replaces the piano roll .pyscript's manual trigger.
+add_library(bridge SHARED bridge/src/bridge.cpp)
+target_link_libraries(bridge PRIVATE fl_sdk)
+target_include_directories(bridge PRIVATE bridge/src)
+set_target_properties(bridge PROPERTIES
+    OUTPUT_NAME "FL MCP Bridge_x64"
+    PREFIX ""
+    SUFFIX ".dylib"
+    CXX_VISIBILITY_PRESET hidden
+)

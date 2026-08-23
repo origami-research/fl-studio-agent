@@ -11,7 +11,16 @@ hasn't seen yet.
 
 from __future__ import annotations
 
+import time
 from typing import Any
+
+import sys
+from pathlib import Path
+
+# The optional auto-trigger lives in the repo's harness package.
+_REPO_ROOT = Path(__file__).resolve().parents[3]
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
 
 from mcp.server.mcpserver import MCPServer
 
@@ -28,15 +37,56 @@ _TRIGGER_HINT = (
 mcp = MCPServer("fl-studio")
 
 
+def _try_autoapply(command_id: int, timeout: float = 12.0) -> dict[str, Any] | None:
+    """Trigger the in-FL script ourselves, if macOS lets us.
+
+    Returns the applied result, or None if we could not trigger (no permission,
+    FL not running, or no response) — in which case the caller falls back to
+    telling the user to run it by hand.
+    """
+    try:
+        from harness import trigger  # optional: only present in the repo checkout
+    except ImportError:
+        return None
+
+    try:
+        if not trigger.is_fl_running():
+            return None
+        if not trigger.check_permission().granted:
+            return None
+        trigger.run_piano_roll_script()
+    except Exception:  # noqa: BLE001 - never let auto-apply break the tool
+        return None
+
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        result = spool.read_result()
+        if result is not None and result.get("id") == command_id:
+            return result
+        time.sleep(0.25)
+    return None
+
+
 def _queued(cmd: dict[str, Any], summary: str) -> dict[str, Any]:
+    applied = _try_autoapply(cmd["id"])
+    if applied is not None and applied.get("ok"):
+        return {
+            "status": "applied",
+            "command_id": cmd["id"],
+            "applied": summary,
+            "notes_in_piano_roll": applied.get("note_count"),
+            "note": "Already visible in FL Studio's piano roll. No user action needed.",
+        }
+
     return {
         "status": "queued",
         "command_id": cmd["id"],
         "queued": summary,
         "next_step": _TRIGGER_HINT,
         "note": (
-            "Nothing has changed in FL Studio yet. The edit applies when the user "
-            "runs the script. Call fl_status to confirm it was applied."
+            "Nothing has changed in FL Studio yet. Auto-apply is unavailable "
+            "(see harness/trigger.py for the one-time macOS permission), so the "
+            "user must run the script. Call fl_status to confirm it was applied."
         ),
     }
 
