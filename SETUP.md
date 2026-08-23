@@ -28,6 +28,16 @@ with `FLMCP_AGENT_PROJECT=/path/to/your.flp`.
 
 A `.flp.bak` rollback copy is written before every change.
 
+## Which channel notes land on
+
+Notes go to the first **melodic** channel — anything named kick, snare, clap,
+hat, 808 and so on is skipped. Rack 0 is a drum in most FL templates, so
+defaulting to it put melodies where they could be neither heard properly nor
+found.
+
+The response says which channel it used. Open that channel's piano roll in the
+Channel Rack to see the notes.
+
 ## Verifying
 
 `fl_status` reads the notes back out of the project file — ground truth, not a
