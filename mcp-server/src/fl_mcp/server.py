@@ -167,9 +167,12 @@ def write_notes(notes: list[dict], mode: str = "merge") -> dict:
             "backend": written["backend"],
             "project": written["project"],
             "notes_in_pattern": written["notes_in_pattern"],
-            "note": (
-                "Written into the project and FL Studio reopened on it — visible "
-                "now, no user action needed. Call fl_status to read the notes back."
+            "channel": written.get("channel"),
+            "channel_name": written.get("channel_name"),
+            "where_to_look": (
+                f"FL Studio reopened on the project. Double-click channel "
+                f"{written.get('channel')} ('{written.get('channel_name')}') in the "
+                f"Channel Rack to open its piano roll and see the notes."
             ),
         }
 

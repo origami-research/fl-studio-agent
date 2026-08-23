@@ -46,6 +46,52 @@ def available() -> bool:
     return agent_project() is not None
 
 
+# Names that mean "this channel is one drum sample", where a melody would be
+# both inaudible as written and invisible to anyone looking for it.
+_PERCUSSIVE = (
+    "kick", "snare", "clap", "hat", "hihat", "crash", "ride", "tom",
+    "perc", "rim", "shaker", "cymbal", "808",
+)
+
+
+def list_channels() -> list[dict[str, Any]]:
+    """Channels in the agent project, flagged melodic or percussive."""
+    project = agent_project()
+    if project is None:
+        return []
+    from harness.flp_compat import parse
+
+    out: list[dict[str, Any]] = []
+    for index, channel in enumerate(parse(project).channels):
+        name = ""
+        try:
+            name = channel.name or ""
+        except Exception:  # noqa: BLE001 - some channel types have no name
+            pass
+        lowered = name.lower()
+        out.append(
+            {
+                "index": index,
+                "name": name or f"Channel {index}",
+                "melodic": not any(word in lowered for word in _PERCUSSIVE),
+            }
+        )
+    return out
+
+
+def default_channel() -> int:
+    """Pick a melodic channel, so a tune does not land on a kick drum.
+
+    Rack channel 0 is a drum in most templates, so defaulting to it silently put
+    melodies somewhere they could be neither heard properly nor found.
+    """
+    channels = list_channels()
+    for channel in channels:
+        if channel["melodic"]:
+            return channel["index"]
+    return 0
+
+
 def fl_app() -> Path:
     return Path(os.environ.get("FL_APP", "/Applications/FL Studio 2025.app"))
 
@@ -95,11 +141,18 @@ def apply_notes(
     notes: list[dict[str, Any]],
     mode: str = "merge",
     pattern: int = 1,
-    channel: int = 0,
+    channel: int | None = None,
     reload_fl: bool = True,
 ) -> dict[str, Any]:
-    """Write notes into the agent project and show them in FL."""
+    """Write notes into the agent project and show them in FL.
+
+    `channel=None` picks a melodic channel rather than rack 0, which is a drum
+    in most templates.
+    """
     from .flp_writer import write_notes
+
+    if channel is None:
+        channel = default_channel()
 
     project = agent_project()
     if project is None:
@@ -145,6 +198,10 @@ def apply_notes(
         "notes_written": result.notes_written,
         "notes_in_pattern": result.notes_in_pattern,
         "reloaded_fl": reloaded,
+        "channel_name": next(
+            (c["name"] for c in list_channels() if c["index"] == channel),
+            f"Channel {channel}",
+        ),
     }
 
 
