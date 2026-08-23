@@ -67,6 +67,25 @@ def _try_autoapply(command_id: int, timeout: float = 12.0) -> dict[str, Any] | N
     return None
 
 
+def _try_project_write(
+    notes: list[dict[str, Any]] | None, mode: str
+) -> dict[str, Any] | None:
+    """Write straight into the agent project — the fully autonomous path.
+
+    Preferred when an agent project is configured, because it needs no user
+    action and no macOS permission. Returns None when unavailable so the caller
+    falls back to the spool, which is non-destructive to a live session.
+    """
+    try:
+        from . import autonomous
+    except ImportError:
+        return None
+    if not autonomous.available():
+        return None
+    result = autonomous.apply_notes(notes or [], mode=mode)
+    return result if result.get("ok") else None
+
+
 def _queued(cmd: dict[str, Any], summary: str) -> dict[str, Any]:
     applied = _try_autoapply(cmd["id"])
     if applied is not None and applied.get("ok"):
@@ -136,12 +155,29 @@ def write_notes(notes: list[dict], mode: str = "merge") -> dict:
             ),
         }
 
+    summary = describe(parsed) + (", replacing existing notes" if mode == "replace" else "")
+
+    # Fully autonomous path first: writes the project file and reopens FL on it,
+    # needing no user action and no macOS permission.
+    written = _try_project_write(parsed, mode)
+    if written is not None:
+        return {
+            "status": "applied",
+            "applied": summary,
+            "backend": written["backend"],
+            "project": written["project"],
+            "notes_in_pattern": written["notes_in_pattern"],
+            "note": (
+                "Written into the project and FL Studio reopened on it — visible "
+                "now, no user action needed. Call fl_status to read the notes back."
+            ),
+        }
+
     spool.clear_stale_results()
     try:
         cmd = spool.put_command("add_notes", mode=mode, notes=parsed)
     except spool.SpoolUnavailable as exc:
         return {"status": "error", "error": str(exc)}
-    summary = describe(parsed) + (", replacing existing notes" if mode == "replace" else "")
     return _queued(cmd, summary)
 
 
@@ -169,6 +205,22 @@ def fl_status() -> dict:
     whether the piano roll script is installed.
     """
     from .install import script_installed_path  # local import: optional dependency on FL paths
+
+    # Autonomous backend first: when configured it is what write_notes uses.
+    try:
+        from . import autonomous
+
+        if autonomous.available():
+            verified = autonomous.verify()
+            return {
+                "backend": "project-write (autonomous, no user action needed)",
+                "project": str(autonomous.agent_project()),
+                "fl_running": autonomous.fl_is_running(),
+                "notes_in_project": verified.get("note_count"),
+                "notes": verified.get("notes", [])[:16],
+            }
+    except ImportError:
+        pass
 
     installed = script_installed_path()
     pending = spool.pending_command()

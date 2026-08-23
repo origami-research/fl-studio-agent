@@ -1,105 +1,66 @@
-# Setup: from zero to "ask for notes, they appear in FL Studio"
-
-Run this any time to see exactly where you are:
+# Setup: ask for notes, they appear in FL Studio
 
 ```bash
-mcp-server/.venv/bin/python -m harness.doctor
+cd mcp-server && uv pip install -e . && uv pip install pyflp
+.venv/bin/python -m fl_mcp.make_agent_project
 ```
 
-It checks every link and names the fix for the first broken one.
+That is the whole setup. Ask an agent for notes and they appear in FL Studio,
+with no clicking, no macOS permission, and no hotkey.
 
----
+## How it works
 
-## The honest summary
+Notes are written **directly into the project file**, then FL is opened on it:
 
-Writing notes into FL works today and is fully tested. Making it apply **without
-you clicking** needs two one-time steps that macOS and FL Studio each require a
-human for. Neither can be scripted, and it is worth knowing why before you spend
-time on them.
-
-| Step | Automatable? | Why not |
-|---|---|---|
-| Install the piano roll script | yes, done | — |
-| Queue notes from an agent | yes, done | — |
-| **Grant macOS automation consent** | **no** | The TCC permission database is SIP-protected. `tccutil` can reset entries but never grant them. Consent is deliberately gated behind a human click. |
-| **Bind a hotkey to the script in FL** | **no** | FL assigns no shortcut to piano roll scripts automatically, and stores the binding somewhere with no writable file to pre-populate. |
-
-The design that would have avoided both — a native plugin polling FL's Idle
-callback, needing no trigger at all — is blocked: FL Studio does not load
-third-party plugins from `Plugins/Fruity/Effects`. That is measured, not
-assumed; see [docs/11](docs/11-native-plugin-blocked.md).
-
----
-
-## Step 1 — install (already done, repeat after a code change)
-
-```bash
-cd mcp-server && python -m fl_mcp.install    # then restart FL Studio
+```
+write_notes()  ->  edit FLMCP Agent.flp  ->  open -a "FL Studio" <project>
 ```
 
-## Step 2 — grant macOS automation
+Both halves are unprivileged — editing a file is just writing a file, and
+`open -a` is the documented way to open a document. Neither needs automation
+consent, which is what every other route to FL's piano roll requires.
+
+**The trade-off:** FL *reloads* the project rather than being edited live, so
+anything unsaved in the running session is lost. That is why this backend is
+scoped to one dedicated project (`~/Documents/Image-Line/FL Studio/Projects/FLMCP
+Agent.flp`) and never touches a project you opened yourself. Point it elsewhere
+with `FLMCP_AGENT_PROJECT=/path/to/your.flp`.
+
+A `.flp.bak` rollback copy is written before every change.
+
+## Verifying
+
+`fl_status` reads the notes back out of the project file — ground truth, not a
+claim about what was sent.
+
+## Why not edit the live session instead
+
+Every in-place route is blocked on macOS, each measured rather than assumed:
+
+| Route | Status |
+|---|---|
+| Native plugin polling FL's Idle callback | **Blocked.** FL never loads third-party binaries — a `dlopen` constructor trace never fired. [docs/11](docs/11-native-plugin-blocked.md) |
+| Piano roll `.pyscript` | Works, but only runs from FL's Scripting menu — one click per request |
+| Keystroke to trigger that menu | Needs macOS automation consent (SIP-protected, cannot be scripted) **and** a hotkey bound inside FL |
+| MIDI controller script | Cannot write notes; the API has no note-writing function |
+
+The project-write backend sidesteps all of it.
+
+## The live-session fallback
+
+Without an agent project configured, `write_notes` falls back to the spool +
+piano roll script, which edits the session you already have open without
+reloading it. That path needs one click per request:
+
+**piano roll ▸ menu ▸ Tools ▸ Scripting ▸ MCP Write Notes**
+
+To reduce that to zero clicks, see `python -m harness.enable_autonomy`.
+
+## Development
 
 ```bash
-mcp-server/.venv/bin/python -m harness.enable_autonomy
-```
-
-This provokes the consent prompt (until an app *attempts* automation it does not
-appear in the list at all), opens the right System Settings panes, waits for the
-grant, then verifies.
-
-Enable, under the app running this (Terminal / iTerm / Claude):
-
-- **Privacy & Security ▸ Automation** → `System Events` and `FL Studio`
-- **Privacy & Security ▸ Accessibility** → the same app
-
-## Step 3 — bind the hotkey inside FL
-
-In FL Studio's piano roll: **menu ▸ Tools ▸ Scripting**, right-click
-**MCP Write Notes**, assign **Cmd+Opt+Y**.
-
-Confirm by pressing Cmd+Opt+Y yourself — the script should run. Then record it
-so `doctor` stops asking:
-
-```bash
-touch harness/.hotkey_bound
-```
-
-## Step 4 — restart the MCP server
-
-Auto-apply was added after your current server process started, so it is running
-older code:
-
-```bash
-claude mcp restart fl-studio     # or restart the session
-```
-
-## Step 5 — confirm
-
-```bash
-mcp-server/.venv/bin/python -m harness.doctor
-```
-
-All green means asking for notes writes them straight into the open piano roll.
-`write_notes` will return `"status": "applied"` instead of `"queued"`.
-
----
-
-## Using it before finishing setup
-
-Everything works now with one click per request:
-
-1. Ask for notes.
-2. In the piano roll: **menu ▸ Tools ▸ Scripting ▸ MCP Write Notes**.
-
-That path is fully tested — 46 automated tests, including the real `.pyscript`
-run against an emulation of FL's sandbox
-([docs/10](docs/10-v0-vertical-slice.md)).
-
-## For development
-
-```bash
-cd mcp-server && .venv/bin/python -m pytest -q      # 46 tests
-.venv/bin/python tests/mutation_check.py            # verifies the FL sandbox emulator
-python -m harness.flctl                             # FL lifecycle control
-python -m harness.verify <project.flp>              # ground-truth notes from a saved project
+cd mcp-server && .venv/bin/python -m pytest -q     # 55 tests
+.venv/bin/python tests/mutation_check.py           # verifies the FL sandbox emulator
+python -m harness.doctor                           # live status of every link
+python -m harness.verify <project.flp>             # dump notes from any project
 ```
