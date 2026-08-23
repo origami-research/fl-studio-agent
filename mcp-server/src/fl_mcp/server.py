@@ -37,34 +37,22 @@ _TRIGGER_HINT = (
 mcp = MCPServer("fl-studio")
 
 
-def _try_autoapply(command_id: int, timeout: float = 12.0) -> dict[str, Any] | None:
-    """Trigger the in-FL script ourselves, if macOS lets us.
+def _try_live(command_id: int) -> dict[str, Any] | None:
+    """Edit the open piano roll in place — preferred when it is usable.
 
-    Returns the applied result, or None if we could not trigger (no permission,
-    FL not running, or no response) — in which case the caller falls back to
-    telling the user to run it by hand.
+    Ranked above the project-write backend because it is the only one that does
+    not reload FL: the user keeps their session, and sees notes appear in the
+    piano roll they are looking at. It needs two one-time grants, so it is not
+    always available; see live.readiness().
     """
     try:
-        from harness import trigger  # optional: only present in the repo checkout
+        from . import live
     except ImportError:
         return None
-
-    try:
-        if not trigger.is_fl_running():
-            return None
-        if not trigger.check_permission().granted:
-            return None
-        trigger.run_piano_roll_script()
-    except Exception:  # noqa: BLE001 - never let auto-apply break the tool
+    if not live.available():
         return None
-
-    deadline = time.time() + timeout
-    while time.time() < deadline:
-        result = spool.read_result()
-        if result is not None and result.get("id") == command_id:
-            return result
-        time.sleep(0.25)
-    return None
+    result = live.apply(command_id)
+    return result if result is not None and result.get("ok") else None
 
 
 def _try_project_write(
@@ -87,25 +75,33 @@ def _try_project_write(
 
 
 def _queued(cmd: dict[str, Any], summary: str) -> dict[str, Any]:
-    applied = _try_autoapply(cmd["id"])
-    if applied is not None and applied.get("ok"):
+    applied = _try_live(cmd["id"])
+    if applied is not None:
         return {
             "status": "applied",
+            "backend": "live",
             "command_id": cmd["id"],
             "applied": summary,
             "notes_in_piano_roll": applied.get("note_count"),
-            "note": "Already visible in FL Studio's piano roll. No user action needed.",
+            "note": (
+                "Applied in place to the piano roll you have open. FL was not "
+                "reloaded and nothing was lost."
+            ),
         }
 
+    from . import live
+
+    state = live.readiness()
     return {
         "status": "queued",
         "command_id": cmd["id"],
         "queued": summary,
         "next_step": _TRIGGER_HINT,
+        "live_backend_blocked_by": state.blockers(),
         "note": (
-            "Nothing has changed in FL Studio yet. Auto-apply is unavailable "
-            "(see harness/trigger.py for the one-time macOS permission), so the "
-            "user must run the script. Call fl_status to confirm it was applied."
+            "Nothing has changed in FL Studio yet. Live editing is unavailable, "
+            "so the user must run the script. Run `python -m harness.doctor` for "
+            "the fix, then call fl_status to confirm."
         ),
     }
 
@@ -157,8 +153,28 @@ def write_notes(notes: list[dict], mode: str = "merge") -> dict:
 
     summary = describe(parsed) + (", replacing existing notes" if mode == "replace" else "")
 
-    # Fully autonomous path first: writes the project file and reopens FL on it,
-    # needing no user action and no macOS permission.
+    # Live first: it is the only backend that edits the session the user is
+    # looking at. The alternative reloads FL, which is correct but disruptive,
+    # so it is a fallback rather than the default.
+    spool.clear_stale_results()
+    try:
+        cmd = spool.put_command("add_notes", mode=mode, notes=parsed)
+    except spool.SpoolUnavailable as exc:
+        return {"status": "error", "error": str(exc)}
+
+    applied = _try_live(cmd["id"])
+    if applied is not None:
+        return {
+            "status": "applied",
+            "backend": "live",
+            "applied": summary,
+            "notes_in_piano_roll": applied.get("note_count"),
+            "note": (
+                "Applied in place to the piano roll you have open. FL was not "
+                "reloaded and nothing was lost."
+            ),
+        }
+
     written = _try_project_write(parsed, mode)
     if written is not None:
         return {
@@ -174,13 +190,13 @@ def write_notes(notes: list[dict], mode: str = "merge") -> dict:
                 f"{written.get('channel')} ('{written.get('channel_name')}') in the "
                 f"Channel Rack to open its piano roll and see the notes."
             ),
+            "note": (
+                "Live in-place editing was unavailable, so the project file was "
+                "rewritten and FL reopened on it. Run `python -m harness.doctor` "
+                "to enable live editing."
+            ),
         }
 
-    spool.clear_stale_results()
-    try:
-        cmd = spool.put_command("add_notes", mode=mode, notes=parsed)
-    except spool.SpoolUnavailable as exc:
-        return {"status": "error", "error": str(exc)}
     return _queued(cmd, summary)
 
 
