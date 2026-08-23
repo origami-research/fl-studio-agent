@@ -74,8 +74,16 @@ def _try_project_write(
     return result if result.get("ok") else None
 
 
-def _queued(cmd: dict[str, Any], summary: str) -> dict[str, Any]:
-    applied = _try_live(cmd["id"])
+def _queued(
+    cmd: dict[str, Any], summary: str, tried_live: bool = False
+) -> dict[str, Any]:
+    """Build the response for a command that could not be applied.
+
+    `tried_live` must be True when the caller already attempted the live
+    backend. Retrying here would press FL's shortcut a second time and apply
+    the same notes twice.
+    """
+    applied = None if tried_live else _try_live(cmd["id"])
     if applied is not None:
         return {
             "status": "applied",
@@ -197,7 +205,7 @@ def write_notes(notes: list[dict], mode: str = "merge") -> dict:
             ),
         }
 
-    return _queued(cmd, summary)
+    return _queued(cmd, summary, tried_live=True)
 
 
 @mcp.tool()
