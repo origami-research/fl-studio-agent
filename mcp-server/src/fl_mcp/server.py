@@ -56,7 +56,9 @@ def _try_live(command_id: int) -> dict[str, Any] | None:
 
 
 def _try_project_write(
-    notes: list[dict[str, Any]] | None, mode: str
+    notes: list[dict[str, Any]] | None,
+    mode: str,
+    channel: str | int | None = None,
 ) -> dict[str, Any] | None:
     """Write straight into the agent project — the fully autonomous path.
 
@@ -70,7 +72,7 @@ def _try_project_write(
         return None
     if not autonomous.available():
         return None
-    result = autonomous.apply_notes(notes or [], mode=mode)
+    result = autonomous.apply_notes(notes or [], mode=mode, channel=channel)
     return result if result.get("ok") else None
 
 
@@ -115,7 +117,9 @@ def _queued(
 
 
 @mcp.tool()
-def write_notes(notes: list[dict], mode: str = "merge") -> dict:
+def write_notes(
+    notes: list[dict], mode: str = "merge", channel: str | int | None = None
+) -> dict:
     """Queue notes to be written into FL Studio's piano roll.
 
     The notes land in whichever piano roll the user has open when they run the
@@ -136,6 +140,10 @@ def write_notes(notes: list[dict], mode: str = "merge") -> dict:
         mode: "merge" keeps existing notes (default), "replace" clears the piano
             roll first. Use "replace" when rewriting a part, "merge" when adding
             a layer such as a countermelody.
+        channel: Which instrument to write to — a name ("Lead", "Bass",
+            "Chords") or a rack index. Defaults to the most melody-appropriate
+            channel, preferring a lead over a bass and never a drum. Call
+            list_channels to see what this project has.
 
     Returns:
         Confirmation that the command is queued, plus the step the user must
@@ -183,7 +191,7 @@ def write_notes(notes: list[dict], mode: str = "merge") -> dict:
             ),
         }
 
-    written = _try_project_write(parsed, mode)
+    written = _try_project_write(parsed, mode, channel)
     if written is not None:
         return {
             "status": "applied",
@@ -255,6 +263,32 @@ def set_tempo(bpm: float) -> dict:
         "status": "applied",
         "tempo": result["tempo"],
         "note": f"Project tempo is now {result['tempo']} BPM.",
+    }
+
+
+@mcp.tool()
+def list_channels() -> dict:
+    """List the instrument channels available to write notes to.
+
+    Call this when the user names an instrument, or when placing different
+    parts on different channels — a bassline on "Bass" and a melody on "Lead"
+    rather than stacking everything in one place.
+    """
+    try:
+        from . import autonomous
+    except ImportError:
+        return {"status": "error", "error": "channel listing unavailable"}
+    channels = autonomous.list_channels()
+    if not channels:
+        return {
+            "status": "error",
+            "error": "No agent project. Run: python -m fl_mcp.make_agent_project",
+        }
+    return {
+        "status": "ok",
+        "channels": channels,
+        "default": autonomous.default_channel(),
+        "note": "Pass a name or index as write_notes(channel=...).",
     }
 
 

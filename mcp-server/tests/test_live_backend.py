@@ -30,7 +30,7 @@ def fl_home(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
     # Keep the project-write backend out of the way; it is a separate path.
-    monkeypatch.setattr(server, "_try_project_write", lambda notes, mode: None)
+    monkeypatch.setattr(server, "_try_project_write", lambda notes, mode, channel=None: None)
     return tmp_path
 
 
@@ -113,7 +113,7 @@ def test_live_is_preferred_over_project_write(monkeypatch, fl_home):
     monkeypatch.setattr(
         server,
         "_try_project_write",
-        lambda notes, mode: {
+        lambda notes, mode, channel=None: {
             "backend": "project-write",
             "project": "x",
             "notes_in_pattern": 99,
