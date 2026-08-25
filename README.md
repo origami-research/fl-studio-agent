@@ -1,4 +1,4 @@
-# private-product — FL Studio MCP
+# fl-studio-mcp
 
 Ask an AI agent for music; it appears in FL Studio's piano roll.
 
