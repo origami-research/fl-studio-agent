@@ -16,10 +16,37 @@ from pathlib import Path
 from . import flpaths
 from .autonomous import DEFAULT_PROJECT_NAME
 
-STOCK_TEMPLATE = Path(
-    "/Applications/FL Studio 2025.app/Contents/Resources/FL/Data/Templates"
-    "/Minimal/Basic with limiter/Basic with limiter.flp"
+def _templates_dir() -> Path:
+    import os
+
+    app = Path(os.environ.get("FL_APP", "/Applications/FL Studio 2025.app"))
+    return app / "Contents/Resources/FL/Data/Templates"
+
+
+# Chosen for its channel palette: Chords, Bass, Lead and Drums, on real
+# instruments (Sytrus on the lead). The previous default only had four 808 drum
+# samples plus one bass, so any melody had exactly one place to go and it was
+# the wrong timbre for most requests.
+#
+# Candidates are tried in order so a missing template degrades to a working
+# project rather than an error.
+TEMPLATE_CANDIDATES = (
+    "Utility/Create a chord progression/Create a chord progression.flp",
+    "Utility/Patch bank/Patch bank.flp",
+    "Minimal/Basic with limiter/Basic with limiter.flp",
 )
+
+
+def stock_template() -> Path:
+    base = _templates_dir()
+    for relative in TEMPLATE_CANDIDATES:
+        candidate = base / relative
+        if candidate.is_file():
+            return candidate
+    raise FileNotFoundError(
+        f"No usable FL template found under {base}. "
+        "Set FL_APP if FL Studio is installed elsewhere."
+    )
 
 
 def destination() -> Path:
@@ -38,9 +65,7 @@ def create(force: bool = False) -> Path:
     target = destination()
     if target.is_file() and not force:
         return target
-    if not STOCK_TEMPLATE.is_file():
-        raise FileNotFoundError(f"stock template missing: {STOCK_TEMPLATE}")
-    shutil.copy2(STOCK_TEMPLATE, target)
+    shutil.copy2(stock_template(), target)
     return target
 
 

@@ -49,8 +49,8 @@ def available() -> bool:
 # Names that mean "this channel is one drum sample", where a melody would be
 # both inaudible as written and invisible to anyone looking for it.
 _PERCUSSIVE = (
-    "kick", "snare", "clap", "hat", "hihat", "crash", "ride", "tom",
-    "perc", "rim", "shaker", "cymbal", "808",
+    "drum", "kick", "snare", "clap", "hat", "hihat", "crash", "ride", "tom",
+    "perc", "rim", "shaker", "cymbal", "tamb", "shake", "808", "fpc",
 )
 
 
@@ -79,17 +79,65 @@ def list_channels() -> list[dict[str, Any]]:
     return out
 
 
-def default_channel() -> int:
-    """Pick a melodic channel, so a tune does not land on a kick drum.
+# Preference order when nothing is specified. A melody belongs on a lead before
+# a bass, and on anything before a drum.
+_ROLE_PREFERENCE = ("lead", "synth", "pluck", "chord", "key", "piano", "pad", "bass")
 
-    Rack channel 0 is a drum in most templates, so defaulting to it silently put
+
+def default_channel() -> int:
+    """Pick the most melody-appropriate channel.
+
+    Rack 0 is a drum in most templates, so defaulting to it silently put
     melodies somewhere they could be neither heard properly nor found.
     """
     channels = list_channels()
-    for channel in channels:
-        if channel["melodic"]:
-            return channel["index"]
-    return 0
+    melodic = [c for c in channels if c["melodic"]]
+    if not melodic:
+        return 0
+    for role in _ROLE_PREFERENCE:
+        for channel in melodic:
+            if role in channel["name"].lower():
+                return channel["index"]
+    return melodic[0]["index"]
+
+
+class ChannelNotFound(ValueError):
+    """Raised with the available names, so the caller can pick a real one."""
+
+
+def resolve_channel(channel: int | str | None) -> int:
+    """Accept an index, a channel name, or None for the best default.
+
+    Names are matched case-insensitively, exact first then as a substring, so
+    "lead" finds "Lead" and "Synth 1" is reachable as "synth 1" or "synth".
+    """
+    channels = list_channels()
+    if channel is None:
+        return default_channel()
+    if isinstance(channel, int) and not isinstance(channel, bool):
+        if any(c["index"] == channel for c in channels):
+            return channel
+        raise ChannelNotFound(
+            f"No channel {channel}. Available: "
+            + ", ".join(f"{c['index']}={c['name']}" for c in channels)
+        )
+
+    wanted = str(channel).strip().lower()
+    for candidate in channels:
+        if candidate["name"].lower() == wanted:
+            return candidate["index"]
+    matches = [c for c in channels if wanted in c["name"].lower()]
+    if len(matches) == 1:
+        return matches[0]["index"]
+    if len(matches) > 1:
+        raise ChannelNotFound(
+            f"{channel!r} matches several channels: "
+            + ", ".join(c["name"] for c in matches)
+        )
+    raise ChannelNotFound(
+        f"No channel named {channel!r}. Available: "
+        + ", ".join(c["name"] for c in channels)
+    )
 
 
 def fl_app() -> Path:
@@ -141,18 +189,20 @@ def apply_notes(
     notes: list[dict[str, Any]],
     mode: str = "merge",
     pattern: int = 1,
-    channel: int | None = None,
+    channel: int | str | None = None,
     reload_fl: bool = True,
 ) -> dict[str, Any]:
     """Write notes into the agent project and show them in FL.
 
-    `channel=None` picks a melodic channel rather than rack 0, which is a drum
-    in most templates.
+    `channel` accepts an index or a name ("Lead"); None picks the most
+    melody-appropriate channel.
     """
     from .flp_writer import write_notes
 
-    if channel is None:
-        channel = default_channel()
+    try:
+        channel = resolve_channel(channel)
+    except ChannelNotFound as exc:
+        return {"ok": False, "error": str(exc)}
 
     project = agent_project()
     if project is None:
