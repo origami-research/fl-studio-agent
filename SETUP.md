@@ -46,6 +46,38 @@ on the channel named in the reply.
 
 ---
 
+## What you can ask for
+
+| Tool | What it does |
+|---|---|
+| `write_notes` | Notes by name or MIDI number, positions in beats, merge or replace |
+| `list_channels` | What instruments this project has |
+| `set_tempo` | Project tempo in BPM |
+| `set_channel_mix` | Channel volume, pan and pitch |
+| `clear_notes` | Empty a channel's notes |
+| `fl_status` | Which backend is active, and read the notes back |
+
+You do not call these directly — just say what you want:
+
+> "make hot cross buns"
+> "write a 4-bar bassline in A minor on Bass, at 128 BPM"
+> "pan the lead slightly left and turn it down a bit"
+> "add a countermelody over what's there"
+
+The agent project ships with **Chords**, **Bass**, **Lead** and **Drums** on
+real instruments. Notes go to the Lead unless you name another channel; a
+melody is never placed on a drum.
+
+### What it cannot do
+
+`set_channel_mix` controls the channel strip, not the instrument. Preset,
+filter cutoff, detune and envelopes live inside the plugin's own saved state,
+which is an opaque blob in the project file — so "make it sound like a supersaw"
+is out of reach. Loading a different instrument is too; the palette is whatever
+the project was created with.
+
+---
+
 ## How it works, and the trade-off
 
 ```
@@ -102,11 +134,12 @@ python -m harness.doctor
 
 ## Which channel notes land on
 
-The first **melodic** channel — anything named kick, snare, clap, hat, 808 and
-so on is skipped. Rack 0 is a drum in most FL templates, so defaulting to it put
-melodies where they could be neither heard properly nor found.
+Name one — `"put the bassline on Bass"` — or leave it and the most
+melody-appropriate channel is chosen: a lead before a bass, and never a drum.
+Rack 0 is a drum in most FL templates, so defaulting to it put melodies where
+they could be neither heard properly nor found.
 
-The response names the channel it used.
+The response names the channel it used. `list_channels` shows the options.
 
 ## Why not edit the live session by default
 
@@ -138,7 +171,7 @@ to remove the ambiguity.
 ## Development
 
 ```bash
-cd mcp-server && uv run pytest                     # 62 tests
+cd mcp-server && uv run pytest                     # 110 tests
 uv run python tests/mutation_check.py              # verifies the FL sandbox emulator
 python -m harness.doctor                           # live status of every link
 python -m harness.verify <project.flp>             # dump notes from any project
