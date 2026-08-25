@@ -293,6 +293,59 @@ def list_channels() -> dict:
 
 
 @mcp.tool()
+def set_channel_mix(
+    channel: str | int | None = None,
+    volume: float | None = None,
+    pan: float | None = None,
+    pitch_semitones: int | None = None,
+) -> dict:
+    """Adjust a channel's volume, pan or pitch.
+
+    Only the values you pass are changed, so setting pan leaves a volume the
+    user already adjusted alone.
+
+    Args:
+        channel: Name ("Lead") or rack index. Defaults to the melodic channel
+            write_notes would use.
+        volume: 0.0 (silent) to 1.0 (maximum). FL's default is about 0.78.
+        pan: -1.0 hard left, 0.0 centre, 1.0 hard right.
+        pitch_semitones: -48 to 48. Use 12 or -12 to shift an octave.
+
+    This controls the channel strip, not the instrument's own sound. Preset,
+    filter cutoff, detune and envelope live inside the plugin's saved state,
+    which is an opaque blob in the project file and cannot be edited from here.
+    """
+    try:
+        from . import autonomous
+    except ImportError:
+        return {"status": "error", "error": "mix control unavailable"}
+    if not autonomous.available():
+        return {
+            "status": "error",
+            "error": "No agent project. Run: python -m fl_mcp.make_agent_project",
+        }
+    if volume is None and pan is None and pitch_semitones is None:
+        return {
+            "status": "error",
+            "error": "Nothing to change — pass volume, pan and/or pitch_semitones.",
+        }
+
+    result = autonomous.set_levels(
+        channel=channel, volume=volume, pan=pan, pitch_semitones=pitch_semitones
+    )
+    if not result.get("ok"):
+        return {"status": "error", "error": result.get("error")}
+    return {
+        "status": "applied",
+        "channel": result["channel"],
+        "channel_name": result.get("channel_name"),
+        "volume": result["volume"],
+        "pan": result["pan"],
+        "pitch_semitones": result["pitch_semitones"],
+    }
+
+
+@mcp.tool()
 def fl_status() -> dict:
     """Check the setup and whether the last queued command was applied.
 
