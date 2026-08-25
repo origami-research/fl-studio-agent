@@ -15,6 +15,9 @@ notes in about two minutes.
 | Tool | |
 |---|---|
 | `write_notes` | Write notes — note names or MIDI, positions in beats, merge or replace |
+| `list_channels` | What instruments the project has |
+| `set_tempo` | Project tempo in BPM |
+| `set_channel_mix` | Channel volume, pan and pitch |
 | `clear_notes` | Empty the piano roll |
 | `fl_status` | Which backend is active, and read the notes back from the project |
 
