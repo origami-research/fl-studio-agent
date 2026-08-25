@@ -267,6 +267,32 @@ def set_tempo(bpm: float) -> dict:
 
 
 @mcp.tool()
+def list_channels() -> dict:
+    """List the instrument channels available to write notes to.
+
+    Call this when the user names an instrument, or when placing different
+    parts on different channels — a bassline on "Bass" and a melody on "Lead"
+    rather than stacking everything in one place.
+    """
+    try:
+        from . import autonomous
+    except ImportError:
+        return {"status": "error", "error": "channel listing unavailable"}
+    channels = autonomous.list_channels()
+    if not channels:
+        return {
+            "status": "error",
+            "error": "No agent project. Run: python -m fl_mcp.make_agent_project",
+        }
+    return {
+        "status": "ok",
+        "channels": channels,
+        "default": autonomous.default_channel(),
+        "note": "Pass a name or index as write_notes(channel=...).",
+    }
+
+
+@mcp.tool()
 def fl_status() -> dict:
     """Check the setup and whether the last queued command was applied.
 
