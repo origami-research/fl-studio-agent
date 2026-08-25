@@ -5,6 +5,20 @@ one unverified behavior (cross-channel `FHD_AddNotesToPR` from an effect). If Sp
 fails, we redesign before writing anything else; everything after it is known
 engineering.
 
+## Spike 1.5 — dispatcher probe (runs before or parallel with Spike 1)
+
+Bridge-plugin mode that sweeps undocumented host-dispatcher message IDs 0-255 on a
+scratch project, hunting for note/selection **getters**. Full spec in
+[11-interface-spec.md](11-interface-spec.md) §6.1. Best case: live readback exists and
+the shadow-score machinery shrinks to a cache. Worst case: a few days and certainty.
+
+- [ ] Sweep 0-255, classify: clean error / silence / crash (contained, scratch project)
+- [ ] Validate candidates: write known chord via `FHD_AddNotesToPR`, check for matching returns
+- [ ] Sweep specifically around known selection-related IDs for selection queries
+- [ ] Written verdict recorded in 11 §6.1
+
+**Exit criteria:** written getter-exists / getter-does-not-exist verdict.
+
 ## Spike 1 — the load-bearing unknown (native plugin)
 
 Minimal effect plugin, no spool, no protocol: hardcoded to write a C-major chord via
@@ -114,3 +128,18 @@ spike and its doc updated — this table is the checklist.
 - The Bridge plugin gets a standalone host shim for unit-testing command execution
   logic (dispatcher mocked) — the only untestable-in-CI line is the dispatcher call
   itself.
+
+## Open questions added 2026-08-24 (from spec 11 workshop)
+
+| # | Question | Doc | Spike |
+|---|---|---|---|
+| 16 | One `FHD_AddNotesToPR` call = one undo step? | 11 §5.1 | 1 |
+| 17 | Undo-stack introspection can attribute whose step is on top? | 11 §5.1 | 3 |
+| 18 | `OnDirtyChannel`/`OnRefresh` coverage of pattern/note edits | 11 freshness | 3 |
+| 19 | FL autosave file locations + format stability for background parse | 11 freshness | 3 |
+| 20 | `score.selection` availability in pyscript for note-level selection | 11 §9 | 3 |
+| 21 | Filesystem access from embedded interpreter (spool control plane) | 11 addendum, issue #8 | 3 |
+
+Sequencing note: docs/11 §10 is the authoritative stage order and extends the
+milestones below with the pydantic core (M1), records/action log (M2), notebook
+kernel + bootstrap (M3), diff-matching references (M4).

@@ -22,6 +22,8 @@ build and the record of why we build it this way.
 | [07-template-project.md](07-template-project.md) | The template project strategy that covers the two API holes |
 | [08-roadmap.md](08-roadmap.md) | Spikes (riskiest first), milestones, open-questions checklist |
 | [09-references.md](09-references.md) | All sources |
+| [10-v0-vertical-slice.md](10-v0-vertical-slice.md) | v0 vertical slice |
+| [11-interface-spec.md](11-interface-spec.md) | Interface & representation spec: dialect ladder, pydantic types, reference system, action log, readback ladder, kernel |
 
 ## Epistemic status legend
 
