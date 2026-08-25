@@ -17,4 +17,4 @@ build-backend = "hatchling.build"
 packages = ["src/fl_mcp"]
 
 [dependency-groups]
-dev = ["pytest>=8.0", "pyflp>=2.0"]
+dev = ["pytest>=8.0", "pyflp>=2.0", "python-rtmidi>=1.5"]
