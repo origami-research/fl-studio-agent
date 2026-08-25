@@ -195,3 +195,63 @@ def set_tempo(project: Path, bpm: float) -> float:
 
     pyflp.save(parsed, project)
     return float(parse(project).tempo)
+
+
+# FL's channel levels are raw 0..12800 integers. Volume defaults to 10000 and
+# pan is bipolar around 6400. The tool surface uses 0..1 and -1..1 so a model
+# never has to know that.
+LEVEL_MAX = 12800
+PAN_CENTRE = 6400
+VOLUME_DEFAULT = 10000
+
+
+def set_channel_levels(
+    project: Path,
+    channel: int,
+    volume: float | None = None,
+    pan: float | None = None,
+    pitch_semitones: int | None = None,
+) -> dict[str, Any]:
+    """Set a channel's volume, pan and/or pitch, in place.
+
+    Only the parameters passed are touched; None leaves a value alone, so
+    setting pan does not reset a volume the user already adjusted.
+
+    Returns what the saved file actually contains, re-read rather than echoed.
+    """
+    from harness.flp_compat import import_pyflp, parse
+
+    pyflp = import_pyflp()
+    parsed = parse(project)
+    channels = list(parsed.channels)
+    if not 0 <= channel < len(channels):
+        raise IndexError(f"no channel {channel}; project has {len(channels)}")
+    target = channels[channel]
+
+    if volume is not None:
+        if not 0.0 <= volume <= 1.0:
+            raise ValueError(f"volume {volume} out of range (0.0-1.0)")
+        target.volume = int(round(volume * LEVEL_MAX))
+    if pan is not None:
+        if not -1.0 <= pan <= 1.0:
+            raise ValueError(f"pan {pan} out of range (-1.0 left to 1.0 right)")
+        target.pan = int(round(PAN_CENTRE + pan * PAN_CENTRE))
+    if pitch_semitones is not None:
+        if not -48 <= pitch_semitones <= 48:
+            raise ValueError(f"pitch {pitch_semitones} out of range (-48 to 48)")
+        target.pitch_shift = int(pitch_semitones)
+
+    pyflp.save(parsed, project)
+
+    saved = list(parse(project).channels)[channel]
+    # Explicit None checks, not `or`: hard-left pan is raw 0 and silence is
+    # volume 0, both falsy. `saved.pan or PAN_CENTRE` reported a hard-left
+    # channel as centred.
+    raw_volume = saved.volume if saved.volume is not None else VOLUME_DEFAULT
+    raw_pan = saved.pan if saved.pan is not None else PAN_CENTRE
+    return {
+        "channel": channel,
+        "volume": round(raw_volume / LEVEL_MAX, 3),
+        "pan": round((raw_pan - PAN_CENTRE) / PAN_CENTRE, 3),
+        "pitch_semitones": saved.pitch_shift,
+    }

@@ -287,6 +287,52 @@ def set_tempo(bpm: float, reload_fl: bool = True) -> dict[str, Any]:
     return {"ok": True, "tempo": stored, "reloaded_fl": reloaded}
 
 
+def set_levels(
+    channel: int | str | None = None,
+    volume: float | None = None,
+    pan: float | None = None,
+    pitch_semitones: int | None = None,
+    reload_fl: bool = True,
+) -> dict[str, Any]:
+    """Adjust a channel's mix settings and show the result in FL."""
+    from .flp_writer import set_channel_levels
+
+    project = agent_project()
+    if project is None:
+        return {"ok": False, "error": "no agent project configured"}
+    try:
+        index = resolve_channel(channel)
+    except ChannelNotFound as exc:
+        return {"ok": False, "error": str(exc)}
+
+    backup = project.with_suffix(".flp.bak")
+    try:
+        shutil.copy2(project, backup)
+    except OSError:
+        backup = None
+
+    try:
+        levels = set_channel_levels(
+            project, index, volume=volume, pan=pan, pitch_semitones=pitch_semitones
+        )
+    except Exception as exc:  # noqa: BLE001
+        if backup is not None and backup.is_file():
+            shutil.copy2(backup, project)
+        return {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
+
+    if reload_fl:
+        if fl_is_running():
+            _stop_fl()
+            time.sleep(2.0)
+        _open_project(project)
+
+    levels["ok"] = True
+    levels["channel_name"] = next(
+        (c["name"] for c in list_channels() if c["index"] == index), f"Channel {index}"
+    )
+    return levels
+
+
 def verify(pattern: int = 1) -> dict[str, Any]:
     """Read the notes back out of the project — ground truth, not a claim."""
     project = agent_project()
