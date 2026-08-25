@@ -165,3 +165,33 @@ def write_notes(
 
 def clear_notes(project: Path, pattern: int = 1) -> WriteResult:
     return write_notes(project, [], pattern=pattern, mode="replace")
+
+
+def set_tempo(project: Path, bpm: float) -> float:
+    """Set the project tempo, in place. Returns the tempo actually stored.
+
+    FL stores tempo as ProjectID.Tempo, an integer of BPM x 1000, so 130 BPM is
+    130000. Writing the float directly silently produces a 130 BPM project at
+    0.13 BPM, which is the kind of failure that looks like the write did
+    nothing.
+
+    Re-reads the saved file before returning rather than trusting the write.
+    """
+    from harness.flp_compat import import_pyflp, parse
+
+    if not 10.0 <= bpm <= 999.0:
+        raise ValueError(f"tempo {bpm} out of range (10-999 BPM)")
+
+    pyflp = import_pyflp()
+    parsed = parse(project)
+
+    found = False
+    for event in parsed.events:
+        if str(event.id) == "ProjectID.Tempo":
+            event.value = int(round(bpm * 1000))
+            found = True
+    if not found:
+        raise RuntimeError("project has no ProjectID.Tempo event")
+
+    pyflp.save(parsed, project)
+    return float(parse(project).tempo)

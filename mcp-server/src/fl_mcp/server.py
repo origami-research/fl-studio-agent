@@ -224,6 +224,41 @@ def clear_notes() -> dict:
 
 
 @mcp.tool()
+def set_tempo(bpm: float) -> dict:
+    """Set the project tempo in beats per minute.
+
+    Args:
+        bpm: Tempo, 10-999. Fractional values are kept (e.g. 128.5).
+
+    Genres sit in rough ranges if you need a default: house and bass house
+    124-132, hip hop 80-95, drum and bass 172-176, trap 140-150 (often felt at
+    half time).
+    """
+    try:
+        from . import autonomous
+    except ImportError:
+        return {"status": "error", "error": "tempo control unavailable"}
+
+    if not autonomous.available():
+        return {
+            "status": "error",
+            "error": (
+                "No agent project configured, so there is no project to retempo. "
+                "Run: python -m fl_mcp.make_agent_project"
+            ),
+        }
+
+    result = autonomous.set_tempo(bpm)
+    if not result.get("ok"):
+        return {"status": "error", "error": result.get("error")}
+    return {
+        "status": "applied",
+        "tempo": result["tempo"],
+        "note": f"Project tempo is now {result['tempo']} BPM.",
+    }
+
+
+@mcp.tool()
 def fl_status() -> dict:
     """Check the setup and whether the last queued command was applied.
 

@@ -205,6 +205,38 @@ def apply_notes(
     }
 
 
+def set_tempo(bpm: float, reload_fl: bool = True) -> dict[str, Any]:
+    """Change the agent project's tempo and show it in FL."""
+    from .flp_writer import set_tempo as write_tempo
+
+    project = agent_project()
+    if project is None:
+        return {"ok": False, "error": "no agent project configured"}
+
+    backup = project.with_suffix(".flp.bak")
+    try:
+        shutil.copy2(project, backup)
+    except OSError:
+        backup = None
+
+    try:
+        stored = write_tempo(project, bpm)
+    except Exception as exc:  # noqa: BLE001
+        if backup is not None and backup.is_file():
+            shutil.copy2(backup, project)
+        return {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
+
+    reloaded = False
+    if reload_fl:
+        if fl_is_running():
+            _stop_fl()
+            time.sleep(2.0)
+        _open_project(project)
+        reloaded = True
+
+    return {"ok": True, "tempo": stored, "reloaded_fl": reloaded}
+
+
 def verify(pattern: int = 1) -> dict[str, Any]:
     """Read the notes back out of the project — ground truth, not a claim."""
     project = agent_project()
