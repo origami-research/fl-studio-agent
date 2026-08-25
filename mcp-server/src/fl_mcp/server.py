@@ -11,7 +11,16 @@ hasn't seen yet.
 
 from __future__ import annotations
 
+import time
 from typing import Any
+
+import sys
+from pathlib import Path
+
+# The optional auto-trigger lives in the repo's harness package.
+_REPO_ROOT = Path(__file__).resolve().parents[3]
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
 
 from mcp.server.mcpserver import MCPServer
 
@@ -28,15 +37,79 @@ _TRIGGER_HINT = (
 mcp = MCPServer("fl-studio")
 
 
-def _queued(cmd: dict[str, Any], summary: str) -> dict[str, Any]:
+def _try_live(command_id: int) -> dict[str, Any] | None:
+    """Edit the open piano roll in place — preferred when it is usable.
+
+    Ranked above the project-write backend because it is the only one that does
+    not reload FL: the user keeps their session, and sees notes appear in the
+    piano roll they are looking at. It needs two one-time grants, so it is not
+    always available; see live.readiness().
+    """
+    try:
+        from . import live
+    except ImportError:
+        return None
+    if not live.available():
+        return None
+    result = live.apply(command_id)
+    return result if result is not None and result.get("ok") else None
+
+
+def _try_project_write(
+    notes: list[dict[str, Any]] | None, mode: str
+) -> dict[str, Any] | None:
+    """Write straight into the agent project — the fully autonomous path.
+
+    Preferred when an agent project is configured, because it needs no user
+    action and no macOS permission. Returns None when unavailable so the caller
+    falls back to the spool, which is non-destructive to a live session.
+    """
+    try:
+        from . import autonomous
+    except ImportError:
+        return None
+    if not autonomous.available():
+        return None
+    result = autonomous.apply_notes(notes or [], mode=mode)
+    return result if result.get("ok") else None
+
+
+def _queued(
+    cmd: dict[str, Any], summary: str, tried_live: bool = False
+) -> dict[str, Any]:
+    """Build the response for a command that could not be applied.
+
+    `tried_live` must be True when the caller already attempted the live
+    backend. Retrying here would press FL's shortcut a second time and apply
+    the same notes twice.
+    """
+    applied = None if tried_live else _try_live(cmd["id"])
+    if applied is not None:
+        return {
+            "status": "applied",
+            "backend": "live",
+            "command_id": cmd["id"],
+            "applied": summary,
+            "notes_in_piano_roll": applied.get("note_count"),
+            "note": (
+                "Applied in place to the piano roll you have open. FL was not "
+                "reloaded and nothing was lost."
+            ),
+        }
+
+    from . import live
+
+    state = live.readiness()
     return {
         "status": "queued",
         "command_id": cmd["id"],
         "queued": summary,
         "next_step": _TRIGGER_HINT,
+        "live_backend_blocked_by": state.blockers(),
         "note": (
-            "Nothing has changed in FL Studio yet. The edit applies when the user "
-            "runs the script. Call fl_status to confirm it was applied."
+            "Nothing has changed in FL Studio yet. Live editing is unavailable, "
+            "so the user must run the script. Run `python -m harness.doctor` for "
+            "the fix, then call fl_status to confirm."
         ),
     }
 
@@ -86,13 +159,53 @@ def write_notes(notes: list[dict], mode: str = "merge") -> dict:
             ),
         }
 
+    summary = describe(parsed) + (", replacing existing notes" if mode == "replace" else "")
+
+    # Live first: it is the only backend that edits the session the user is
+    # looking at. The alternative reloads FL, which is correct but disruptive,
+    # so it is a fallback rather than the default.
     spool.clear_stale_results()
     try:
         cmd = spool.put_command("add_notes", mode=mode, notes=parsed)
     except spool.SpoolUnavailable as exc:
         return {"status": "error", "error": str(exc)}
-    summary = describe(parsed) + (", replacing existing notes" if mode == "replace" else "")
-    return _queued(cmd, summary)
+
+    applied = _try_live(cmd["id"])
+    if applied is not None:
+        return {
+            "status": "applied",
+            "backend": "live",
+            "applied": summary,
+            "notes_in_piano_roll": applied.get("note_count"),
+            "note": (
+                "Applied in place to the piano roll you have open. FL was not "
+                "reloaded and nothing was lost."
+            ),
+        }
+
+    written = _try_project_write(parsed, mode)
+    if written is not None:
+        return {
+            "status": "applied",
+            "applied": summary,
+            "backend": written["backend"],
+            "project": written["project"],
+            "notes_in_pattern": written["notes_in_pattern"],
+            "channel": written.get("channel"),
+            "channel_name": written.get("channel_name"),
+            "where_to_look": (
+                f"FL Studio reopened on the project. Double-click channel "
+                f"{written.get('channel')} ('{written.get('channel_name')}') in the "
+                f"Channel Rack to open its piano roll and see the notes."
+            ),
+            "note": (
+                "Live in-place editing was unavailable, so the project file was "
+                "rewritten and FL reopened on it. Run `python -m harness.doctor` "
+                "to enable live editing."
+            ),
+        }
+
+    return _queued(cmd, summary, tried_live=True)
 
 
 @mcp.tool()
@@ -119,6 +232,22 @@ def fl_status() -> dict:
     whether the piano roll script is installed.
     """
     from .install import script_installed_path  # local import: optional dependency on FL paths
+
+    # Autonomous backend first: when configured it is what write_notes uses.
+    try:
+        from . import autonomous
+
+        if autonomous.available():
+            verified = autonomous.verify()
+            return {
+                "backend": "project-write (autonomous, no user action needed)",
+                "project": str(autonomous.agent_project()),
+                "fl_running": autonomous.fl_is_running(),
+                "notes_in_project": verified.get("note_count"),
+                "notes": verified.get("notes", [])[:16],
+            }
+    except ImportError:
+        pass
 
     installed = script_installed_path()
     pending = spool.pending_command()
