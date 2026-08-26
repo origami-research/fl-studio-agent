@@ -1,5 +1,9 @@
 # 07 — The Template Project
 
+> **PARTIALLY SUPERSEDED (2026-08-26):** FL 2026's `ilmcp.addEffect` / `ilmcp.addChannel` make plugin loading and instrument creation programmatic.
+> The template's remaining job is the pattern bank only (pattern creation still has no API).
+> See [12-fl2026-native-surface.md](12-fl2026-native-surface.md).
+
 Two things are impossible in a live session, from any surface (01):
 
 1. **Loading a new plugin** — the picker is human-only.

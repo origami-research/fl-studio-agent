@@ -1,5 +1,9 @@
 # 04 — The Bridge Plugin (native C++ effect)
 
+> **SUPERSEDED (2026-08-26):** FL 2026's native `ilmcp.runPRScript` replaces this plugin as the note-write path.
+> See [12-fl2026-native-surface.md](12-fl2026-native-surface.md).
+> Kept as historical record; the plugin survives only as a fallback until the doc-12 gating probe passes.
+
 The load-bearing component. A silent FL-native effect whose sole purpose is to execute
 spool commands against the host dispatcher. Everything risky in this project lives
 here, which is why Spike 1 builds this first.

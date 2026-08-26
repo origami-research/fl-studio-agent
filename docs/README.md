@@ -24,6 +24,11 @@ build and the record of why we build it this way.
 | [09-references.md](09-references.md) | All sources |
 | [10-v0-vertical-slice.md](10-v0-vertical-slice.md) | v0 vertical slice |
 | [11-interface-spec.md](11-interface-spec.md) | Interface & representation spec: dialect ladder, pydantic types, reference system, action log, readback ladder, kernel |
+| [12-fl2026-native-surface.md](12-fl2026-native-surface.md) | **Current authority.** FL 2026's native `ilmcp`/MCPTools surface (verified), the backend swap that retires the C++ plugin, capability matrix, gating probe, readiness |
+
+> **2026-08-26 amendment:** FL Studio 2026 ships native tooling (`ilmcp` + `MCPTools.pyc`) that loads plugins, creates channels, and runs piano-roll scripts programmatically.
+> [Doc 12](12-fl2026-native-surface.md) supersedes the note-plane design in doc 04 and the plugin-provisioning half of doc 07.
+> Where any older doc conflicts with doc 12, doc 12 wins.
 
 ## Epistemic status legend
 
