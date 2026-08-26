@@ -100,6 +100,23 @@ Until the probe passes, NOTHING is deleted.
 Harness: `fl-scripts/controller/probe/host_probe.py`, extended with the note-write step.
 Prerequisite: the controller script assigned to the FLMCP virtual MIDI input in FL's MIDI settings (one-time, scriptable once Accessibility is granted).
 
+## 4b. Interim note path — VERIFIED LIVE 2026-08-26
+
+With `ilmcp` unreachable, the interim note plane was built and demonstrated end to end the same day:
+a model-written beat (kick, hats, snare, clap on four channels of the 808 demo project) landed in FL's piano roll and played back, driven entirely from the pipeline.
+
+Per-write sequence (packaged as `fl-scripts/controller/probe/apply_notes.py`, one command per write):
+1. `server.write_notes(...)` queues the command on the spool (unchanged v0 path).
+2. `open_piano_roll_for_channel(N)` over the control plane focuses the target channel (uses `flbridge.py`, the persistent host-side bridge).
+3. FL's own "run last script again" shortcut (Cmd+Opt+Y) triggers the `MCP Write Notes` pyscript - after a one-time-per-FL-session menu prime (`--prime` does the menu walk automatically).
+4. `result.json` is polled and matched by command id.
+
+Cost per write: one brief FL focus flash and about 2 seconds.
+Limitations: writes target the focused channel's active pattern; the shortcut needs one prime per FL session; focus contention with other apps is handled by retry.
+This path retires the moment the native Bridge plugin loads cleanly (crash bisect running in a parallel lane) - nothing above the spool changes when it does.
+
+Also live-verified along the way: FL auto-rebinds to re-created virtual MIDI endpoints (no reconfiguration needed after a bridge restart), and FL 2026 passes `(index, updateType)` to `OnDirtyChannel`/`OnDirtyMixerTrack` (script fixed to accept both shapes).
+
 ## 5. Readiness definition and sequence
 
 Already done (156 tests green, against fake FL): MCP server (~18 tools), notebook kernel, records store, action log, schemas, controller script, macOS installer.
