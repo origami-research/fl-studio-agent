@@ -39,6 +39,17 @@ Net: MIDI stays, but setup is zero-config and there is no bridge process. The ot
 
 Note plane keeps using files — the pyscript (and, once it loads, the plugin) run in interpreters that *can* write, which is why that path works and this one doesn't.
 
+## Corrected plan: implemented and validated live 2026-08-26
+
+The MIDI-stays plan is now built and proven end to end against FL 2026:
+
+- `mcp-server/src/fl_mcp/control_midi.py` — the server opens the virtual ports itself and speaks the SysEx control protocol directly. **No bridge process.** Validated live: server opened the ports, FL bound them at launch, `hello` received, then 7 control ops (including a mutating `setCurrentTempo` that flipped the tempo 130000 -> 128000) round-tripped in ~45 ms total (~6 ms each). `flbridge.py`/`host_probe.py` are now probe-only and can be deleted from the product path.
+- `mcp-server/src/fl_mcp/install.py` — `configure_midi()` writes the FLMCP controller assignment (input+output ports, enabled) into `reg.xml` with FL closed; `install_controller()` deploys the device script; `install_all()` does note script + controller + assignment in one call. `configure_midi()` is unit-tested for fresh insert, idempotent re-run, port normalization, and no-duplicate-keys.
+
+Ordering requirement (documented, not a bug): the ports must exist before FL enumerates MIDI at launch — the natural user flow (start the Claude session, which spawns the server and opens the ports, then open FL). If FL is already open, restart it once. A persistent IAC bus would remove even that; it is deferred because enabling IAC programmatically is unreliable across macOS versions, and the server-hosted virtual port covers the normal flow with zero config.
+
+Remaining manual step in the whole system: none for the control plane. The only human action left anywhere is the one-time plugin insert for the note plane's template `.flp` (crash bisect lane), which is paid once at build time.
+
 ## Artifacts on this branch
 
 - `mcp-server/src/fl_mcp/control_spool.py` — the server-side spool client (kept for the record; not viable as sole transport).
