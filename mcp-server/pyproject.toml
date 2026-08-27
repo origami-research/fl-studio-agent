@@ -3,7 +3,11 @@ name = "fl-studio-mcp"
 version = "0.1.0"
 description = "MCP server for controlling FL Studio's piano roll"
 requires-python = ">=3.11"
-dependencies = ["mcp>=2.0.0"]
+dependencies = [
+    "mcp>=2.0.0",
+    "python-rtmidi>=1.5.0",
+    "watchdog>=6.0.0",
+]
 
 [project.scripts]
 fl-mcp = "fl_mcp.server:main"

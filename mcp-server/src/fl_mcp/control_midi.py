@@ -23,7 +23,7 @@ import sys
 import threading
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 _CONTROLLER_DIR = _REPO_ROOT / "fl-scripts" / "controller"
@@ -39,6 +39,8 @@ from device_FLMCP import (  # noqa: E402  (path set above)
     decode_frame,
     encode_message,
 )
+
+from . import errors, schemas  # noqa: E402
 
 REQ_PORT_NAME = "FLMCP Req"  # server -> FL (FL sees it as a MIDI input source)
 RES_PORT_NAME = "FLMCP Res"  # FL -> server (FL sees it as a MIDI output dest)
@@ -69,6 +71,9 @@ class MidiControl:
         self._responses: dict[int, dict] = {}
         self._events: list[dict] = []
         self._reassembler = Reassembler()
+        self._event_listeners: list[Callable[[dict], None]] = []
+        self.hello: schemas.HelloEvent | None = None
+        self._hello_event = threading.Event()
 
         self._out = rtmidi.MidiOut()
         self._out.open_virtual_port(REQ_PORT_NAME)
@@ -103,6 +108,11 @@ class MidiControl:
             # else: orphan (call already timed out and was abandoned) -> drop.
         elif frame_type == TYPE_EVENT:
             self._events.append(message)
+            if message.get("op") == "hello":
+                self.hello = schemas.HelloEvent.model_validate(message)
+                self._hello_event.set()
+            for fn in self._event_listeners:
+                fn(message)
 
     # -- outbound ---------------------------------------------------------
 
@@ -138,6 +148,49 @@ class MidiControl:
         """Return and clear buffered events (hello, dirty_channel, refresh, ...)."""
         events, self._events = self._events, []
         return events
+
+    # -- kernel/session ergonomics ------------------------------------------
+    #
+    # The kernel (kernel.py) and session (session.py) depend only on this
+    # surface, not on MidiControl itself, so tests can substitute
+    # fake_fl.FakeControl without touching real MIDI ports.
+
+    def add_event_listener(self, fn: Callable[[dict], None]) -> None:
+        """Subscribe to inbound events as they arrive (docs/11 Layer 1),
+        instead of polling ``drain_events()``."""
+        self._event_listeners.append(fn)
+
+    def await_hello(self, timeout: float = 5.0) -> schemas.HelloEvent:
+        if self.hello is not None:
+            return self.hello
+        if not self._hello_event.wait(timeout):
+            raise errors.control_plane_unavailable("hello", timeout)
+        assert self.hello is not None
+        return self.hello
+
+    def send_request(
+        self,
+        op: str,
+        args: list[Any] | None = None,
+        kwargs: dict[str, Any] | None = None,
+        timeout: float = 2.0,
+    ) -> schemas.ControlResponse:
+        """``call()`` wrapped as a validated ``schemas.ControlResponse`` —
+        the shape kernel.py and session.py's doctor()/tools already expect.
+
+        ``call()`` raises a plain ``TimeoutError`` on no response (it has no
+        dependency on errors.py); every caller here wants the structured
+        ``control_plane_unavailable`` ToolError instead, so it's converted
+        at this one seam.
+        """
+        try:
+            resp = self.call(op, args=args, kwargs=kwargs, timeout=timeout)
+        except TimeoutError as exc:
+            raise errors.control_plane_unavailable(op, timeout) from exc
+        return schemas.ControlResponse.model_validate(resp)
+
+    def ping(self, timeout: float = 2.0) -> bool:
+        return self.send_request("ping", timeout=timeout).ok
 
     def close(self) -> None:
         for port in (self._in, self._out):
