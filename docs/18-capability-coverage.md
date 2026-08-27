@@ -95,6 +95,16 @@ Every FILE capability below is: author the `.flp` event structure → write it �
 6. **Offline render** — turn a project into audio, closing the compose→listen loop.
 7. **Extended note fields + note selection read** — fidelity + editing intelligence.
 
+## Grounded feasibility of the FILE-write frontier (measured 2026-08-27)
+
+Parsing real FL 2026 projects with PyFLP split the frontier by actual cost:
+
+- **Tractable now (PyFLP round-trips it):** notes (done), and — with moderate event-authoring effort — pattern create/name, channel provisioning, project settings. These edit or insert well-supported event types and can be round-trip tested (write → re-parse → assert) before the real-FL confirm.
+- **RE-heavy (PyFLP is fragile here):** playlist/arrangement clip placement and automation clips. PyFLP's own *reader* raised `KeyError` on a stock demo's arrangement (the clip→channel iid map), so authoring reliable *writes* is raw-byte reverse-engineering of the format, not a library call - a real program per feature, each with heavy real-FL verification (a wrong byte corrupts the project silently). This is the file-format analogue of the native-plugin saga: doable, but measured in sessions, not hours.
+- **Impossible:** a plugin's internal state (below).
+
+So "the walls fall via file-write" is true in principle; in practice notes + patterns + channels are near, while arrangement + automation are a serious RE investment. The roadmap order above still holds, but items 3-4 (arrangement, automation) are heavyweight and should be scheduled as their own RE projects with batched real-FL verification, not treated as quick wins.
+
 ## What stays impossible (be honest)
 
 - A plugin's **internal** state: its wavetable, its preset's guts, its modulation matrix. We load plugins, pick presets, and set exposed parameters — we never reach inside the vendor's opaque blob. No approach can, short of that vendor's own API.
