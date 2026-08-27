@@ -306,6 +306,12 @@ class FakeControl:
     def _general_undo(self) -> None:
         pass  # no undo-stack model on the fake; the kernel only needs the round trip to ack
 
+    def _set_channel_volume(self, index: int, value: float) -> None:
+        self.channels[index].volume = float(value)
+
+    def _set_channel_pan(self, index: int, value: float) -> None:
+        self.channels[index].pan = float(value)
+
     _OPS = {
         "transport.start": _transport_start,
         "transport.stop": _transport_stop,
@@ -313,5 +319,7 @@ class FakeControl:
         "mixer.setCurrentTempo": _set_tempo,
         "general.undo": _general_undo,
         "channels.channelCount": _channels_count,
+        "channels.setChannelVolume": _set_channel_volume,
+        "channels.setChannelPan": _set_channel_pan,
         "mixer.trackCount": _mixer_count,
     }

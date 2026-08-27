@@ -398,26 +398,40 @@ def fl_doctor() -> dict:
 
 @mcp.tool()
 def undo_last() -> dict:
-    """Identify the model's last recorded action (docs/11 action log).
+    """Undo the last step via the control plane, and report what it was.
 
-    Stub: does not yet call the control plane's undo (docs/05 general.undo).
-    Use FL Studio's own Ctrl+Z for now; this just tells you what it would undo.
+    Invokes FL's own undo (`general.undo`) over the live control plane and names
+    the model's last recorded action (docs/11 action log). Note the single-writer
+    caveat: `general.undo` undoes FL's *last* step, which is the model's last
+    action only if nobody hand-edited in between. Without a control plane it
+    falls back to identifying the action so the user can Ctrl+Z it.
     """
     session = get_session()
     last = session.actions.last()
-    if last is None:
+    identified = (
+        {"id": last.id, "op": last.op, "undo_step": last.undo_step} if last is not None else None
+    )
+    resp = router.try_live_control(session, "general.undo")
+    if resp is not None:
+        return {
+            "status": "applied",
+            "backend": "live",
+            "undone": identified,
+            "note": (
+                "Invoked FL's undo. This reverses FL's last step - the model's "
+                "last action unless the user hand-edited since."
+            ),
+        }
+    if identified is None:
         return {
             "status": "error",
             "error": "nothing to undo",
-            "fix": "No actions have been recorded for this project yet.",
+            "fix": "No actions recorded yet, and no live control plane to call FL's undo.",
         }
     return {
-        "status": "not_implemented",
-        "would_undo": {"id": last.id, "op": last.op, "undo_step": last.undo_step},
-        "note": (
-            "undo_last is a stub: it identifies the action but does not yet call "
-            "the control plane's undo. Use FL's own Ctrl+Z for now."
-        ),
+        "status": "identified",
+        "would_undo": identified,
+        "note": "No live control plane; use FL's own Ctrl+Z. Run fl_doctor to connect.",
     }
 
 
@@ -519,6 +533,30 @@ def set_channel_mix(
     filter cutoff, detune and envelope live inside the plugin's saved state,
     which is an opaque blob in the project file and cannot be edited from here.
     """
+    if volume is None and pan is None and pitch_semitones is None:
+        return {
+            "status": "error",
+            "error": "Nothing to change — pass volume, pan and/or pitch_semitones.",
+        }
+
+    # Live tier (docs/17): volume/pan in place when the control plane is up and
+    # the channel is an explicit index. Pitch and name resolution stay on the
+    # file path below (no simple live op / would need a resolve round trip).
+    session = get_session()
+    if session.control is not None and isinstance(channel, int) and pitch_semitones is None:
+        applied: dict[str, Any] = {}
+        ok = True
+        if volume is not None:
+            ok = router.try_live_control(session, "channels.setChannelVolume", [channel, volume]) is not None
+            if ok:
+                applied["volume"] = volume
+        if ok and pan is not None:
+            ok = router.try_live_control(session, "channels.setChannelPan", [channel, pan]) is not None
+            if ok:
+                applied["pan"] = pan
+        if ok:
+            return {"status": "applied", "backend": "live", "channel": channel, **applied}
+
     try:
         from . import autonomous
     except ImportError:
@@ -527,11 +565,6 @@ def set_channel_mix(
         return {
             "status": "error",
             "error": "No agent project. Run: python -m fl_mcp.make_agent_project",
-        }
-    if volume is None and pan is None and pitch_semitones is None:
-        return {
-            "status": "error",
-            "error": "Nothing to change — pass volume, pan and/or pitch_semitones.",
         }
 
     result = autonomous.set_levels(

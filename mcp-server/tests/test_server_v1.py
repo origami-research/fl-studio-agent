@@ -196,14 +196,16 @@ def test_fl_doctor_degraded_when_note_script_not_installed(wired_session, fake_s
 # --- undo_last -----------------------------------------------------------------
 
 
-def test_undo_last_with_no_history_names_the_problem(wired_session):
+def test_undo_last_invokes_control_undo_even_with_no_history(wired_session):
+    # With a control plane, undo_last invokes FL's undo; no recorded action
+    # just means there's nothing to name.
     result = server.undo_last()
-    assert result["status"] == "error"
-    assert result["error"] == "nothing to undo"
+    assert result["status"] == "applied" and result["backend"] == "live"
+    assert result["undone"] is None
 
 
-def test_undo_last_identifies_but_does_not_apply(wired_session):
+def test_undo_last_applies_and_names_the_action(wired_session):
     server.write_notes([{"key": "C4", "start": 0, "length": 1}], pattern=1, channel=1)
     result = server.undo_last()
-    assert result["status"] == "not_implemented"
-    assert result["would_undo"]["op"] == "add_notes"
+    assert result["status"] == "applied" and result["backend"] == "live"
+    assert result["undone"]["op"] == "add_notes"
