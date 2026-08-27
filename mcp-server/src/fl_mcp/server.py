@@ -357,10 +357,12 @@ def get_notes(pattern: int | str, channel: int | str, key_min: int | None = None
             "note": "nothing recorded for this target yet - write_notes or sync_from_project first",
         }
     notes = session.shadow.notes_at(target) or []
+    # Note.key is "C4"-or-MIDI; resolve to MIDI before an integer range compare
+    # (comparing a note-name string to an int would raise, not filter).
     if key_min is not None:
-        notes = [n for n in notes if n.key >= key_min]  # type: ignore[operator]
+        notes = [n for n in notes if schemas._resolve_key(n.key) >= key_min]
     if key_max is not None:
-        notes = [n for n in notes if n.key <= key_max]  # type: ignore[operator]
+        notes = [n for n in notes if schemas._resolve_key(n.key) <= key_max]
     return {
         "status": "ok",
         "source": ref.provenance,

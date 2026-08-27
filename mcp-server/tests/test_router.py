@@ -184,3 +184,33 @@ def test_sync_from_project_rebuilds_shadow_with_project_provenance(tmp_path, mon
         assert ch1["source"] == "project" and ch1["notes"][0]["key"] == 67
     finally:
         server.set_session(None)
+
+
+# --- regression: get_notes key filter must handle string note keys ----------
+
+def test_get_notes_key_filter_handles_string_keys(tmp_path):
+    """Notes are stored with keys like 'C4'; filtering by an int MIDI range must
+    normalize them, not compare str >= int (which raises). Regression for the
+    '# type: ignore[operator]' that was masking a real bug."""
+    from fl_mcp import schemas, server
+    from fl_mcp.session import FLSession
+
+    session = FLSession(project_key="t", spool_root=tmp_path / "s", project_root=tmp_path / "p", control=None)
+    target = schemas.Target(pattern=1, channel=0)
+    session.shadow.write(
+        target,
+        [
+            schemas.Note(key="C4", start=0, length=1),   # 60
+            schemas.Note(key="C6", start=1, length=1),   # 84
+            schemas.Note(key="C2", start=2, length=1),   # 36
+        ],
+        mode="replace",
+    )
+    server.set_session(session)
+    try:
+        result = server.get_notes(pattern=1, channel=0, key_min=48, key_max=72)
+        assert result["status"] == "ok"
+        keys = {n["key"] for n in result["notes"]}
+        assert keys == {"C4"}  # only 60 is within [48, 72]
+    finally:
+        server.set_session(None)

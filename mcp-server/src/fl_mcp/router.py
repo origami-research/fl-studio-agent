@@ -10,19 +10,22 @@ delta per write regardless of which mechanism moved the notes.
 
 This wraps the existing cascade rather than rewriting it, so every backend's
 user-facing return shape is preserved exactly; the router only adds the
-write-through as a side effect that can never break the user's edit (recording
-failures are swallowed - a logged edit is better than a dropped one, but a
-dropped log must not drop the edit).
+write-through as a side effect. The edit lands at the backend first, so a
+recording failure must not fail the tool - but it is logged with a traceback,
+never silently dropped, so a real bug in the recording path surfaces.
 """
 
 from __future__ import annotations
 
+import logging
 from datetime import datetime, timezone
-from typing import Any, Callable
+from typing import Any, Callable, Literal
 
-from . import diff, schemas
+from . import diff, errors, schemas
 from .records import ShadowStore
 from .actions import ActionLog
+
+log = logging.getLogger(__name__)
 
 
 def _now() -> datetime:
@@ -46,11 +49,12 @@ def record_note_write(
     the structured NoteDelta. Returns the delta, or None if recording failed
     (never raises - the edit itself already succeeded).
     """
+    mode_lit: Literal["merge", "replace"] = "replace" if mode == "replace" else "merge"
     try:
         before_ref = shadow.ref_at(target)
         before_notes = shadow.notes_at(target) or []
         typed = [schemas.Note.model_validate(n) for n in parsed_notes]
-        ref = shadow.write(target, typed, mode=mode)  # type: ignore[arg-type]
+        ref = shadow.write(target, typed, mode=mode_lit)
         after_notes = shadow.notes_by_id(ref.id) or []
         delta = diff.diff_notes(before_notes, after_notes)
         actions.append(
@@ -60,7 +64,7 @@ def record_note_write(
                 gen=gen,
                 op="add_notes",
                 target=target,
-                mode=mode,
+                mode=mode_lit,
                 before_hash=before_ref.id if before_ref else None,
                 after_hash=ref.id,
                 delta=delta,
@@ -69,6 +73,10 @@ def record_note_write(
         )
         return delta
     except Exception:
+        # The edit already landed at the backend; a recording failure must not
+        # fail the tool. But it must not be SILENT either - log it with a
+        # traceback so a real bug here surfaces instead of vanishing.
+        log.exception("write-through recording failed after the %s backend applied the edit", backend)
         return None
 
 
@@ -94,13 +102,13 @@ def try_live_control(
     FL's "unsafe at current time" guard is handled controller-side (the OnIdle
     deferral), so a transient engine-busy doesn't surface here.
     """
-    if getattr(session, "control", None) is None:
+    if session.control is None:
         return None
     try:
         resp = session.control.send_request(op, args=args, kwargs=kwargs, timeout=timeout)
-    except Exception:
-        return None
-    return resp if getattr(resp, "ok", False) else None
+    except errors.ToolError:
+        return None  # control plane didn't answer; fall back to the file backend
+    return resp if resp.ok else None
 
 
 def route_note_write(
