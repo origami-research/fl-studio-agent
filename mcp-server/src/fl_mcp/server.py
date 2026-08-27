@@ -432,6 +432,20 @@ def set_tempo(bpm: float) -> dict:
     124-132, hip hop 80-95, drum and bass 172-176, trap 140-150 (often felt at
     half time).
     """
+    if not 10 <= bpm <= 999:
+        return {"status": "error", "error": f"bpm must be 10-999, got {bpm}"}
+
+    # Live tier first (docs/17 control cascade): a connected control plane sets
+    # the tempo in place with no FL reopen. Falls through to the file backend.
+    resp = router.try_live_control(get_session(), "mixer.setCurrentTempo", args=[bpm, 1])
+    if resp is not None:
+        return {
+            "status": "applied",
+            "backend": "live",
+            "tempo": bpm,
+            "note": f"Project tempo is now {bpm} BPM (live, FL was not reloaded).",
+        }
+
     try:
         from . import autonomous
     except ImportError:

@@ -71,3 +71,33 @@ def test_route_note_write_tries_in_order_and_reports(tmp_path):
     assert calls == ["a", "b"]  # tried a, then b
     assert result["backend"] == "b"
     assert applied == ["b"]  # on_applied fired for the backend that applied
+
+
+# --- live control cascade (set_tempo prefers the live plane) ---------------
+
+def test_set_tempo_uses_live_control_plane_when_connected(tmp_path):
+    from fake_fl import FakeControl
+
+    from fl_mcp import server
+    from fl_mcp.session import FLSession
+
+    control = FakeControl()
+    control.send_hello()
+    session = FLSession(project_key="t", spool_root=tmp_path / "s", project_root=tmp_path / "p", control=control)
+    server.set_session(session)
+    try:
+        result = server.set_tempo(140)
+        assert result["status"] == "applied"
+        assert result["backend"] == "live"
+        assert result["tempo"] == 140
+        assert control.tempo == 140  # actually changed in the fake session
+    finally:
+        server.set_session(None)
+
+
+def test_set_tempo_rejects_out_of_range(tmp_path):
+    from fl_mcp import server
+
+    server.set_session(None)
+    assert server.set_tempo(5)["status"] == "error"
+    assert server.set_tempo(2000)["status"] == "error"

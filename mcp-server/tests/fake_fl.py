@@ -294,7 +294,7 @@ class FakeControl:
     def _transport_is_playing(self) -> bool:
         return self.playing
 
-    def _set_tempo(self, bpm: float) -> None:
+    def _set_tempo(self, bpm: float, *_flags) -> None:
         self.tempo = float(bpm)
 
     def _channels_count(self) -> int:

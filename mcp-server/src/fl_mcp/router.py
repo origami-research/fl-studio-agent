@@ -78,6 +78,31 @@ def record_note_write(
 NoteBackend = Callable[[list[dict[str, Any]], str, "str | int | None", int], "dict[str, Any] | None"]
 
 
+def try_live_control(
+    session: Any,
+    op: str,
+    args: list[Any] | None = None,
+    kwargs: dict[str, Any] | None = None,
+    timeout: float = 2.0,
+) -> Any | None:
+    """Try one op over the live MIDI control plane; None if unavailable/failed.
+
+    The live tier of the control cascade (docs/17): a connected control plane
+    edits FL in place with no reopen. Returns the ControlResponse on success,
+    or None so the caller falls back to the file backend (project-write). Never
+    raises - a missing/timed-out control plane is a fall-through, not an error.
+    FL's "unsafe at current time" guard is handled controller-side (the OnIdle
+    deferral), so a transient engine-busy doesn't surface here.
+    """
+    if getattr(session, "control", None) is None:
+        return None
+    try:
+        resp = session.control.send_request(op, args=args, kwargs=kwargs, timeout=timeout)
+    except Exception:
+        return None
+    return resp if getattr(resp, "ok", False) else None
+
+
 def route_note_write(
     backends: list[tuple[str, NoteBackend]],
     parsed_notes: list[dict[str, Any]],
