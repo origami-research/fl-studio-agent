@@ -148,15 +148,24 @@ FL sometimes refuses engine changes (like tempo) when asked from the MIDI callba
 Fix: in the controller script's dispatcher, catch exactly that error, park the op in a queue, execute it on the next `OnIdle` tick (which we proved fires ~every 20ms), and reply when it lands.
 One function, plus a test. This also gives every future op safe-retry for free.
 
-**2. Finish the native plugin (the note-plane endgame; in flight).**
-A rebuilt plugin with 64 padded, logging slots is installed and awaiting one insert test (plus two variants that isolate the remaining effect-vs-generator question).
-When it loads: build the production Bridge plugin base-free, have it consume the same note spool silently on idle, save the template project, and delete the interim trigger (`apply_notes.py`) forever.
+**2. Native plugin: crash SOLVED, autonomous self-poll RULED OUT (verdict 2026-08-27).**
+The crash mystery is solved: FL 2026's internal plugin interface grew beyond the public headers (it calls vtable slots 26+), and the SDK base class + short vtable were the cause.
+The base-free, 64-slot plugin now loads cleanly and stably, every time - proven live across many inserts as both an effect and a generator.
+BUT the plan for it to *poll the note spool on its own* is dead, proven by live experiment:
+- windowless effect => loads, but dormant (FL's idle callback is pumped by an editor-window run loop it doesn't have);
+- windowless generator => loads (`have_host=1`), but receives ZERO callbacks while the transport is stopped (12s idle, not a single idle/tick/render call, the heartbeat file wasn't even rewritten);
+- adding an editor window to get idle => reintroduces FL's window-embed crash on load.
+So there is no callback source that fires while FL is idle+stopped without an editor, and the editor crashes.
+The autonomous silent plugin is NOT achievable on FL 2026 macOS with the known SDK.
+**Decision: ship the interim pyscript note path (it works).**
+The plugin work is not wasted - the note *write* path (`FHD_AddNotesToPR`, base-free load, cross-channel) is proven and unit-tested; it pivots to a **driven model**: the server pokes the plugin on demand (via a plugin-parameter change through the controller script), so the plugin writes notes in its param callback - no idle, no editor needed. That becomes a fast-path upgrade over the interim later.
+Also fix the quit-teardown crash (our dylib on the stack during FL shutdown - guard all callbacks against post-shutdown/null-host calls).
 
-**3. Bake the one-time plugin insert into a template project (after 2).**
-FL only loads plugins that are already in a project file.
-So we insert the Bridge plugin once, save `flmcp-template.flp`, and ship the file.
-Every session starts by opening it: zero clicks for every user forever.
+**3. Bake the one-time plugin insert into a template project (after 2, needs licensed FL).**
+FL only loads plugins that are already in a project file, and saving a template needs a licensed FL (trial blocks save) - deferred until the license arrives.
+Once we can save: insert the Bridge plugin once, save `flmcp-template.flp`, ship the file; every session opens it, zero clicks forever.
 The template also carries pre-made empty patterns (pattern creation has no API on any door).
+Until then the installer places scripts + `reg.xml` and marks the template step "pending license"; `fl_doctor` does not fail on a missing template.
 
 **4. Merge the two branches (medium, high value).**
 `spool-first-control` has the live-verified transport and installer; `integrate/lanes-wave1` has the ~18-tool surface, the notebook kernel, records, and the action log.
