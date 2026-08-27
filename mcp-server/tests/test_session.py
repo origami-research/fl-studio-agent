@@ -41,6 +41,24 @@ def test_write_notes_confirms_and_writes_through(wired):
     assert last.op == "add_notes"
     assert last.after_hash == ref.id
     assert last.undo_step is not None
+    # The action log records a structured delta, not just a hash: this write
+    # added one note to an empty target.
+    assert last.delta is not None
+    assert len(last.delta.added) == 1 and last.delta.added[0].key == "C4"
+    assert not last.delta.removed and not last.delta.moved
+
+
+def test_write_notes_records_delta_of_a_merge(wired):
+    session, bridge, control = wired
+    target = schemas.Target(pattern=1, channel=3)
+    session.write_notes(target, [schemas.Note(key="C4", start=0, length=1)], mode="replace")
+    session.write_notes(target, [schemas.Note(key="G4", start=2, length=1)], mode="merge")
+
+    last = session.actions.last()
+    # A merge that appends one note is a delta of exactly one added note.
+    assert last.delta is not None
+    assert [n.key for n in last.delta.added] == ["G4"]
+    assert not last.delta.removed
 
 
 def test_write_notes_failure_does_not_touch_shadow_or_actions(wired):

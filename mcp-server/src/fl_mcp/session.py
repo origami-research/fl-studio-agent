@@ -17,7 +17,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Protocol
 
-from . import actions, errors, records, schemas, spool
+from . import actions, diff, errors, records, schemas, spool
 
 
 def _now() -> datetime:
@@ -68,7 +68,10 @@ class FLSession:
         )
         resp = self.spool.wait_for_response(cmd.id, timeout=timeout)
         if resp.ok:
+            before_ref = self.shadow.ref_at(target)
+            before_notes = self.shadow.notes_at(target) or []
             ref = self.shadow.write(target, notes, mode=mode, provenance="shadow")
+            after_notes = self.shadow.notes_by_id(ref.id) or []
             self.actions.append(
                 schemas.ActionEntry(
                     ts=_now(),
@@ -77,7 +80,9 @@ class FLSession:
                     op="add_notes",
                     target=target,
                     mode=mode,
+                    before_hash=before_ref.id if before_ref else None,
                     after_hash=ref.id,
+                    delta=diff.diff_notes(before_notes, after_notes),
                     undo_step=f"mcp: write notes ({target.pattern}:{target.channel})",
                 )
             )

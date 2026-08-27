@@ -13,14 +13,13 @@ by hand, per the freshness policy in docs/11.
 
 from __future__ import annotations
 
-import hashlib
 import json
 import threading
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Literal
 
-from . import paths, schemas
+from . import hashing, paths, schemas
 from .spool import read_json, write_json_atomic
 
 Provenance = Literal["shadow", "project", "model"]
@@ -31,15 +30,13 @@ def _now() -> datetime:
 
 
 def note_set_id(notes: list[schemas.Note]) -> str:
-    """sha256 of schema_version + canonical notes (docs/11) — content address."""
-    canonical = [n.canonical() for n in notes]
-    payload = json.dumps(
-        {"schema_version": schemas.SCHEMA_VERSION, "notes": canonical},
-        sort_keys=True,
-        separators=(",", ":"),
-        default=str,
-    )
-    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+    """Content address for a note group.
+
+    Delegates to the single source of truth in `hashing` (order-independent,
+    SCHEMA_VERSION-salted) so the shadow score, action log, and diff layer all
+    key off the exact same id. See docs/16.
+    """
+    return hashing.noteset_hash(notes)
 
 
 def _target_key(target: schemas.Target) -> str:

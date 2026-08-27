@@ -269,6 +269,7 @@ class ActionEntry(BaseModel):
     after_hash: str | None = None
     before: Any = None  # scalar before-value for param ops
     after: Any = None
+    delta: NoteDelta | None = None  # structured note change (added/removed/moved)
     undo_step: str | None = None
 
 
