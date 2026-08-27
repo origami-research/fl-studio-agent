@@ -22,8 +22,8 @@ from datetime import datetime, timezone
 from typing import Any, Callable, Literal
 
 from . import diff, errors, schemas
-from .records import ShadowStore
 from .actions import ActionLog
+from .records import ShadowStore
 
 log = logging.getLogger(__name__)
 
@@ -71,13 +71,14 @@ def record_note_write(
                 undo_step=f"{backend}: write notes ({target.pattern}:{target.channel})",
             )
         )
-        return delta
     except Exception:
         # The edit already landed at the backend; a recording failure must not
         # fail the tool. But it must not be SILENT either - log it with a
         # traceback so a real bug here surfaces instead of vanishing.
         log.exception("write-through recording failed after the %s backend applied the edit", backend)
         return None
+    else:
+        return delta
 
 
 # A note backend: given (parsed notes, mode, channel, command_id) it either

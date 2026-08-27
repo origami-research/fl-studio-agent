@@ -16,7 +16,6 @@ from __future__ import annotations
 
 import re
 import shutil
-import sys
 from pathlib import Path
 
 from .flpaths import fl_settings_dirs, piano_roll_scripts_dir
@@ -140,7 +139,7 @@ def configure_midi() -> str:
         if not ok:
             return (f"WARN {REQ_PORT_NAME} key present but has no Port value; "
                     "unexpected reg.xml shape - assign the controller once in FL")
-        data, en = _set_int_value(data, REQ_PORT_NAME, "Enabled", 1)  # best-effort
+        data, _en = _set_int_value(data, REQ_PORT_NAME, "Enabled", 1)  # best-effort
         changed = True
     else:
         data, n = re.subn(r'(<Key Name="MIDI input">\s*)',

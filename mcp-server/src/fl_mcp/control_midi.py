@@ -30,7 +30,9 @@ _CONTROLLER_DIR = _REPO_ROOT / "fl-scripts" / "controller"
 if str(_CONTROLLER_DIR) not in sys.path:
     sys.path.insert(0, str(_CONTROLLER_DIR))
 
-from flmcp_codec import (  # noqa: E402  (path set above)
+import contextlib
+
+from flmcp_codec import (
     TYPE_EVENT,
     TYPE_REQUEST,
     TYPE_RESPONSE,
@@ -40,7 +42,7 @@ from flmcp_codec import (  # noqa: E402  (path set above)
     encode_message,
 )
 
-from . import errors, schemas  # noqa: E402
+from . import errors, schemas
 
 REQ_PORT_NAME = "FLMCP Req"  # server -> FL (FL sees it as a MIDI input source)
 RES_PORT_NAME = "FLMCP Res"  # FL -> server (FL sees it as a MIDI output dest)
@@ -194,10 +196,8 @@ class MidiControl:
 
     def close(self) -> None:
         for port in (self._in, self._out):
-            try:
+            with contextlib.suppress(Exception):
                 port.close_port()
-            except Exception:
-                pass
 
 
 _singleton: MidiControl | None = None

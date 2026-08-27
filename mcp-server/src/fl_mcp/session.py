@@ -186,6 +186,7 @@ def _fl_process_running() -> bool:
         return False  # Windows/other: process check not implemented yet (docs/08 roadmap)
     try:
         result = subprocess.run(["pgrep", "-fi", "FL Studio"], capture_output=True, timeout=2)
-        return result.returncode == 0
     except (OSError, subprocess.SubprocessError):
         return False
+    else:
+        return result.returncode == 0

@@ -27,7 +27,7 @@ class ActionLog:
         # the file (each entry is two separate write() calls: json + "\n").
         with self._lock:
             self.root.mkdir(parents=True, exist_ok=True)
-            with open(self.path, "a", encoding="utf-8") as f:
+            with self.path.open("a", encoding="utf-8") as f:
                 f.write(entry.model_dump_json())
                 f.write("\n")
 
@@ -36,7 +36,7 @@ class ActionLog:
         if not self.path.is_file():
             return []
         entries = []
-        with open(self.path, encoding="utf-8") as f:
+        with self.path.open(encoding="utf-8") as f:
             for line in f:
                 line = line.strip()
                 if line:

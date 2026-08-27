@@ -308,7 +308,7 @@ class FLKernel:
                 raise errors.stale_handle("track", item.track_name)
             self._queue.pop(0)
             if isinstance(item, _QueuedWrite):
-                resp, cmd = self.session.write_notes(item.target, item.notes, item.mode)
+                resp, _ = self.session.write_notes(item.target, item.notes, item.mode)
                 results.append(
                     {
                         "op": "add_notes",
@@ -319,7 +319,7 @@ class FLKernel:
                     }
                 )
             else:
-                resp, cmd = self.session.clear_notes(item.target)
+                resp, _cmd = self.session.clear_notes(item.target)
                 results.append(
                     {"op": "clear_notes", "track": item.track_name, "ok": resp.ok, "err": resp.err}
                 )

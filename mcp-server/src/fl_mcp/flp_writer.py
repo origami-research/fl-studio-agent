@@ -77,13 +77,13 @@ def _blob_from_notes(notes: list[dict[str, Any]], channel: int, ppq: int) -> byt
     packed = b""
     for note in notes:
         packed += _pack_note(
-            position=int(round(float(note["start"]) * ppq)),
-            length=max(1, int(round(float(note["length"]) * ppq))),
+            position=round(float(note["start"]) * ppq),
+            length=max(1, round(float(note["length"]) * ppq)),
             key=int(note["key"]),
             channel=channel,
             # Tool surface is 0..1; the file format is 0..127 / 0..128.
-            velocity=max(0, min(127, int(round(float(note.get("velocity", 0.8)) * 127)))),
-            pan=max(0, min(128, int(round(float(note.get("pan", 0.5)) * 128)))),
+            velocity=max(0, min(127, round(float(note.get("velocity", 0.8)) * 127))),
+            pan=max(0, min(128, round(float(note.get("pan", 0.5)) * 128))),
         )
     return packed
 
@@ -188,7 +188,7 @@ def set_tempo(project: Path, bpm: float) -> float:
     found = False
     for event in parsed.events:
         if str(event.id) == "ProjectID.Tempo":
-            event.value = int(round(bpm * 1000))
+            event.value = round(bpm * 1000)
             found = True
     if not found:
         raise RuntimeError("project has no ProjectID.Tempo event")
@@ -231,11 +231,11 @@ def set_channel_levels(
     if volume is not None:
         if not 0.0 <= volume <= 1.0:
             raise ValueError(f"volume {volume} out of range (0.0-1.0)")
-        target.volume = int(round(volume * LEVEL_MAX))
+        target.volume = round(volume * LEVEL_MAX)
     if pan is not None:
         if not -1.0 <= pan <= 1.0:
             raise ValueError(f"pan {pan} out of range (-1.0 left to 1.0 right)")
-        target.pan = int(round(PAN_CENTRE + pan * PAN_CENTRE))
+        target.pan = round(PAN_CENTRE + pan * PAN_CENTRE)
     if pitch_semitones is not None:
         if not -48 <= pitch_semitones <= 48:
             raise ValueError(f"pitch {pitch_semitones} out of range (-48 to 48)")

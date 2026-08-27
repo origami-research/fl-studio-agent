@@ -51,7 +51,7 @@ class Note(BaseModel):
 def _resolve_key(key: str | int) -> int:
     """Note name or number -> MIDI 0-127. Raises ValueError with a model-readable message."""
     if isinstance(key, bool):
-        raise ValueError(f"invalid key {key!r}")
+        raise ValueError(f"invalid key {key!r}")  # noqa: TRY004 - uniform model-readable ValueError, not TypeError
     if isinstance(key, int):
         if not 0 <= key <= 127:
             raise ValueError(f"MIDI note {key} out of range (0-127)")
