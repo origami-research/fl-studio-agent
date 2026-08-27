@@ -9,11 +9,11 @@ is the natural user flow (start the Claude session, which spawns this server and
 opens the ports, *then* open FL). For the FL-already-running case the installer
 can enable a persistent IAC bus; see ``install.py`` / docs/14.
 
-The wire codec (framing, chunking, reassembly) lives in the controller script,
-which is the single source of truth for the protocol and is deployed standalone
-into FL. We import it here rather than maintain a second copy. (Cleanup noted in
-docs/14: lift the codec into a shared vendored module if a third consumer
-appears.)
+The wire codec (framing, chunking, reassembly) lives in ``flmcp_codec.py``
+(docs/15 fix item 6), the single source of truth for the protocol. The
+controller script embeds it verbatim (byte-for-byte, checked by
+``test_codec_sync.py``) since FL loads it as one standalone file; the server
+imports the same module directly since it has no such constraint.
 """
 
 from __future__ import annotations
@@ -30,7 +30,7 @@ _CONTROLLER_DIR = _REPO_ROOT / "fl-scripts" / "controller"
 if str(_CONTROLLER_DIR) not in sys.path:
     sys.path.insert(0, str(_CONTROLLER_DIR))
 
-from device_FLMCP import (  # noqa: E402  (path set above)
+from flmcp_codec import (  # noqa: E402  (path set above)
     TYPE_EVENT,
     TYPE_REQUEST,
     TYPE_RESPONSE,
