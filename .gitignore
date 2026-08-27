@@ -13,3 +13,6 @@ native/build/
 # probe runtime artifacts
 fl-scripts/controller/probe/*.jsonl
 fl-scripts/controller/probe/*.log
+
+# fetched .flp corpus (third-party test inputs, not vendored)
+mcp-server/tests/corpus/data/
