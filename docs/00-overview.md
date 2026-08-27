@@ -1,5 +1,9 @@
 # 00 — Overview
 
+> **AMENDED (2026-08-26):** the "unlock" below (the C++ effect plugin + `FHD_AddNotesToPR`) is superseded by FL 2026's own native tooling (`ilmcp`).
+> Plugin loading and instrument creation are no longer walls.
+> See [12-fl2026-native-surface.md](12-fl2026-native-surface.md) for the current architecture and capability matrix.
+
 ## What we are building
 
 An MCP (Model Context Protocol) server that lets an AI model act as a producer inside a

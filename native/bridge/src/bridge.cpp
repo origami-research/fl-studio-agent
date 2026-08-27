@@ -1,19 +1,32 @@
-// FL MCP Bridge — applies the MCP server's note edits to a live FL session.
+// FL MCP Bridge — the production note-writing plugin. Removes the human from
+// the loop: it consumes the same spool the piano roll .pyscript reads and
+// applies note edits to the live FL session on its own, silently, with no
+// editor and no user trigger.
 //
-// This is what removes the human from the loop. The piano roll .pyscript that
-// preceded it works, but only when a user clicks Tools > Scripting, because FL
-// gives piano roll scripts no other entry point. A native effect gets an Idle
-// callback instead, so it can pick work up on its own.
+// ABI: base-free, correct-by-construction for FL 2026 (26.1.5.x, Apple
+// Silicon). This is the outcome of the 12-run Spike 1 crash saga documented in
+// native/spike1/NOBASE_FINDINGS.md and BRIDGE_FINDINGS.md next to this file:
 //
-// It reads the *same* spool the pyscript reads — the pending.json / result.json
-// / consumed.json protocol from docs/03 — so the MCP server needed no changes
-// to gain an autonomous backend, and the pyscript remains a working fallback
-// for anyone who has not installed this. Whichever consumer sees a command
-// first records its id in the shared ledger, so it is applied exactly once.
+//   * NO SDK base class. TCPPFruityPlug's construction (or its base
+//     TFruityPlug's virtual destructor, which lands two host-callable slots at
+//     20/21) crashed every one of the first 11 builds inside FL's own window
+//     setup, with zero frames of ours. This class reimplements the TFruityPlug
+//     ABI directly: identical data layout (static_asserted against the SDK
+//     header) and the 20 classic virtuals in SDK order, with NO virtual
+//     destructor anywhere.
+//   * 64 vtable slots. FL 2026's real TFruityPlug has grown well past the
+//     public header's 20 virtuals — its loader host-calls extended slots
+//     (observed live: 26, 27, 30, 32; the RE found call sites for 25/26/31).
+//     A 22-slot vtable let those calls run off the end into adjacent RTTI data
+//     and branch there (the run-11 EBusError at typeinfo+0). Slots 20..63 are
+//     real virtuals here, so every extended call lands on a defined method.
+//   * ExtReserved object tail: FL reads a pointer out of the object's +0xa0
+//     region on the extended path and may write host-side state past the
+//     classic fields; this zeroed tail keeps such access inside memory we own.
 //
-// Registered as an EFFECT, not a generator: per fp_plugclass.h, TNotesParams
-// .ChanNum retargets to the selected channel only for effects. See
-// native/spike1 for the experiment that established this.
+// The note-writing and spool logic lives in bridge_core.* so it is unit-tested
+// under ASan/UBSan against a mock host (bridge/tests/bridge_core_test.cpp) with
+// no FL in the loop. This file is only the ABI shell + the extended-slot map.
 
 #include <unistd.h>
 
@@ -25,177 +38,87 @@
 #include <string>
 #include <vector>
 
-#include "fp_cplug.h"
+#include "bridge_core.h"
 #include "fp_plugclass.h"
-#include "minijson.h"
 
 namespace {
 
-// --- load tracing ------------------------------------------------------------
-// Without this there is no way to tell "FL never loaded the dylib" from "FL
-// loaded it but never instantiated the plugin" from "the plugin ran but could
-// not write its heartbeat". Each stage stamps a file in /tmp, which is always
-// writable and outside every sandbox, so a failure at any stage is visible to
-// the harness instead of presenting as a silent timeout.
-void TraceStage(const char* stage) {
-  char path[128];
-  snprintf(path, sizeof(path), "/tmp/flmcp_trace_%s.txt", stage);
-  FILE* f = fopen(path, "w");
-  if (f == nullptr) return;
-  fprintf(f, "stage=%s\npid=%d\nunix_time=%lld\n", stage, (int)getpid(),
-          (long long)time(nullptr));
-  fclose(f);
-}
+// --- checkpoints -------------------------------------------------------------
+// Kept deliberately small and capped: this plugin lives on a mixer insert
+// permanently, so unbounded logging is not acceptable. Status is a single
+// overwritten value; the heartbeat is a single overwritten counter; the
+// extended-slot discovery log is capped per slot. All under the spool dir so a
+// human retest can read the plugin's state without a debugger.
 
-// Runs at dlopen, before FL calls anything. Proves the binary was at least
-// found and loaded.
-__attribute__((constructor)) static void OnDylibLoaded() { TraceStage("dylib_loaded"); }
-
-const int kProtoVersion = 1;
-const int kIdleTicksBetweenPolls = 6;   // Idle is ~20ms; poll a few times a sec
-const int kMaxConsumedIds = 64;
-const int kDefaultPPQ = 96;             // FL's default; overridable per command
-
-// Mirrors mcp-server/src/fl_mcp/flpaths.py. FL allows writes under
-// 'Piano roll scripts' recursively but not elsewhere in Settings, so both
-// candidates live under it.
-const char* kSpoolSubdirs[] = {
-    "Piano roll scripts/FLMCP",
-    "Piano roll scripts",
-};
-const int kSpoolSubdirCount = 2;
-
+char gSpoolDir[512] = {0};
 std::vector<std::string> gSpoolRoots;
 
-void BuildSpoolRoots() {
-  gSpoolRoots.clear();
-  const char* home = getenv("HOME");
+void BuildSpoolState() {
+  const char *home = getenv("HOME");
   if (home == nullptr) return;
-  for (int i = 0; i < kSpoolSubdirCount; ++i) {
-    gSpoolRoots.push_back(std::string(home) +
-                          "/Documents/Image-Line/FL Studio/Settings/" +
-                          kSpoolSubdirs[i]);
-  }
+  snprintf(gSpoolDir, sizeof(gSpoolDir),
+           "%s/Documents/Image-Line/FL Studio/Settings/Piano roll scripts/FLMCP", home);
+  gSpoolRoots = bridge_core::SpoolRoots(home);
 }
 
-std::string Join(const std::string& dir, const char* name) {
-  return dir + "/" + name;
-}
-
-bool ReadFile(const std::string& path, std::string* out) {
-  FILE* f = fopen(path.c_str(), "rb");
-  if (f == nullptr) return false;
-  out->clear();
-  char buffer[4096];
-  size_t n;
-  while ((n = fread(buffer, 1, sizeof(buffer), f)) > 0) out->append(buffer, n);
+void WriteSmall(const char *name, const char *text) {
+  if (gSpoolDir[0] == '\0') return;
+  char path[600];
+  snprintf(path, sizeof(path), "%s/%s", gSpoolDir, name);
+  FILE *f = fopen(path, "w");
+  if (f == nullptr) return;
+  fputs(text, f);
   fclose(f);
-  return true;
 }
 
-bool WriteFile(const std::string& path, const std::string& text) {
-  FILE* f = fopen(path.c_str(), "wb");
-  if (f == nullptr) return false;
-  size_t written = fwrite(text.data(), 1, text.size(), f);
+void WriteStatus(const char *status) {
+  char text[96];
+  snprintf(text, sizeof(text), "status=%s\n", status);
+  WriteSmall("bridge_status.txt", text);
+}
+
+void WriteHeartbeat(long long tick, int applied) {
+  char text[160];
+  snprintf(text, sizeof(text), "tick=%lld\napplied=%d\npid=%d\nunix_time=%lld\nbackend=bridge\n",
+           tick, applied, (int)getpid(), (long long)time(nullptr));
+  WriteSmall("bridge_heartbeat.txt", text);
+}
+
+// Extended-slot discovery log, capped per slot. Turns FL 2026's undocumented
+// extended ABI into evidence instead of a crash, without growing without bound.
+constexpr int kExtSlotCount = 64;
+constexpr int kExtLogCapPerSlot = 4;
+int gExtSlotHits[kExtSlotCount] = {0};
+
+void LogExtSlot(int slot, intptr_t a, intptr_t b, intptr_t c) {
+  if (slot < 0 || slot >= kExtSlotCount) return;
+  if (gExtSlotHits[slot] >= kExtLogCapPerSlot) return;
+  gExtSlotHits[slot]++;
+  if (gSpoolDir[0] == '\0') return;
+  char path[600];
+  snprintf(path, sizeof(path), "%s/bridge_ext_slots.txt", gSpoolDir);
+  FILE *f = fopen(path, "a");
+  if (f == nullptr) return;
+  fprintf(f, "ext slot=%d a=%lld b=%lld c=%lld\n", slot, (long long)a, (long long)b, (long long)c);
   fclose(f);
-  return written == text.size();
-}
-
-// --- consumed-id ledger ------------------------------------------------------
-// Shared with the .pyscript. Consumption cannot depend on deleting or
-// overwriting pending.json: the pyscript runs in FL's sandbox where os.remove
-// is blocked, and the folder holding a command may be readable but not
-// writable. The ledger is the single source of truth for "already applied".
-
-std::vector<int> ReadConsumedIds() {
-  std::vector<int> ids;
-  for (const std::string& root : gSpoolRoots) {
-    std::string text;
-    if (!ReadFile(Join(root, "consumed.json"), &text)) continue;
-    minijson::Value doc;
-    if (!minijson::Parse(text.c_str(), &doc)) continue;
-    const minijson::Value* list = doc.Get("ids");
-    if (list == nullptr || list->type != minijson::Type::Array) continue;
-    for (const minijson::Value& item : list->array) {
-      if (item.type != minijson::Type::Number) continue;
-      int id = static_cast<int>(item.number);
-      bool seen = false;
-      for (int existing : ids) seen = seen || existing == id;
-      if (!seen) ids.push_back(id);
-    }
-  }
-  return ids;
-}
-
-bool AlreadyConsumed(int id) {
-  for (int existing : ReadConsumedIds()) {
-    if (existing == id) return true;
-  }
-  return false;
-}
-
-// Returns how many roots accepted the write. Zero means the command will be
-// re-applied on the next poll, which the caller must report rather than hide.
-int RecordConsumed(int id) {
-  std::vector<int> ids = ReadConsumedIds();
-  bool seen = false;
-  for (int existing : ids) seen = seen || existing == id;
-  if (!seen) ids.push_back(id);
-  if ((int)ids.size() > kMaxConsumedIds) {
-    ids.erase(ids.begin(), ids.begin() + (ids.size() - kMaxConsumedIds));
-  }
-
-  std::string json = "{\"ids\": [";
-  for (size_t i = 0; i < ids.size(); ++i) {
-    if (i != 0) json += ", ";
-    json += std::to_string(ids[i]);
-  }
-  json += "]}";
-
-  std::string tombstone =
-      "{\"consumed\": true, \"id\": " + std::to_string(id) + "}";
-
-  int accepted = 0;
-  for (const std::string& root : gSpoolRoots) {
-    if (WriteFile(Join(root, "consumed.json"), json)) ++accepted;
-    std::string pending = Join(root, "pending.json");
-    std::string existing;
-    if (ReadFile(pending, &existing)) WriteFile(pending, tombstone);
-  }
-  return accepted;
-}
-
-void WriteResult(const std::string& json) {
-  for (const std::string& root : gSpoolRoots) {
-    WriteFile(Join(root, "result.json"), json);
-  }
-}
-
-void WriteHeartbeat(long long tick) {
-  char buffer[256];
-  snprintf(buffer, sizeof(buffer),
-           "tick=%lld\npid=%d\nunix_time=%lld\nbackend=bridge\n", tick,
-           (int)getpid(), (long long)time(nullptr));
-  for (const std::string& root : gSpoolRoots) {
-    WriteFile(Join(root, "bridge_heartbeat.txt"), buffer);
-  }
 }
 
 char gLongName[] = "FL MCP Bridge";
 char gShortName[] = "MCPBR";
 
-// Name pointers are assigned at runtime: fp_plugclass.h uses #pragma pack(4),
-// putting LongName at offset 4, and arm64 cannot emit a pointer relocation at a
-// 4-byte-aligned address. Static initialisation fails to link.
+// #pragma pack(4) in the SDK puts LongName at offset 4; arm64 cannot emit a
+// pointer relocation at a 4-byte-aligned address, so the name pointers are
+// assigned at runtime rather than in this static initializer.
 TFruityPlugInfo gPlugInfo = {
     CurrentSDKVersion,
-    nullptr,
-    nullptr,
-    FPF_Type_Effect,  // effect, not generator — this is what enables ChanNum
-    0,                // NumParams
-    0,                // DefPoly
-    0,                // NumOutCtrls
-    0,                // NumOutVoices
+    nullptr,  // LongName  — set in InitPlugInfo()
+    nullptr,  // ShortName — set in InitPlugInfo()
+    FPF_Type_Effect,  // effect (not generator): TNotesParams.ChanNum retargets to
+                      // the selected channel only for effects (fp_plugclass.h)
+    0,  // NumParams
+    0,  // DefPoly
+    0,  // NumOutCtrls
+    0,  // NumOutVoices
     {0},
 };
 
@@ -204,193 +127,251 @@ void InitPlugInfo() {
   gPlugInfo.ShortName = gShortName;
 }
 
+// The extended tick (FL 2026 slot 27) fires often; polling the filesystem on
+// every one is wasteful. Poll every Nth tick — still sub-second responsiveness.
+constexpr int kPollEveryNTicks = 3;
+
 }  // namespace
 
-class Bridge : public TCPPFruityPlug {
+// ABI-exact reimplementation of TFruityPlug. See the file header and
+// native/spike1/NOBASE_FINDINGS.md for why this is not derived from the SDK
+// class. Layout is static_asserted against the SDK header below.
+class Bridge {
  public:
-  Bridge(intptr_t tag, TFruityPlugHost* host);
+  // --- data: mirrors TFruityPlug's field order/types exactly -----------------
+  TPluginTag HostTag = 0;
+  PFruityPlugInfo Info = nullptr;
+  HWND EditorHandle = 0;
+  BOOL MonoRender = 0;
+  int Reserved[32] = {0};
+  // FL 2026's real TFruityPlug is larger than the public header; this zeroed
+  // tail absorbs any host-side state it reads/writes past the classic fields.
+  unsigned char ExtReserved[256] = {0};
 
-  void _stdcall DestroyObject() override;
-  void _stdcall Idle_Public() override;
-  void _stdcall Eff_Render(PWAV32FS source, PWAV32FS dest, int length) override;
+  Bridge(TPluginTag tag, TFruityPlugHost *host);
+
+  // --- classic vtable, slots 0..19, SDK declaration order --------------------
+  virtual void _stdcall DestroyObject();                                              // 0
+  virtual intptr_t _stdcall Dispatcher(intptr_t id, intptr_t index, intptr_t value);  // 1
+  virtual void _stdcall Idle_Public();                                                // 2
+  virtual void _stdcall SaveRestoreState(IStream *stream, BOOL save);                 // 3
+  virtual void _stdcall GetName(int section, int index, int value, char *name);       // 4
+  virtual int _stdcall ProcessEvent(int event_id, int event_value, int flags);        // 5
+  virtual int _stdcall ProcessParam(int index, int value, int rec_flags);             // 6
+  virtual void _stdcall Eff_Render(PWAV32FS source, PWAV32FS dest, int length);       // 7
+  virtual void _stdcall Gen_Render(PWAV32FS dest, int &length);                       // 8
+  virtual TVoiceHandle _stdcall TriggerVoice(PVoiceParams voice_params, intptr_t set_tag);  // 9
+  virtual void _stdcall Voice_Release(TVoiceHandle handle);                           // 10
+  virtual void _stdcall Voice_Kill(TVoiceHandle handle);                              // 11
+  virtual int _stdcall Voice_ProcessEvent(TVoiceHandle handle, intptr_t event_id,
+                                          intptr_t event_value, intptr_t flags);      // 12
+  virtual int _stdcall Voice_Render(TVoiceHandle handle, PWAV32FS dest, int &length);  // 13
+  virtual void _stdcall NewTick();                                                    // 14
+  virtual void _stdcall MIDITick();                                                   // 15
+  virtual void _stdcall MIDIIn(int &msg);                                             // 16
+  virtual void _stdcall MsgIn(intptr_t msg);                                          // 17
+  virtual int _stdcall OutputVoice_ProcessEvent(TOutVoiceHandle handle, intptr_t event_id,
+                                                intptr_t event_value, intptr_t flags);  // 18
+  virtual void _stdcall OutputVoice_Kill(TVoiceHandle handle);                        // 19
+
+  // --- extended-ABI slots 20..63 ---------------------------------------------
+  // FL 2026 host-calls into this range (observed live: 26/27/30/32). Signatures
+  // are undocumented, so each takes three integer args (harmless to read extra
+  // arg registers on both AAPCS64 and x86_64 SysV) and returns 0 ("unsupported")
+  // — except slot 27, the tick, which drives the spool poll. NO virtual
+  // destructor exists anywhere in this class ON PURPOSE: implicit dtor slots
+  // would sit at 20/21, where a host call would run `delete this`.
+#define BRIDGE_PAD_SLOT(n)                                                    \
+  virtual intptr_t _stdcall ExtSlot##n(intptr_t a, intptr_t b, intptr_t c) {  \
+    LogExtSlot(n, a, b, c);                                                   \
+    return 0;                                                                 \
+  }
+  BRIDGE_PAD_SLOT(20) BRIDGE_PAD_SLOT(21) BRIDGE_PAD_SLOT(22) BRIDGE_PAD_SLOT(23)
+  BRIDGE_PAD_SLOT(24) BRIDGE_PAD_SLOT(25)
+  // slot 26: a host query (observed a=query-id, c=value, e.g. a=4/c=44100
+  // samplerate). We do not need any of these to write notes, so the sane
+  // response is 0 ("not handled") — the same value the pure-pad build returned
+  // when it loaded and ran stably. Logged for future refinement.
+  virtual intptr_t _stdcall ExtSlot26(intptr_t a, intptr_t b, intptr_t c) {
+    LogExtSlot(26, a, b, c);
+    return 0;
+  }
+  // slot 27: the tick. FL calls this repeatedly while the plugin is live; it is
+  // our autonomous entry point (the base-free ABI never calls FHD_WantIdle, the
+  // dispatcher call implicated in earlier crashes). Poll the spool here.
+  virtual intptr_t _stdcall ExtSlot27(intptr_t a, intptr_t b, intptr_t c) {
+    LogExtSlot(27, a, b, c);
+    Tick();
+    return 0;
+  }
+  BRIDGE_PAD_SLOT(28) BRIDGE_PAD_SLOT(29)
+  BRIDGE_PAD_SLOT(30) BRIDGE_PAD_SLOT(31) BRIDGE_PAD_SLOT(32) BRIDGE_PAD_SLOT(33)
+  BRIDGE_PAD_SLOT(34) BRIDGE_PAD_SLOT(35) BRIDGE_PAD_SLOT(36) BRIDGE_PAD_SLOT(37)
+  BRIDGE_PAD_SLOT(38) BRIDGE_PAD_SLOT(39) BRIDGE_PAD_SLOT(40) BRIDGE_PAD_SLOT(41)
+  BRIDGE_PAD_SLOT(42) BRIDGE_PAD_SLOT(43) BRIDGE_PAD_SLOT(44) BRIDGE_PAD_SLOT(45)
+  BRIDGE_PAD_SLOT(46) BRIDGE_PAD_SLOT(47) BRIDGE_PAD_SLOT(48) BRIDGE_PAD_SLOT(49)
+  BRIDGE_PAD_SLOT(50) BRIDGE_PAD_SLOT(51) BRIDGE_PAD_SLOT(52) BRIDGE_PAD_SLOT(53)
+  BRIDGE_PAD_SLOT(54) BRIDGE_PAD_SLOT(55) BRIDGE_PAD_SLOT(56) BRIDGE_PAD_SLOT(57)
+  BRIDGE_PAD_SLOT(58) BRIDGE_PAD_SLOT(59) BRIDGE_PAD_SLOT(60) BRIDGE_PAD_SLOT(61)
+  BRIDGE_PAD_SLOT(62) BRIDGE_PAD_SLOT(63)
+#undef BRIDGE_PAD_SLOT
 
  private:
-  void Poll();
-  void Execute(const minijson::Value& command, const std::string& source_root);
-  int AddNotes(const minijson::Value& command, std::string* error);
+  void Tick();
 
-  int idle_counter_ = 0;
+  // Non-virtual, private: only DestroyObject (`delete this`) destroys the
+  // object, exactly the SDK contract — and non-virtual keeps dtor slots out of
+  // the vtable entirely.
+  ~Bridge() = default;
+
+  TFruityPlugHost *host_ = nullptr;
+  int tick_counter_ = 0;
   long long heartbeat_tick_ = 0;
+  int applied_total_ = 0;
 };
 
-Bridge::Bridge(intptr_t tag, TFruityPlugHost* host)
-    : TCPPFruityPlug(tag, host, 0) {
-  InitPlugInfo();
-  Info = &gPlugInfo;
-  HostTag = tag;
-  PlugHost = host;
+// Layout contract with the fetched SDK header: if it ever disagrees, fail the
+// build, not FL Studio. (offsetof on this non-standard-layout class is
+// conditionally-supported; clang evaluates it correctly and only warns.)
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Winvalid-offsetof"
+static_assert(offsetof(Bridge, HostTag) == offsetof(TFruityPlug, HostTag), "HostTag offset");
+static_assert(offsetof(Bridge, Info) == offsetof(TFruityPlug, Info), "Info offset");
+static_assert(offsetof(Bridge, EditorHandle) == offsetof(TFruityPlug, EditorHandle),
+              "EditorHandle offset");
+static_assert(offsetof(Bridge, MonoRender) == offsetof(TFruityPlug, MonoRender), "MonoRender offset");
+static_assert(offsetof(Bridge, Reserved) == offsetof(TFruityPlug, Reserved), "Reserved offset");
+static_assert(sizeof(((Bridge *)nullptr)->Reserved) == sizeof(((TFruityPlug *)nullptr)->Reserved),
+              "Reserved size");
+#pragma clang diagnostic pop
 
-  BuildSpoolRoots();
-
-  // Value 2 == always enabled, so Idle keeps firing with no editor open. This
-  // plugin has no UI at all, so without it nothing would ever run.
-  if (PlugHost != nullptr) {
-    PlugHost->Dispatcher(HostTag, FHD_WantIdle, 0, 2);
+Bridge::Bridge(TPluginTag tag, TFruityPlugHost *host) {
+  try {
+    BuildSpoolState();
+    WriteStatus("constructing");
+    InitPlugInfo();
+    Info = &gPlugInfo;
+    HostTag = tag;
+    EditorHandle = 0;
+    host_ = host;
+    // Deliberately no FHD_WantIdle: the base-free ABI gets its autonomous
+    // callback from the extended tick (slot 27), and FHD_WantIdle was the
+    // dispatcher call implicated in the earlier crash chain (run 5).
+    WriteHeartbeat(0, 0);
+    WriteStatus("loaded");
+  } catch (...) {
+    WriteStatus("constructor_exception");
   }
-  TraceStage("ctor_done");
-  WriteHeartbeat(0);
 }
 
-void _stdcall Bridge::DestroyObject() { delete this; }
-
-void _stdcall Bridge::Eff_Render(PWAV32FS source, PWAV32FS dest, int length) {
-  // Sonically inert. Users will leave this on an insert permanently.
-  if (source != dest && length > 0) {
-    memcpy(dest, source, sizeof(TWAV32FS) * (size_t)length);
+void Bridge::Tick() {
+  if (++tick_counter_ < kPollEveryNTicks) return;
+  tick_counter_ = 0;
+  int applied = 0;
+  try {
+    bridge_core::PollOutcome out =
+        bridge_core::PollOnce(host_, HostTag, gSpoolRoots, bridge_core::kDefaultPPQ);
+    if (out.had_command && out.ok) applied = out.notes_written;
+    if (out.had_command) applied_total_ += out.ok ? out.notes_written : 0;
+  } catch (...) {
+    WriteStatus("tick_exception");
   }
+  WriteHeartbeat(++heartbeat_tick_, applied_total_);
+  (void)applied;
 }
 
+void _stdcall Bridge::DestroyObject() {
+  WriteStatus("destroyed");
+  delete this;
+}
+
+// Classic slots: silent no-ops matching the SDK defaults. Eff_Render passes
+// audio through untouched (this plugin is sonically inert). None of these are
+// the note path — that runs on the tick.
+intptr_t _stdcall Bridge::Dispatcher(intptr_t id, intptr_t index, intptr_t value) {
+  (void)index;
+  (void)value;
+  return id == FPD_UseIncreasedMIDIResolution ? 1 : 0;
+}
 void _stdcall Bridge::Idle_Public() {
-  if (++idle_counter_ < kIdleTicksBetweenPolls) return;
-  idle_counter_ = 0;
-  WriteHeartbeat(++heartbeat_tick_);
-  Poll();
+  // If FL ever calls the classic idle unsolicited, use it as a poll source too
+  // (harmless; shares the same throttle path). Primary driver is slot 27.
+  Tick();
+}
+void _stdcall Bridge::SaveRestoreState(IStream *stream, BOOL save) {
+  (void)stream;
+  (void)save;
+}
+void _stdcall Bridge::GetName(int section, int index, int value, char *name) {
+  (void)section;
+  (void)index;
+  (void)value;
+  (void)name;
+}
+int _stdcall Bridge::ProcessEvent(int event_id, int event_value, int flags) {
+  (void)event_id;
+  (void)event_value;
+  (void)flags;
+  return 0;
+}
+int _stdcall Bridge::ProcessParam(int index, int value, int rec_flags) {
+  (void)index;
+  (void)rec_flags;
+  return value;
+}
+void _stdcall Bridge::Eff_Render(PWAV32FS source, PWAV32FS dest, int length) {
+  if (source != dest && length > 0) memcpy(dest, source, sizeof(TWAV32FS) * (size_t)length);
+}
+void _stdcall Bridge::Gen_Render(PWAV32FS dest, int &length) {
+  (void)dest;
+  (void)length;
+}
+TVoiceHandle _stdcall Bridge::TriggerVoice(PVoiceParams voice_params, intptr_t set_tag) {
+  (void)voice_params;
+  (void)set_tag;
+  return 0;
+}
+void _stdcall Bridge::Voice_Release(TVoiceHandle handle) { (void)handle; }
+void _stdcall Bridge::Voice_Kill(TVoiceHandle handle) { (void)handle; }
+int _stdcall Bridge::Voice_ProcessEvent(TVoiceHandle handle, intptr_t event_id,
+                                        intptr_t event_value, intptr_t flags) {
+  (void)handle;
+  (void)event_id;
+  (void)event_value;
+  (void)flags;
+  return 0;
+}
+int _stdcall Bridge::Voice_Render(TVoiceHandle handle, PWAV32FS dest, int &length) {
+  (void)handle;
+  (void)dest;
+  (void)length;
+  return 0;
+}
+void _stdcall Bridge::NewTick() {}
+void _stdcall Bridge::MIDITick() {}
+void _stdcall Bridge::MIDIIn(int &msg) { (void)msg; }
+void _stdcall Bridge::MsgIn(intptr_t msg) { (void)msg; }
+int _stdcall Bridge::OutputVoice_ProcessEvent(TOutVoiceHandle handle, intptr_t event_id,
+                                              intptr_t event_value, intptr_t flags) {
+  (void)handle;
+  (void)event_id;
+  (void)event_value;
+  (void)flags;
+  return 0;
+}
+void _stdcall Bridge::OutputVoice_Kill(TVoiceHandle handle) { (void)handle; }
+
+// intptr_t tag (not int — an int param truncates FL's real tag on this build).
+// Returns void*: FL treats the result as an opaque object pointer + vtable.
+extern "C" __attribute__((visibility("default"))) void *_stdcall
+CreatePlugInstance(TFruityPlugHost *host, TPluginTag tag) {
+  return new Bridge(tag, host);
 }
 
-void Bridge::Poll() {
-  for (const std::string& root : gSpoolRoots) {
-    std::string text;
-    if (!ReadFile(Join(root, "pending.json"), &text)) continue;
-
-    minijson::Value command;
-    if (!minijson::Parse(text.c_str(), &command)) continue;
-    if (command.type != minijson::Type::Object) continue;
-
-    // A tombstone left by whichever consumer got here first.
-    const minijson::Value* op = command.Get("op");
-    if (op == nullptr || op->type != minijson::Type::String) continue;
-
-    Execute(command, root);
-    return;  // one command per poll; the next Idle picks up the next
-  }
-}
-
-void Bridge::Execute(const minijson::Value& command, const std::string& source_root) {
-  int id = command.Int("id", 0);
-  if (AlreadyConsumed(id)) return;
-
-  int proto = command.Int("proto", 0);
-  if (proto != kProtoVersion) {
-    RecordConsumed(id);
-    WriteResult("{\"id\": " + std::to_string(id) +
-                ", \"ok\": false, \"error\": \"protocol mismatch: command is v" +
-                std::to_string(proto) + ", bridge is v" +
-                std::to_string(kProtoVersion) + "\", \"backend\": \"bridge\"}");
-    return;
-  }
-
-  // Claim before executing: a command that crashes FL must not replay on
-  // restart and crash it again.
-  int accepted = RecordConsumed(id);
-
-  std::string op = command.Str("op", "");
-  std::string error;
-  int written = 0;
-  bool ok = false;
-
-  if (op == "add_notes") {
-    written = AddNotes(command, &error);
-    ok = error.empty();
-  } else if (op == "clear_notes") {
-    minijson::Value clear;
-    clear.type = minijson::Type::Object;
-    clear.object.emplace_back("mode", minijson::Value());
-    clear.object.back().second.type = minijson::Type::String;
-    clear.object.back().second.text = "replace";
-    written = AddNotes(clear, &error);
-    ok = error.empty();
-  } else {
-    error = "unknown op: " + op;
-  }
-
-  if (PlugHost != nullptr) PlugHost->Dispatcher(HostTag, FHD_SetDirty, 0, 0);
-
-  std::string json = "{\"id\": " + std::to_string(id);
-  json += ok ? ", \"ok\": true" : ", \"ok\": false";
-  if (!ok) json += ", \"error\": \"" + minijson::Escape(error) + "\"";
-  json += ", \"op\": \"" + minijson::Escape(op) + "\"";
-  json += ", \"notes_written\": " + std::to_string(written);
-  json += ", \"consumed\": " + std::string(accepted > 0 ? "true" : "false");
-  json += ", \"backend\": \"bridge\"";
-  json += ", \"spool\": \"" + minijson::Escape(source_root) + "\"";
-  json += ", \"summary\": \"applied " + std::to_string(written) +
-          " note(s) via FHD_AddNotesToPR\"}";
-  WriteResult(json);
-}
-
-int Bridge::AddNotes(const minijson::Value& command, std::string* error) {
-  if (PlugHost == nullptr) {
-    *error = "no plugin host";
-    return 0;
-  }
-
-  const minijson::Value* notes = command.Get("notes");
-  int count = 0;
-  if (notes != nullptr && notes->type == minijson::Type::Array) {
-    count = (int)notes->array.size();
-  }
-
-  const double ppq = command.Num("ppq", kDefaultPPQ);
-  const bool replace = command.Str("mode", "merge") == "replace";
-
-  // TNoteParams is #pragma pack(1) and TNotesParams ends in a variable-length
-  // array, so size from offsetof — sizeof would fold in the trailing element.
-  size_t bytes =
-      offsetof(TNotesParams, NoteParams) + (size_t)(count > 0 ? count : 1) * sizeof(TNoteParams);
-  TNotesParams* params = (TNotesParams*)calloc(1, bytes);
-  if (params == nullptr) {
-    *error = "out of memory";
-    return 0;
-  }
-
-  params->Target = 1;  // piano roll
-  params->Flags = replace ? NPF_EmptyFirst : 0;
-  params->PatNum = command.Int("pattern", -1);
-  params->ChanNum = command.Int("channel", -1);
-  params->Count = count;
-
-  for (int i = 0; i < count; ++i) {
-    const minijson::Value& n = notes->array[(size_t)i];
-    TNoteParams* out = &params->NoteParams[i];
-    memset(out, 0, sizeof(*out));
-    out->Position = (int)(n.Num("start", 0.0) * ppq + 0.5);
-    int length = (int)(n.Num("length", 1.0) * ppq + 0.5);
-    out->Length = length > 0 ? length : 1;
-    out->Note = (short)n.Int("key", 60);
-    // The server sends 0..1; FL's Vol default is 100/128.
-    out->Vol = (int)(n.Num("velocity", 0.8) * 128.0);
-    // Server pan is 0..1 centred at 0.5; TNoteParams.Pan is centred at 0.
-    out->Pan = (int)((n.Num("pan", 0.5) - 0.5) * 128.0);
-    out->Color = (short)n.Int("color", 0);
-    out->Pitch = 0;
-    out->FCut = 0.0f;
-    out->FRes = 0.0f;
-  }
-
-  PlugHost->Dispatcher(HostTag, FHD_AddNotesToPR, 0, (intptr_t)params);
-  free(params);
-  return count;
-}
-
-extern "C" __attribute__((visibility("default"))) TFruityPlug* _stdcall
-CreatePlugInstance(TFruityPlugHost* host, int tag) {
-  TraceStage("create_called");
-  Bridge* plugin = new Bridge(tag, host);
-  TraceStage("create_returned");
-  return (TFruityPlug*)plugin;
-}
-
-extern "C" __attribute__((visibility("default"))) void _stdcall
-SetExternalAppHandle(intptr_t handle) {
+// Second export in Image-Line's own two-export surface. Per the run-11
+// post-mortem this export is the gate FL 2026 uses to take the extended-slot
+// path — which the Bridge WANTS, since slot 27 (the tick) is its autonomous
+// entry point.
+extern "C" __attribute__((visibility("default"))) void _stdcall SetExternalAppHandle(intptr_t handle) {
   (void)handle;
 }

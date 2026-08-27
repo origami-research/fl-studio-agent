@@ -173,3 +173,14 @@ is the only orchestrator; neither in-FL component knows the other exists. Sequen
 rule: a cross-plane tool call completes plane 1, awaits its response, then issues
 plane 2 — no speculative parallelism inside one tool call, ever. Simplicity beats
 latency here; both planes are sub-50 ms.
+
+### Amendment (spec 11 supersedes)
+
+v0 ships the opposite of the units rule above: the spool carries **beats**, and
+conversion to ticks happens inside FL where the score's real PPQ lives
+(`flp.score.PPQ`). This removes the PPQ-handshake dependency and is the
+standing design; the ticks-on-the-wire rule applies only if a future control
+plane needs it. See docs/10 and docs/11.
+
+Also note: a file-spool control plane (replacing SysEx entirely) is an open
+question - see repo issue #8 and the addendum in docs/11.

@@ -6,11 +6,20 @@ executor inside FL knows the score's real PPQ at runtime (``flp.score.PPQ``),
 so the spool carries beats and conversion happens there. This differs from
 docs/03, which assumed the server would learn PPQ from a control-plane
 handshake that v0 doesn't have yet — see docs/10.
+
+Field-range validation (start/length/velocity/pan/color bounds) is owned by
+``schemas.Note`` — the one seam every lane validates against. This module
+keeps only what pydantic can't do for us: note-name -> MIDI resolution
+(``parse_key``), and per-note error context (which index in the list failed).
 """
 
 from __future__ import annotations
 
 from typing import Any
+
+from pydantic import ValidationError
+
+from . import schemas
 
 # Scientific pitch notation: C4 == MIDI 60 == middle C.
 #
@@ -71,12 +80,17 @@ def key_name(midi: int) -> str:
     return f"{names[midi % 12]}{midi // 12 - 5 + _MIDDLE_C_OCTAVE}"
 
 
-def _num(value: Any, field: str, lo: float, hi: float) -> float:
-    if isinstance(value, bool) or not isinstance(value, (int, float)):
-        raise NoteError(f"{field} must be a number, got {value!r}")
-    if not lo <= value <= hi:
-        raise NoteError(f"{field} must be between {lo} and {hi}, got {value}")
-    return float(value)
+def _validation_message(exc: ValidationError) -> str:
+    """First pydantic error, prefixed with its field name (e.g. 'velocity: ...')."""
+    err = exc.errors()[0]
+    field = ".".join(str(part) for part in err["loc"])
+    return f"{field}: {err['msg']}" if field else err["msg"]
+
+
+# schemas.Note.start has no upper bound (only ge=0) — it's meant to catch
+# malformed/garbage input here, not to express a real musical limit, so this
+# stays a local check rather than something to add to the shared seam.
+_MAX_START_BEATS = 100_000.0
 
 
 def normalize_note(raw: Any, index: int) -> dict[str, Any]:
@@ -93,10 +107,6 @@ def normalize_note(raw: Any, index: int) -> dict[str, Any]:
     if missing:
         raise NoteError(f"note {index}: missing required field(s) {', '.join(missing)}")
 
-    length = _num(raw["length"], f"note {index} length", 0.0, 1024.0)
-    if length <= 0:
-        raise NoteError(f"note {index}: length must be greater than 0 beats")
-
     try:
         key = parse_key(raw["key"])
     except NoteError as exc:
@@ -104,14 +114,22 @@ def normalize_note(raw: Any, index: int) -> dict[str, Any]:
         # the model sent 64 of them.
         raise NoteError(f"note {index}: {exc}") from None
 
-    return {
-        "key": key,
-        "start": _num(raw["start"], f"note {index} start", 0.0, 100_000.0),
-        "length": length,
-        "velocity": _num(raw.get("velocity", 0.8), f"note {index} velocity", 0.0, 1.0),
-        "pan": _num(raw.get("pan", 0.5), f"note {index} pan", 0.0, 1.0),
-        "color": int(_num(raw.get("color", 0), f"note {index} color", 0, 15)),
-    }
+    try:
+        note = schemas.Note(
+            key=key,
+            start=raw["start"],
+            length=raw["length"],
+            velocity=raw.get("velocity", 0.8),
+            pan=raw.get("pan", 0.5),
+            color=raw.get("color", 0),
+        )
+    except ValidationError as exc:
+        raise NoteError(f"note {index}: {_validation_message(exc)}") from None
+
+    if note.start > _MAX_START_BEATS:
+        raise NoteError(f"note {index} start: must be at most {_MAX_START_BEATS:g}, got {note.start:g}")
+
+    return note.canonical()
 
 
 def normalize_notes(raw: Any) -> list[dict[str, Any]]:

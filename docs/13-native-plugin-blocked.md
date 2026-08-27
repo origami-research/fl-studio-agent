@@ -1,4 +1,15 @@
-# 11 — FL Studio will not load third-party native plugins (macOS)
+# 13 — FL Studio will not load third-party native plugins (macOS) — CORRECTED
+
+> **CORRECTION (see [12](12-fl2026-native-surface.md) and [17](17-unified-architecture.md)):**
+> the conclusion below is wrong. The plugin never loaded here because it used the
+> SDK base class / a short vtable; FL 2026's internal interface calls extended
+> vtable slots the public header doesn't declare, so the object fell over before
+> its constructor ran. A **base-free, 64-slot-padded** plugin loads cleanly and
+> stably in FL 2026 (verified live, docs/12). What IS true: a windowless plugin
+> gets no idle callback to self-poll, and an editor crashes on load — so the
+> plugin can only work **server-driven** and is an optional fast-path, not a
+> dependency. The permission-free `flp_writer` backend remains the default
+> regardless. This doc is kept for the record; read it with that correction.
 
 **This invalidates the Bridge plugin design in [04](04-native-plugin.md).** The
 architecture assumed a native effect could be installed alongside Image-Line's

@@ -63,15 +63,40 @@ set_target_properties(spike1 PROPERTIES
     CXX_VISIBILITY_PRESET hidden
 )
 
-# --- FL MCP Bridge -----------------------------------------------------------
-# The real thing: reads the same spool the MCP server writes, so note edits
-# apply with no user action. Replaces the piano roll .pyscript's manual trigger.
-add_library(bridge SHARED bridge/src/bridge.cpp)
-target_link_libraries(bridge PRIVATE fl_sdk)
-target_include_directories(bridge PRIVATE bridge/src)
+# --- FL MCP Bridge: the production note-writing plugin ------------------------
+# Base-free, 64-slot ABI (the proven outcome of the Spike 1 crash saga; see
+# native/bridge/BRIDGE_FINDINGS.md), with the note-write + spool-consume logic
+# factored into bridge_core.* for unit testing under ASan/UBSan. Self-contained:
+# it reimplements the TFruityPlug ABI directly and calls no SDK-cpp symbol, so
+# it links no fl_sdk lib at all (only the header, for struct layouts and the
+# static_assert contract).
+add_library(bridge SHARED
+    bridge/src/bridge.cpp
+    bridge/src/bridge_core.cpp
+)
+target_include_directories(bridge PRIVATE "${FL_SDK_DIR}" bridge/src)
+target_compile_options(bridge PRIVATE
+    -Wno-ignored-attributes -Wno-macro-redefined -Wno-deprecated-declarations
+)
 set_target_properties(bridge PROPERTIES
     OUTPUT_NAME "FL MCP Bridge_x64"
     PREFIX ""
     SUFFIX ".dylib"
     CXX_VISIBILITY_PRESET hidden
 )
+
+# Bridge core unit test: drives PollOnce/BuildNotesParams against a mock host
+# with a temp spool dir, no FL needed. ASan+UBSan.
+add_executable(bridge_core_test
+    bridge/tests/bridge_core_test.cpp
+    bridge/src/bridge_core.cpp
+)
+target_include_directories(bridge_core_test PRIVATE "${FL_SDK_DIR}" bridge/src)
+target_compile_options(bridge_core_test PRIVATE
+    -fsanitize=address,undefined -g
+    -Wno-ignored-attributes
+)
+target_link_options(bridge_core_test PRIVATE -fsanitize=address,undefined)
+
+enable_testing()
+add_test(NAME bridge_core_test COMMAND bridge_core_test)
