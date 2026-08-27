@@ -155,16 +155,22 @@ def _queued(
 
 @mcp.tool()
 def write_notes(
-    notes: list[dict], mode: str = "merge", channel: str | int | None = None
+    notes: list[dict],
+    mode: str = "merge",
+    channel: str | int | None = None,
+    pattern: int | str = -1,
 ) -> dict:
-    """Queue notes to be written into FL Studio's piano roll.
+    """Write notes into FL Studio's piano roll.
 
-    Notes land via the backend cascade (docs/17): live in-place edit if the
-    grants are set up, else the project is rewritten and FL reopened on it (the
-    permission-free default), else the edit is queued for the user to trigger.
-    The result reports which backend ran. Targeting a specific channel is
-    supported via `channel`; explicit-pattern targeting through the Bridge
-    plugin is the documented router follow-up (docs/17), not yet wired here.
+    Two routes (docs/17 backend router):
+    - Default (no explicit `pattern`): the backend cascade - live in-place edit
+      if the grants are set up, else the project is rewritten and FL reopened
+      (the permission-free default), else queued for the user to trigger. The
+      result reports which backend ran; `channel` targets an instrument by name
+      or index.
+    - Explicit `pattern` (and optional `channel`): targets that pattern/channel
+      directly through the Bridge plugin and blocks until it confirms the write.
+      Requires the Bridge plugin loaded and connected (run fl_doctor).
 
     Args:
         notes: List of note objects. Each requires:
@@ -208,6 +214,25 @@ def write_notes(
         }
 
     summary = describe(parsed) + (", replacing existing notes" if mode == "replace" else "")
+
+    # Explicit target -> the Bridge plugin path: targets an arbitrary
+    # pattern/channel and blocks for confirmation (docs/17 router follow-up).
+    if pattern != -1:
+        target = schemas.Target(pattern=pattern, channel=channel if channel is not None else -1)
+        parsed_notes = [schemas.Note.model_validate(n) for n in parsed]
+        try:
+            resp, cmd = get_session().write_notes(target, parsed_notes, mode)
+        except errors.ToolError as exc:
+            return exc.to_dict()
+        if not resp.ok:
+            return errors.fl_api_error("add_notes", resp.err or "unknown error").to_dict()
+        return {
+            "status": "ok",
+            "backend": "bridge",
+            "command_id": cmd.id,
+            "notes_written": resp.notes_written,
+            "target": {"pattern": target.pattern, "channel": target.channel},
+        }
 
     # Live first: it is the only backend that edits the session the user is
     # looking at. The alternative reloads FL, which is correct but disruptive,
