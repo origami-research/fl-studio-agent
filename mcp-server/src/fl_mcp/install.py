@@ -87,14 +87,30 @@ def install_controller() -> Path:
     return dest
 
 
+def _set_int_value(data: str, key_name: str, value_name: str, new_value: int) -> tuple[str, bool]:
+    """Set <Value Name="value_name" Type="2">N</Value> inside the given key's
+    own block only. The body matcher `(?:(?!</Key>).)*?` refuses to cross a
+    </Key>, so a missing value in this key can never make the match overreach
+    into a later, unrelated device's key. Returns (data, matched).
+    """
+    pattern = (
+        r'(<Key Name="' + re.escape(key_name) + r'">(?:(?!</Key>).)*?'
+        r'<Value Name="' + re.escape(value_name) + r'" Type="2">)-?\d+(</Value>)'
+    )
+    data, n = re.subn(pattern, r"\g<1>" + str(new_value) + r"\g<2>", data, count=1, flags=re.DOTALL)
+    return data, bool(n)
+
+
 def configure_midi() -> str:
     """Write the FLMCP controller assignment into FL's reg.xml (FL closed).
 
-    Idempotent: if the FLMCP input/output keys already exist, their ports are
-    normalized to CONTROL_PORT and the controller is enabled; otherwise the keys
-    are inserted into the MIDI input/output sections. Returns a status string.
-    Never raises on a missing/oddly-shaped reg.xml - returns a WARN string so the
-    installer can fall back to a one-time manual assignment.
+    Idempotent. If the FLMCP input/output keys are absent, they are inserted
+    into the MIDI input/output sections. If present, the input and output Port
+    values are normalized to CONTROL_PORT (they must agree for FL to route
+    request/response) and the input Enabled flag is set. Returns a status
+    string; never raises on a missing/oddly-shaped reg.xml and never edits
+    outside the FLMCP keys - returns WARN so the installer can fall back to a
+    one-time manual assignment.
     """
     if not REG_XML.is_file():
         return f"WARN reg.xml not found at {REG_XML}; assign the controller once in FL's MIDI settings"
@@ -117,27 +133,35 @@ def configure_midi() -> str:
     )
 
     changed = False
-    if REQ_PORT_NAME in data:
-        # Normalize the existing input port + enabled flag within its key block.
-        data, n = re.subn(
-            r'(<Key Name="' + re.escape(REQ_PORT_NAME) + r'">.*?<Value Name="Port" Type="2">)-?\d+(</Value>)',
-            r'\g<1>' + str(CONTROL_PORT) + r'\g<2>',
-            data, count=1, flags=re.DOTALL,
-        )
-        changed = changed or bool(n)
+
+    # --- input key ---
+    if f'<Key Name="{REQ_PORT_NAME}">' in data:
+        data, ok = _set_int_value(data, REQ_PORT_NAME, "Port", CONTROL_PORT)
+        if not ok:
+            return (f"WARN {REQ_PORT_NAME} key present but has no Port value; "
+                    "unexpected reg.xml shape - assign the controller once in FL")
+        data, en = _set_int_value(data, REQ_PORT_NAME, "Enabled", 1)  # best-effort
+        changed = True
     else:
         data, n = re.subn(r'(<Key Name="MIDI input">\s*)',
                           r'\g<1>' + input_key + "\n                ", data, count=1)
         if not n:
-            return "WARN could not locate <Key Name=\"MIDI input\"> in reg.xml; assign controller once in FL"
+            return 'WARN could not locate <Key Name="MIDI input"> in reg.xml; assign controller once in FL'
         changed = True
 
-    if RES_PORT_NAME not in data:
-        data2, n = re.subn(r'(<Key Name="MIDI output">\s*)',
-                           r'\g<1>' + output_key + "\n                ", data, count=1)
-        if n:
-            data = data2
-            changed = True
+    # --- output key ---
+    if f'<Key Name="{RES_PORT_NAME}">' in data:
+        data, ok = _set_int_value(data, RES_PORT_NAME, "Port", CONTROL_PORT)
+        if not ok:
+            return (f"WARN {RES_PORT_NAME} key present but has no Port value; "
+                    "unexpected reg.xml shape - assign the controller once in FL")
+        changed = True
+    else:
+        data, n = re.subn(r'(<Key Name="MIDI output">\s*)',
+                          r'\g<1>' + output_key + "\n                ", data, count=1)
+        if not n:
+            return 'WARN could not locate <Key Name="MIDI output"> in reg.xml; assign controller once in FL'
+        changed = True
 
     if changed:
         REG_XML.write_text(data, encoding="utf-8")

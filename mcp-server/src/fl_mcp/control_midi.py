@@ -31,7 +31,7 @@ if str(_CONTROLLER_DIR) not in sys.path:
     sys.path.insert(0, str(_CONTROLLER_DIR))
 
 from device_FLMCP import (  # noqa: E402  (path set above)
-    TYPE_CHUNK,
+    TYPE_EVENT,
     TYPE_REQUEST,
     TYPE_RESPONSE,
     FrameError,
@@ -80,20 +80,28 @@ class MidiControl:
     # -- inbound ----------------------------------------------------------
 
     def _on_message(self, event, _data=None) -> None:
+        # Runs on rtmidi's callback thread. Any escaping exception would cross a
+        # C boundary with undefined behavior, so every step is guarded and the
+        # frame is dropped on malformed input (the documented contract).
         try:
             decoded = decode_frame(event[0])
-        except FrameError:
+            if decoded is None:
+                return
+            frame_type, payload = decoded
+            message = self._reassembler.feed(frame_type, payload)
+        except (FrameError, KeyError, TypeError, ValueError):
             return
-        if decoded is None:
-            return
-        frame_type, payload = decoded
-        message = self._reassembler.feed(frame_type, payload)
         if message is None:
             return
-        msg_id = message.get("id")
-        if msg_id in self._pending:
-            self._responses[msg_id] = message
-        else:
+        # Route by frame type, not by id: event and response id namespaces are
+        # independent (different sides count them), so a shared-id collision must
+        # not misroute. Responses correlate to a live/abandoned call; events buffer.
+        if frame_type == TYPE_RESPONSE:
+            msg_id = message.get("id")
+            if msg_id in self._pending:
+                self._responses[msg_id] = message
+            # else: orphan (call already timed out and was abandoned) -> drop.
+        elif frame_type == TYPE_EVENT:
             self._events.append(message)
 
     # -- outbound ---------------------------------------------------------
@@ -120,7 +128,11 @@ class MidiControl:
                     "(the ports must exist before FL launches; see docs/14)"
                 )
             finally:
+                # Pop both: on timeout the callback may have written a late
+                # response between the poll's last check and here; dropping it
+                # prevents an unbounded per-timeout leak (ids are never reused).
                 self._pending.pop(req_id, None)
+                self._responses.pop(req_id, None)
 
     def drain_events(self) -> list[dict]:
         """Return and clear buffered events (hello, dirty_channel, refresh, ...)."""
@@ -136,14 +148,36 @@ class MidiControl:
 
 
 _singleton: MidiControl | None = None
+_singleton_lock = threading.Lock()
 
 
 def get_control() -> MidiControl:
-    """Process-wide MIDI control transport, opened on first use."""
+    """Process-wide MIDI control transport, opened on first use.
+
+    Double-checked locking: ``call()`` is a blocking function, so a threaded MCP
+    server may invoke it concurrently. Constructing two MidiControls would open
+    duplicate virtual ports (FL sees duplicate devices; the losing instance's
+    callback silently swallows traffic). The lock makes first-open atomic.
+    """
     global _singleton
     if _singleton is None:
-        _singleton = MidiControl()
+        with _singleton_lock:
+            if _singleton is None:
+                _singleton = MidiControl()
     return _singleton
+
+
+def close() -> None:
+    """Close the process-wide transport and reset the singleton.
+
+    Without the reset a later get_control()/call() would reuse the dead instance
+    and hang against closed ports; resetting makes the next call reopen cleanly.
+    """
+    global _singleton
+    with _singleton_lock:
+        if _singleton is not None:
+            _singleton.close()
+            _singleton = None
 
 
 def call(op: str, args: list | None = None, kwargs: dict | None = None, timeout: float = 5.0) -> dict:
