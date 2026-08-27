@@ -497,7 +497,9 @@ def set_tempo(bpm: float) -> dict:
 
     # Live tier first (docs/17 control cascade): a connected control plane sets
     # the tempo in place with no FL reopen. Falls through to the file backend.
-    resp = router.try_live_control(get_session(), "mixer.setCurrentTempo", args=[bpm, 1])
+    # 5s: FL can stay "unsafe at current time" for a few seconds after a load;
+    # give the controller's OnIdle deferral (DEFER_MAX_TICKS ~4s) time to land.
+    resp = router.try_live_control(get_session(), "mixer.setCurrentTempo", args=[bpm, 1], timeout=5.0)
     if resp is not None:
         return {
             "status": "applied",
