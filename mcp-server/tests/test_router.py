@@ -1,0 +1,73 @@
+"""Tests for the backend router's write-through (docs/17): whichever backend
+applies, the shadow score and action log record the same structured delta."""
+
+from fl_mcp import router, schemas
+from fl_mcp.actions import ActionLog
+from fl_mcp.records import ShadowStore
+
+
+def _stores(tmp_path):
+    return ShadowStore("test", root=tmp_path / "shadow"), ActionLog("test", root=tmp_path / "actions")
+
+
+def test_record_note_write_updates_shadow_and_logs_delta(tmp_path):
+    shadow, actions = _stores(tmp_path)
+    target = schemas.Target(pattern=1, channel=2)
+    notes = [{"key": "C4", "start": 0, "length": 1}]
+
+    delta = router.record_note_write(shadow, actions, target, notes, "replace", "project-write", command_id=7)
+
+    # Shadow score now holds the notes.
+    assert len(shadow.notes_at(target)) == 1
+    # A delta was returned and logged.
+    assert delta is not None and len(delta.added) == 1 and delta.added[0].key == "C4"
+    last = actions.last()
+    assert last.op == "add_notes" and last.after_hash is not None
+    assert last.delta is not None and len(last.delta.added) == 1
+    assert last.undo_step.startswith("project-write:")
+
+
+def test_record_note_write_merge_delta_is_only_the_addition(tmp_path):
+    shadow, actions = _stores(tmp_path)
+    target = schemas.Target(pattern=1, channel=3)
+    router.record_note_write(shadow, actions, target, [{"key": "C4", "start": 0, "length": 1}], "replace", "live", 1)
+    router.record_note_write(shadow, actions, target, [{"key": "G4", "start": 2, "length": 1}], "merge", "live", 2)
+
+    last = actions.last()
+    assert [n.key for n in last.delta.added] == ["G4"]
+    assert not last.delta.removed
+    assert len(shadow.notes_at(target)) == 2
+
+
+def test_record_note_write_never_raises_on_bad_input(tmp_path):
+    shadow, actions = _stores(tmp_path)
+    # A malformed note would raise inside; the recorder must swallow and return None.
+    delta = router.record_note_write(
+        shadow, actions, schemas.Target(), [{"key": "H9", "start": 0, "length": 1}], "merge", "live", 1
+    )
+    assert delta is None
+
+
+def test_route_note_write_tries_in_order_and_reports(tmp_path):
+    calls = []
+
+    def backend_a(parsed, mode, channel, cid):
+        calls.append("a")
+        return None  # falls through
+
+    def backend_b(parsed, mode, channel, cid):
+        calls.append("b")
+        return {"status": "applied", "backend": "b"}
+
+    applied = []
+    result = router.route_note_write(
+        [("a", backend_a), ("b", backend_b)],
+        [{"key": "C4", "start": 0, "length": 1}],
+        "merge",
+        None,
+        command_id=1,
+        on_applied=lambda name, res: applied.append(name),
+    )
+    assert calls == ["a", "b"]  # tried a, then b
+    assert result["backend"] == "b"
+    assert applied == ["b"]  # on_applied fired for the backend that applied
