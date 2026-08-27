@@ -79,6 +79,95 @@ def _resolve_key(key: str | int) -> int:
 
 
 # ---------------------------------------------------------------------------
+# Observations (FL state rendered to the model)
+#
+# Every default is chosen to be the *resting / no-op* value (0 dB = unity,
+# centered pan, not muted, no plugin, empty lists) so that render() with
+# exclude_defaults drops it. An untouched channel serializes to just its
+# index and name; the model's eye goes straight to what is actually set.
+# See views.render() and docs/16.
+# ---------------------------------------------------------------------------
+
+
+class Effect(BaseModel):
+    slot: int
+    name: str
+
+
+class Send(BaseModel):
+    to: int
+    level: float = 0.8  # FL's default send level; an inactive send is simply absent
+
+
+class Channel(BaseModel):
+    index: int
+    name: str
+    plugin: str | None = None  # None = native sampler / no generator
+    volume_db: float = 0.0  # 0 dB = unity
+    pan: float = 0.0  # centered
+    muted: bool = False
+    routed_to: int | None = None  # None = master (track 0)
+
+
+class MixerTrack(BaseModel):
+    index: int
+    name: str
+    volume_db: float = 0.0
+    pan: float = 0.0
+    muted: bool = False
+    solo: bool = False
+    effects: list[Effect] = Field(default_factory=list)
+    sends: list[Send] = Field(default_factory=list)
+
+
+class SessionState(BaseModel):
+    """The whole live session as one observation. Rendered compactly to the model."""
+
+    tempo_bpm: float
+    ppq: int = 96
+    playing: bool = False
+    current_pattern: int = 0
+    channels: list[Channel] = Field(default_factory=list)
+    mixer: list[MixerTrack] = Field(default_factory=list)
+    source: Literal["live", "project"] = "live"
+
+
+class NoteSetSummary(BaseModel):
+    """Lazy stand-in for a large note group: a summary instead of N notes, so
+    a 5,000-note pattern doesn't flood context. The model filters, then pulls."""
+
+    count: int
+    low: str | None = None  # lowest pitch, e.g. "C2"
+    high: str | None = None  # highest pitch
+    density: float | None = None  # notes per beat
+    id: str | None = None  # content hash (via hashing.noteset_hash)
+
+
+# ---------------------------------------------------------------------------
+# Deltas (structured edits: what changed, not a replay of action strings)
+# ---------------------------------------------------------------------------
+
+
+class NoteMove(BaseModel):
+    """A note whose value changed, paired from a removed hash to its new form."""
+
+    from_hash: str
+    to: Note
+    confidence: float = Field(default=1.0, ge=0, le=1)
+
+
+class NoteDelta(BaseModel):
+    """A content-addressed diff between two note groups. Fold, don't replay."""
+
+    added: list[Note] = Field(default_factory=list)
+    removed: list[str] = Field(default_factory=list)  # hashes of gone notes
+    moved: list[NoteMove] = Field(default_factory=list)
+
+    def is_empty(self) -> bool:
+        return not (self.added or self.removed or self.moved)
+
+
+# ---------------------------------------------------------------------------
 # Targets and references
 # ---------------------------------------------------------------------------
 
