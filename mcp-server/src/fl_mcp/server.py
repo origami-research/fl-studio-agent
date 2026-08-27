@@ -338,8 +338,8 @@ def get_notes(pattern: int | str, channel: int | str, key_min: int | None = None
     """Read notes for one pattern/channel from the shadow score (docs/06).
 
     Always labeled with provenance: "shadow" (the server's own record of what
-    it wrote, may be stale if a human edited by hand) vs "project" (a fresh
-    read - not implemented yet, see sync_from_project in docs/11).
+    it wrote, may be stale if a human edited by hand) vs "project" (ground
+    truth parsed from the saved .flp - call sync_from_project to refresh it).
 
     Args:
         pattern: pattern number.
@@ -367,6 +367,52 @@ def get_notes(pattern: int | str, channel: int | str, key_min: int | None = None
         "as_of": ref.as_of.isoformat(),
         "stale": ref.stale,
         "notes": [json.loads(n.model_dump_json()) for n in notes],
+    }
+
+
+@mcp.tool()
+def sync_from_project(pattern: int = 1) -> dict:
+    """Refresh the shadow score from ground truth: parse the saved .flp.
+
+    FL can't be asked what notes exist live, so this reads them back out of the
+    project file (docs/11 readback) and rebuilds the shadow score for that
+    pattern with provenance "project" - the authoritative source after a human
+    hand-edit. Requires the project-write (autonomous) backend; without it there
+    is no saved project to parse.
+    """
+    try:
+        from . import autonomous
+    except ImportError:
+        return {"status": "error", "error": "project read-back unavailable"}
+    if not autonomous.available():
+        return {
+            "status": "error",
+            "error": "No agent project to read. Run: python -m fl_mcp.make_agent_project",
+        }
+
+    verified = autonomous.verify(pattern=pattern)
+    if not verified.get("ok"):
+        return {"status": "error", "error": verified.get("error", "read failed")}
+
+    # Group the parsed rows by channel and rebuild the shadow score per target.
+    by_channel: dict[int, list[schemas.Note]] = {}
+    for row in verified.get("notes", []):
+        by_channel.setdefault(int(row["channel"]), []).append(
+            schemas.Note(key=int(row["midi"]), start=float(row["start_beat"]), length=float(row["length_beats"]))
+        )
+    session = get_session()
+    synced = []
+    for channel, notes in by_channel.items():
+        target = schemas.Target(pattern=pattern, channel=channel)
+        ref = session.shadow.write(target, notes, mode="replace", provenance="project")
+        synced.append({"channel": channel, "notes": len(notes), "id": ref.id})
+    return {
+        "status": "ok",
+        "source": "project",
+        "pattern": pattern,
+        "note_count": verified.get("note_count", 0),
+        "synced_targets": synced,
+        "note": "Shadow score rebuilt from the saved project. get_notes now reports source 'project'.",
     }
 
 

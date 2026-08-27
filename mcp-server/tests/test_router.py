@@ -151,3 +151,36 @@ def test_set_channel_mix_live_sets_volume_and_pan(tmp_path):
         assert control.channels[0].pan == -0.3
     finally:
         server.set_session(None)
+
+
+# --- sync_from_project (ground-truth read-back) ----------------------------
+
+def test_sync_from_project_rebuilds_shadow_with_project_provenance(tmp_path, monkeypatch):
+    from fl_mcp import server, schemas
+    from fl_mcp.session import FLSession
+
+    session = FLSession(project_key="t", spool_root=tmp_path / "s", project_root=tmp_path / "p", control=None)
+    server.set_session(session)
+
+    # Stand in for the .flp reader on the real module (setattr, so it holds
+    # regardless of how server.py imports it).
+    from fl_mcp import autonomous
+    monkeypatch.setattr(autonomous, "available", lambda: True)
+    monkeypatch.setattr(autonomous, "verify", lambda pattern=1: {
+        "ok": True, "note_count": 2, "notes": [
+            {"midi": 60, "channel": 0, "start_beat": 0.0, "length_beats": 1.0},
+            {"midi": 67, "channel": 1, "start_beat": 2.0, "length_beats": 0.5},
+        ],
+    })
+    try:
+        result = server.sync_from_project(pattern=1)
+        assert result["status"] == "ok" and result["source"] == "project"
+        assert result["note_count"] == 2
+
+        # get_notes now reports ground-truth provenance for each synced target.
+        ch0 = server.get_notes(pattern=1, channel=0)
+        assert ch0["source"] == "project" and len(ch0["notes"]) == 1 and ch0["notes"][0]["key"] == 60
+        ch1 = server.get_notes(pattern=1, channel=1)
+        assert ch1["source"] == "project" and ch1["notes"][0]["key"] == 67
+    finally:
+        server.set_session(None)
