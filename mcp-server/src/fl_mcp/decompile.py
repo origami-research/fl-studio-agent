@@ -35,10 +35,16 @@ class Step:
 
 @dataclass
 class Program:
-    """An ordered construction program that rebuilds `source` from empty."""
+    """An ordered construction program that rebuilds `source` from empty.
+
+    ``warnings`` records anything the source project could not be read faithfully
+    (e.g. a tempo the parser returned as None) - surfaced, never silently
+    dropped, so a partial reconstruction is visible as partial.
+    """
 
     source: str
     steps: list[Step] = field(default_factory=list)
+    warnings: list[str] = field(default_factory=list)
 
 
 def decompile(flp_path: str | Path) -> Program:
@@ -54,18 +60,21 @@ def decompile(flp_path: str | Path) -> Program:
     project = parse(str(flp_path))
     program = Program(source=str(flp_path))
 
-    # 1. Global settings.
-    program.steps.append(Step("set_tempo", {"bpm": float(project.tempo)}, "project tempo"))
+    # 1. Global settings. project.tempo is a real attribute; the only reason it
+    #    can be missing is that PyFLP failed to read it on some projects, which
+    #    is a data-quality fact to surface, not a step to silently omit.
+    if project.tempo is None:
+        program.warnings.append("tempo unreadable from project; reconstruction omits set_tempo")
+    else:
+        program.steps.append(Step("set_tempo", {"bpm": float(project.tempo)}, "project tempo"))
 
     # 2. Channels - they must exist before any notes reference them. Name falls
-    #    back to the rack index when the project left it unnamed.
-    channel_names: dict[int, str] = {}
+    #    back to the rack index when the project left it unnamed. ch.iid is the
+    #    channel's real, stable id; notes reference it, so we trust it directly.
     for ch in project.channels:
-        iid = int(getattr(ch, "iid", len(channel_names)))
-        name = ch.name or f"Channel {iid}"
-        channel_names[iid] = name
+        name = ch.name or f"Channel {ch.iid}"
         program.steps.append(
-            Step("add_channel", {"name": name, "kind": type(ch).__name__}, f"channel {iid}")
+            Step("add_channel", {"name": name, "kind": type(ch).__name__}, f"channel {ch.iid}")
         )
 
     # 3. Notes, grouped by (pattern, channel). read_notes is the same reader the
