@@ -1,0 +1,17 @@
+name: ci
+on: [push, pull_request]
+jobs:
+  quality:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: mcp-server
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - run: uv pip install --system -e . ruff pytest
+      # Lint gate: the code-taste rules in AGENTS.md / docs/19 are enforced here,
+      # so a regression fails the PR instead of accumulating.
+      - run: ruff check src
+      # The fake-FL suite runs anywhere; live e2e (FL_E2E) is local/nightly only.
+      - run: python -m pytest tests -q
