@@ -54,5 +54,5 @@ Remaining manual step in the whole system: none for the control plane. The only 
 
 ## Artifacts on this branch
 
-- `mcp-server/src/fl_mcp/control_spool.py` — the server-side spool client (kept for the record; not viable as sole transport).
+- `control_spool.py` — the server-side spool client (removed after the verdict; it was never viable as the sole transport and had no live callers). This doc is its record.
 - `fl-scripts/controller/device_FLMCP.py` — `OnIdle` spool poll + `ctl.selftest`/`ctl.poll` diagnostics (the diagnostics are worth keeping; they answer sandbox questions over MIDI in one call).
