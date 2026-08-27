@@ -26,6 +26,7 @@ live in this module side by side:
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import tempfile
@@ -66,7 +67,7 @@ def write_json_atomic(path: Path, payload: dict[str, Any]) -> None:
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as f:
             json.dump(payload, f, indent=2)
-        os.replace(tmp, path)
+        Path(tmp).replace(path)
     except BaseException:
         Path(tmp).unlink(missing_ok=True)
         raise
@@ -74,7 +75,7 @@ def write_json_atomic(path: Path, payload: dict[str, Any]) -> None:
 
 def read_json(path: Path) -> dict[str, Any] | None:
     try:
-        with open(path, encoding="utf-8") as f:
+        with path.open(encoding="utf-8") as f:
             return json.load(f)
     except (FileNotFoundError, NotADirectoryError, json.JSONDecodeError):
         return None
@@ -143,10 +144,8 @@ def put_command(op: str, **fields: Any) -> dict[str, Any]:
 def clear_stale_results() -> None:
     """Drop old result files so a new command's result can't be confused with them."""
     for root in spool_roots():
-        try:
+        with contextlib.suppress(OSError):
             (root / "result.json").unlink(missing_ok=True)
-        except OSError:
-            pass
 
 
 def read_result() -> dict[str, Any] | None:
@@ -209,13 +208,13 @@ class _ResponseArrived(FileSystemEventHandler):
     def __init__(self, wake: threading.Event) -> None:
         self._wake = wake
 
-    def on_created(self, event: Any) -> None:  # noqa: D102
+    def on_created(self, event: Any) -> None:
         self._wake.set()
 
-    def on_moved(self, event: Any) -> None:  # noqa: D102
+    def on_moved(self, event: Any) -> None:
         self._wake.set()
 
-    def on_modified(self, event: Any) -> None:  # noqa: D102
+    def on_modified(self, event: Any) -> None:
         self._wake.set()
 
 
@@ -320,10 +319,8 @@ class SpoolSession:
 
     def close(self) -> None:
         """Best-effort cleanup; commands/done/ is left for debugging (server GC's it)."""
-        try:
+        with contextlib.suppress(OSError):
             (self.dir / "session.json").unlink(missing_ok=True)
-        except OSError:
-            pass
 
 
 def gc_stale_sessions(root: Path | None = None, max_age: float = _STALE_SESSION_AGE) -> list[str]:

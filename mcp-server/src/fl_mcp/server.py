@@ -26,12 +26,11 @@ the ports exist before FL Studio launches (docs/14's ordering requirement).
 
 from __future__ import annotations
 
+import contextlib
 import json
-import time
-from typing import Any
-
 import sys
 from pathlib import Path
+from typing import Any
 
 # The optional auto-trigger lives in the repo's harness package.
 _REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -60,10 +59,10 @@ def get_session() -> FLSession:
     global _session
     if _session is None:
         control = None
-        try:
+        # python-rtmidi missing or ports couldn't open: control-plane tools then
+        # degrade honestly (session.control is None), so this is a real optional.
+        with contextlib.suppress(control_midi.ControlUnavailable):
             control = control_midi.get_control()
-        except control_midi.ControlUnavailable:
-            pass  # python-rtmidi missing or ports couldn't open; control-plane tools degrade honestly
         _session = FLSession(control=control)
     return _session
 

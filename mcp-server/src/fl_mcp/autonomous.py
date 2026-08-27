@@ -15,6 +15,7 @@ is configured, so the default remains the non-destructive spool path.
 
 from __future__ import annotations
 
+import contextlib
 import os
 import shutil
 import subprocess
@@ -64,10 +65,8 @@ def list_channels() -> list[dict[str, Any]]:
     out: list[dict[str, Any]] = []
     for index, channel in enumerate(parse(project).channels):
         name = ""
-        try:
+        with contextlib.suppress(Exception):  # some channel types have no name
             name = channel.name or ""
-        except Exception:  # noqa: BLE001 - some channel types have no name
-            pass
         lowered = name.lower()
         out.append(
             {

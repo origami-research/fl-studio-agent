@@ -23,3 +23,16 @@ packages = ["src/fl_mcp"]
 
 [dependency-groups]
 dev = ["pytest>=8.0", "pyflp>=2.0", "python-rtmidi>=1.5"]
+
+[tool.ruff]
+line-length = 110
+
+[tool.ruff.lint]
+# Enforce the hygiene the code-quality proposal (docs/19) is built on. TRY003
+# (vanilla raise messages) and PLC0415 (in-function imports) are baselined here
+# and retired in proposal phases 2-3 (they need package unification first).
+select = ["E", "F", "I", "BLE", "TRY", "SIM", "PTH", "TID", "RUF"]
+ignore = ["TRY003", "PLC0415", "E501", "E402"]  # E402: sys.path cross-tree imports, removed in docs/19 phase 2
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["BLE", "TRY", "SIM105"]  # tests may catch broadly / suppress deliberately

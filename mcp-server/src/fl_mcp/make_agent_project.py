@@ -16,6 +16,7 @@ from pathlib import Path
 from . import flpaths
 from .autonomous import DEFAULT_PROJECT_NAME
 
+
 def _templates_dir() -> Path:
     import os
 
