@@ -20,6 +20,16 @@ notes in about two minutes.
 | `set_channel_mix` | Channel volume, pan and pitch |
 | `clear_notes` | Empty the piano roll |
 | `fl_status` | Which backend is active, and read the notes back from the project |
+| `get_notes` | Read a pattern/channel's notes from the shadow score, with provenance |
+| `get_session_state` | Live tempo, channels and mixer over the MIDI control plane |
+| `fl_doctor` | What's connected, what's broken, and the exact fix |
+| `undo_last` | The model's last recorded action (from the delta history) |
+
+Notes land via a **backend cascade** (docs/17): live in-place edit if set up,
+else the permission-free project-write (rewrite the `.flp` and reopen FL), else
+queued. Non-note control (`get_session_state`) rides a live MIDI control plane.
+Whichever backend runs, every write is recorded as a foldable `NoteDelta` in the
+action log. See **[docs/17-unified-architecture.md](docs/17-unified-architecture.md)**.
 
 Notes are specified musically (`{"key": "C4", "start": 0, "length": 1}`), never
 in FL's internal units.

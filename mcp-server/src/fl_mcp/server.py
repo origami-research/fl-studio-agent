@@ -40,7 +40,7 @@ if str(_REPO_ROOT) not in sys.path:
 
 from mcp.server.mcpserver import MCPServer
 
-from . import control_midi, errors, schemas, spool
+from . import control_midi, errors, router, schemas, spool
 from .notes import NoteError, describe, normalize_notes
 from .session import FLSession
 
@@ -245,6 +245,9 @@ def write_notes(
 
     applied = _try_live(cmd["id"])
     if applied is not None:
+        # Backend-agnostic write-through: the live backend edits "whatever's
+        # open", so record against the current target (docs/17).
+        _record_cascade_write(schemas.Target(pattern=-1, channel=-1), parsed, mode, "live", cmd["id"])
         return {
             "status": "applied",
             "backend": "live",
@@ -258,6 +261,10 @@ def write_notes(
 
     written = _try_project_write(parsed, mode, channel)
     if written is not None:
+        _record_cascade_write(
+            schemas.Target(pattern=1, channel=written.get("channel") if written.get("channel") is not None else -1),
+            parsed, mode, "project-write", cmd["id"],
+        )
         return {
             "status": "applied",
             "applied": summary,
@@ -279,6 +286,18 @@ def write_notes(
         }
 
     return _queued(cmd, summary, tried_live=True)
+
+
+def _record_cascade_write(
+    target: schemas.Target, parsed: list[dict[str, Any]], mode: str, backend: str, command_id: int
+) -> None:
+    """Record a cascade-backend write into the shadow score + action log.
+
+    Side effect only: a recording failure must never break the user's edit,
+    which already landed (router.record_note_write swallows its own errors).
+    """
+    session = get_session()
+    router.record_note_write(session.shadow, session.actions, target, parsed, mode, backend, command_id)
 
 
 @mcp.tool()
