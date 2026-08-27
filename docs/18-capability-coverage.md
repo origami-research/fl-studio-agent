@@ -14,6 +14,18 @@ So there are three real mechanisms, and every capability routes to one:
 
 The router (docs/17) already picks LIVE-first, FILE-fallback per capability; this doc is the capability catalog it routes over.
 
+## Verified against real FL 2026 (2026-08-27)
+
+Ran the actual server code (`control_midi` + the merged controller script) against a live FL 2026 session:
+
+- Control plane connects (hello), ~7 ms/op round trips.
+- Reads: `getCurrentTempo`, `channelCount` ✅.
+- **Live tempo**: `setCurrentTempo` changed the project 130000 → 137000 in place, no reopen ✅.
+- **Live undo**: `general.undo` ✅.
+- Caveat found and fixed: right after a project load FL returns "Operation unsafe at current time" for mutating ops for up to a few seconds. The controller's OnIdle deferral was giving up at ~1 s; widened to ~4 s (`DEFER_MAX_TICKS`), and `set_tempo`'s live call waits accordingly. Mutations that are transiently unsafe now land once FL settles; the cascade still falls back to file if they never do.
+
+The `set_channel_mix` live path and the driven Bridge plugin note write are the next live verifications (not yet run against real FL).
+
 ## Coverage matrix
 
 Status: ✅ built · 🟡 partial · 🔵 reachable, unbuilt · ⛔ impossible.
