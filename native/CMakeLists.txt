@@ -48,20 +48,6 @@ target_compile_options(fl_sdk PUBLIC
     -Wno-deprecated-declarations
 )
 
-# --- Spike 1 -----------------------------------------------------------------
-# Answers whether FHD_AddNotesToPR can target an arbitrary channel from an
-# effect-registered plugin. See native/spike1/README.md.
-add_library(spike1 SHARED spike1/src/spike1.cpp)
-target_link_libraries(spike1 PRIVATE fl_sdk)
-
-# FL discovers native plugins as <Name>/<Name>_x64.dylib — the suffix is part of
-# the contract even on arm64, matching Image-Line's own bundled effects.
-set_target_properties(spike1 PROPERTIES
-    OUTPUT_NAME "FL MCP Spike1_x64"
-    PREFIX ""
-    SUFFIX ".dylib"
-    CXX_VISIBILITY_PRESET hidden
-)
 
 # --- FL MCP Bridge: the production note-writing plugin ------------------------
 # Base-free, 64-slot ABI (the proven outcome of the Spike 1 crash saga; see
