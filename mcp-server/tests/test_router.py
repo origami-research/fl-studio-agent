@@ -101,3 +101,53 @@ def test_set_tempo_rejects_out_of_range(tmp_path):
     server.set_session(None)
     assert server.set_tempo(5)["status"] == "error"
     assert server.set_tempo(2000)["status"] == "error"
+
+
+# --- undo_last + set_channel_mix over the live control plane ----------------
+
+def _live_session(tmp_path):
+    from fake_fl import FakeControl
+    from fl_mcp.session import FLSession
+    control = FakeControl()
+    control.send_hello()
+    return FLSession(project_key="t", spool_root=tmp_path / "s", project_root=tmp_path / "p", control=control), control
+
+
+def test_undo_last_invokes_control_plane_when_connected(tmp_path):
+    from fl_mcp import schemas, server
+    session, _ = _live_session(tmp_path)
+    server.set_session(session)
+    try:
+        # record an action so there's something to name
+        session.actions.append(schemas.ActionEntry(ts=__import__("datetime").datetime.now(), id=1, gen=0, op="add_notes", undo_step="mcp: x"))
+        result = server.undo_last()
+        assert result["status"] == "applied" and result["backend"] == "live"
+        assert result["undone"]["op"] == "add_notes"
+    finally:
+        server.set_session(None)
+
+
+def test_undo_last_identifies_when_no_control_plane(tmp_path):
+    from fl_mcp import schemas, server
+    from fl_mcp.session import FLSession
+    session = FLSession(project_key="t", spool_root=tmp_path / "s", project_root=tmp_path / "p", control=None)
+    session.actions.append(schemas.ActionEntry(ts=__import__("datetime").datetime.now(), id=1, gen=0, op="add_notes", undo_step="mcp: x"))
+    server.set_session(session)
+    try:
+        result = server.undo_last()
+        assert result["status"] == "identified"
+    finally:
+        server.set_session(None)
+
+
+def test_set_channel_mix_live_sets_volume_and_pan(tmp_path):
+    from fl_mcp import server
+    session, control = _live_session(tmp_path)
+    server.set_session(session)
+    try:
+        result = server.set_channel_mix(channel=0, volume=0.5, pan=-0.3)
+        assert result["status"] == "applied" and result["backend"] == "live"
+        assert control.channels[0].volume == 0.5
+        assert control.channels[0].pan == -0.3
+    finally:
+        server.set_session(None)
