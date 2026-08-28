@@ -391,6 +391,87 @@ file-write without an independent marker proving FL loaded that file. A tempo pa
 a cheap, proven positive control. Round 1 would have been read as "the map is wrong"
 when the truth was "FL was never looking at our file".
 
+
+### G3 (Lane S) - fast half PASSED; live half BLOCKED on a one-time human step
+
+**Fast half - PASSED.** `tests/v2/test_spool.py` + `test_session.py` +
+`tests/test_pyscript.py`: **56 passed**. The pyscript suite (19 of those) drives the
+updated script against a fake `flpianoroll` and covers exactly the properties that
+matter, including the fail-closed ledger: applies-exactly-once, cancelled-never-
+applies, corrupt-ledger-refuses-instead-of-replaying, blocked `os.remove` tolerated,
+read-only and fully-unwritable spool folders diagnosed rather than silently
+duplicating, `encoding=` never used, protocol-version mismatch reported.
+
+Server-side protocol verified live as far as it can be without FL executing the script:
+`Spool.send()` wrote `commands/002003.json` and `commands/queue.json`
+(`{"proto": 2, "ids": [2003]}`) into the measured writable root
+(`Settings/Piano roll scripts/FLMCP`), and the command **stayed queued and unconsumed**
+when the script never ran - which is the fail-closed behavior we want.
+
+**Live half - BLOCKED, and it is a human step, not a defect.** The manual lane fires
+the pyscript by sending FL the keyboard shortcut bound to it (`harness/trigger.py`,
+default Cmd+Opt+Y). On this machine:
+
+- macOS Automation/Accessibility consent **is** granted (`trigger.check_permission()`
+  -> granted). That is not the blocker.
+- FL launched on our project (window title `g3_probe.flp - FL Studio 2026`), the piano
+  roll was opened, and the shortcut was sent 5 times. **No response file ever
+  appeared** and the command stayed queued.
+- No shortcut binding for the script exists anywhere in FL's settings tree - grepping
+  `Settings/` for the script name matches only the controller script.
+
+Conclusion: **the piano-roll script has never been bound to a shortcut inside FL.**
+That binding is done in FL's own UI and cannot be scripted - the same class of
+one-time human step as the Accessibility grant (`harness/enable_autonomy.py` exists
+precisely because TCC consent is un-scriptable; this is its in-FL sibling).
+
+The MCPTools escape hatch is closed and already documented: FL 2026 ships
+`run_piano_roll_script` in `System/Tools/MCP/MCPTools.pyc`, but that file is CPython
+**3.12** bytecode while the controller script runs in FL's embedded Python **3.9**, so
+`device_FLMCP.py` cannot import it (`fl-scripts/controller/NOTES.md`).
+
+**What remains genuinely unproven** (worth being precise, rather than calling this
+"basically passed"): the fast suite executes the pyscript under CPython 3.12 against a
+fake `flpianoroll`. It therefore cannot prove that FL's *embedded* interpreter accepts
+the v2 script - a syntax or sandbox regression introduced by the rewrite would still be
+invisible. Only a real run closes that, and that needs the binding.
+
+**To unblock (one-time, ~1 minute in FL):** open the piano roll -> Tools > Scripting,
+find "MCP Write Notes", and bind it to a keyboard shortcut (Cmd+Opt+Y is what
+`harness/trigger.py` sends by default; any other binding works if passed to
+`run_piano_roll_script`). After that, `/tmp/g3_live.py` runs end to end unattended.
+
+### G1 (Lane F) - partial: reader + set_tempo landed and live-verified
+
+`v2/flp.set_tempo` verified against real FL 2026 on **both** code paths, each with the
+window-title assertion fact 5 requires:
+
+```
+Basic with limiter.flp          file tempo None -> set 137.0    (APPEND path)
+  [PASS] set_tempo returns the readback           returned 137.0
+  [PASS] re-read confirms                         re-read 137.0
+  [PASS] FL LOADED OUR FILE (title)               'g1_Basic_with_limiter.flp - FL Studio 2026'
+  [PASS] REAL FL reports 137000                   got 137000
+
+Create a chord progression.flp  file tempo 128.0 -> set 143.0   (MUTATE path)
+  [PASS] set_tempo returns the readback           returned 143.0
+  [PASS] re-read confirms                         re-read 143.0
+  [PASS] FL LOADED OUR FILE (title)               'g1_Create_a_chord_progression.flp - FL Studio 2026'
+  [PASS] REAL FL reports 143000                   got 143000
+```
+
+So the port of the live-verified v1 path is faithful: in-place u32 patch when event 156
+exists, append at end-of-stream when FL omitted it, readback-or-`FlpError`.
+
+Reader also landed. Notable: our reader **fully parses `Astes - Bien Duro.flp`**
+(308 channels, 1937 notes) - the one corpus file pyflp fails on (addendum A2). On that
+file our library is strictly better than the oracle it is measured against.
+
+Merged tree with the reader + set_tempo: **427 passed, 7 skipped**, ruff clean.
+
+Outstanding for G1: `write_notes` (in progress), `set_channel_levels` (map already
+solved and live-verified - A8), and the corpus differential test.
+
 ## Manager addendum 5 (2026-08-28): A12 and A13 - two seam bugs the live gates caught
 
 ### A12. `run()`'s namespace made the product's primary operation impossible
