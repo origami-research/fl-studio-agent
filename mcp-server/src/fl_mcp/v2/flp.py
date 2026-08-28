@@ -426,8 +426,10 @@ def _chunks(data: bytes) -> tuple[bytes, memoryview]:
     if hd_len < 6 or 8 + hd_len > len(data):
         raise FlpError(f"bad FLhd length {hd_len} at offset 4")
     header = data[8 : 8 + hd_len]
+    # pyflp's FileFormat set: None_/Project/Score/Automation/ChannelState/
+    # PluginState/GeneratorState/FXState/InsertState/Patcher.
     file_format = int.from_bytes(header[0:2], "little", signed=True)
-    if file_format not in (-1, 0, 0x10, 24, 25, 26, 0x30):  # pyflp's FileFormat set
+    if file_format not in (-1, 0, 0x10, 24, 0x20, 0x30, 0x31, 0x32, 0x40, 0x50):
         raise FlpError(f"unknown FLP format {file_format} at offset 8")
     dt_off = 8 + hd_len
     if data[dt_off : dt_off + 4] != b"FLdt":

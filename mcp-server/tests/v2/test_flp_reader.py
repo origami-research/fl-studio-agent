@@ -124,6 +124,27 @@ def test_tempo_is_none_when_event_omitted(tmp_path):
     assert project.tempo is None
 
 
+def test_legacy_coarse_fine_tempo_pair(tmp_path):
+    # Pre-156 files store tempo as u16 whole BPM + u16 milli-BPM (pyflp's
+    # _TempoCoarse/_TempoFine); event 156 wins when both forms are present.
+    events = VERSION_ANCIENT + event(
+        flp.EVENT_TEMPO_COARSE, struct.pack("<H", 125)
+    ) + event(flp.EVENT_TEMPO_FINE, struct.pack("<H", 250))
+    assert flp.read(write_flp(tmp_path, events)).tempo == 125.25
+
+    events += event(flp.EVENT_TEMPO, struct.pack("<I", 90_000))
+    assert flp.read(write_flp(tmp_path, events)).tempo == 90.0
+
+
+def test_unknown_header_format_raises(tmp_path):
+    data = bytearray(build_flp(VERSION_MODERN))
+    data[8:10] = struct.pack("<H", 256)  # not in the FileFormat set
+    path = tmp_path / "bad_format.flp"
+    path.write_bytes(bytes(data))
+    with pytest.raises(FlpError, match="format 256"):
+        flp.read(path)
+
+
 # -- channels -----------------------------------------------------------------
 
 
