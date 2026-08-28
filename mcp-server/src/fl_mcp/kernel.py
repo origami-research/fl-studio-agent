@@ -315,6 +315,11 @@ class FLKernel:
                 results.append(
                     {"op": "clear_notes", "track": item.track_name, "ok": resp.ok, "err": resp.err}
                 )
+            if not resp.ok:
+                # Later writes assumed this one landed; applying them against
+                # the wrong base state compounds the failure. Stop here - the
+                # rejected op is reported above, the remainder stays queued.
+                break
         return results
 
     @contextmanager

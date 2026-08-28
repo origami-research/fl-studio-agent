@@ -349,3 +349,24 @@ def test_mutating_op_reports_operation_unsafe_as_retryable(wired):
         fl.set_tempo(128)
     assert exc_info.value.category == "operation_unsafe"
     assert exc_info.value.retryable is True
+
+
+def test_flush_stops_on_first_rejection_leaving_the_rest_queued(wired):
+    """The docstring's contract: a rejected op halts the flush so later writes
+    never apply against a base state that assumed the rejected one landed."""
+    session, bridge, control = wired
+    fl = kernel.bootstrap(session)
+
+    fl.track("Bass").write([schemas.Note(key="C4", start=0, length=1)])
+    fl.track("Lead").write([schemas.Note(key="E4", start=0, length=1)])
+
+    bridge.fail_ops.add("add_notes")
+    results = fl.flush()
+
+    assert len(results) == 1 and results[0]["ok"] is False  # stopped at the rejection
+    assert bridge.notes_at(-1, 2) == []  # Lead write did not apply
+
+    bridge.fail_ops.clear()
+    retry = fl.flush()  # the remainder stayed queued and applies cleanly now
+    assert [r["ok"] for r in retry] == [True]
+    assert bridge.notes_at(-1, 2)
