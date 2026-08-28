@@ -213,3 +213,110 @@ Every GitHub Actions run on this repo fails in ~4s having executed **zero steps*
 problem - billing or org policy - not a workflow or code defect, and it is not
 fixable from here. The gates in this document are all local commands and are
 unaffected. Flagged for the owner.
+
+## Manager addendum 3 (2026-08-27): the channel-levels map, SOLVED
+
+Lane F's first worker was killed with an uncommitted context and no commits. Its
+transcript survived, so the discovery was recovered from it and then re-verified
+directly against FL's own files. **The Lane F "discovery task" is therefore closed** -
+what remains is a live write-verification, which the manager runs.
+
+### A8. Channel levels are ONE event, not three
+
+They live in `ChannelID.Levels` = **event id 219**, a fixed 24-byte payload:
+
+| bytes | field | type | range | default |
+|---|---|---|---|---|
+| `[0:4]`   | pan          | int32 (signed) | 0..12800 | 6400 (centre) |
+| `[4:8]`   | volume       | uint32         | 0..12800 | 10000 |
+| `[8:12]`  | pitch_shift  | int32 (signed) | semitones | 0 |
+| `[12:24]` | filter mod_x / mod_y / type | 3x uint32 | - | - |
+
+So `set_channel_levels` patches three int32s inside one existing event - it does not
+splice new events, which makes it markedly simpler than the skeleton's docstring
+assumed.
+
+**Evidence (this is the verification, not a citation).** Decoding event 219 straight
+out of FL 2026's own stock templates with our own event walker:
+
+```
+Basic with limiter.flp         219 size=24 pan=6400 volume=10000 pitch=0 rest=12B  (x4 channels)
+Create a chord progression.flp 219 size=24 pan=6372 volume=10000 pitch=0 rest=12B
+                               219 size=24 pan=6400 volume=10000 pitch=0 rest=12B  (x3)
+Empty.flp                      219 size=24 pan=6400 volume=10000 pitch=0 rest=12B
+```
+
+The non-default `pan=6372` in "Create a chord progression" is what proves the field is
+live and positional rather than coincidentally-zero padding.
+
+This independently confirms the three constants already in the `v2/flp.py` skeleton:
+`LEVEL_MAX = 12800`, `PAN_CENTRE = 6400`, `VOLUME_DEFAULT = 10000`.
+
+**Legacy fallback (older projects).** When a channel has no 219 event, pyflp falls
+back to single-value events, and our reader should do the same rather than reporting a
+default it did not read: `_VolWord` = 72, `_VolByte` = 2, `_PanWord` = 73,
+`_PanByte` = 3. Also resolved while here: `ChannelID.New` = 64, `PatternID.New` = 65,
+`PatternID.Notes` = 224, `PatternID.Name` = 193.
+
+**Still open, and it is the manager's to run:** a live write-verification - set a
+known volume/pan/pitch, load the file in real FL, read the values back through the
+control plane. Byte-diff agreement is not sufficient on its own (AGENTS.md: the fake
+always says yes).
+
+### A9. Two reader edge cases the first worker surfaced
+
+1. **`Remix a song.flp` has a 224 (`PatternID.Notes`) event whose size is 34** - not a
+   multiple of the 24-byte note record, and it appears *before* any pattern event. A
+   reader that assumes `size % 24 == 0` will raise on a stock FL project. Decide
+   deliberately: skip a non-conforming blob with a logged warning, or raise `FlpError`.
+   Do not discover this by crashing on the corpus.
+2. **Text-event encoding is version-dependent**: the `FLVersion` event (id 199, ascii)
+   at >= 11.5 means text events are UTF-16-LE. This is the same rot that makes pyflp
+   fail `Astes - Bien Duro.flp` (addendum A2).
+
+### A10. Process rule, learned the hard way
+
+An uncommitted investigation is not work; it is a liability. Roughly an hour of Lane F
+discovery evaporated because nothing was committed. Every lane commits evidence
+*before* it is complete and *before* it is pretty. A worker that has been running for a
+while with a clean worktree is a red flag the manager should act on early.
+
+## Manager addendum 4 (2026-08-27): SIGNATURE CHANGE, signed off
+
+### A11. `FLSession` gains `play()` / `stop()` / `undo()`
+
+Lane K flagged this rather than hiding it, which is what the process is for.
+
+**The problem.** `sdk.FL` exposes `play`/`stop`/`undo`, but `FLSession` had no
+counterpart, so `sdk.py` had to do this three times:
+
+```python
+if self._session.control is None:
+    raise errors.control_plane_unavailable("transport.start", 0.0)
+resp = self._session.control.send_request("transport.start")
+...  # + the operation-unsafe conversion, inlined again
+```
+
+That breaks three rules at once: docs/21 says Lane K "may NOT touch transport";
+`sdk.py`'s own docstring says it has no helpers because anything reusable belongs in
+session/flp/store; and AGENTS.md requires one canonical function per rule - this was
+the same conversion written three times, reaching through `session` into `wire`.
+
+**The change.** Three methods added to the `FLSession` frozen surface. Each sends its
+control op and RAISES on failure - `ToolError(control_plane_unavailable)` with no
+control plane, `ToolError(operation_unsafe)` when FL refuses the call as unsafe at
+current time (retryable - addendum A6). They return `None`; handing back a
+`ControlResponse` would just relocate the same conversion into every caller.
+
+**Why session and not wire.** `wire.send_request` returning a typed `ControlResponse`
+is correct - the transport reports what happened and does not decide policy. Deciding
+that "no control plane" and "FL refused" are *errors* is FL-state policy, and
+`FLSession` is the one owner of FL state. `sdk.FL.play()` becomes a one-line delegation
+and never touches the transport again.
+
+**Owners.** Lane S implements the three bodies (they are thin). The `sdk.py` side -
+replacing the three inlined blocks with delegation - is the manager's at integration,
+since Lane K has already completed and retired; it is a ~15-line deletion.
+
+This is the only signature change to the frozen surface so far. Everything else in
+`v2/` is unchanged from the day-0 skeleton.
