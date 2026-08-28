@@ -67,7 +67,11 @@ class FakeControl:
         self.calls.append((op, args or []))
         if op not in self.handlers:
             return ControlResponse(id=len(self.calls), ok=False, err=f"no handler for {op}")
-        return ControlResponse(id=len(self.calls), ok=True, ret=self.handlers[op](args or []))
+        ret = self.handlers[op](args or [])
+        # A handler may script a full failure response (e.g. unsafe-at-current-time).
+        if isinstance(ret, ControlResponse):
+            return ret
+        return ControlResponse(id=len(self.calls), ok=True, ret=ret)
 
 
 class FakeSpool:
@@ -415,61 +419,115 @@ def test_snapshot_from_project_file(monkeypatch, tmp_path):
     assert state.channels[0].pan == 0.0
 
 
-# The live snapshot is ONE composite state.snapshot round trip. Its response is
-# chunked (~10 SysEx frames), which v1's transport silently discarded - so this
-# whole path only became usable once Lane W fixed the chunk routing (A5).
-_SNAPSHOT_PAYLOAD = {
+SNAPSHOT_PAYLOAD = {
     "ppq": 96,
-    "tempo": 128000,  # BPM x 1000
-    "playing": 1,
-    "song_pos": 0,
+    "tempo": 128000,  # getCurrentTempo: BPM x 1000
+    "playing": True,
+    "song_pos": 0.0,
     "current_pattern": 3,
     "pattern_count": 4,
     "channels": [
-        {"idx": 0, "name": "Kick", "muted": 0, "vol": 0.78125, "pan": 0.0, "target_mixer_track": 1}
+        {"idx": 0, "name": "Kick", "muted": False, "vol": 0.78, "pan": 0.0, "target_mixer_track": 1}
     ],
-    "mixer": [{"idx": 0, "name": "Master", "vol": 0.8, "pan": 0.0, "muted": 0, "solo": 0}],
+    "mixer": [
+        {"idx": 0, "name": "Master", "vol": 0.8, "pan": 0.0, "muted": False, "solo": False},
+        {"idx": 1, "name": "Kick bus", "vol": 0.7, "pan": -0.1, "muted": True, "solo": False},
+    ],
 }
 
 
-def test_snapshot_live_uses_one_composite_round_trip():
-    control = FakeControl(hello=HELLO, handlers={"state.snapshot": lambda args: _SNAPSHOT_PAYLOAD})
-    session, _ = make_session(control=control)
+def test_snapshot_live_uses_one_composite_round_trip(monkeypatch):
+    """Addendum A5: state.snapshot works in v2 (Lane W fixed chunk routing);
+    the session must NOT read the file when the live plane answers."""
+    monkeypatch.setattr(
+        flp, "read", lambda path: pytest.fail("live snapshot must not touch the file")
+    )
+    control = FakeControl(hello=HELLO, handlers={"state.snapshot": lambda args: SNAPSHOT_PAYLOAD})
+    session, _ = make_session(control=control, project=Path("/tmp/agent.flp"))
 
     state = session.snapshot()
 
+    assert control.calls == [("state.snapshot", [])], "exactly one composite round trip"
     assert state.tempo_bpm == 128.0
     assert state.ppq == 96
     assert state.playing is True
     assert state.current_pattern == 3
     assert [c.name for c in state.channels] == ["Kick"]
-    assert [m.name for m in state.mixer] == ["Master"]
-    # ONE call - not a per-field fan-out.
-    assert [op for op, _ in control.calls] == ["state.snapshot"]
+    assert [t.name for t in state.mixer] == ["Master", "Kick bus"]
+    assert state.mixer[1].muted is True
 
 
-def test_snapshot_live_does_not_blend_in_the_project_file(tmp_path, monkeypatch):
-    """One backend per call: a stale file must never contaminate a live view."""
-    monkeypatch.setattr(
-        flp,
-        "read",
-        lambda path: flp.FlpProject(ppq=999, tempo=1.0, channels=(), notes=()),
-    )
-    control = FakeControl(hello=HELLO, handlers={"state.snapshot": lambda args: _SNAPSHOT_PAYLOAD})
-    session, _ = make_session(control=control, project=tmp_path / "agent.flp")
-
-    state = session.snapshot()
-
-    assert state.ppq == 96 and state.tempo_bpm == 128.0
-
-
-def test_snapshot_malformed_payload_is_reported_not_guessed():
+def test_snapshot_live_malformed_payload_is_a_typed_error():
     control = FakeControl(hello=HELLO, handlers={"state.snapshot": lambda args: {"ppq": 96}})
     session, _ = make_session(control=control)
 
-    with pytest.raises(errors.ToolError) as exc:
+    with pytest.raises(errors.ToolError) as excinfo:
         session.snapshot()
-    assert "malformed snapshot payload" in exc.value.message
+    assert excinfo.value.category == "fl_api_error"
+    assert "malformed" in excinfo.value.message
+
+
+# --- play / stop / undo (addendum A11) ---------------------------------------
+
+UNSAFE = ControlResponse(id=1, ok=False, err="Operation unsafe at current time (mid-cycle)")
+
+
+@pytest.mark.parametrize(
+    ("method", "op"),
+    [("play", "transport.start"), ("stop", "transport.stop"), ("undo", "general.undo")],
+)
+def test_transport_methods_send_their_op_and_return_none(method, op):
+    control = FakeControl(hello=HELLO, handlers={op: lambda args: 0})
+    session, _ = make_session(control=control)
+
+    assert getattr(session, method)() is None
+    assert control.calls == [(op, [])]
+
+
+@pytest.mark.parametrize("method", ["play", "stop", "undo"])
+def test_transport_methods_raise_without_a_control_plane(method):
+    session, _ = make_session()
+    with pytest.raises(errors.ToolError) as excinfo:
+        getattr(session, method)()
+    assert excinfo.value.category == "control_plane_unavailable"
+
+
+def test_transport_unsafe_refusal_is_retryable_operation_unsafe():
+    """Addendum A6: unsafe-at-current-time means busy, not broken."""
+    control = FakeControl(hello=HELLO, handlers={"transport.start": lambda args: UNSAFE})
+    session, _ = make_session(control=control)
+
+    with pytest.raises(errors.ToolError) as excinfo:
+        session.play()
+    assert excinfo.value.category == "operation_unsafe"
+    assert excinfo.value.retryable is True
+
+
+def test_transport_other_refusals_surface_fl_detail():
+    boom = ControlResponse(id=1, ok=False, err="no such op")
+    control = FakeControl(hello=HELLO, handlers={"general.undo": lambda args: boom})
+    session, _ = make_session(control=control)
+
+    with pytest.raises(errors.ToolError) as excinfo:
+        session.undo()
+    assert excinfo.value.category == "fl_api_error"
+    assert "no such op" in excinfo.value.message
+
+
+def test_set_tempo_unsafe_refusal_never_falls_through(monkeypatch, tmp_path, no_reload):
+    """The warm-up window after _reload_fl (A6): degrade to the file backend
+    here and you have rebuilt the v1 cascade bug."""
+    monkeypatch.setattr(
+        flp, "set_tempo", lambda *a: pytest.fail("must not fall through to the file backend")
+    )
+    control = FakeControl(hello=HELLO, handlers={"mixer.setCurrentTempo": lambda args: UNSAFE})
+    session, _ = make_session(control=control, project=tmp_path / "agent.flp")
+
+    with pytest.raises(errors.ToolError) as excinfo:
+        session.set_tempo(130.0)
+    assert excinfo.value.category == "operation_unsafe"
+    assert excinfo.value.retryable is True
+    assert no_reload == []
 
 
 # --- doctor ------------------------------------------------------------------
@@ -542,66 +600,3 @@ def test_create_session_is_the_factory():
     except NotImplementedError as exc:
         pytest.skip(f"blocked on another lane's stub: {exc}")
     assert isinstance(session, FLSession)
-
-
-# --- transport (addendum A11) -------------------------------------------------
-#
-# These three exist so sdk.py never reaches through the session into the wire.
-# The conversion from ControlResponse to exception lives here, once, so "FL
-# refused" cannot come to mean different things in different callers.
-
-
-@pytest.mark.parametrize(
-    ("method", "op"),
-    [("play", "transport.start"), ("stop", "transport.stop"), ("undo", "general.undo")],
-)
-def test_transport_sends_its_op_and_returns_none(method, op):
-    control = FakeControl(hello=HELLO, handlers={op: lambda args: None})
-    session, _ = make_session(control=control)
-
-    assert getattr(session, method)() is None
-    assert control.calls == [(op, [])]
-
-
-@pytest.mark.parametrize("method", ["play", "stop", "undo"])
-def test_transport_without_a_control_plane_raises(method):
-    session, _ = make_session(control=None)
-
-    with pytest.raises(errors.ToolError) as exc:
-        getattr(session, method)()
-    assert exc.value.category == "control_plane_unavailable"
-
-
-@pytest.mark.parametrize(
-    ("method", "op"),
-    [("play", "transport.start"), ("stop", "transport.stop"), ("undo", "general.undo")],
-)
-def test_transport_unsafe_at_current_time_is_its_own_retryable_category(method, op):
-    """FL being busy is not the call being wrong (addendum A6) - a caller that
-    cannot tell the two apart retries the wrong things and gives up on the right
-    ones."""
-    control = FakeControl(hello=HELLO)  # no handler -> ok=False
-    control.handlers = {}
-
-    def unsafe(op_name, args=None, kwargs=None, timeout=2.0):
-        control.calls.append((op_name, args or []))
-        return ControlResponse(
-            id=1, ok=False, err="Operation unsafe at current time (deferred, gave up)"
-        )
-
-    control.send_request = unsafe
-    session, _ = make_session(control=control)
-
-    with pytest.raises(errors.ToolError) as exc:
-        getattr(session, method)()
-    assert exc.value.category == "operation_unsafe"
-    assert exc.value.retryable is True
-
-
-def test_transport_other_failure_is_an_fl_api_error_not_unsafe():
-    control = FakeControl(hello=HELLO)  # no handler for transport.start -> ok=False
-    session, _ = make_session(control=control)
-
-    with pytest.raises(errors.ToolError) as exc:
-        session.play()
-    assert exc.value.category != "operation_unsafe"

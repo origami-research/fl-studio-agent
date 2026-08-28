@@ -278,6 +278,10 @@ class FLSession:
                 "mixer.setCurrentTempo", args=[bpm, 1], timeout=LIVE_SET_TIMEOUT_SECONDS
             )
             if not resp.ok:
+                # Unsafe-at-current-time means busy (warm-up window after a
+                # load, addendum A6) - retryable, and NEVER a fallthrough.
+                if errors.is_operation_unsafe(resp.err or ""):
+                    raise errors.operation_unsafe("mixer.setCurrentTempo")
                 raise WriteRejected(
                     f"mixer.setCurrentTempo({bpm}) failed inside FL: {resp.err}",
                     fix="Check the value (10-999 BPM) and retry.",
@@ -331,6 +335,8 @@ class FLSession:
                     continue
                 resp = self.control.send_request(op, args=args, timeout=LIVE_SET_TIMEOUT_SECONDS)
                 if not resp.ok:
+                    if errors.is_operation_unsafe(resp.err or ""):
+                        raise errors.operation_unsafe(op)  # busy, not broken (A6)
                     raise WriteRejected(
                         f"{op} failed inside FL: {resp.err}. "
                         f"Already applied live and KEPT: {', '.join(applied) or 'nothing'}.",
