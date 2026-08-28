@@ -76,10 +76,9 @@ def transpose(notes: list[schemas.Note], semitones: int) -> list[schemas.Note]:
     """A new list with every note shifted by ``semitones``; the input is untouched."""
     out = []
     for n in notes:
-        midi = n.key if isinstance(n.key, int) else parse_key(n.key)
-        shifted = midi + semitones
+        shifted = n.key + semitones
         if not 0 <= shifted <= 127:
-            raise NoteError(f"transpose: note {midi} + {semitones} = {shifted}, outside 0-127")
+            raise NoteError(f"transpose: note {n.key} + {semitones} = {shifted}, outside 0-127")
         out.append(n.model_copy(update={"key": shifted}))
     return out
 

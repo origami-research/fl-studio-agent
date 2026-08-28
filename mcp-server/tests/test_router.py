@@ -20,7 +20,7 @@ def test_record_note_write_updates_shadow_and_logs_delta(tmp_path):
     # Shadow score now holds the notes.
     assert len(shadow.notes_at(target)) == 1
     # A delta was returned and logged.
-    assert delta is not None and len(delta.added) == 1 and delta.added[0].key == "C4"
+    assert delta is not None and len(delta.added) == 1 and delta.added[0].key == 60
     last = actions.last()
     assert last.op == "add_notes" and last.after_hash is not None
     assert last.delta is not None and len(last.delta.added) == 1
@@ -34,7 +34,7 @@ def test_record_note_write_merge_delta_is_only_the_addition(tmp_path):
     router.record_note_write(shadow, actions, target, [{"key": "G4", "start": 2, "length": 1}], "merge", "live", 2)
 
     last = actions.last()
-    assert [n.key for n in last.delta.added] == ["G4"]
+    assert [n.key for n in last.delta.added] == [67]
     assert not last.delta.removed
     assert len(shadow.notes_at(target)) == 2
 
@@ -211,6 +211,6 @@ def test_get_notes_key_filter_handles_string_keys(tmp_path):
         result = server.get_notes(pattern=1, channel=0, key_min=48, key_max=72)
         assert result["status"] == "ok"
         keys = {n["key"] for n in result["notes"]}
-        assert keys == {"C4"}  # only 60 is within [48, 72]
+        assert keys == {60}  # only C4=60 is within [48, 72]
     finally:
         server.set_session(None)

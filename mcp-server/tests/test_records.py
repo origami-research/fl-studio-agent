@@ -34,7 +34,7 @@ def test_write_stores_and_returns_a_shadow_ref(tmp_path):
     ref = store.write(target, make_notes("C4"), mode="replace")
     assert ref.provenance == "shadow"
     assert ref.stale is False
-    assert store.notes_at(target)[0].key == "C4"
+    assert store.notes_at(target)[0].key == 60
 
 
 def test_merge_appends_replace_overwrites(tmp_path):
@@ -47,7 +47,7 @@ def test_merge_appends_replace_overwrites(tmp_path):
     store.write(target, make_notes("G4"), mode="replace")
     notes = store.notes_at(target)
     assert len(notes) == 1
-    assert notes[0].key == "G4"
+    assert notes[0].key == 67
 
 
 def test_clear_empties_the_target(tmp_path):
@@ -67,7 +67,7 @@ def test_old_note_set_stays_addressable_by_hash_after_target_moves_on(tmp_path):
     assert store.ref_at(target).id != ref1.id
     old_notes = store.notes_by_id(ref1.id)
     assert old_notes is not None
-    assert old_notes[0].key == "C4"
+    assert old_notes[0].key == 60
 
 
 def test_mark_stale_flags_only_the_given_target(tmp_path):
@@ -104,7 +104,7 @@ def test_persistence_round_trips_across_instances(tmp_path):
     assert ref is not None
     assert ref.provenance == "model"
     notes = reloaded.notes_at(target)
-    assert [n.key for n in notes] == ["C4", "E4", "G4"]
+    assert [n.key for n in notes] == [60, 64, 67]
 
 
 def test_get_on_unknown_target_returns_none(tmp_path):
