@@ -320,3 +320,73 @@ since Lane K has already completed and retired; it is a ~15-line deletion.
 
 This is the only signature change to the frozen surface so far. Everything else in
 `v2/` is unchanged from the day-0 skeleton.
+
+## GATE RESULTS (manager-run, re-verified in the manager's own checkout)
+
+### G2 (Lane W) - PASSED 2026-08-27
+
+**Fast half** - `tests/v2/test_wire.py` + `test_server.py`: **30 passed**. Full merged
+suite (all lanes) **362 passed, 7 skipped**, `ruff check src tests` clean.
+
+**Live half** - v2 `wire.py` driven against real FL 2026 Producer Edition v26.1.5:
+
+```
+[PASS] hello received            fl_ver=Producer Edition v26.1.5 [build 5384] ppq=96
+[PASS] window title is FL        title='FL Studio 2026'
+[PASS] tempo round trip          getCurrentTempo=141000 (expected 141000)
+[PASS] chunked state.snapshot    elapsed=0.0s ok=True
+[PASS] snapshot shape            channels=5 mixer=18, keys incl. tempo/ppq/playing
+[PASS] snapshot tempo agrees     snapshot.tempo=141000 == readback
+[PASS] dropped_frames == 0       for valid traffic
+```
+
+The third line is the one that matters: `state.snapshot` is the exact op v1 never
+answered - not at 8s, not at 45s (addendum A5) - because it discarded the reassembled
+chunked response. Under v2's wire it returns in **0.0s**. The bug measured in A5 is
+fixed and the fix is verified against real FL, not against the fake.
+
+`dropped_frames == 0` also confirms the counter does not fire on valid chunked traffic,
+so "malformed input" and "large response" stay distinguishable in `fl_doctor` as
+required.
+
+Window-title assertion included per fact 5 - a rejected project leaves FL on a default
+project whose read-backs look plausible, so tempo assertions never stand alone.
+
+### A8 CLOSED - channel levels live-verified end to end (2026-08-27)
+
+The open item in A8 is now discharged. Method: patch event 219 in a stock template,
+load it in real FL, read the values back through the control plane.
+
+**Round 1 failed instructively** and is worth recording, because it is fact 5's trap
+firing exactly as documented. FL reported `volume=0.78125` and `pan=0.0` - which are
+`10000/12800` and dead centre, i.e. the DEFAULTS - and the window-title read came back
+empty, so "did FL even load my file?" was unanswerable. Plausible-looking readbacks
+from a default project are indistinguishable from a successful write unless something
+independent proves which project is loaded.
+
+**Round 2 added a positive control**: patch the TEMPO to a unique value in the same
+file with the live-verified v1 `set_tempo`, and only trust the levels readback if the
+tempo readback proves FL loaded our file.
+
+```
+set_tempo -> readback 137.0
+  219 before: (6400, 10000, 0)      # pan, volume, pitch_shift
+  219 after:  (3200,  6400, 5)
+[PASS] POSITIVE CONTROL: FL loaded OUR file (tempo==137000)   got 137000
+       channel 0: volume=0.5 pan=-0.5
+[PASS] volume 6400/12800 -> 0.5    got 0.5
+[PASS] pan    3200 -> -0.5         got -0.5
+```
+
+So the byte layout in A8 is confirmed by FL itself, **and** the unit conversions are
+pinned:
+
+- `volume_0_1  = raw / LEVEL_MAX`            (raw 6400 -> 0.5; default 10000 -> 0.78125)
+- `pan_-1_1    = (raw - PAN_CENTRE) / PAN_CENTRE`  (raw 3200 -> -0.5; 6400 -> 0.0)
+
+`set_channel_levels` can be implemented against this with no further discovery.
+
+**Method note for every future live gate in this repo:** never assert a readback from a
+file-write without an independent marker proving FL loaded that file. A tempo patch is
+a cheap, proven positive control. Round 1 would have been read as "the map is wrong"
+when the truth was "FL was never looking at our file".
