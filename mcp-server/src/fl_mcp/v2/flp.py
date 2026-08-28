@@ -129,8 +129,15 @@ def read(path: Path) -> FlpProject:
     coarse: int | None = None  # legacy tempo pair, used only when 156 is absent
     fine = 0
     unicode_text = False  # flips when FLVersion says >= 11.5
-    channels: list[dict[str, int | str]] = []  # raw fields per rack channel, in order
+    # CHANNEL 0 IS IMPLICIT: its events can precede any New(64) event (stock
+    # 'Basic with limiter' does this; found live by the manager's G4 smoke).
+    # New(64)=N opens/switches to channel N; a channel-scoped event with no
+    # channel open yet opens channel 0. Verified corpus-wide: FLhd nChannels
+    # == |{0} union {New payloads}| on all 164 bundled projects.
+    n_channels = int.from_bytes(header[2:4], "little")
+    channel_map: dict[int, dict[str, int | str]] = {}
     current: dict[str, int | str] | None = None
+    mixer_seen = False
     pattern = 0  # 0 = before any PatternID.New (A9: stock files do this)
     notes: list[FlpNote] = []
 
@@ -144,11 +151,12 @@ def read(path: Path) -> FlpProject:
             coarse = int.from_bytes(payload, "little")
         elif event_id == EVENT_TEMPO_FINE and size == 2 and fine == 0:
             fine = int.from_bytes(payload, "little")
-        elif event_id == EVENT_CHANNEL_NEW and size == 2:
-            current = {"index": int.from_bytes(payload, "little")}
-            channels.append(current)
+        elif event_id == EVENT_CHANNEL_NEW and size == 2 and not mixer_seen:
+            iid = int.from_bytes(payload, "little")
+            current = channel_map.setdefault(iid, {"index": iid})
         elif event_id == EVENT_MIXER_FLAGS:
-            current = None  # mixer section began; its Plugin events are not channel names
+            mixer_seen = True  # mixer Plugin events are not channel names
+            current = None
         elif event_id == EVENT_PATTERN_NEW and size == 2:
             pattern = int.from_bytes(payload, "little")
         elif event_id == EVENT_PATTERN_NOTES:
@@ -160,15 +168,22 @@ def read(path: Path) -> FlpProject:
                 )
                 continue
             notes.extend(replace(n, pattern=pattern) for n in _decode_notes(payload))
-        elif current is not None:
+        elif _is_channel_scoped(event_id) and not mixer_seen:
+            if current is None:
+                current = channel_map.setdefault(0, {"index": 0})
             _apply_channel_event(current, event_id, payload, unicode_text, off)
 
     if tempo is None and coarse is not None:
         tempo = coarse + fine / 1000  # pre-156 files store tempo as a word pair
+    if channel_map and len(channel_map) != n_channels:
+        log.warning(
+            "%s: decoded %d channels but the FLhd header says %d",
+            path.name, len(channel_map), n_channels,
+        )
     return FlpProject(
         ppq=ppq,
         tempo=tempo,
-        channels=tuple(_build_channel(fields) for fields in channels),
+        channels=tuple(_build_channel(channel_map[iid]) for iid in sorted(channel_map)),
         notes=tuple(notes),
     )
 
@@ -336,22 +351,30 @@ def set_channel_levels(
     header, stream = _chunks(bytes(data))
     base = 8 + len(header) + 8  # FLdt payload's file offset
 
+    # Same attribution rule as read(): channel 0 is implicit, New(64) switches,
+    # the mixer section ends attribution.
     current: int | None = None
+    mixer_seen = False
     seen: set[int] = set()
     levels_off: int | None = None
     for event_id, off, size in _events(stream):
-        if event_id == EVENT_CHANNEL_NEW and size == 2:
+        if event_id == EVENT_CHANNEL_NEW and size == 2 and not mixer_seen:
             current = int.from_bytes(stream[off : off + size], "little")
             seen.add(current)
         elif event_id == EVENT_MIXER_FLAGS:
+            mixer_seen = True
             current = None
-        elif (
-            event_id == EVENT_CHANNEL_LEVELS
-            and size == 24
-            and current == channel
-            and levels_off is None
-        ):
-            levels_off = off
+        elif _is_channel_scoped(event_id) and not mixer_seen:
+            if current is None:
+                current = 0
+                seen.add(0)
+            if (
+                event_id == EVENT_CHANNEL_LEVELS
+                and size == 24
+                and current == channel
+                and levels_off is None
+            ):
+                levels_off = off
 
     if channel not in seen:
         raise IndexError(f"no channel {channel}; project has {len(seen)}")
@@ -533,6 +556,11 @@ _CHANNEL_EVENT_FIELDS = {
     EVENT_VOL_BYTE: "vol_byte",
     EVENT_PAN_BYTE: "pan_byte",
 }
+
+
+def _is_channel_scoped(event_id: int) -> bool:
+    """True for events that belong to the currently open rack channel."""
+    return event_id == EVENT_CHANNEL_LEVELS or event_id in _CHANNEL_EVENT_FIELDS
 
 
 def _apply_channel_event(

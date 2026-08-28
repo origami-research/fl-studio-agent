@@ -66,24 +66,31 @@ def _oracle_parse(path: Path):
 
 def _channel_own_name_events(path: Path) -> list[set[str]]:
     """Every name-event string inside each channel's OWN block (before the
-    mixer section) - the byte evidence for divergence class 1."""
+    mixer section) - the byte evidence for divergence class 1. Same
+    attribution rule as the reader: channel 0 is implicit, New(64) switches,
+    output ordered by channel index."""
     data = path.read_bytes()
     _, stream = flp._chunks(data)
     unicode_text = False
-    blocks: list[set[str]] = []
+    blocks: dict[int, set[str]] = {}
+    current: set[str] | None = None
     for event_id, off, size in flp._events(stream):
         payload = bytes(stream[off : off + size])
         if event_id == flp.EVENT_VERSION:
             unicode_text = flp._version_is_unicode(payload, off)
         elif event_id == flp.EVENT_CHANNEL_NEW and size == 2:
-            blocks.append(set())
+            current = blocks.setdefault(int.from_bytes(payload, "little"), set())
         elif event_id == flp.EVENT_MIXER_FLAGS:
             break
-        elif blocks and event_id in (
+        elif event_id in (
             flp.EVENT_NAME_USER, flp.EVENT_NAME_LEGACY, flp.EVENT_NAME_INTERNAL
         ):
-            blocks[-1].add(flp._text(payload, unicode_text, off))
-    return blocks
+            if current is None:
+                current = blocks.setdefault(0, set())
+            current.add(flp._text(payload, unicode_text, off))
+        elif current is None and flp._is_channel_scoped(event_id):
+            current = blocks.setdefault(0, set())
+    return [blocks[iid] for iid in sorted(blocks)]
 
 
 def _has_nonconforming_notes_blob(path: Path) -> bool:
@@ -123,12 +130,17 @@ def test_reader_matches_pyflp_or_divergence_is_evidenced(path):
         assert ours.tempo == pytest.approx(float(tempo), abs=1e-9)
 
     # -- channels -------------------------------------------------------------
+    # The FLhd header's nChannels field is the free ground truth for channel
+    # COUNT - stronger than pyflp, which drops the implicit channel 0 (the
+    # G4-found bug this invariant would have caught immediately).
+    header = path.read_bytes()[8:14]
+    assert len(ours.channels) == int.from_bytes(header[2:4], "little")
+
     try:
         oracle_names = [(c.display_name or "") for c in oracle.channels]
     except Exception:
         oracle_names = None
-    if oracle_names is not None:
-        assert len(ours.channels) == len(oracle_names)
+    if oracle_names is not None and len(oracle_names) == len(ours.channels):
         own_names = _channel_own_name_events(path)
         for i, (our_channel, oracle_name) in enumerate(
             zip(ours.channels, oracle_names, strict=True)
@@ -174,7 +186,8 @@ def test_astes_bien_duro_parses_where_pyflp_cannot():
     assert _oracle_parse(path) is None, "pyflp learned to parse Astes; update A2"
     project = flp.read(path)
     assert project.tempo == 95.0
-    assert len(project.channels) > 100
+    header = path.read_bytes()[8:14]
+    assert len(project.channels) == int.from_bytes(header[2:4], "little") == 308
     assert len(project.notes) > 1000
 
 

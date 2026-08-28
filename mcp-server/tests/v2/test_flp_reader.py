@@ -191,6 +191,41 @@ def test_channel_name_priority_user_over_legacy_over_internal(tmp_path):
     assert [c.name for c in channels] == ["User", "Legacy", "Internal", ""]
 
 
+def test_implicit_channel_zero_before_any_new_event(tmp_path):
+    # CHANNEL 0 IS IMPLICIT: stock 'Basic with limiter' opens with channel 0's
+    # Levels event BEFORE any New(64); New(64)=N then switches to channel N.
+    # Found live by the manager's G4 smoke (fl.track(0) raised ChannelNotFound).
+    events = VERSION_MODERN + event(
+        flp.EVENT_CHANNEL_LEVELS, struct.pack("<iIi", 6000, 9000, 1) + b"\0" * 12
+    ) + channel_block(1, event(flp.EVENT_NAME_USER, "Clap\0".encode("utf-16-le")))
+    project = flp.read(write_flp(tmp_path, events, n_channels=2))
+
+    assert [c.index for c in project.channels] == [0, 1]
+    implicit, named = project.channels
+    assert (implicit.name, implicit.pan, implicit.volume, implicit.pitch_semitones) == (
+        "", 6000, 9000, 1,
+    )
+    assert named.name == "Clap"
+
+
+def test_explicit_new_zero_reuses_the_implicit_channel(tmp_path):
+    # Pre-New events open channel 0; a later New(64)=0 switches back to the
+    # SAME channel rather than creating a duplicate.
+    events = VERSION_MODERN + event(
+        flp.EVENT_CHANNEL_LEVELS, struct.pack("<iIi", 6000, 9000, 0) + b"\0" * 12
+    ) + channel_block(0, event(flp.EVENT_NAME_USER, "Kick\0".encode("utf-16-le")))
+    (channel,) = flp.read(write_flp(tmp_path, events)).channels
+    assert (channel.index, channel.name, channel.pan) == (0, "Kick", 6000)
+
+
+def test_mixer_events_do_not_create_an_implicit_channel(tmp_path):
+    # A channel-less file whose stream goes straight to the mixer section must
+    # report zero channels - slot plugin names never open channel 0.
+    events = VERSION_MODERN + event(flp.EVENT_MIXER_FLAGS, b"\0" * 12)
+    events += event(flp.EVENT_NAME_USER, "Reverb\0".encode("utf-16-le"))
+    assert flp.read(write_flp(tmp_path, events)).channels == ()
+
+
 def test_mixer_section_names_do_not_leak_into_last_channel(tmp_path):
     events = VERSION_MODERN + channel_block(
         0, event(flp.EVENT_NAME_USER, "Kick\0".encode("utf-16-le"))
