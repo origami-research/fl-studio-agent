@@ -578,3 +578,54 @@ this repo needs its control run through the identical path.** Re-run this experi
 with a template that the harness is already known to open (`Basic with limiter` and
 `Create a chord progression` both load reliably) and add the target pattern by other
 means, or extend the sampling window well past 60s.
+
+### A13 UPDATE (2026-08-28): it is NOT pattern-block creation
+
+The decisive experiment, re-run properly on `Create a chord progression.flp` - a
+template the harness is known to open, sampling every window, with a pristine control:
+
+```
+control    loaded=True   ['', 'i6_control.flp - FL Studio 2026']
+existing   loaded=False  ['', 'FL Studio 2026']
+```
+
+**Writing into a pattern that already exists also produces a file FL refuses to open.**
+So the fault is not in creating a pattern block from scratch, which was the leading
+hypothesis - it is in the notes-event write itself. That eliminates a whole class of
+theories and is the most useful thing learned about A13 so far.
+
+What that file actually contains, before and after (pattern, notes-event size):
+
+```
+BEFORE  [(4, 1224)]
+AFTER   [(4, 1224), (1, 24)]
+```
+
+Note the target: the template's only notes event belongs to pattern **4**. Pattern 1
+exists as a bare `New(65)=1` with no notes, so `write_notes` took the
+"splice a notes event after the pattern's New" path rather than replacing anything.
+The resulting shape - `New(65)=1` immediately followed by `Notes(224)` - is exactly the
+shape FL's own files use, and FL still rejects it.
+
+**Hypotheses now eliminated:** framing (FLdt length and event walk are exact), splice
+position (three placements tried), note-record flags (fixed, real, insufficient),
+pattern-block creation, and pattern `Name(193)` being required (83 of 134 FL files with
+patterns have no `Name` at all).
+
+**Still unexplained**, and the honest state of this defect: something about the notes
+event or its surroundings that we have not identified. Remaining leads, cheapest first:
+
+1. `mode="replace"` replaces the WHOLE `Notes` blob, which holds every channel's notes
+   for that pattern - so a replace silently destroys other channels' notes. That is a
+   real semantic bug worth fixing regardless of A13, and it may also be what FL objects
+   to when the blob stops matching the pattern's other state.
+2. Zero-length event **216** immediately precedes the first `New(65)` in 107 of 134
+   FL-authored files (146 in 26 more) - a plausible required pattern-section marker
+   that templates without patterns lack entirely.
+3. Compare a byte-diff of an FL-authored file before/after FL itself adds one note,
+   which needs a human to make the edit in FL once - the same kind of one-time human
+   step G3 needs.
+
+This is reverse engineering an undocumented format without a spec; further progress
+needs either more live experiments or a byte-diff of FL's own edit, not more
+speculation.
