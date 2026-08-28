@@ -50,6 +50,7 @@ on the channel named in the reply.
 
 | Tool | What it does |
 |---|---|
+| `get_scene` | Read what's there — tempo, inferred key, what each channel has |
 | `write_notes` | Notes by name or MIDI number, positions in beats, merge or replace |
 | `list_channels` | What instruments this project has |
 | `set_tempo` | Project tempo in BPM |
@@ -63,6 +64,7 @@ You do not call these directly — just say what you want:
 > "write a 4-bar bassline in A minor on Bass, at 128 BPM"
 > "pan the lead slightly left and turn it down a bit"
 > "add a countermelody over what's there"
+> "what's in the project right now?"
 
 The agent project ships with **Chords**, **Bass**, **Lead** and **Drums** on
 real instruments. Notes go to the Lead unless you name another channel; a
@@ -171,7 +173,7 @@ to remove the ambiguity.
 ## Development
 
 ```bash
-cd mcp-server && uv run pytest                     # 110 tests
+cd mcp-server && uv run pytest                     # 122 tests
 uv run python tests/mutation_check.py              # verifies the FL sandbox emulator
 python -m harness.doctor                           # live status of every link
 python -m harness.verify <project.flp>             # dump notes from any project

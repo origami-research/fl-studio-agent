@@ -139,6 +139,22 @@ def resolve_channel(channel: int | str | None) -> int:
     )
 
 
+def read_tempo() -> float | None:
+    """Current project tempo, or None if it cannot be read."""
+    project = agent_project()
+    if project is None:
+        return None
+    try:
+        from harness.flp_compat import parse
+
+        for event in parse(project).events:
+            if str(event.id) == "ProjectID.Tempo":
+                return event.value / 1000.0
+    except Exception:  # noqa: BLE001 - a missing tempo must not break a read
+        return None
+    return None
+
+
 def fl_app() -> Path:
     return Path(os.environ.get("FL_APP", "/Applications/FL Studio 2025.app"))
 

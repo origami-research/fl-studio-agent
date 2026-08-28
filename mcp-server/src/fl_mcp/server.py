@@ -699,6 +699,42 @@ def fl_status() -> dict:
     return status
 
 
+@mcp.tool()
+def get_scene(detail: str = "summary", channel: int | None = None) -> dict:
+    """Read what is currently in the project — key, tempo, and what each channel has.
+
+    Call this before writing, so additions fit what is already there. It returns
+    an analysis rather than a note dump: a 56-note project summarises to about
+    20 tokens instead of ~960, and the summary answers the questions that
+    actually get asked.
+
+    Args:
+        detail: "summary" (default) for tempo, inferred key and a per-channel
+            digest — note count, span in beats, register, pitch classes, and for
+            bass-register parts the root motion. Use "notes" only when you need
+            individual notes, such as harmonising an existing line.
+        channel: With detail="notes", limit to one channel index.
+
+    Returns:
+        For "summary", a `summary` string is included that is already formatted
+        for reading. Key inference carries a confidence and can be wrong on
+        modal or chromatic material — treat "low" as "no reliable key".
+    """
+    from . import autonomous, scene
+
+    project = autonomous.agent_project()
+    if project is None:
+        return {"error": "No agent project configured. Run: python -m fl_mcp.make_agent_project"}
+
+    if detail == "notes":
+        return {"notes": scene.notes_detail(project, channel)}
+    if detail != "summary":
+        return {"error": f'detail must be "summary" or "notes", got {detail!r}'}
+
+    names = {c["index"]: c["name"] for c in autonomous.list_channels()}
+    return scene.summarize(project, names, tempo=autonomous.read_tempo())
+
+
 def main() -> None:
     get_session()  # open the MIDI ports now, before the first tool call (docs/14 ordering)
     mcp.run()
