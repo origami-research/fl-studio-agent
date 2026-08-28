@@ -16,7 +16,6 @@ import pytest
 from fl_mcp import flp_writer
 from fl_mcp.flpaths import fl_app
 from fl_mcp.v2 import flp
-from fl_mcp.v2.flp import FlpError
 
 from .test_flp_reader import VERSION_MODERN, build_flp, event, write_flp
 
