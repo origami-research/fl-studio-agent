@@ -397,6 +397,26 @@ class FLSession:
                 state.playing = bool(playing.ret)
         return state
 
+    # -- transport (manager sign-off, addendum A11) -------------------------------
+    #
+    # These exist so the SDK never reaches through to the wire. Each sends the
+    # control op and RAISES on failure - ToolError(control_plane_unavailable) when
+    # there is no control plane, ToolError(operation_unsafe) when FL refused the
+    # call as unsafe at current time (retryable; see addendum A6). Returning a
+    # ControlResponse here would just move the same conversion into every caller.
+
+    def play(self) -> None:
+        """``transport.start``."""
+        raise NotImplementedError("Lane S")
+
+    def stop(self) -> None:
+        """``transport.stop``."""
+        raise NotImplementedError("Lane S")
+
+    def undo(self) -> None:
+        """``general.undo``."""
+        raise NotImplementedError("Lane S")
+
     def doctor(self) -> DoctorReport:
         """Typed report - control plane, note plane, project file - with a
         concrete ``fix`` string per degraded plane."""
