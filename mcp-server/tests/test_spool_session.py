@@ -105,3 +105,20 @@ def test_gc_stale_sessions_removes_old_dirs_only(tmp_path):
 def test_send_command_validates_args_against_schema(session):
     with pytest.raises(ValidationError):
         session.send_command("add_notes", target={"pattern": 0, "channel": 0}, notes=[])
+
+
+def test_next_command_id_unique_under_concurrency(tmp_path, monkeypatch):
+    """Concurrent tool calls must never mint the same command id.
+
+    Duplicate ids correlate the wrong FL response to the wrong command, so the
+    read-modify-write of the counter file has to be serialized.
+    """
+    from concurrent.futures import ThreadPoolExecutor
+
+    monkeypatch.setattr(spool, "spool_root", lambda: tmp_path)
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        ids = list(pool.map(lambda _: spool.next_command_id(), range(200)))
+
+    assert len(set(ids)) == len(ids)
+    assert max(ids) == len(ids)

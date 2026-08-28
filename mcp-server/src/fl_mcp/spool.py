@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import contextlib
 import json
+import logging
 import os
 import tempfile
 import threading
@@ -96,22 +97,34 @@ def _newest(name: str) -> dict[str, Any] | None:
     return best[1] if best is not None else None
 
 
+# Command-id allocation must be serialized: MCP dispatches tool calls on
+# concurrent worker threads, and an unguarded read-modify-write of the counter
+# file can mint the same id twice - which correlates the wrong FL response to
+# the wrong command. The lock covers the whole read+write cycle.
+_counter_lock = threading.Lock()
+
+log = logging.getLogger(__name__)
+
+
 def next_command_id() -> int:
     """Monotonic command id, used to correlate a result with its command."""
     root = spool_root()
     if root is None:
         return 1
     counter = root / "counter"
-    try:
-        current = int(counter.read_text())
-    except (FileNotFoundError, ValueError, OSError):
-        current = 0
-    nxt = current + 1
-    try:
-        counter.parent.mkdir(parents=True, exist_ok=True)
-        counter.write_text(str(nxt))
-    except OSError:
-        pass
+    with _counter_lock:
+        try:
+            current = int(counter.read_text())
+        except (FileNotFoundError, ValueError, OSError):
+            current = 0
+        nxt = current + 1
+        try:
+            counter.parent.mkdir(parents=True, exist_ok=True)
+            counter.write_text(str(nxt))
+        except OSError:
+            # The next call would re-read the stale value and hand out this same
+            # id again - a correlation bug, not a cosmetic one. Surface it.
+            log.exception("could not persist command counter %s; duplicate ids possible", counter)
     return nxt
 
 
@@ -130,15 +143,15 @@ def put_command(op: str, **fields: Any) -> dict[str, Any]:
 
     cmd = {"proto": PROTO_VER, "id": next_command_id(), "op": op, **fields}
     written = []
-    errors = []
+    write_failures = []  # not `errors`: that name is the imported errors module
     for root in roots:
         try:
             write_json_atomic(root / "pending.json", cmd)
             written.append(root)
         except OSError as exc:
-            errors.append(f"{root}: {exc}")
+            write_failures.append(f"{root}: {exc}")
     if not written:
-        raise SpoolUnavailable("Could not write to any spool location:\n  " + "\n  ".join(errors))
+        raise SpoolUnavailable("Could not write to any spool location:\n  " + "\n  ".join(write_failures))
     return cmd
 
 
