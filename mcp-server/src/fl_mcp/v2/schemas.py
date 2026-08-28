@@ -1,0 +1,239 @@
+"""The single seam every lane codes against. Every type is FIRM:
+unions resolve at construction, invariants live in the fields, and a dict
+exists only at the MCP boundary via ``.model_dump()``.
+
+This file is IMPLEMENTED, not a stub - it is the contract the lanes share.
+"""
+
+from __future__ import annotations
+
+from datetime import datetime
+from typing import Any, Literal
+
+from pydantic import BaseModel, Field, field_validator
+
+from fl_mcp.clock import now
+from fl_mcp.pitch import parse_key
+
+SCHEMA_VERSION = 2
+
+NoteWriteMode = Literal["merge", "replace"]  # THE mode type - validated once, at a boundary
+
+Backend = Literal["live", "project-write", "bridge"]
+
+
+class Note(BaseModel):
+    """One note, in musical units. C4 = MIDI 60 = middle C.
+
+    ``key`` is firmly an int after construction: "C4"/"F#3" are accepted as
+    input and resolved once by ``pitch.parse_key``. Use ``pitch.key_name`` for
+    display. No downstream code ever sees a union.
+    """
+
+    key: int = Field(ge=0, le=127)
+    start: float = Field(ge=0)  # beats from pattern start
+    length: float = Field(gt=0, le=1024)  # beats
+    velocity: float = Field(default=0.8, ge=0, le=1)
+    pan: float = Field(default=0.5, ge=0, le=1)
+    color: int = Field(default=0, ge=0, le=15)
+
+    @field_validator("key", mode="before")
+    @classmethod
+    def _resolve_key(cls, value: object) -> int:
+        return parse_key(value)
+
+    def canonical(self) -> dict[str, Any]:
+        """Normalized form; the only basis for hashing and the action log."""
+        return {
+            "key": self.key,
+            "start": round(self.start, 6),
+            "length": round(self.length, 6),
+            "velocity": round(self.velocity, 4),
+            "pan": round(self.pan, 4),
+            "color": self.color,
+        }
+
+
+class Target(BaseModel):
+    """A pattern/channel coordinate. Firmly ints: channel names and the
+    "current" default are resolved AT THE TOOL BOUNDARY (server/sdk), never
+    carried as a union or a -1 sentinel into the core."""
+
+    pattern: int = Field(ge=1)
+    channel: int = Field(ge=0)
+
+
+class NoteMove(BaseModel):
+    """A note paired across a diff as dragged rather than delete+insert."""
+
+    from_: Note = Field(alias="from")
+    to: Note
+    confidence: float = Field(gt=0, le=1)
+
+    model_config = {"populate_by_name": True}
+
+
+class NoteDelta(BaseModel):
+    """The structured change one write made - the unit of history."""
+
+    added: list[Note] = Field(default_factory=list)
+    removed: list[Note] = Field(default_factory=list)
+    moved: list[NoteMove] = Field(default_factory=list)
+
+    def is_empty(self) -> bool:
+        return not (self.added or self.removed or self.moved)
+
+
+class WriteReceipt(BaseModel):
+    """What a write CONFIRMED (readback), never what was requested."""
+
+    backend: Backend
+    target: Target
+    confirmed_notes: int  # notes on this target in the saved/live state, post-write
+    delta: NoteDelta
+
+
+class ChannelLevels(BaseModel):
+    """A channel's mix state, in tool units (readback, post-write)."""
+
+    channel: int = Field(ge=0)
+    volume: float = Field(ge=0, le=1)
+    pan: float = Field(ge=-1, le=1)
+    pitch_semitones: int = Field(ge=-48, le=48)
+
+
+class PlaneStatus(BaseModel):
+    connected: bool
+    detail: str | None = None
+    fix: str | None = None
+
+
+class DoctorReport(BaseModel):
+    status: Literal["ok", "degraded"]
+    control_plane: PlaneStatus
+    note_plane: PlaneStatus
+    project_file: PlaneStatus
+
+
+# -- spool wire (server <-> code inside FL) ----------------------------------
+
+
+class AddNotesArgs(BaseModel):
+    target: Target
+    notes: list[Note] = Field(min_length=1, max_length=5000)
+    mode: NoteWriteMode = "merge"
+
+
+class ClearNotesArgs(BaseModel):
+    target: Target
+
+
+class PingArgs(BaseModel):
+    pass
+
+
+SpoolOp = Literal["add_notes", "clear_notes", "ping"]
+
+OP_ARGS: dict[str, type[BaseModel]] = {
+    "add_notes": AddNotesArgs,
+    "clear_notes": ClearNotesArgs,
+    "ping": PingArgs,
+}
+
+
+class SpoolCommand(BaseModel):
+    proto: int = SCHEMA_VERSION
+    id: int
+    op: SpoolOp
+    args: dict[str, Any]  # validated against OP_ARGS[op] at send time
+    ts: datetime = Field(default_factory=now)
+
+
+class SpoolResponse(BaseModel):
+    id: int
+    ok: bool
+    op: SpoolOp | None = None
+    notes_written: int | None = None
+    err: str | None = None
+
+
+# -- control wire (server <-> controller script over SysEx) ------------------
+
+
+class ControlRequest(BaseModel):
+    id: int
+    op: str  # dotted FL API name, e.g. "mixer.getCurrentTempo"
+    args: list[Any] = Field(default_factory=list)
+    kwargs: dict[str, Any] = Field(default_factory=dict)
+
+
+class ControlResponse(BaseModel):
+    id: int
+    ok: bool
+    ret: Any = None
+    err: str | None = None
+
+
+class HelloEvent(BaseModel):
+    """Controller script -> server on attach."""
+
+    script_ver: str
+    fl_ver: str
+    ppq: int
+    tempo: float | None = None
+
+
+# -- observations (FL state rendered to the model) ----------------------------
+
+
+class Channel(BaseModel):
+    index: int
+    name: str
+    volume: float = 0.78
+    pan: float = 0.0
+    muted: bool = False
+    melodic: bool = True
+
+
+class MixerTrack(BaseModel):
+    index: int
+    name: str
+    volume: float = 0.8
+    pan: float = 0.0
+    muted: bool = False
+
+
+class SessionState(BaseModel):
+    tempo_bpm: float | None = None
+    ppq: int | None = None
+    playing: bool = False
+    current_pattern: int = 1
+    channels: list[Channel] = Field(default_factory=list)
+    mixer: list[MixerTrack] = Field(default_factory=list)
+
+
+# -- history ------------------------------------------------------------------
+
+
+class NoteSetRef(BaseModel):
+    """Content-addressed handle to a note set in the store."""
+
+    id: str
+    target: Target
+    provenance: Literal["shadow", "project"]
+    as_of: datetime
+
+
+class ActionEntry(BaseModel):
+    """One applied action in the durable log."""
+
+    ts: datetime = Field(default_factory=now)
+    id: int
+    op: str
+    target: Target | None = None
+    mode: NoteWriteMode | None = None
+    backend: Backend | None = None
+    before_hash: str | None = None
+    after_hash: str | None = None
+    delta: NoteDelta | None = None
+    summary: str | None = None
