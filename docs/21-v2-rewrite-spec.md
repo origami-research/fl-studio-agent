@@ -555,3 +555,26 @@ false negatives - it read `''` in one run and `'Invalid data'` in another for th
 file. Sample `name of every window` repeatedly across the load, and always run a
 pristine control through the identical harness. Two of my own runs were misleading
 before I did this.
+### A13 follow-up: the "existing pattern" experiment was INCONCLUSIVE
+
+I attempted the decisive experiment above using `Soundgoodizer.flp` (a small stock
+template that already contains pattern 1). Result:
+
+```
+control        loaded_our_file=False  invalid_dialog=False  ['', 'FL Studio 2026']
+existing_pat1  loaded_our_file=False  invalid_dialog=False  ['', 'FL Studio 2026']
+```
+
+**The control failed too** - FL did not open the pristine, unmodified copy either
+within the sampling window. So this run proves nothing about `write_notes`; it only
+shows the harness does not reliably open that particular file (it lives under
+`System/Render tests`, and may simply load more slowly than the ~36s sampled, or be
+treated specially by FL).
+
+Recorded rather than discarded because the near-miss is the lesson: without the
+control, `existing_pat1 loaded_our_file=False` reads as damning evidence against
+`write_notes` when it is in fact evidence about the harness. **Every live comparison in
+this repo needs its control run through the identical path.** Re-run this experiment
+with a template that the harness is already known to open (`Basic with limiter` and
+`Create a chord progression` both load reliably) and add the target pattern by other
+means, or extend the sampling window well past 60s.
