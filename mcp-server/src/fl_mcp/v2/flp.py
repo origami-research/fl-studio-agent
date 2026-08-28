@@ -32,6 +32,8 @@ EVENT_PATTERN_NOTES = 224  # varint-length blob of NOTE_STRUCT records
 # Event ids confirmed against pyflp's enums (docs/21 addendum A8) and, for 219,
 # decoded straight out of FL 2026's own stock templates.
 EVENT_VERSION = 199  # ascii "major.minor..."; >= 11.5 -> text events are UTF-16-LE
+EVENT_TEMPO_COARSE = 66  # legacy u16 whole BPM (pre-156 files); 156 wins
+EVENT_TEMPO_FINE = 93  # legacy u16 milli-BPM fraction added to coarse
 EVENT_CHANNEL_NEW = 64  # u16 channel IID; starts that channel's event block
 EVENT_CHANNEL_LEVELS = 219  # 24B: pan i32, volume u32, pitch i32, filter 12B
 EVENT_VOL_WORD = 72  # legacy per-channel volume (pre-Levels files)
@@ -124,9 +126,16 @@ def read(path: Path) -> FlpProject:
     ppq = int.from_bytes(header[4:6], "little")
 
     tempo: float | None = None
+    coarse: int | None = None  # legacy tempo pair, used only when 156 is absent
+    fine = 0
     unicode_text = False  # flips when FLVersion says >= 11.5
-    channels: list[dict[str, int | str]] = []  # raw fields per rack channel, in order
+    # Keyed by rack index, not appended: New(64)=N may arrive for a channel we
+    # already opened implicitly (a stray legacy vol/pan byte can precede it), and
+    # keying makes that duplicate impossible instead of merely unlikely. dicts
+    # keep insertion order, so rack order is preserved.
+    channels: dict[int, dict[str, int | str]] = {}
     current: dict[str, int | str] | None = None
+    mixer_reached = False  # past the channel section; Plugin events are inserts', not channels
     pattern = 0  # 0 = before any PatternID.New (A9: stock files do this)
     notes: list[FlpNote] = []
 
@@ -136,11 +145,24 @@ def read(path: Path) -> FlpProject:
             unicode_text = _version_is_unicode(payload, off)
         elif event_id == EVENT_TEMPO and size == 4:
             tempo = int.from_bytes(payload, "little") / 1000
+        elif event_id == EVENT_TEMPO_COARSE and size == 2 and coarse is None:
+            coarse = int.from_bytes(payload, "little")
+        elif event_id == EVENT_TEMPO_FINE and size == 2 and fine == 0:
+            fine = int.from_bytes(payload, "little")
         elif event_id == EVENT_CHANNEL_NEW and size == 2:
-            current = {"index": int.from_bytes(payload, "little")}
-            channels.append(current)
+            index = int.from_bytes(payload, "little")
+            current = channels.setdefault(index, {"index": index})
         elif event_id == EVENT_MIXER_FLAGS:
             current = None  # mixer section began; its Plugin events are not channel names
+            mixer_reached = True
+        elif event_id in _CHANNEL_SCOPED and current is None and not mixer_reached:
+            # CHANNEL 0 IS IMPLICIT: FL opens channel N with New(64)=N, but the
+            # FIRST channel's events precede any New. Verified in FL 2026's own
+            # templates - "Basic with limiter" is Levels(219), New=1, ..., New=4
+            # with FLhd nChannels=5. Keying channels off New alone silently
+            # dropped channel 0, which surfaced as fl.track(0) -> ChannelNotFound.
+            current = channels.setdefault(0, {"index": 0})
+            _apply_channel_event(current, event_id, payload, unicode_text, off)
         elif event_id == EVENT_PATTERN_NEW and size == 2:
             pattern = int.from_bytes(payload, "little")
         elif event_id == EVENT_PATTERN_NOTES:
@@ -155,10 +177,12 @@ def read(path: Path) -> FlpProject:
         elif current is not None:
             _apply_channel_event(current, event_id, payload, unicode_text, off)
 
+    if tempo is None and coarse is not None:
+        tempo = coarse + fine / 1000  # pre-156 files store tempo as a word pair
     return FlpProject(
         ppq=ppq,
         tempo=tempo,
-        channels=tuple(_build_channel(fields) for fields in channels),
+        channels=tuple(_build_channel(fields) for fields in channels.values()),
         notes=tuple(notes),
     )
 
@@ -402,6 +426,9 @@ def _chunks(data: bytes) -> tuple[bytes, memoryview]:
     if hd_len < 6 or 8 + hd_len > len(data):
         raise FlpError(f"bad FLhd length {hd_len} at offset 4")
     header = data[8 : 8 + hd_len]
+    file_format = int.from_bytes(header[0:2], "little", signed=True)
+    if file_format not in (-1, 0, 0x10, 24, 25, 26, 0x30):  # pyflp's FileFormat set
+        raise FlpError(f"unknown FLP format {file_format} at offset 8")
     dt_off = 8 + hd_len
     if data[dt_off : dt_off + 4] != b"FLdt":
         raise FlpError(f"no FLdt magic at offset {dt_off}")
@@ -509,6 +536,21 @@ def _text(payload: bytes, unicode_text: bool, offset: int) -> str:
 
 
 # Raw-field keys a channel block accumulates before _build_channel resolves them.
+# Every event id that belongs to a rack channel rather than the project. Used to
+# detect the implicit channel 0, whose events precede the first New(64).
+_CHANNEL_SCOPED = frozenset(
+    {
+        EVENT_CHANNEL_LEVELS,
+        EVENT_NAME_USER,
+        EVENT_NAME_LEGACY,
+        EVENT_NAME_INTERNAL,
+        EVENT_VOL_WORD,
+        EVENT_PAN_WORD,
+        EVENT_VOL_BYTE,
+        EVENT_PAN_BYTE,
+    }
+)
+
 _CHANNEL_EVENT_FIELDS = {
     EVENT_NAME_USER: "name_user",
     EVENT_NAME_LEGACY: "name_legacy",
