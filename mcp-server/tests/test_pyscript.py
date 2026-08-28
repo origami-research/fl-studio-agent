@@ -267,3 +267,25 @@ def test_malformed_notes_do_not_crash_fl(fl_home):
     result = spool.read_result()
     assert result["ok"] is False and result["id"] == 7
     assert fake_flpianoroll.Utils.messages, "user must be told it failed"
+
+
+def test_corrupt_ledger_refuses_instead_of_replaying(fl_home):
+    """A torn/corrupt consumed.json is the one thing standing between an
+    already-applied command and a silent replay - the script must fail closed."""
+    write_notes([{"key": "C4", "start": 0, "length": 1}])
+    run_script(fl_home)
+    assert fake_flpianoroll.score.noteCount == 1
+
+    # Corrupt every ledger the script can see (torn write simulation), then
+    # queue a new command. With the ledger unreadable, applying could replay -
+    # the script must refuse and say so, not guess "nothing applied yet".
+    for root in spool.spool_roots():
+        ledger = root / "consumed.json"
+        if ledger.exists():
+            ledger.write_text("{not json", encoding="utf-8")
+
+    write_notes([{"key": "E4", "start": 1, "length": 1}])
+    run_script(fl_home)
+
+    assert fake_flpianoroll.score.noteCount == 1  # nothing was applied
+    assert "refusing" in last_message().lower()
