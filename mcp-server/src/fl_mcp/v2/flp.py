@@ -64,6 +64,10 @@ FINE_PITCH_CENTER = 120
 RELEASE_DEFAULT = 64
 NOTE_PAN_CENTER = 64
 MOD_DEFAULT = 128
+# Every note FL itself has written carries bit 0x4000. Surveyed across the 132
+# bundled FL 2026 projects that contain notes: 23,526 records with flags=0x4000
+# and 909 with 0x4008 - and NOT ONE with flags=0, which is what v1 emitted.
+NOTE_FLAGS_DEFAULT = 0x4000
 
 
 class FlpError(ValueError):
@@ -611,7 +615,7 @@ def _encode_notes(notes: list[Note], channel: int, ppq: int) -> bytes:
     for note in notes:
         packed += NOTE_STRUCT.pack(
             round(note.start * ppq),  # position, ticks
-            0,  # flags
+            NOTE_FLAGS_DEFAULT,  # flags - FL sets 0x4000 on every note it writes
             channel,  # rack_channel
             max(1, round(note.length * ppq)),  # length, ticks (never 0)
             note.key,  # MIDI number, firm int (schemas resolved any name)
