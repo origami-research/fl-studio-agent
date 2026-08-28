@@ -415,21 +415,61 @@ def test_snapshot_from_project_file(monkeypatch, tmp_path):
     assert state.channels[0].pan == 0.0
 
 
-def test_snapshot_live_overrides_with_confirmed_values():
-    control = FakeControl(
-        hello=HELLO,
-        handlers={
-            "mixer.getCurrentTempo": lambda args: 128000,
-            "transport.isPlaying": lambda args: 1,
-        },
-    )
+# The live snapshot is ONE composite state.snapshot round trip. Its response is
+# chunked (~10 SysEx frames), which v1's transport silently discarded - so this
+# whole path only became usable once Lane W fixed the chunk routing (A5).
+_SNAPSHOT_PAYLOAD = {
+    "ppq": 96,
+    "tempo": 128000,  # BPM x 1000
+    "playing": 1,
+    "song_pos": 0,
+    "current_pattern": 3,
+    "pattern_count": 4,
+    "channels": [
+        {"idx": 0, "name": "Kick", "muted": 0, "vol": 0.78125, "pan": 0.0, "target_mixer_track": 1}
+    ],
+    "mixer": [{"idx": 0, "name": "Master", "vol": 0.8, "pan": 0.0, "muted": 0, "solo": 0}],
+}
+
+
+def test_snapshot_live_uses_one_composite_round_trip():
+    control = FakeControl(hello=HELLO, handlers={"state.snapshot": lambda args: _SNAPSHOT_PAYLOAD})
     session, _ = make_session(control=control)
 
     state = session.snapshot()
 
     assert state.tempo_bpm == 128.0
-    assert state.ppq == HELLO.ppq
+    assert state.ppq == 96
     assert state.playing is True
+    assert state.current_pattern == 3
+    assert [c.name for c in state.channels] == ["Kick"]
+    assert [m.name for m in state.mixer] == ["Master"]
+    # ONE call - not a per-field fan-out.
+    assert [op for op, _ in control.calls] == ["state.snapshot"]
+
+
+def test_snapshot_live_does_not_blend_in_the_project_file(tmp_path, monkeypatch):
+    """One backend per call: a stale file must never contaminate a live view."""
+    monkeypatch.setattr(
+        flp,
+        "read",
+        lambda path: flp.FlpProject(ppq=999, tempo=1.0, channels=(), notes=()),
+    )
+    control = FakeControl(hello=HELLO, handlers={"state.snapshot": lambda args: _SNAPSHOT_PAYLOAD})
+    session, _ = make_session(control=control, project=tmp_path / "agent.flp")
+
+    state = session.snapshot()
+
+    assert state.ppq == 96 and state.tempo_bpm == 128.0
+
+
+def test_snapshot_malformed_payload_is_reported_not_guessed():
+    control = FakeControl(hello=HELLO, handlers={"state.snapshot": lambda args: {"ppq": 96}})
+    session, _ = make_session(control=control)
+
+    with pytest.raises(errors.ToolError) as exc:
+        session.snapshot()
+    assert "malformed snapshot payload" in exc.value.message
 
 
 # --- doctor ------------------------------------------------------------------

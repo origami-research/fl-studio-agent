@@ -33,6 +33,7 @@ from .schemas import (
     ChannelLevels,
     DoctorReport,
     HelloEvent,
+    MixerTrack,
     Note,
     NoteWriteMode,
     PlaneStatus,
@@ -61,6 +62,10 @@ HELLO_PROBE_SECONDS = 0.2
 # controller's OnIdle deferral time to land a mutating call (v1-measured).
 LIVE_SET_TIMEOUT_SECONDS = 5.0
 LIVE_READ_TIMEOUT_SECONDS = 2.0
+
+# state.snapshot arrives as ~10 chunked SysEx frames (measured ~4.8KB on a
+# 5-channel/18-track project, addendum A5); give bigger projects headroom.
+SNAPSHOT_TIMEOUT_SECONDS = 10.0
 
 FL_STOP_TIMEOUT_SECONDS = 20.0
 FL_OPEN_ATTEMPTS = 6
@@ -367,35 +372,67 @@ class FLSession:
         )
 
     def snapshot(self) -> SessionState:
-        state = SessionState()
+        """Live: ONE composite ``state.snapshot`` round trip (chunked response;
+        v1's transport silently dropped it, Lane W fixed the routing - addendum
+        A5). Else: decoded from the project file. One backend per call, so a
+        stale file never contaminates a live view or vice versa."""
+        if self._hello() is not None and self.control is not None:
+            resp = self.control.send_request("state.snapshot", timeout=SNAPSHOT_TIMEOUT_SECONDS)
+            if not resp.ok:
+                detail = resp.err or "no detail"
+                if errors.is_operation_unsafe(detail):
+                    raise errors.operation_unsafe("state.snapshot")
+                raise errors.fl_api_error("state.snapshot", detail)
+            snap = resp.ret
+            try:
+                return SessionState(
+                    tempo_bpm=float(snap["tempo"]) / 1000.0,  # getCurrentTempo: BPM x 1000
+                    ppq=int(snap["ppq"]),
+                    playing=bool(snap["playing"]),
+                    current_pattern=int(snap["current_pattern"]),
+                    channels=[
+                        Channel(
+                            index=c["idx"],
+                            name=c["name"],
+                            volume=float(c["vol"]),
+                            pan=float(c["pan"]),
+                            muted=bool(c["muted"]),
+                        )
+                        for c in snap["channels"]
+                    ],
+                    mixer=[
+                        MixerTrack(
+                            index=t["idx"],
+                            name=t["name"],
+                            volume=float(t["vol"]),
+                            pan=float(t["pan"]),
+                            muted=bool(t["muted"]),
+                        )
+                        for t in snap["mixer"]
+                    ],
+                )
+            except (KeyError, TypeError, ValueError) as exc:
+                raise errors.fl_api_error(
+                    "state.snapshot", f"malformed snapshot payload ({exc!r})"
+                ) from exc
+
         if self.project is not None:
             project = flp.read(self.project)
-            state.ppq = project.ppq
-            state.tempo_bpm = project.tempo
-            state.channels = [
-                Channel(
-                    index=c.index,
-                    name=c.name,
-                    volume=c.volume / flp.LEVEL_MAX,
-                    pan=(c.pan - flp.PAN_CENTRE) / flp.PAN_CENTRE,
-                )
-                for c in project.channels
-            ]
+            return SessionState(
+                ppq=project.ppq,
+                tempo_bpm=project.tempo,
+                channels=[
+                    Channel(
+                        index=c.index,
+                        name=c.name,
+                        volume=c.volume / flp.LEVEL_MAX,
+                        pan=(c.pan - flp.PAN_CENTRE) / flp.PAN_CENTRE,
+                    )
+                    for c in project.channels
+                ],
+            )
 
-        hello = self._hello()
-        if hello is not None and self.control is not None:
-            state.ppq = hello.ppq
-            tempo = self.control.send_request(
-                "mixer.getCurrentTempo", timeout=LIVE_READ_TIMEOUT_SECONDS
-            )
-            if tempo.ok and tempo.ret is not None:
-                state.tempo_bpm = float(tempo.ret) / 1000.0
-            playing = self.control.send_request(
-                "transport.isPlaying", timeout=LIVE_READ_TIMEOUT_SECONDS
-            )
-            if playing.ok and playing.ret is not None:
-                state.playing = bool(playing.ret)
-        return state
+        return SessionState()
 
     # -- transport (manager sign-off, addendum A11) -------------------------------
     #
@@ -407,31 +444,30 @@ class FLSession:
 
     def play(self) -> None:
         """``transport.start``."""
-        self._transport("transport.start")
+        self._control_command("transport.start")
 
     def stop(self) -> None:
         """``transport.stop``."""
-        self._transport("transport.stop")
+        self._control_command("transport.stop")
 
     def undo(self) -> None:
         """``general.undo``."""
-        self._transport("general.undo")
+        self._control_command("general.undo")
 
-    def _transport(self, op: str) -> None:
-        """THE control-op -> exception conversion. One implementation, so
-        "FL refused" cannot come to mean different things in different callers.
-        """
+    def _control_command(self, op: str) -> None:
+        """THE call-to-policy conversion (addendum A11), written once: no wire
+        -> control_plane_unavailable; FL's unsafe-at-current-time refusal ->
+        operation_unsafe (retryable - it means busy, not absent, addendum A6);
+        any other refusal -> fl_api_error with FL's own detail. A send_request
+        timeout raises control_plane_unavailable from the wire and propagates."""
         if self.control is None:
             raise errors.control_plane_unavailable(op, 0.0)
         resp = self.control.send_request(op, timeout=LIVE_SET_TIMEOUT_SECONDS)
-        if resp.ok:
-            return
-        detail = resp.err or "unknown error"
-        # Unsafe-at-current-time is FL being busy, not the call being wrong -
-        # a distinct, retryable category (addendum A6).
-        if errors.is_operation_unsafe(detail):
-            raise errors.operation_unsafe(op)
-        raise errors.fl_api_error(op, detail)
+        if not resp.ok:
+            detail = resp.err or "no detail"
+            if errors.is_operation_unsafe(detail):
+                raise errors.operation_unsafe(op)
+            raise errors.fl_api_error(op, detail)
 
     def doctor(self) -> DoctorReport:
         """Typed report - control plane, note plane, project file - with a
