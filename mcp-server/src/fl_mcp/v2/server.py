@@ -25,7 +25,7 @@ from fl_mcp import theory
 from fl_mcp.errors import ToolError
 
 from . import sdk
-from .schemas import Target
+from .schemas import Note, Target
 from .session import create_session
 
 log = logging.getLogger(__name__)
@@ -55,11 +55,19 @@ async def lifespan(server: Any) -> Any:
 
 
 def run(code: str, ctx: Any) -> dict[str, Any]:
-    """MCP tool. Execute Python in a namespace holding ``fl`` (the SDK) and
-    ``theory``. Returns {"stdout": ..., "result": repr-of-last-expression} or
-    {"traceback": ...} - errors read like Python, no status-string zoo."""
+    """MCP tool. Execute Python in a namespace holding ``fl`` (the SDK),
+    ``theory``, and ``Note``. Returns {"stdout": ..., "result":
+    repr-of-last-expression} or {"traceback": ...} - errors read like Python, no
+    status-string zoo.
+
+    ``Note`` is in the namespace because without it the product's primary
+    operation is inexpressible: ``Track.write`` takes ``list[Note]``,
+    ``theory.chord``/``scale`` return bare MIDI ints, and ``theory.drums``
+    returns a *v1* ``schemas.Note`` that v2 rejects. Verified by G4 (manager
+    addendum A12) - every route to writing a note was closed.
+    """
     fl = ctx.request_context.lifespan_context["fl"]
-    namespace: dict[str, Any] = {"fl": fl, "theory": theory}
+    namespace: dict[str, Any] = {"fl": fl, "theory": theory, "Note": Note}
     try:
         tree = ast.parse(code, mode="exec")
     except SyntaxError as exc:

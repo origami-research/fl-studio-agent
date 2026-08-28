@@ -202,3 +202,40 @@ def test_main_logs_to_stderr_at_the_env_level(monkeypatch):
     finally:
         root.handlers[:] = saved_handlers
         root.setLevel(saved_level)
+
+
+# --- run() namespace (addendum A12) -------------------------------------------
+
+
+def test_run_namespace_can_actually_write_notes(monkeypatch):
+    """The regression this guards: ``Note`` was missing from run()'s namespace,
+    which made the product's PRIMARY operation inexpressible. Track.write takes
+    list[Note]; theory.chord/scale return bare ints; theory.drums returns a v1
+    schemas.Note that v2 rejects. Every route to writing a note was closed.
+    """
+    captured: dict[str, object] = {}
+
+    class FakeTrack:
+        def write(self, notes, mode="merge"):
+            captured["notes"] = notes
+            captured["mode"] = mode
+            return f"wrote {len(notes)}"
+
+    class FakeFL:
+        def track(self, _name_or_index):
+            return FakeTrack()
+
+    out = server.run(
+        "notes = [Note(key='C4', start=0.0, length=1.0)]\nfl.track(0).write(notes, mode='replace')",
+        _ctx(FakeFL()),
+    )
+
+    assert "traceback" not in out, out.get("traceback")
+    assert out["result"] == "'wrote 1'"
+    assert captured["mode"] == "replace"
+    assert captured["notes"][0].key == 60  # "C4" resolved at construction
+
+
+def test_run_namespace_exposes_theory_alongside_note():
+    out = server.run("theory.chord('C4')", _ctx(object()))
+    assert out["result"] == "[60, 64, 67]"
