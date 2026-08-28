@@ -242,9 +242,16 @@ def write_notes(
         ):
             channel_section_head = head
 
-    if mode == "merge" and existing is not None:
+    if existing is not None:
         head, off, size = existing
-        blob = bytes(stream[off : off + size]) + blob
+        kept = bytes(stream[off : off + size])
+        if mode == "replace":
+            # A pattern's Notes blob holds EVERY channel's notes, so replacing
+            # the whole blob would silently destroy other channels' work -
+            # measured: one note written to channel 0 wiped 51 notes on channel
+            # 3 of the same pattern. "replace" is scoped to the target channel.
+            kept = _without_channel(kept, channel)
+        blob = kept + blob
 
     length = bytearray()
     n = len(blob)
@@ -520,6 +527,20 @@ def _splice(data: bytearray, at: int, event: bytes) -> None:
     dt_len_off = 8 + hd_len + 4
     old_len = int.from_bytes(data[dt_len_off : dt_len_off + 4], "little")
     data[dt_len_off : dt_len_off + 4] = (old_len + len(event)).to_bytes(4, "little")
+
+
+def _without_channel(blob: bytes, channel: int) -> bytes:
+    """The blob's records minus those on ``channel``, byte-for-byte.
+
+    Filters the raw records rather than round-tripping through FlpNote, so every
+    field we do not model (group, filter, mod) survives untouched.
+    """
+    kept = bytearray()
+    for at in range(0, len(blob) - NOTE_SIZE + 1, NOTE_SIZE):
+        record = blob[at : at + NOTE_SIZE]
+        if int.from_bytes(record[6:8], "little") != channel:  # rack_channel
+            kept += record
+    return bytes(kept)
 
 
 def _decode_notes(blob: bytes) -> list[FlpNote]:

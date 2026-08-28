@@ -372,3 +372,26 @@ def test_set_tempo_on_stock_templates_both_paths(tmp_path):
 
         expected_growth = 0 if label == "patch" else 5
         assert len(path.read_bytes()) == grew + expected_growth
+
+
+def test_replace_is_scoped_to_the_channel_not_the_whole_pattern(tmp_path):
+    """A pattern's Notes blob holds EVERY channel's notes. Replacing the whole
+    blob silently destroyed other channels' work - measured against a stock
+    template, one note written to channel 0 wiped 51 notes on channel 3.
+    """
+    project = write_flp(tmp_path, VERSION_MODERN)
+
+    flp.write_notes(
+        project,
+        [Note(key="C4", start=0.0, length=1.0), Note(key="E4", start=1.0, length=1.0)],
+        pattern=1,
+        channel=3,
+        mode="replace",
+    )
+    flp.write_notes(
+        project, [Note(key="G5", start=0.0, length=1.0)], pattern=1, channel=0, mode="replace"
+    )
+
+    assert [n.key for n in flp.notes_at(project, 1, 0)] == [79]
+    # The other channel is untouched: replace scopes to its own channel.
+    assert sorted(n.key for n in flp.notes_at(project, 1, 3)) == [60, 64]
