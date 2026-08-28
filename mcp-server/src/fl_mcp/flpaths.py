@@ -13,8 +13,27 @@ see docs/10-v0-vertical-slice.md.
 from __future__ import annotations
 
 import os
+import subprocess
 import sys
 from pathlib import Path
+
+
+def fl_process_running() -> bool:
+    """Best-effort check for a running FL Studio process (docs/15 fix item 5).
+
+    The one implementation - session's doctor and the autonomous backend both
+    use it, so "is FL running" cannot drift between subtly different pgrep
+    invocations again. A False just means "can't tell" (unsupported platform,
+    or no process-listing tool), never a claim that FL definitely isn't running.
+    """
+    if sys.platform != "darwin":
+        return False  # Windows/other: process check not implemented yet (docs/08 roadmap)
+    try:
+        result = subprocess.run(["pgrep", "-fi", "FL Studio"], capture_output=True, timeout=2)
+    except (OSError, subprocess.SubprocessError):
+        return False
+    else:
+        return result.returncode == 0
 
 
 def fl_app() -> Path:

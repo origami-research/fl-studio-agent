@@ -16,7 +16,7 @@ import json
 from pathlib import Path
 from typing import Any, Protocol
 
-from . import actions, diff, errors, records, schemas, spool
+from . import actions, diff, errors, flpaths, records, schemas, spool
 from .clock import now
 
 
@@ -168,21 +168,5 @@ class FLSession:
         return report
 
 
-def _fl_process_running() -> bool:
-    """Best-effort check for a running FL Studio process (docs/15 fix item 5).
-
-    Used only to sharpen fl_doctor's message; a False here just means "can't
-    tell" (unsupported platform, or no process-listing tool), never a claim
-    that FL definitely isn't running.
-    """
-    import subprocess
-    import sys
-
-    if sys.platform != "darwin":
-        return False  # Windows/other: process check not implemented yet (docs/08 roadmap)
-    try:
-        result = subprocess.run(["pgrep", "-fi", "FL Studio"], capture_output=True, timeout=2)
-    except (OSError, subprocess.SubprocessError):
-        return False
-    else:
-        return result.returncode == 0
+# Module-level alias so tests can stub the doctor's process probe in isolation.
+_fl_process_running = flpaths.fl_process_running
