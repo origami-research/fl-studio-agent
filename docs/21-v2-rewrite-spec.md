@@ -79,3 +79,61 @@ Implements `v2/flp.py`: the reader subset (ppq, tempo, channels with names+level
 ## What stays untouched by everyone
 
 `pitch.py`, `clock.py`, `theory.py`, `flpaths.py`, `errors.py` (trim only), the controller script's frozen codec (`flmcp_codec.py`), `harness/` (except the pyscript update in Lane S), and PR #35's branch.
+
+## Manager addendum 1 (2026-08-27, verified in the manager worktree)
+
+Three facts in this document were imprecise enough to send Lane F down a wrong
+path. They are corrected here; the corrected form is the contract.
+
+### A1. The differential corpus is FL's own bundled projects, not `tests/corpus/data`
+
+`mcp-server/tests/corpus/` is a *fetch* manifest of **4** third-party files
+(PyFLP's fixtures), downloaded on demand and gitignored. It is not the 164.
+
+The 164 projects are the ones FL Studio ships, on this machine at:
+
+```
+$(fl_mcp.flpaths.fl_app())/Contents/Resources/FL/Data/**/*.flp
+```
+
+164 files exactly (Demo projects, Templates, System/Render tests). They are read
+in place, never copied into the repo and never redistributed - so the corpus
+test resolves them through `flpaths.fl_app()` and **skips when FL is absent**,
+exactly like the e2e suite. The 4 fetched files stay in the differential set too;
+they are simply not where the number came from.
+
+### A2. pyflp is unusable without the compat shim, and it fails 1 of 164, not 3
+
+Bare `import pyflp; pyflp.parse(path)` fails **164 of 164** on this venv's
+Python 3.12 - every file, with the misleading
+`<enum 'EventEnum'> has no members` `TypeError`. That is not a corpus property;
+it is PyFLP 2.2.1 being broken on 3.12 (see `harness/flp_compat.py`).
+
+The oracle must be reached as:
+
+```python
+from harness.flp_compat import import_pyflp, parse
+import_pyflp()          # idempotent; raises clearly if PyFLP changes shape
+project = parse(str(path))
+```
+
+Measured with the shim applied: **163 parse, 1 fails** -
+`Demo projects/Demo songs/Astes - Bien Duro.flp`, `StringError: cannot use
+encoding 'utf-16-le' to decode ...`. So the parity target is the 163 pyflp reads;
+the 164th is a *reader-robustness* case - our reader must fail cleanly with
+`FlpError` or parse it, never crash or hang, and the test asserts that
+explicitly rather than skipping it.
+
+### A3. Lane worktree setup (each worker's first command)
+
+A fresh worktree has no venv. From the repo root:
+
+```sh
+uv venv --python 3.12 mcp-server/.venv
+uv pip install --python mcp-server/.venv/bin/python -e . -e ./mcp-server pytest pyflp python-rtmidi
+```
+
+Both editable installs are required: the root package supplies `harness` and
+`flmcp_codec`, the `mcp-server` one supplies `fl_mcp`. Baseline on
+`feat/v2-rewrite` before any lane work: **257 passed, 7 skipped** in ~16s
+(`cd mcp-server && .venv/bin/python -m pytest -q`).
