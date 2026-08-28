@@ -179,7 +179,93 @@ def write_notes(
     """Splice the pattern's notes blob (raw surgery); return ``notes_at`` of
     the RESULT. Raises FlpError when the readback does not field-match what was
     sent (tick-quantized positions; velocity within 1/127)."""
-    raise NotImplementedError("Lane F")
+    data = bytearray(path.read_bytes())
+    header, stream = _chunks(bytes(data))
+    base = 8 + len(header) + 8  # FLdt payload's file offset
+    ppq = int.from_bytes(header[4:6], "little")
+    blob = _encode_notes(notes, channel, ppq)
+
+    # One walk locates everything the splice needs: the end of the target
+    # pattern's PatternID.New event, the extent of that pattern's existing
+    # notes event (v1 semantics, with attribution fixed: only a 224 while the
+    # target pattern is current counts), and v1's anchor for a new pattern.
+    current = 0
+    prev_end = 0
+    pattern_end: int | None = None
+    existing: tuple[int, int, int] | None = None  # (event head, payload off, size)
+    anchor_end: int | None = None
+    for event_id, off, size in _events(stream):
+        head = prev_end
+        prev_end = off + size
+        if event_id == EVENT_PATTERN_NEW and size == 2:
+            current = int.from_bytes(stream[off : off + size], "little")
+            if current == pattern and pattern_end is None:
+                pattern_end = off + size
+        elif event_id == EVENT_PATTERN_NOTES and current == pattern and existing is None:
+            existing = (head, off, size)
+        elif event_id == EVENT_CUR_GROUP_ID and anchor_end is None:
+            anchor_end = off + size
+
+    if mode == "merge" and existing is not None:
+        head, off, size = existing
+        blob = bytes(stream[off : off + size]) + blob
+
+    length = bytearray()
+    n = len(blob)
+    while True:  # varint length, 7 bits per byte, high bit = continue
+        length.append((n & 0x7F) | (0x80 if n > 0x7F else 0))
+        n >>= 7
+        if not n:
+            break
+    notes_event = bytes([EVENT_PATTERN_NOTES]) + bytes(length) + blob
+
+    if existing is not None:
+        head, off, size = existing
+        old_extent = (off + size) - head
+        data[base + head : base + off + size] = notes_event
+        dt_len_off = 8 + len(header) + 4
+        old_len = int.from_bytes(data[dt_len_off : dt_len_off + 4], "little")
+        new_len = old_len + len(notes_event) - old_extent
+        data[dt_len_off : dt_len_off + 4] = new_len.to_bytes(4, "little")
+    elif pattern_end is not None:
+        _splice(data, base + pattern_end, notes_event)
+    else:
+        # No such pattern yet - create it where FL itself writes patterns,
+        # after the display-group block (v1's anchor; stream start if absent).
+        new_pattern = bytes([EVENT_PATTERN_NEW]) + pattern.to_bytes(2, "little")
+        at = base + (anchor_end if anchor_end is not None else 0)
+        _splice(data, at, new_pattern + notes_event)
+
+    path.write_bytes(bytes(data))
+
+    # The readback IS the contract: every sent note must be found in the saved
+    # file, field-matched after the same tool-unit -> file-unit quantization.
+    result = notes_at(path, pattern, channel)
+    expected = _decode_notes(_encode_notes(notes, channel, ppq))
+    pool = list(result)
+    for want in expected:
+        found = next(
+            (
+                got
+                for got in pool
+                if (got.position, got.length, got.key, got.channel, got.pan)
+                == (want.position, want.length, want.key, want.channel, want.pan)
+                and abs(got.velocity - want.velocity) <= 1
+            ),
+            None,
+        )
+        if found is None:
+            raise FlpError(
+                f"readback of {path.name} pattern {pattern} channel {channel} "
+                f"is missing a sent note: {want}"
+            )
+        pool.remove(found)
+    if mode == "replace" and pool:
+        raise FlpError(
+            f"readback of {path.name} pattern {pattern} channel {channel} has "
+            f"{len(pool)} notes beyond the replace set, e.g. {pool[0]}"
+        )
+    return result
 
 
 def set_tempo(path: Path, bpm: float) -> float:
@@ -407,4 +493,22 @@ def _build_channel(fields: dict[str, int | str]) -> FlpChannel:
 
 def _encode_notes(notes: list[Note], channel: int, ppq: int) -> bytes:
     """Pack tool-unit notes into NOTE_STRUCT records (ticks, 0-127 velocity)."""
-    raise NotImplementedError("Lane F")
+    packed = bytearray()
+    for note in notes:
+        packed += NOTE_STRUCT.pack(
+            round(note.start * ppq),  # position, ticks
+            0,  # flags
+            channel,  # rack_channel
+            max(1, round(note.length * ppq)),  # length, ticks (never 0)
+            note.key,  # MIDI number, firm int (schemas resolved any name)
+            0,  # group
+            FINE_PITCH_CENTER,
+            0,  # _u1
+            RELEASE_DEFAULT,
+            0,  # midi_channel
+            max(0, min(128, round(note.pan * 128))),
+            max(0, min(127, round(note.velocity * 127))),
+            MOD_DEFAULT,
+            MOD_DEFAULT,
+        )
+    return bytes(packed)
