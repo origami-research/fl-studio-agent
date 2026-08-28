@@ -251,6 +251,94 @@ def test_write_notes_into_stock_template_pyflp_agrees(tmp_path):
     assert oracle_notes == ours
 
 
+# -- set_channel_levels -------------------------------------------------------
+
+
+def channel_with_levels(iid: int, pan: int = 6400, volume: int = 10000, pitch: int = 0) -> bytes:
+    return event(flp.EVENT_CHANNEL_NEW, struct.pack("<H", iid)) + event(
+        flp.EVENT_CHANNEL_LEVELS, struct.pack("<iIi", pan, volume, pitch) + b"\0" * 12
+    )
+
+
+def test_set_channel_levels_patches_all_three_fields(tmp_path):
+    path = write_flp(tmp_path, VERSION_MODERN + channel_with_levels(0))
+
+    result = flp.set_channel_levels(path, 0, volume=0.5, pan=-0.25, pitch_semitones=3)
+
+    assert result.channel == 0
+    assert result.volume == pytest.approx(6400 / 12800)
+    assert result.pan == pytest.approx((6400 - 1600 - 6400) / 6400)
+    assert result.pitch_semitones == 3
+    saved = flp.read(path).channels[0]
+    assert (saved.pan, saved.volume, saved.pitch_semitones) == (4800, 6400, 3)
+
+
+def test_set_channel_levels_none_leaves_fields_alone(tmp_path):
+    path = write_flp(tmp_path, VERSION_MODERN + channel_with_levels(0, volume=11000, pitch=-2))
+
+    result = flp.set_channel_levels(path, 0, pan=1.0)
+
+    saved = flp.read(path).channels[0]
+    assert (saved.volume, saved.pitch_semitones) == (11000, -2)  # untouched
+    assert saved.pan == 12800
+    assert result.pan == pytest.approx(1.0)
+
+
+def test_set_channel_levels_targets_only_the_requested_channel(tmp_path):
+    events = VERSION_MODERN + channel_with_levels(0) + channel_with_levels(1)
+    path = write_flp(tmp_path, events)
+
+    flp.set_channel_levels(path, 1, volume=0.25)
+
+    first, second = flp.read(path).channels
+    assert first.volume == 10000  # untouched
+    assert second.volume == 3200
+
+
+def test_set_channel_levels_validates_ranges(tmp_path):
+    path = write_flp(tmp_path, VERSION_MODERN + channel_with_levels(0))
+    for kwargs in ({"volume": 1.1}, {"pan": -1.5}, {"pitch_semitones": 49}):
+        with pytest.raises(ValueError, match="out of range"):
+            flp.set_channel_levels(path, 0, **kwargs)
+
+
+def test_set_channel_levels_unknown_channel_raises_index_error(tmp_path):
+    path = write_flp(tmp_path, VERSION_MODERN + channel_with_levels(0))
+    with pytest.raises(IndexError, match="no channel 5"):
+        flp.set_channel_levels(path, 5, volume=0.5)
+
+
+def test_set_channel_levels_refuses_legacy_channel_without_219(tmp_path):
+    events = VERSION_MODERN + event(flp.EVENT_CHANNEL_NEW, struct.pack("<H", 0)) + event(
+        flp.EVENT_VOL_WORD, struct.pack("<H", 9000)
+    )
+    path = write_flp(tmp_path, events)
+    before = path.read_bytes()
+
+    with pytest.raises(flp.FlpError, match="no Levels event"):
+        flp.set_channel_levels(path, 0, volume=0.5)
+    assert path.read_bytes() == before  # refused writes touch nothing
+
+
+@requires_fl
+def test_set_channel_levels_on_stock_template_pyflp_agrees(tmp_path):
+    # Empty.flp, not Basic with limiter: pyflp's channel enumeration fails on
+    # the PRISTINE Basic with limiter (its group handling, an oracle
+    # limitation), so it cannot arbitrate our write there.
+    from harness.flp_compat import parse
+
+    path = tmp_path / "empty.flp"
+    shutil.copy(_FL_DATA / "Templates/Minimal/Empty/Empty.flp", path)
+
+    result = flp.set_channel_levels(path, 0, volume=0.5, pan=0.5, pitch_semitones=-12)
+
+    assert result.volume == pytest.approx(0.5)
+    assert result.pan == pytest.approx(0.5)
+    assert result.pitch_semitones == -12
+    (oracle,) = parse(path).channels
+    assert (oracle.volume, oracle.pan, oracle.pitch_shift) == (6400, 9600, -12)
+
+
 @requires_fl
 def test_set_tempo_on_stock_templates_both_paths(tmp_path):
     # Empty.flp carries a tempo event (patch path); Basic with limiter omits

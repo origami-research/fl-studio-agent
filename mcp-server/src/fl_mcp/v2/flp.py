@@ -308,11 +308,81 @@ def set_channel_levels(
     pan: float | None = None,
     pitch_semitones: int | None = None,
 ) -> ChannelLevels:
-    """Patch the channel's level events in place; None leaves a value alone.
-    Returns the readback. DISCOVERY TASK (docs/21 Lane F): find the per-channel
-    level event ids by byte-diffing a template before/after pyflp mutates them,
-    then live-verify against real FL before trusting the map."""
-    raise NotImplementedError("Lane F")
+    """Patch the channel's levels in place; None leaves a value alone. Returns
+    the readback. The discovery task docs/21 assigned here is CLOSED (addendum
+    A8): levels are ONE event, ChannelID.Levels 219, fixed 24-byte payload -
+    pan i32 [0:4], volume u32 [4:8], pitch i32 [8:12] - verified by decoding
+    FL 2026's own stock templates. So this patches three int32s inside the
+    existing event. A legacy project whose channel has no 219 event is refused
+    (FlpError) rather than written with guessed units."""
+    if volume is not None and not 0.0 <= volume <= 1.0:
+        raise ValueError(f"volume {volume} out of range (0.0-1.0)")
+    if pan is not None and not -1.0 <= pan <= 1.0:
+        raise ValueError(f"pan {pan} out of range (-1.0 left to 1.0 right)")
+    if pitch_semitones is not None and not -48 <= pitch_semitones <= 48:
+        raise ValueError(f"pitch {pitch_semitones} out of range (-48 to 48)")
+
+    data = bytearray(path.read_bytes())
+    header, stream = _chunks(bytes(data))
+    base = 8 + len(header) + 8  # FLdt payload's file offset
+
+    current: int | None = None
+    seen: set[int] = set()
+    levels_off: int | None = None
+    for event_id, off, size in _events(stream):
+        if event_id == EVENT_CHANNEL_NEW and size == 2:
+            current = int.from_bytes(stream[off : off + size], "little")
+            seen.add(current)
+        elif event_id == EVENT_MIXER_FLAGS:
+            current = None
+        elif (
+            event_id == EVENT_CHANNEL_LEVELS
+            and size == 24
+            and current == channel
+            and levels_off is None
+        ):
+            levels_off = off
+
+    if channel not in seen:
+        raise IndexError(f"no channel {channel}; project has {len(seen)}")
+    if levels_off is None:
+        raise FlpError(
+            f"channel {channel} has no Levels event (id 219); refusing to write "
+            "a legacy-format project with guessed units"
+        )
+
+    at = base + levels_off
+    if pan is not None:
+        data[at : at + 4] = struct.pack("<i", round(PAN_CENTRE + pan * PAN_CENTRE))
+    if volume is not None:
+        data[at + 4 : at + 8] = struct.pack("<I", round(volume * LEVEL_MAX))
+    if pitch_semitones is not None:
+        data[at + 8 : at + 12] = struct.pack("<i", pitch_semitones)
+    path.write_bytes(bytes(data))
+
+    # Report what the saved file contains, then confirm the requested fields
+    # landed exactly (the write is deterministic byte surgery; any drift is a
+    # writer bug, not tolerance).
+    saved = next(c for c in read(path).channels if c.index == channel)
+    mismatches = [
+        name
+        for name, requested, stored in (
+            ("volume", volume if volume is None else round(volume * LEVEL_MAX), saved.volume),
+            ("pan", pan if pan is None else round(PAN_CENTRE + pan * PAN_CENTRE), saved.pan),
+            ("pitch_semitones", pitch_semitones, saved.pitch_semitones),
+        )
+        if requested is not None and requested != stored
+    ]
+    if mismatches:
+        raise FlpError(
+            f"channel {channel} readback does not match the write: {mismatches}"
+        )
+    return ChannelLevels(
+        channel=channel,
+        volume=saved.volume / LEVEL_MAX,
+        pan=(saved.pan - PAN_CENTRE) / PAN_CENTRE,
+        pitch_semitones=saved.pitch_semitones,
+    )
 
 
 # -- helpers (each = exactly one wire-format job) --------------------------------
