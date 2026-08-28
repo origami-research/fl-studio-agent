@@ -28,15 +28,8 @@ from __future__ import annotations
 
 import contextlib
 import json
-import sys
 import threading
-from pathlib import Path
 from typing import Any
-
-# The optional auto-trigger lives in the repo's harness package.
-_REPO_ROOT = Path(__file__).resolve().parents[3]
-if str(_REPO_ROOT) not in sys.path:
-    sys.path.insert(0, str(_REPO_ROOT))
 
 from mcp.server.mcpserver import MCPServer
 

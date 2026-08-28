@@ -18,20 +18,14 @@ imports the same module directly since it has no such constraint.
 
 from __future__ import annotations
 
+import contextlib
 import itertools
-import sys
 import threading
 import time
-from pathlib import Path
 from typing import Any, Callable
 
-_REPO_ROOT = Path(__file__).resolve().parents[3]
-_CONTROLLER_DIR = _REPO_ROOT / "fl-scripts" / "controller"
-if str(_CONTROLLER_DIR) not in sys.path:
-    sys.path.insert(0, str(_CONTROLLER_DIR))
-
-import contextlib
-
+# flmcp_codec is installed by the repo-root package (pyproject dev-mode-dirs),
+# resolving to the real file beside the controller script - no sys.path surgery.
 from flmcp_codec import (
     TYPE_EVENT,
     TYPE_REQUEST,
