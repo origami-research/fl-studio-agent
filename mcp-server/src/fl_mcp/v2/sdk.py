@@ -12,8 +12,10 @@ session/flp/store. A private function appearing here is a design smell.
 
 from __future__ import annotations
 
-from .schemas import Channel, Note, NoteWriteMode, SessionState, WriteReceipt
-from .session import FLSession
+from fl_mcp import errors
+
+from .schemas import Channel, Note, NoteWriteMode, SessionState, Target, WriteReceipt
+from .session import FLSession, create_session
 
 
 class ChannelNotFound(ValueError):
@@ -23,59 +25,102 @@ class ChannelNotFound(ValueError):
 def connect(session: FLSession | None = None) -> FL:
     """The entrypoint. Builds the default session (``create_session()``) when
     none is injected; tests inject one wired to fakes."""
-    raise NotImplementedError("Lane K")
+    return FL(session if session is not None else create_session())
 
 
 class FL:
     """The project. Reads return confirmed state (store or live FL, labeled)."""
 
     def __init__(self, session: FLSession) -> None:
-        raise NotImplementedError("Lane K")
+        self._session = session
 
     @property
     def channels(self) -> list[Channel]:
-        raise NotImplementedError("Lane K")
+        return self._session.snapshot().channels
 
     @property
     def tempo(self) -> float:
-        raise NotImplementedError("Lane K")
+        tempo = self._session.snapshot().tempo_bpm
+        if tempo is None:
+            raise errors.control_plane_unavailable("mixer.getCurrentTempo", 0.0)
+        return tempo
 
     def track(self, name_or_index: str | int) -> Track:
         """Resolve by index, exact name, then unambiguous substring; raises
         ChannelNotFound listing the real names otherwise. This is THE place
         channel names resolve - Target is ints-only past this boundary."""
-        raise NotImplementedError("Lane K")
+        channels = self.channels
+        listing = ", ".join(f"{c.index}: {c.name}" for c in channels) or "(none)"
+        if isinstance(name_or_index, int):
+            if any(c.index == name_or_index for c in channels):
+                return Track(self, name_or_index)
+            raise ChannelNotFound(f"No channel at index {name_or_index}. Channels: {listing}")
+        exact = [c for c in channels if c.name == name_or_index]
+        if len(exact) == 1:
+            return Track(self, exact[0].index)
+        partial = [c for c in channels if name_or_index.lower() in c.name.lower()]
+        if len(partial) == 1:
+            return Track(self, partial[0].index)
+        if len(exact) > 1 or len(partial) > 1:
+            raise ChannelNotFound(f"{name_or_index!r} is ambiguous. Channels: {listing}")
+        raise ChannelNotFound(f"No channel matching {name_or_index!r}. Channels: {listing}")
 
     def set_tempo(self, bpm: float) -> float:
         """Returns FL's own read-back, never the request echo."""
-        raise NotImplementedError("Lane K")
+        return self._session.set_tempo(bpm)
 
     def play(self) -> None:
-        raise NotImplementedError("Lane K")
+        if self._session.control is None:
+            raise errors.control_plane_unavailable("transport.start", 0.0)
+        resp = self._session.control.send_request("transport.start")
+        if not resp.ok:
+            detail = resp.err or "unknown error"
+            if errors.is_operation_unsafe(detail):
+                raise errors.operation_unsafe("transport.start")
+            raise errors.fl_api_error("transport.start", detail)
 
     def stop(self) -> None:
-        raise NotImplementedError("Lane K")
+        if self._session.control is None:
+            raise errors.control_plane_unavailable("transport.stop", 0.0)
+        resp = self._session.control.send_request("transport.stop")
+        if not resp.ok:
+            detail = resp.err or "unknown error"
+            if errors.is_operation_unsafe(detail):
+                raise errors.operation_unsafe("transport.stop")
+            raise errors.fl_api_error("transport.stop", detail)
 
     def undo(self) -> None:
-        raise NotImplementedError("Lane K")
+        if self._session.control is None:
+            raise errors.control_plane_unavailable("general.undo", 0.0)
+        resp = self._session.control.send_request("general.undo")
+        if not resp.ok:
+            detail = resp.err or "unknown error"
+            if errors.is_operation_unsafe(detail):
+                raise errors.operation_unsafe("general.undo")
+            raise errors.fl_api_error("general.undo", detail)
 
     def snapshot(self) -> SessionState:
-        raise NotImplementedError("Lane K")
+        return self._session.snapshot()
 
 
 class Track:
     """One channel's piano roll."""
 
     def __init__(self, fl: FL, channel: int, pattern: int = 1) -> None:
-        raise NotImplementedError("Lane K")
+        self.channel = channel
+        self.pattern = pattern
+        self._fl = fl
 
     def write(self, notes: list[Note], mode: NoteWriteMode = "merge") -> WriteReceipt:
         """Applies NOW. Raises on failure; the receipt carries the confirmed
         note count (readback) and which backend applied."""
-        raise NotImplementedError("Lane K")
+        target = Target(pattern=self.pattern, channel=self.channel)
+        return self._fl._session.write_notes(target, notes, mode)
 
     def clear(self) -> WriteReceipt:
-        raise NotImplementedError("Lane K")
+        target = Target(pattern=self.pattern, channel=self.channel)
+        return self._fl._session.clear_notes(target)
 
     def notes(self) -> list[Note]:
-        raise NotImplementedError("Lane K")
+        target = Target(pattern=self.pattern, channel=self.channel)
+        return self._fl._session.read_notes(target)
