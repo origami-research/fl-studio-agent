@@ -34,7 +34,7 @@ from flmcp_codec import (
 )
 from pydantic import ValidationError
 
-from fl_mcp.errors import control_plane_unavailable
+from fl_mcp.errors import ToolError, control_plane_unavailable
 
 from .schemas import ControlResponse, HelloEvent
 
@@ -120,7 +120,21 @@ class MidiControl:
                     if req_id in self._responses:
                         return ControlResponse.model_validate(self._responses.pop(req_id))
                     time.sleep(RESPONSE_POLL_SECONDS)
-                raise control_plane_unavailable(op, timeout)
+                # Same category either way, but the language distinguishes the
+                # two live-measured failure modes (docs/21 A6): no hello means
+                # no controller is attached; hello + timeout usually means FL
+                # parked the call "unsafe at current time" - busy, not absent.
+                if self._hello is None:
+                    raise control_plane_unavailable(op, timeout)
+                raise ToolError(
+                    "control_plane_unavailable",
+                    f"No response to {op!r} within {timeout:g}s, but the controller IS "
+                    "attached (hello received) - FL is likely busy, not disconnected.",
+                    "FL parks calls that arrive 'unsafe at current time' for OnIdle retry "
+                    "(common right after a project load) and the controller gives up after "
+                    "~4s. Retry, with a longer timeout if this was the first engine call.",
+                    retryable=True,
+                )
             finally:
                 # Pop both: on timeout the callback may have written a late
                 # response between the poll's last check and here; dropping it

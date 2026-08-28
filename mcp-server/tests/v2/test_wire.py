@@ -175,6 +175,22 @@ def test_send_request_timeout_is_control_plane_unavailable(rig):
     with pytest.raises(errors.ToolError) as exc_info:
         control.send_request("ping", timeout=0.05)
     assert exc_info.value.category == "control_plane_unavailable"
+    # No hello ever arrived: the language must say "not attached", not "busy".
+    assert "attached" not in exc_info.value.message
+
+
+def test_timeout_after_hello_reads_as_busy_not_absent(rig):
+    """docs/21 A6: FL parks the first engine call after a load as 'unsafe at
+    current time' and the controller gives up first. With a hello on record,
+    a timeout must not claim the controller is missing."""
+    control, midi_in, _midi_out = rig
+    _deliver_event(midi_in, op="hello", script_ver="0.1.0", fl_ver="2026.0", ppq=96)
+    with pytest.raises(errors.ToolError) as exc_info:
+        control.send_request("mixer.getCurrentTempo", timeout=0.05)
+    err = exc_info.value
+    assert err.category == "control_plane_unavailable"
+    assert err.retryable is True
+    assert "attached" in err.message and "busy" in err.message
 
 
 def test_response_with_wrong_id_never_satisfies_the_call(rig):
@@ -233,6 +249,7 @@ def test_chunked_event_still_routes_as_an_event(rig):
     for frame in frames:
         midi_in.deliver(frame)
     assert seen == [fields]
+    assert control.dropped_frames == 0  # valid chunk frames are never "dropped"
 
 
 def test_await_hello_returns_once_the_event_arrives(rig):
