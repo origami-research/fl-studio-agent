@@ -320,3 +320,34 @@ since Lane K has already completed and retired; it is a ~15-line deletion.
 
 This is the only signature change to the frozen surface so far. Everything else in
 `v2/` is unchanged from the day-0 skeleton.
+
+## GATE RESULTS (manager-run, re-verified in the manager's own checkout)
+
+### G2 (Lane W) - PASSED 2026-08-27
+
+**Fast half** - `tests/v2/test_wire.py` + `test_server.py`: **30 passed**. Full merged
+suite (all lanes) **362 passed, 7 skipped**, `ruff check src tests` clean.
+
+**Live half** - v2 `wire.py` driven against real FL 2026 Producer Edition v26.1.5:
+
+```
+[PASS] hello received            fl_ver=Producer Edition v26.1.5 [build 5384] ppq=96
+[PASS] window title is FL        title='FL Studio 2026'
+[PASS] tempo round trip          getCurrentTempo=141000 (expected 141000)
+[PASS] chunked state.snapshot    elapsed=0.0s ok=True
+[PASS] snapshot shape            channels=5 mixer=18, keys incl. tempo/ppq/playing
+[PASS] snapshot tempo agrees     snapshot.tempo=141000 == readback
+[PASS] dropped_frames == 0       for valid traffic
+```
+
+The third line is the one that matters: `state.snapshot` is the exact op v1 never
+answered - not at 8s, not at 45s (addendum A5) - because it discarded the reassembled
+chunked response. Under v2's wire it returns in **0.0s**. The bug measured in A5 is
+fixed and the fix is verified against real FL, not against the fake.
+
+`dropped_frames == 0` also confirms the counter does not fire on valid chunked traffic,
+so "malformed input" and "large response" stay distinguishable in `fl_doctor` as
+required.
+
+Window-title assertion included per fact 5 - a rejected project leaves FL on a default
+project whose read-backs look plausible, so tempo assertions never stand alone.
