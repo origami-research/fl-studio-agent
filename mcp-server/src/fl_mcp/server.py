@@ -29,6 +29,7 @@ from __future__ import annotations
 import contextlib
 import json
 import sys
+import threading
 from pathlib import Path
 from typing import Any
 
@@ -52,25 +53,59 @@ _TRIGGER_HINT = (
 
 mcp = MCPServer("fl-studio")
 
-_session: FLSession | None = None
+
+def create_session() -> FLSession:
+    """Build the process's FLSession with its real dependencies, explicitly.
+
+    Called once from main() before serving (docs/14 ordering: the MIDI ports
+    must exist before FL launches and binds them). python-rtmidi missing or
+    ports failing to open degrades honestly - session.control is None and
+    control-plane tools report unavailable rather than crashing.
+    """
+    control = None
+    with contextlib.suppress(control_midi.ControlUnavailable):
+        control = control_midi.MidiControl()
+    return FLSession(control=control)
+
+
+class _SessionHolder:
+    """The one seam through which tools reach the process session.
+
+    MCP tools are module-level functions registered by signature, so the
+    session cannot arrive as a call argument; it is injected here instead -
+    explicitly, once, at the entry point (main) or by a test (set_session).
+    No `global` statements, no construction hidden in a getter's side effect.
+
+    The lock covers the lazy fallback for direct-call uses (tests that never
+    injected, a REPL): two concurrent first calls must not build two sessions,
+    because two MidiControls would open duplicate virtual MIDI ports.
+    """
+
+    def __init__(self) -> None:
+        self._session: FLSession | None = None
+        self._lock = threading.Lock()
+
+    def get(self) -> FLSession:
+        with self._lock:
+            if self._session is None:
+                self._session = create_session()
+            return self._session
+
+    def set(self, session: FLSession | None) -> None:
+        with self._lock:
+            self._session = session
+
+
+_holder = _SessionHolder()
 
 
 def get_session() -> FLSession:
-    global _session
-    if _session is None:
-        control = None
-        # python-rtmidi missing or ports couldn't open: control-plane tools then
-        # degrade honestly (session.control is None), so this is a real optional.
-        with contextlib.suppress(control_midi.ControlUnavailable):
-            control = control_midi.get_control()
-        _session = FLSession(control=control)
-    return _session
+    return _holder.get()
 
 
 def set_session(session: FLSession | None) -> None:
-    """Test seam: inject an FLSession wired to tests/fake_fl.py stand-ins."""
-    global _session
-    _session = session
+    """Inject the process session: main() at startup, tests with fakes."""
+    _holder.set(session)
 
 
 def _try_live(command_id: int) -> dict[str, Any] | None:
@@ -738,5 +773,7 @@ def fl_status() -> dict:
 
 
 def main() -> None:
-    get_session()  # open the MIDI ports now, before the first tool call (docs/14 ordering)
+    # Construct dependencies explicitly at the entry point and inject them -
+    # the MIDI ports open now, before the first tool call (docs/14 ordering).
+    set_session(create_session())
     mcp.run()

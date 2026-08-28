@@ -23,10 +23,24 @@ from __future__ import annotations
 import os
 import subprocess
 import time
+from typing import NamedTuple
 
 import pytest
 
+from fl_mcp import control_midi
 from fl_mcp.flpaths import fl_app
+from fl_mcp.session import FLSession
+
+
+class LiveFL(NamedTuple):
+    """What the live fixture provides: the wired session plus FL's hello event.
+
+    A named tuple instead of stapling the hello onto the session as an
+    undeclared attribute - fixtures return values, they don't smuggle state.
+    """
+
+    session: FLSession
+    hello: dict
 
 # The same resolver the server uses, so the e2e never launches a different app
 # than the backend targets (they had drifted: server 2025 vs this fixture 2026).
@@ -51,10 +65,8 @@ def live_fl():
 
     from harness import flctl
 
-    from fl_mcp import control_midi
-    from fl_mcp.session import FLSession
-
-    ctl = control_midi.get_control()  # ports must exist before FL launches
+    # This fixture owns the transport: constructed here, closed on teardown.
+    ctl = control_midi.MidiControl()  # ports must exist before FL launches
     if flctl.is_running():
         flctl.stop(force=True)
         time.sleep(1)
@@ -79,12 +91,10 @@ def live_fl():
 
     if hello is None:
         flctl.stop(force=True)
-        control_midi.close()
+        ctl.close()
         pytest.fail("controller script never said hello within 120s")
 
-    session = FLSession(control=ctl)
-    session._e2e_hello = hello  # type: ignore[attr-defined]
-    yield session
+    yield LiveFL(session=FLSession(control=ctl), hello=hello)
 
     flctl.stop(force=True)
-    control_midi.close()
+    ctl.close()
