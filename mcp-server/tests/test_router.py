@@ -214,3 +214,32 @@ def test_get_notes_key_filter_handles_string_keys(tmp_path):
         assert keys == {60}  # only C4=60 is within [48, 72]
     finally:
         server.set_session(None)
+
+
+# --- set_tempo live tier must report FL's read-back, not the request --------
+
+def test_set_tempo_live_reports_confirmed_readback(tmp_path):
+    from fl_mcp import server
+
+    session, _control = _live_session(tmp_path)
+    server.set_session(session)
+    try:
+        result = server.set_tempo(128.5)
+        assert result["status"] == "applied" and result["backend"] == "live"
+        assert result["confirmed"] is True
+        assert result["tempo"] == 128.5  # from getCurrentTempo, not the request echo
+    finally:
+        server.set_session(None)
+
+
+def test_set_tempo_live_marks_unconfirmed_when_readback_fails(tmp_path):
+    from fl_mcp import server
+
+    session, control = _live_session(tmp_path)
+    control.fail_ops.add("mixer.getCurrentTempo")
+    server.set_session(session)
+    try:
+        result = server.set_tempo(140)
+        assert result["status"] == "applied" and result["confirmed"] is False
+    finally:
+        server.set_session(None)

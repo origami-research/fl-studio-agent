@@ -153,13 +153,20 @@ def write_notes(
 
     pyflp.save(parsed, project)
 
-    written = len(blob) // NOTE_SIZE
+    # Report what the saved file actually contains, not what we intended to
+    # write: re-read via the same reader the round-trip verification uses, so a
+    # malformed event surfaces here as a wrong count instead of as an empty
+    # piano roll discovered later. (set_tempo and set_channel_levels already
+    # re-read; this path was the gap.)
+    from harness.verify import read_notes
+
+    persisted = sum(1 for row in read_notes(project) if row.pattern == pattern)
     return WriteResult(
         project=project,
         pattern=pattern,
         channel=channel,
         notes_written=len(notes),
-        notes_in_pattern=written,
+        notes_in_pattern=persisted,
     )
 
 

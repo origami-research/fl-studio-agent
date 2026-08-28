@@ -500,12 +500,33 @@ def set_tempo(bpm: float) -> dict:
     # give the controller's OnIdle deferral (DEFER_MAX_TICKS ~4s) time to land.
     resp = router.try_live_control(get_session(), "mixer.setCurrentTempo", args=[bpm, 1], timeout=5.0)
     if resp is not None:
-        return {
+        # Report what FL confirms, not what we requested: read the tempo back
+        # (getCurrentTempo returns BPM x 1000). A set that silently no-ops or
+        # clamps - an automation clip overriding it, quantization - surfaces
+        # here as the real value instead of as a false "applied".
+        readback = router.try_live_control(get_session(), "mixer.getCurrentTempo", timeout=2.0)
+        if readback is None or readback.ret is None:
+            return {
+                "status": "applied",
+                "backend": "live",
+                "tempo": bpm,
+                "confirmed": False,
+                "note": f"Tempo set to {bpm} BPM live, but the read-back did not answer - unconfirmed.",
+            }
+        actual = float(readback.ret) / 1000.0
+        result = {
             "status": "applied",
             "backend": "live",
-            "tempo": bpm,
-            "note": f"Project tempo is now {bpm} BPM (live, FL was not reloaded).",
+            "tempo": actual,
+            "confirmed": True,
+            "note": f"Project tempo is now {actual:g} BPM (live, FL was not reloaded).",
         }
+        if abs(actual - bpm) > 0.001:
+            result["note"] = (
+                f"FL reports {actual:g} BPM after setting {bpm:g} - the project may have "
+                "a tempo automation clip or clamped the value."
+            )
+        return result
 
     try:
         from . import autonomous
