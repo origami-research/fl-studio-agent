@@ -439,3 +439,34 @@ invisible. Only a real run closes that, and that needs the binding.
 find "MCP Write Notes", and bind it to a keyboard shortcut (Cmd+Opt+Y is what
 `harness/trigger.py` sends by default; any other binding works if passed to
 `run_piano_roll_script`). After that, `/tmp/g3_live.py` runs end to end unattended.
+
+### G1 (Lane F) - partial: reader + set_tempo landed and live-verified
+
+`v2/flp.set_tempo` verified against real FL 2026 on **both** code paths, each with the
+window-title assertion fact 5 requires:
+
+```
+Basic with limiter.flp          file tempo None -> set 137.0    (APPEND path)
+  [PASS] set_tempo returns the readback           returned 137.0
+  [PASS] re-read confirms                         re-read 137.0
+  [PASS] FL LOADED OUR FILE (title)               'g1_Basic_with_limiter.flp - FL Studio 2026'
+  [PASS] REAL FL reports 137000                   got 137000
+
+Create a chord progression.flp  file tempo 128.0 -> set 143.0   (MUTATE path)
+  [PASS] set_tempo returns the readback           returned 143.0
+  [PASS] re-read confirms                         re-read 143.0
+  [PASS] FL LOADED OUR FILE (title)               'g1_Create_a_chord_progression.flp - FL Studio 2026'
+  [PASS] REAL FL reports 143000                   got 143000
+```
+
+So the port of the live-verified v1 path is faithful: in-place u32 patch when event 156
+exists, append at end-of-stream when FL omitted it, readback-or-`FlpError`.
+
+Reader also landed. Notable: our reader **fully parses `Astes - Bien Duro.flp`**
+(308 channels, 1937 notes) - the one corpus file pyflp fails on (addendum A2). On that
+file our library is strictly better than the oracle it is measured against.
+
+Merged tree with the reader + set_tempo: **427 passed, 7 skipped**, ruff clean.
+
+Outstanding for G1: `write_notes` (in progress), `set_channel_levels` (map already
+solved and live-verified - A8), and the corpus differential test.
