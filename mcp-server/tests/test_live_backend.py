@@ -17,10 +17,7 @@ from types import SimpleNamespace
 
 import pytest
 
-REPO = Path(__file__).resolve().parents[2]
-sys.path.insert(0, str(REPO))
-
-from fl_mcp import live, server, spool  # noqa: E402
+from fl_mcp import live, server, spool
 
 
 @pytest.fixture(autouse=True)

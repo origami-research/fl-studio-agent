@@ -8,16 +8,14 @@ the ground truth FL will load.
 from __future__ import annotations
 
 import shutil
-import sys
 from pathlib import Path
 
 import pytest
+from harness.verify import read_notes
+
+from fl_mcp.flp_writer import NOTE_SIZE, PPQ, write_notes
 
 REPO = Path(__file__).resolve().parents[2]
-sys.path.insert(0, str(REPO))
-
-from fl_mcp.flp_writer import NOTE_SIZE, PPQ, write_notes  # noqa: E402
-from harness.verify import read_notes  # noqa: E402
 
 TEMPLATE = REPO / "harness" / "projects" / "fl_mcp_bridge.flp"
 

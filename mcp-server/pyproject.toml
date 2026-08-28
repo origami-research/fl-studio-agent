@@ -35,4 +35,6 @@ select = ["E", "F", "I", "BLE", "TRY", "SIM", "PTH", "TID", "RUF"]
 ignore = ["TRY003", "PLC0415", "E501", "E402"]  # E402: sys.path cross-tree imports, removed in docs/19 phase 2
 
 [tool.ruff.lint.per-file-ignores]
-"tests/**" = ["BLE", "TRY", "SIM105"]  # tests may catch broadly / suppress deliberately
+# Tests may catch broadly / suppress deliberately. RUF059: unpacking a fixture
+# tuple (`session, bridge, control = wired`) and using a subset is idiomatic.
+"tests/**" = ["BLE", "TRY", "SIM105", "RUF059"]

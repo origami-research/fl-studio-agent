@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 import pytest
-
 from fake_fl import FakeBridge, FakeControl
+
 from fl_mcp import errors, schemas
 from fl_mcp.session import FLSession
 

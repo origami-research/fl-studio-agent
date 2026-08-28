@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 import pytest
-
 from fake_fl import FakeBridge, FakeChannelState, FakeControl, FakeMixerTrack
+
 from fl_mcp import errors, kernel, schemas
 from fl_mcp.session import FLSession
 
@@ -146,10 +146,9 @@ def test_cell_does_not_flush_on_exception(wired):
     fl = kernel.bootstrap(session)
     bass = fl.track("Bass")
 
-    with pytest.raises(RuntimeError):
-        with fl.cell():
-            bass.write([schemas.Note(key="C4", start=0, length=1)])
-            raise RuntimeError("boom")
+    with pytest.raises(RuntimeError), fl.cell():
+        bass.write([schemas.Note(key="C4", start=0, length=1)])
+        raise RuntimeError("boom")
 
     assert bridge.notes_at(-1, 1) == []
     assert len(fl._queue) == 1

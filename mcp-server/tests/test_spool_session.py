@@ -3,9 +3,9 @@ from __future__ import annotations
 import time
 
 import pytest
+from fake_fl import FakeBridge
 from pydantic import ValidationError
 
-from fake_fl import FakeBridge
 from fl_mcp import errors, spool
 
 

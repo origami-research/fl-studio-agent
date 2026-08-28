@@ -10,7 +10,6 @@ from fl_mcp.schemas import (
     SessionState,
 )
 
-
 # --- hashing ---------------------------------------------------------------
 
 
@@ -119,7 +118,7 @@ def test_fold_reconstructs_state():
     d1 = NoteDelta(added=[Note(key="E4", start=1, length=1)])
     d2 = NoteDelta(added=[Note(key="G4", start=2, length=1)])
     folded = diff.fold(bootstrap, [d1, d2])
-    target = bootstrap + [Note(key="E4", start=1, length=1), Note(key="G4", start=2, length=1)]
+    target = [*bootstrap, Note(key="E4", start=1, length=1), Note(key="G4", start=2, length=1)]
     assert hashing.noteset_hash(folded) == hashing.noteset_hash(target)
 
 

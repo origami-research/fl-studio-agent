@@ -25,7 +25,7 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, ClassVar
 
 from fl_mcp import errors, schemas, spool
 
@@ -127,7 +127,7 @@ class FakeBridge:
         schemas.PingArgs.model_validate(raw_args)
         return {"id": cmd_id, "ok": True, "op": "ping"}
 
-    _HANDLERS = {
+    _HANDLERS: ClassVar = {
         "add_notes": _add_notes,
         "clear_notes": _clear_notes,
         "preview_note": _preview_note,
@@ -316,7 +316,7 @@ class FakeControl:
     def _set_channel_pan(self, index: int, value: float) -> None:
         self.channels[index].pan = float(value)
 
-    _OPS = {
+    _OPS: ClassVar = {
         "transport.start": _transport_start,
         "transport.stop": _transport_stop,
         "transport.isPlaying": _transport_is_playing,

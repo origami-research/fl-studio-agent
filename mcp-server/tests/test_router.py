@@ -107,6 +107,7 @@ def test_set_tempo_rejects_out_of_range(tmp_path):
 
 def _live_session(tmp_path):
     from fake_fl import FakeControl
+
     from fl_mcp.session import FLSession
     control = FakeControl()
     control.send_hello()
@@ -156,7 +157,7 @@ def test_set_channel_mix_live_sets_volume_and_pan(tmp_path):
 # --- sync_from_project (ground-truth read-back) ----------------------------
 
 def test_sync_from_project_rebuilds_shadow_with_project_provenance(tmp_path, monkeypatch):
-    from fl_mcp import server, schemas
+    from fl_mcp import server
     from fl_mcp.session import FLSession
 
     session = FLSession(project_key="t", spool_root=tmp_path / "s", project_root=tmp_path / "p", control=None)

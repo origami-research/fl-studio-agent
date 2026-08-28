@@ -12,10 +12,10 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import pytest
-
 import fake_flpianoroll
 import fl_env
+import pytest
+
 from fl_mcp import spool
 from fl_mcp.server import clear_notes, fl_status, write_notes
 
