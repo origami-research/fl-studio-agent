@@ -137,3 +137,79 @@ Both editable installs are required: the root package supplies `harness` and
 `flmcp_codec`, the `mcp-server` one supplies `fl_mcp`. Baseline on
 `feat/v2-rewrite` before any lane work: **257 passed, 7 skipped** in ~16s
 (`cd mcp-server && .venv/bin/python -m pytest -q`).
+
+## Manager addendum 2 (2026-08-27, live FL 2026 Producer Edition, manager worktree)
+
+Gate-rig validation turned up two live facts and one real v1 bug. All three were
+measured against real FL, not reasoned about.
+
+### A4. The live rigs work; here is the honest baseline
+
+- `FL_E2E=1 pytest tests/e2e/test_flp_writer_live.py -m e2e` -> **1 passed in 12.18s**,
+  clean boot and teardown, no modal intervention needed (licensed FL, as fact 6 predicted).
+  G1's live half is proven working.
+- `FL_E2E=1 pytest tests/e2e/test_control_plane_e2e.py -m e2e` -> **4 passed, 2 failed**.
+  The two failures are A5 and A6 below. Neither is caused by v2 work; both are
+  pre-existing v1 defects that the rewrite fixes.
+
+### A5. v1 silently discards every CHUNKED control-plane response (real bug)
+
+`state.snapshot` and `ctl.selftest` never answer - not at 8s, not at 45s - while
+small ops (`channelCount`, `getChannelName`, `undo`, `state.undo_probe`,
+`getCurrentTempo`, `setCurrentTempo`) answer in under 3s.
+
+Instrumenting the raw rtmidi callback during one `state.snapshot`:
+
+```
+12 MIDI messages, 4796 bytes
+frame types: TYPE_CHUNK (0x4) x10, TYPE_EVENT (0x3) x3, TYPE_RESPONSE (0x2) x1
+result: caller timed out at 40s
+```
+
+The complete response **arrives** and reassembles. `control_midi._on_message` then
+routes on `frame_type`, which is still `TYPE_CHUNK` for a reassembled message, so it
+matches neither the `TYPE_RESPONSE` nor the `TYPE_EVENT` branch and the finished
+message is dropped. Every composite read - the ones docs/11 calls the ops "the server
+calls most" - has therefore never worked over MIDI.
+
+The codec is not at fault: chunking round-trips correctly in
+`fl-scripts/controller/tests/test_framing.py`. Only the *routing* after reassembly is
+wrong, and that is server-side, which is why in-process tests never caught it.
+
+Fixed in v2 by Lane W (found independently by reading, confirmed by this measurement):
+a reassembled chunk is classified by shape - the controller's responses carry `ok`,
+its events do not. This must stay covered by a non-live test for both directions
+(chunked response correlating to its request; chunked event dispatching to listeners).
+`dropped_frames` must NOT count this path - those frames are valid - so that
+"malformed input" and "large response" stay distinguishable in `fl_doctor`.
+
+### A6. The first engine call after a project load can time out, and that is not a failure
+
+Measured: an identical `mixer.getCurrentTempo` FAILED at a 5s timeout as the first
+call after hello, then succeeded seconds later. FL parks the call as "unsafe at
+current time" (fact 6) and the controller gives up first - `DEFER_MAX_TICKS = 200`
+is only ~4s at FL's ~20ms OnIdle cadence. This is why
+`test_control_plane_e2e.py::test_tempo_round_trips` fails with its 6s budget: it is
+the first engine call after boot.
+
+Consequences, both load-bearing:
+
+- **Live-plane writes DO land.** `mixer.setCurrentTempo(141, 1)` -> ok, and
+  `getCurrentTempo` read back `141000`; `transport.stop` -> ok. `session.set_tempo`'s
+  live-first path is verified, not aspirational.
+- **A single timeout is not evidence of a dead control plane.** After `_reload_fl`
+  the live plane is briefly present-but-unresponsive. Treating that warm-up timeout as
+  `NotePlaneUnavailable` and falling through to another backend would reintroduce
+  exactly the v1 cascade bug Lane S exists to kill. It means "busy", not "absent".
+
+Do not hide either fact inside a retry loop in `send_request`; a swallowed retry makes
+a genuinely dead control plane indistinguishable from a slow one. `timeout` is already
+a caller-visible parameter on the frozen signature - that is the seam.
+
+### A7. CI is red for a non-code reason (human item, not a lane blocker)
+
+Every GitHub Actions run on this repo fails in ~4s having executed **zero steps**
+(10/10 runs, including on `main` and on PR #35). That is a repo/account-level Actions
+problem - billing or org policy - not a workflow or code defect, and it is not
+fixable from here. The gates in this document are all local commands and are
+unaffected. Flagged for the owner.
