@@ -178,6 +178,8 @@ def set_tempo(project: Path, bpm: float) -> float:
     Re-reads the saved file before returning rather than trusting the write.
     """
     from harness.flp_compat import import_pyflp, parse
+    from pyflp._events import U32Event
+    from pyflp.project import ProjectID
 
     if not 10.0 <= bpm <= 999.0:
         raise ValueError(f"tempo {bpm} out of range (10-999 BPM)")
@@ -185,13 +187,18 @@ def set_tempo(project: Path, bpm: float) -> float:
     pyflp = import_pyflp()
     parsed = parse(project)
 
+    # FL stores tempo as a U32 event of BPM x 1000. A project left at the default
+    # tempo has NO such event (FL omits it), so mutate it when present and insert
+    # one otherwise - the same way write_notes inserts a missing pattern event.
     found = False
     for event in parsed.events:
-        if str(event.id) == "ProjectID.Tempo":
+        if event.id == ProjectID.Tempo:
             event.value = round(bpm * 1000)
             found = True
     if not found:
-        raise RuntimeError("project has no ProjectID.Tempo event")
+        events = list(parsed.events)
+        anchor = next((i for i, e in enumerate(events) if e.id == ProjectID.FLVersion), 0)
+        parsed.events.insert(anchor + 1, U32Event(ProjectID.Tempo, round(bpm * 1000).to_bytes(4, "little")))
 
     pyflp.save(parsed, project)
     return float(parse(project).tempo)

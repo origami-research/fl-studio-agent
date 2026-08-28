@@ -139,10 +139,6 @@ def resolve_channel(channel: int | str | None) -> int:
     )
 
 
-def fl_app() -> Path:
-    return Path(os.environ.get("FL_APP", "/Applications/FL Studio 2025.app"))
-
-
 def fl_is_running() -> bool:
     return subprocess.run(["pgrep", "-f", "FL Studio"], capture_output=True).returncode == 0
 
@@ -173,7 +169,7 @@ def _open_project(project: Path, attempts: int = 6) -> None:
     last = ""
     for attempt in range(attempts):
         result = subprocess.run(
-            ["open", "-a", str(fl_app()), str(project)],
+            ["open", "-a", str(flpaths.fl_app()), str(project)],
             capture_output=True,
             text=True,
         )

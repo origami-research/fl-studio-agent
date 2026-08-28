@@ -12,8 +12,24 @@ see docs/10-v0-vertical-slice.md.
 
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
+
+
+def fl_app() -> Path:
+    """The FL Studio application bundle to drive.
+
+    ``$FL_APP`` wins if set (the operator knows where it is); otherwise the
+    newest installed ``/Applications/FL Studio*.app`` - so a machine with FL
+    2026 is never targeted with a hardcoded 2025 path. One resolver, so the
+    server and the e2e harness never disagree on which app to launch.
+    """
+    override = os.environ.get("FL_APP")
+    if override:
+        return Path(override)
+    installed = sorted(Path("/Applications").glob("FL Studio*.app"), reverse=True)
+    return installed[0] if installed else Path("/Applications/FL Studio.app")
 
 # Subdirectories of FL's Settings folder that hold the spool.
 #

@@ -22,18 +22,17 @@ from __future__ import annotations
 
 import os
 import subprocess
-import sys
 import time
-from pathlib import Path
 
 import pytest
 
-_REPO = Path(__file__).resolve().parents[3]
-for p in (str(_REPO), str(_REPO / "mcp-server" / "src")):
-    if p not in sys.path:
-        sys.path.insert(0, p)
+from fl_mcp.flpaths import fl_app
 
-_FL_APP = Path("/Applications/FL Studio 2026.app")
+# The same resolver the server uses, so the e2e never launches a different app
+# than the backend targets (they had drifted: server 2025 vs this fixture 2026).
+# `fl_mcp` and `harness` are importable via pytest.ini's pythonpath, so no
+# sys.path surgery is needed here.
+_FL_APP = fl_app()
 
 
 def _osa(*lines: str) -> str:
@@ -50,9 +49,10 @@ def live_fl():
     if not _FL_APP.exists():
         pytest.skip("FL Studio not installed")
 
+    from harness import flctl
+
     from fl_mcp import control_midi
     from fl_mcp.session import FLSession
-    from harness import flctl
 
     ctl = control_midi.get_control()  # ports must exist before FL launches
     if flctl.is_running():

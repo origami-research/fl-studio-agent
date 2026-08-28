@@ -18,10 +18,7 @@ from .autonomous import DEFAULT_PROJECT_NAME
 
 
 def _templates_dir() -> Path:
-    import os
-
-    app = Path(os.environ.get("FL_APP", "/Applications/FL Studio 2025.app"))
-    return app / "Contents/Resources/FL/Data/Templates"
+    return flpaths.fl_app() / "Contents/Resources/FL/Data/Templates"
 
 
 # Chosen for its channel palette: Chords, Bass, Lead and Drums, on real
