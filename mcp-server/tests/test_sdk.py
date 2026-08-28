@@ -19,13 +19,11 @@ mode drops by design (noted per docs/21 reporting duty):
 from __future__ import annotations
 
 import pytest
+from sdk_fakes import DEFAULT_CHANNELS, FakeSession
 
-from fl_mcp import errors, theory
-from fl_mcp.v2 import sdk
-from fl_mcp.v2.schemas import Note, Target
-from fl_mcp.v2.sdk import ChannelNotFound, connect
-
-from .conftest import DEFAULT_CHANNELS, FakeSession
+from fl_mcp import errors, sdk, theory
+from fl_mcp.schemas import Note, Target
+from fl_mcp.sdk import ChannelNotFound, connect
 
 
 @pytest.fixture
@@ -61,8 +59,8 @@ def test_track_resolves_by_unambiguous_substring(fl):
 
 
 def test_track_exact_name_beats_substring(tmp_path, control):
-    from fl_mcp.v2.schemas import Channel
-    from fl_mcp.v2.store import Store
+    from fl_mcp.schemas import Channel
+    from fl_mcp.store import Store
 
     session = FakeSession(
         store=Store("test", root=tmp_path),
@@ -203,7 +201,7 @@ def test_tempo_property_reads_confirmed_state(fl):
 
 
 def test_tempo_unconfirmed_raises_instead_of_guessing(tmp_path):
-    from fl_mcp.v2.store import Store
+    from fl_mcp.store import Store
 
     session = FakeSession(store=Store("test", root=tmp_path), channels=DEFAULT_CHANNELS, tempo=None)
     with pytest.raises(errors.ToolError) as exc_info:
@@ -229,7 +227,7 @@ def test_undo_sends_fl_undo(fl, control):
 
 @pytest.mark.parametrize("method", ["play", "stop", "undo"])
 def test_transport_requires_control_plane(tmp_path, method):
-    from fl_mcp.v2.store import Store
+    from fl_mcp.store import Store
 
     session = FakeSession(store=Store("test", root=tmp_path), channels=DEFAULT_CHANNELS, control=None)
     fl = connect(session)

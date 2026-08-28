@@ -1,6 +1,6 @@
 """Live-FL verification of the v2 writers (G1's live half; THE MANAGER RUNS IT).
 
-Run: FL_E2E=1 pytest tests/v2/test_flp_live.py -m e2e
+Run: FL_E2E=1 pytest tests/test_flp_live.py -m e2e
 
 One FL boot, two crafted projects, all three writers:
 
@@ -26,9 +26,8 @@ import time
 
 import pytest
 
-from fl_mcp import control_midi
+from fl_mcp import flp, wire
 from fl_mcp.flpaths import fl_app
-from fl_mcp.v2 import flp
 
 pytestmark = pytest.mark.e2e
 
@@ -79,7 +78,7 @@ def own_fl(tmp_path):
 
     from harness import flctl
 
-    ctl = control_midi.MidiControl()  # ports must exist before FL launches
+    ctl = wire.MidiControl()  # ports must exist before FL launches
     if flctl.is_running():
         flctl.stop(force=True)
         time.sleep(1)
@@ -117,7 +116,7 @@ def test_v2_writers_land_in_real_fl(own_fl, tmp_path):
     # -- file 1: notes splice + mutate-path tempo -----------------------------
     notes_file = tmp_path / "notes_tempo.flp"
     shutil.copy2(fl_app() / _EMPTY, notes_file)
-    from fl_mcp.v2.schemas import Note
+    from fl_mcp.schemas import Note
 
     written = flp.write_notes(
         notes_file,

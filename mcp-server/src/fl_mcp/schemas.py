@@ -1,15 +1,8 @@
-"""FL MCP schema package - the single seam between all lanes.
+"""The single seam every lane codes against. Every type is FIRM:
+unions resolve at construction, invariants live in the fields, and a dict
+exists only at the MCP boundary via ``.model_dump()``.
 
-Every command, response, note, and log line is defined here as a pydantic
-model. Lanes code against these types:
-
-- Lane A (Bridge plugin, C++) mirrors the command/response shapes on the spool.
-- Lane B (controller script) mirrors the SysEx payload shapes.
-- Lane C (server core) imports these directly.
-- Lane D (kernel) imports C's API which is built on these.
-
-Wire rule (spec 11): the spool carries beats and 0..1 normalized values;
-conversion to FL units happens inside FL where the real PPQ lives.
+This file is IMPLEMENTED, not a stub - it is the contract the lanes share.
 """
 
 from __future__ import annotations
@@ -19,26 +12,25 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field, field_validator
 
-from .clock import now
-from .pitch import parse_key
+from fl_mcp.clock import now
+from fl_mcp.pitch import parse_key
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
-# ---------------------------------------------------------------------------
-# Notes
-# ---------------------------------------------------------------------------
+NoteWriteMode = Literal["merge", "replace"]  # THE mode type - validated once, at a boundary
+
+Backend = Literal["live", "project-write", "bridge"]
 
 
 class Note(BaseModel):
     """One note, in musical units. C4 = MIDI 60 = middle C.
 
-    ``key`` is firmly an int MIDI number after construction: a name like "C4" or
-    "F#3" is accepted as input and resolved once, here, so no downstream code
-    ever juggles a ``str | int`` union or re-parses. Use ``pitch.key_name`` to
-    render a MIDI number back to a name for display.
+    ``key`` is firmly an int after construction: "C4"/"F#3" are accepted as
+    input and resolved once by ``pitch.parse_key``. Use ``pitch.key_name`` for
+    display. No downstream code ever sees a union.
     """
 
-    key: int = Field(ge=0, le=127)  # accepts "C4"/"F#3"/MIDI on input, stored as MIDI
+    key: int = Field(ge=0, le=127)
     start: float = Field(ge=0)  # beats from pattern start
     length: float = Field(gt=0, le=1024)  # beats
     velocity: float = Field(default=0.8, ge=0, le=1)
@@ -48,7 +40,6 @@ class Note(BaseModel):
     @field_validator("key", mode="before")
     @classmethod
     def _resolve_key(cls, value: object) -> int:
-        """Resolve a name or number to MIDI once, at the boundary (pitch.parse_key)."""
         return parse_key(value)
 
     def canonical(self) -> dict[str, Any]:
@@ -63,211 +54,115 @@ class Note(BaseModel):
         }
 
 
-# ---------------------------------------------------------------------------
-# Observations (FL state rendered to the model)
-#
-# Every default is chosen to be the *resting / no-op* value (0 dB = unity,
-# centered pan, not muted, no plugin, empty lists) so that render() with
-# exclude_defaults drops it. An untouched channel serializes to just its
-# index and name; the model's eye goes straight to what is actually set.
-# See views.render() and docs/16.
-# ---------------------------------------------------------------------------
+class Target(BaseModel):
+    """A pattern/channel coordinate. Firmly ints: channel names and the
+    "current" default are resolved AT THE TOOL BOUNDARY (server/sdk), never
+    carried as a union or a -1 sentinel into the core."""
 
-
-class Effect(BaseModel):
-    slot: int
-    name: str
-
-
-class Send(BaseModel):
-    to: int
-    level: float = 0.8  # FL's default send level; an inactive send is simply absent
-
-
-class Channel(BaseModel):
-    index: int
-    name: str
-    plugin: str | None = None  # None = native sampler / no generator
-    volume_db: float = 0.0  # 0 dB = unity
-    pan: float = 0.0  # centered
-    muted: bool = False
-    routed_to: int | None = None  # None = master (track 0)
-
-
-class MixerTrack(BaseModel):
-    index: int
-    name: str
-    volume_db: float = 0.0
-    pan: float = 0.0
-    muted: bool = False
-    solo: bool = False
-    effects: list[Effect] = Field(default_factory=list)
-    sends: list[Send] = Field(default_factory=list)
-
-
-class SessionState(BaseModel):
-    """The whole live session as one observation. Rendered compactly to the model."""
-
-    tempo_bpm: float
-    ppq: int = 96
-    playing: bool = False
-    current_pattern: int = 0
-    channels: list[Channel] = Field(default_factory=list)
-    mixer: list[MixerTrack] = Field(default_factory=list)
-    source: Literal["live", "project"] = "live"
-
-
-class NoteSetSummary(BaseModel):
-    """Lazy stand-in for a large note group: a summary instead of N notes, so
-    a 5,000-note pattern doesn't flood context. The model filters, then pulls."""
-
-    count: int
-    low: str | None = None  # lowest pitch, e.g. "C2"
-    high: str | None = None  # highest pitch
-    density: float | None = None  # notes per beat
-    id: str | None = None  # content hash (via hashing.noteset_hash)
-
-
-# ---------------------------------------------------------------------------
-# Deltas (structured edits: what changed, not a replay of action strings)
-# ---------------------------------------------------------------------------
+    pattern: int = Field(ge=1)
+    channel: int = Field(ge=0)
 
 
 class NoteMove(BaseModel):
-    """A note whose value changed, paired from a removed hash to its new form."""
+    """A note paired across a diff as dragged rather than delete+insert."""
 
-    from_hash: str
+    from_: Note = Field(alias="from")
     to: Note
-    confidence: float = Field(default=1.0, ge=0, le=1)
+    confidence: float = Field(gt=0, le=1)
+
+    model_config = {"populate_by_name": True}
 
 
 class NoteDelta(BaseModel):
-    """A content-addressed diff between two note groups. Fold, don't replay."""
+    """The structured change one write made - the unit of history."""
 
     added: list[Note] = Field(default_factory=list)
-    removed: list[str] = Field(default_factory=list)  # hashes of gone notes
+    removed: list[Note] = Field(default_factory=list)
     moved: list[NoteMove] = Field(default_factory=list)
 
     def is_empty(self) -> bool:
         return not (self.added or self.removed or self.moved)
 
 
-# ---------------------------------------------------------------------------
-# Targets and references
-# ---------------------------------------------------------------------------
+class WriteReceipt(BaseModel):
+    """What a write CONFIRMED (readback), never what was requested."""
+
+    backend: Backend
+    target: Target
+    confirmed_notes: int  # notes on this target in the saved/live state, post-write
+    delta: NoteDelta
 
 
-class Target(BaseModel):
-    """Where a command applies. Names resolve via the manifest; -1 = current."""
+class ChannelLevels(BaseModel):
+    """A channel's mix state, in tool units (readback, post-write)."""
 
-    pattern: int | str = -1
-    channel: int | str = -1
-
-
-class NoteSetRef(BaseModel):
-    """A server-side reference to a group of notes (FL has no note identity)."""
-
-    id: str  # sha256 of schema_version + canonical notes
-    provenance: Literal["shadow", "project", "model"]
-    as_of: datetime
-    confidence: float = Field(default=1.0, ge=0, le=1)
-    stale: bool = False
+    channel: int = Field(ge=0)
+    volume: float = Field(ge=0, le=1)
+    pan: float = Field(ge=-1, le=1)
+    pitch_semitones: int = Field(ge=-48, le=48)
 
 
-class TrackRef(BaseModel):
-    """A live handle to a channel. Guarded by the project generation."""
-
-    channel: int
-    name: str
-    generation: int
+class PlaneStatus(BaseModel):
+    connected: bool
+    detail: str | None = None
+    fix: str | None = None
 
 
-# ---------------------------------------------------------------------------
-# Spool commands (server -> Bridge plugin)
-# ---------------------------------------------------------------------------
+class DoctorReport(BaseModel):
+    status: Literal["ok", "degraded"]
+    control_plane: PlaneStatus
+    note_plane: PlaneStatus
+    project_file: PlaneStatus
 
 
-class SpoolCommand(BaseModel):
-    """Envelope for every command file on the spool."""
-
-    id: int
-    op: str
-    gen: int = 0  # project generation at issue time
-    ts: datetime = Field(default_factory=now)
-    args: dict[str, Any] = Field(default_factory=dict)
+# -- spool wire (server <-> code inside FL) ----------------------------------
 
 
 class AddNotesArgs(BaseModel):
     target: Target
-    mode: Literal["merge", "replace"] = "merge"
     notes: list[Note] = Field(min_length=1, max_length=5000)
+    mode: NoteWriteMode = "merge"
 
 
 class ClearNotesArgs(BaseModel):
     target: Target
 
 
-class PreviewNoteArgs(BaseModel):
-    channel: int | str
-    notes: list[Note] = Field(min_length=1, max_length=64)
-
-
 class PingArgs(BaseModel):
     pass
 
 
+SpoolOp = Literal["add_notes", "clear_notes", "ping"]
+
 OP_ARGS: dict[str, type[BaseModel]] = {
     "add_notes": AddNotesArgs,
     "clear_notes": ClearNotesArgs,
-    "preview_note": PreviewNoteArgs,
     "ping": PingArgs,
 }
 
 
-# ---------------------------------------------------------------------------
-# Spool responses (Bridge plugin -> server)
-# ---------------------------------------------------------------------------
+class SpoolCommand(BaseModel):
+    proto: int = SCHEMA_VERSION
+    id: int
+    op: SpoolOp
+    args: dict[str, Any]  # validated against OP_ARGS[op] at send time
+    ts: datetime = Field(default_factory=now)
 
 
 class SpoolResponse(BaseModel):
     id: int
     ok: bool
-    op: str = ""
+    op: SpoolOp | None = None
     notes_written: int | None = None
     err: str | None = None
-    plugin_ver: str = ""
 
 
-# ---------------------------------------------------------------------------
-# Action log (append-only, oldest first; read in reverse for history)
-# ---------------------------------------------------------------------------
-
-
-class ActionEntry(BaseModel):
-    ts: datetime
-    id: int
-    gen: int
-    op: str
-    target: Target | None = None
-    mode: str | None = None
-    before_hash: str | None = None
-    after_hash: str | None = None
-    before: Any = None  # scalar before-value for param ops
-    after: Any = None
-    delta: NoteDelta | None = None  # structured note change (added/removed/moved)
-    undo_step: str | None = None
-
-
-# ---------------------------------------------------------------------------
-# SysEx control-plane payloads (server <-> controller script)
-# ---------------------------------------------------------------------------
+# -- control wire (server <-> controller script over SysEx) ------------------
 
 
 class ControlRequest(BaseModel):
-    """JSON payload inside a SysEx frame (base64 of UTF-8 JSON on the wire)."""
-
     id: int
-    op: str  # "<module>.<function>" mirroring the FL Python API 1:1
+    op: str  # dotted FL API name, e.g. "mixer.getCurrentTempo"
     args: list[Any] = Field(default_factory=list)
     kwargs: dict[str, Any] = Field(default_factory=dict)
 
@@ -277,7 +172,6 @@ class ControlResponse(BaseModel):
     ok: bool
     ret: Any = None
     err: str | None = None
-    trace: str | None = None
 
 
 class HelloEvent(BaseModel):
@@ -287,3 +181,59 @@ class HelloEvent(BaseModel):
     fl_ver: str
     ppq: int
     tempo: float | None = None
+
+
+# -- observations (FL state rendered to the model) ----------------------------
+
+
+class Channel(BaseModel):
+    index: int
+    name: str
+    volume: float = 0.78
+    pan: float = 0.0
+    muted: bool = False
+    melodic: bool = True
+
+
+class MixerTrack(BaseModel):
+    index: int
+    name: str
+    volume: float = 0.8
+    pan: float = 0.0
+    muted: bool = False
+
+
+class SessionState(BaseModel):
+    tempo_bpm: float | None = None
+    ppq: int | None = None
+    playing: bool = False
+    current_pattern: int = 1
+    channels: list[Channel] = Field(default_factory=list)
+    mixer: list[MixerTrack] = Field(default_factory=list)
+
+
+# -- history ------------------------------------------------------------------
+
+
+class NoteSetRef(BaseModel):
+    """Content-addressed handle to a note set in the store."""
+
+    id: str
+    target: Target
+    provenance: Literal["shadow", "project"]
+    as_of: datetime
+
+
+class ActionEntry(BaseModel):
+    """One applied action in the durable log."""
+
+    ts: datetime = Field(default_factory=now)
+    id: int
+    op: str
+    target: Target | None = None
+    mode: NoteWriteMode | None = None
+    backend: Backend | None = None
+    before_hash: str | None = None
+    after_hash: str | None = None
+    delta: NoteDelta | None = None
+    summary: str | None = None

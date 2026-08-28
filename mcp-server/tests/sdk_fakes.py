@@ -7,9 +7,7 @@ the action log - is the shipped code, not a mock of it.
 
 from __future__ import annotations
 
-import pytest
-
-from fl_mcp.v2.schemas import (
+from fl_mcp.schemas import (
     Channel,
     ControlResponse,
     Note,
@@ -18,8 +16,8 @@ from fl_mcp.v2.schemas import (
     Target,
     WriteReceipt,
 )
-from fl_mcp.v2.session import FLSession
-from fl_mcp.v2.store import Store
+from fl_mcp.session import FLSession
+from fl_mcp.store import Store
 
 
 class FakeControl:
@@ -91,13 +89,3 @@ DEFAULT_CHANNELS = (
     Channel(index=1, name="Bass"),
     Channel(index=2, name="Lead"),
 )
-
-
-@pytest.fixture
-def control() -> FakeControl:
-    return FakeControl()
-
-
-@pytest.fixture
-def fake_session(tmp_path, control) -> FakeSession:
-    return FakeSession(store=Store("test", root=tmp_path), channels=DEFAULT_CHANNELS, control=control)

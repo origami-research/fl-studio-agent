@@ -11,8 +11,8 @@ from pathlib import Path
 
 import pytest
 
-from fl_mcp.v2 import flp
-from fl_mcp.v2.flp import FlpError
+from fl_mcp import flp
+from fl_mcp.flp import FlpError
 
 
 def event(event_id: int, payload: bytes) -> bytes:

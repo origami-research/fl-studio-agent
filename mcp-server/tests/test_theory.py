@@ -3,7 +3,7 @@ from __future__ import annotations
 import pytest
 
 from fl_mcp import theory
-from fl_mcp.notes import NoteError
+from fl_mcp.pitch import NoteError
 
 
 def test_chord_major_triad():

@@ -1,4 +1,4 @@
-"""v2/wire.py unit tests: correlation honesty, dropped-frame accounting, hello
+"""wire.py unit tests: correlation honesty, dropped-frame accounting, hello
 tracking, and event dispatch - against a fake ``rtmidi`` module, no hardware,
 no FL. The codec itself is flmcp_codec's frozen surface, covered by
 fl-scripts/controller/tests/test_framing.py.
@@ -21,9 +21,8 @@ from flmcp_codec import (
     encode_message,
 )
 
-from fl_mcp import errors
-from fl_mcp.v2 import wire
-from fl_mcp.v2.schemas import ControlResponse
+from fl_mcp import errors, wire
+from fl_mcp.schemas import ControlResponse
 
 
 class _FakeMidiOut:

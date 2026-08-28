@@ -1,6 +1,6 @@
 """Lane F writer tests: raw byte surgery, verified by re-reading the file.
 
-set_tempo is a PORT of the live-verified v1 (flp_writer.set_tempo, commit
+set_tempo was a PORT of the live-verified v1 (flp_writer.set_tempo, commit
 13f8afc): the byte-differential test below asserts both produce identical
 files, so any byte-level drift in the port fails loudly.
 """
@@ -12,13 +12,11 @@ import struct
 from pathlib import Path
 
 import pytest
+from test_flp_reader import VERSION_MODERN, event, note_record, write_flp
 
-from fl_mcp import flp_writer
+from fl_mcp import flp
 from fl_mcp.flpaths import fl_app
-from fl_mcp.v2 import flp
-from fl_mcp.v2.schemas import Note
-
-from .test_flp_reader import VERSION_MODERN, build_flp, event, note_record, write_flp
+from fl_mcp.schemas import Note
 
 _FL_DATA = fl_app() / "Contents/Resources/FL/Data"
 
@@ -82,19 +80,13 @@ def test_set_tempo_readback_is_the_stored_quantized_value(tmp_path):
     assert stored == round(128.5004 * 1000) / 1000
 
 
-def test_set_tempo_byte_identical_to_v1_port_source(tmp_path):
-    """Both implementations must write the same bytes - the port contract."""
-    events = VERSION_MODERN + event(flp.EVENT_TEMPO, struct.pack("<I", 140_000))
-    for name, payload in (("with_tempo", events), ("no_tempo", VERSION_MODERN)):
-        v1_path = tmp_path / f"{name}_v1.flp"
-        v2_path = tmp_path / f"{name}_v2.flp"
-        v1_path.write_bytes(build_flp(payload))
-        v2_path.write_bytes(build_flp(payload))
-
-        flp_writer.set_tempo(v1_path, 117)
-        flp.set_tempo(v2_path, 117)
-
-        assert v1_path.read_bytes() == v2_path.read_bytes()
+# The v1 byte-identity differential (test_set_tempo_byte_identical_to_v1_port_source)
+# lived here until the cutover. It asserted that v2's set_tempo wrote the same bytes
+# as v1's flp_writer.set_tempo for both the mutate and append paths, and it PASSED -
+# which is what licensed deleting v1. It cannot be re-run now that flp_writer is gone,
+# and re-freezing v2's own output as a golden would only assert v2 == v2, so it is
+# retired rather than faked. The live gate (tests/test_flp_live.py) is what guards
+# set_tempo from here on: FL itself reports the tempo back.
 
 
 # -- write_notes --------------------------------------------------------------

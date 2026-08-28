@@ -13,9 +13,9 @@ import threading
 
 import pytest
 
-from fl_mcp.v2 import store as store_mod
-from fl_mcp.v2.schemas import Note, NoteDelta, Target
-from fl_mcp.v2.store import Store, apply_delta, diff_notes, note_hash, noteset_hash
+from fl_mcp import store as store_mod
+from fl_mcp.schemas import Note, NoteDelta, Target
+from fl_mcp.store import Store, apply_delta, diff_notes, note_hash, noteset_hash
 
 
 def make_notes(*keys):

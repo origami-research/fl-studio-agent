@@ -32,12 +32,11 @@ from pathlib import Path
 
 import pytest
 from harness.flp_compat import parse
+from test_flp_writers import pyflp_key_to_midi
 
+from fl_mcp import flp
+from fl_mcp.flp import FlpError
 from fl_mcp.flpaths import fl_app
-from fl_mcp.v2 import flp
-from fl_mcp.v2.flp import FlpError
-
-from .test_flp_writers import pyflp_key_to_midi
 
 _FL_DATA = fl_app() / "Contents/Resources/FL/Data"
 _FETCHED = Path(__file__).resolve().parents[1] / "corpus" / "data"

@@ -17,7 +17,7 @@ import pytest
 from pydantic import ValidationError
 
 from fl_mcp.errors import ToolError
-from fl_mcp.v2.spool import Spool, SpoolUnavailable, read_json, write_json_atomic
+from fl_mcp.spool import Spool, SpoolUnavailable, read_json, write_json_atomic
 
 
 def make_spool(tmp_path) -> tuple[Spool, Path]:

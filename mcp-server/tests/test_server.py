@@ -1,4 +1,4 @@
-"""v2/server.py tool tests against an injected fake session (G2 fast half).
+"""server.py tool tests against an injected fake session (G2 fast half).
 
 The tools are exercised directly with a stub Context carrying the same
 lifespan-context shape the real lifespan yields; no MIDI, no FL. The live
@@ -13,9 +13,9 @@ from datetime import datetime, timezone
 from types import SimpleNamespace
 from typing import Any
 
+from fl_mcp import server
 from fl_mcp.errors import ToolError
-from fl_mcp.v2 import server
-from fl_mcp.v2.schemas import DoctorReport, Note, NoteSetRef, PlaneStatus, Target
+from fl_mcp.schemas import DoctorReport, Note, NoteSetRef, PlaneStatus, Target
 
 
 class _FakeStore:

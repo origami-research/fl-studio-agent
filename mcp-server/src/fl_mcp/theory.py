@@ -9,7 +9,7 @@ still hold the original list (e.g. to write it somewhere else too).
 from __future__ import annotations
 
 from . import schemas
-from .notes import NoteError, parse_key
+from .pitch import NoteError, parse_key
 
 CHORD_INTERVALS: dict[str, list[int]] = {
     "major": [0, 4, 7],

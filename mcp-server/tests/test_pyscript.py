@@ -5,7 +5,7 @@ restricted `open`, its blocked `os.remove`, its `SystemError` (not `OSError`)
 failure mode, and its habit of calling `apply()` with no arguments. Tests that
 bypass that sandbox have already proven able to pass while the real thing fails.
 
-The server side is the v2 spool (fl_mcp.v2.spool.Spool) - the ONE sequenced
+The server side is the v2 spool (fl_mcp.spool.Spool) - the ONE sequenced
 protocol. Only FL's own note-writing behavior remains unverified here.
 """
 
@@ -18,7 +18,7 @@ import fl_env
 import pytest
 
 from fl_mcp.errors import ToolError
-from fl_mcp.v2.spool import Spool, read_json, spool_roots, write_json_atomic
+from fl_mcp.spool import Spool, read_json, spool_roots, write_json_atomic
 
 SCRIPT = (
     Path(__file__).resolve().parents[2] / "fl-scripts" / "piano-roll" / "MCP Write Notes.pyscript"

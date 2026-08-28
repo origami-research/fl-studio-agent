@@ -14,7 +14,7 @@ import sys
 from pathlib import Path
 
 from . import flpaths
-from .autonomous import DEFAULT_PROJECT_NAME
+from .session import DEFAULT_PROJECT_NAME  # THE definition; session resolves the same path
 
 
 def _templates_dir() -> Path:
