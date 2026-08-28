@@ -660,3 +660,68 @@ project name appearing in a window title, or an error dialog appearing - rather 
 treating "nothing happened in 60s" as a result. Two of my conclusions in this document
 were shaped by a measurement I had not validated, and I would rather flag that than
 leave a confident-sounding record that is partly noise.
+
+## Manager addendum 6 (2026-08-28): A13 RESOLVED, and A15 - the ctx annotation
+
+### A13 is CLOSED - and my "still open" verdict was wrong
+
+Lane F had written the correct live test all along (`tests/v2/test_flp_live.py`) and
+asked me twice to run it. I did not; I wrote my own ad-hoc harness instead, and **my
+harness was the broken thing**. Running Lane F's test:
+
+```
+tests/v2/test_flp_live.py::test_v2_writers_land_in_real_fl PASSED
+[LAUNCH] hello received after 2.5s
+[CHECK] title='notes_tempo.flp - FL Studio 2026'
+```
+
+FL boots and attaches in ~2.5s when warm - not the 30-60s my sampling loops assumed -
+and it **loads the file `write_notes` produced**. G4 re-run on the same pattern:
+
+```
+[PASS] run() returned a receipt, no traceback
+[PASS] saved file holds 3 notes         [(60,0), (64,96), (67,192)]
+[PASS] REAL FL LOADED the written file  title='g4_final.flp - FL Studio 2026'
+[PASS] POSITIVE CONTROL tempo==149000
+```
+
+**G1 live half: PASSED. G4 live half: PASSED.**
+
+What was real, and what was my error, stated separately because they are different:
+
+- **Real:** the original `write_notes` spliced the pattern block at stream offset 0,
+  ahead of the `FLVersion` event. That produced a genuinely bad file and is what
+  FL's 'Invalid data' dialog was complaining about. Fixed (anchor moved to where FL
+  writes the block), plus the `0x4000` note-flag fidelity fix.
+- **My error:** after those fixes I kept reporting A13 as open, on the strength of
+  "the file did not load" readings from a harness whose own pristine control failed
+  intermittently. I had already flagged the flakiness and still under-corrected the
+  conclusion. The lesson is not "controls are useful" - I knew that - it is **use the
+  lane's own test before building a parallel one**; the owner had already solved the
+  measurement problem I then got wrong.
+
+### A15. `ctx: Context` is required, not cosmetic (Lane W's request, ratified late)
+
+Lane W raised this early and I never acked it. It is a real defect, not a style point.
+Context injection in the installed `mcp` is **annotation-based** -
+`find_context_parameter` matches the `Context` class - so the skeleton's `ctx: Any`
+means the parameter is never recognised. Demonstrated directly:
+
+```
+with_any  context_kwarg=None     schema_props=['code', 'ctx']
+with_ctx  context_kwarg='ctx'    schema_props=['code']
+```
+
+With `ctx: Any` every tool exposes `ctx` as a **required caller-supplied argument** that
+no client can populate, and the lifespan value never arrives - i.e. all three tools are
+unusable over a real MCP connection, while passing every direct-call unit test.
+
+Applied: `ctx: Context` on `run`/`get_notes`/`fl_doctor`, plus a registration
+round-trip test asserting `context_kwarg == "ctx"` and that `ctx` is absent from each
+input schema. `lifespan` was already `@contextlib.asynccontextmanager`.
+
+**Process lesson:** three lanes sent me signature requests and status reports that I
+answered late or not at all while I was busy on FL. Lane W's went unanswered longest
+and was the most consequential. A manager who owns the only shared resource still owes
+the lanes timely decisions - being busy on the resource is not an excuse for blocking
+them on a one-word answer.

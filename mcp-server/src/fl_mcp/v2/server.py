@@ -18,7 +18,7 @@ import sys
 import traceback
 from typing import Any
 
-from mcp.server.mcpserver import MCPServer
+from mcp.server.mcpserver import Context, MCPServer
 from pydantic import ValidationError
 
 from fl_mcp import theory
@@ -54,7 +54,7 @@ async def lifespan(server: Any) -> Any:
             session.control.close()
 
 
-def run(code: str, ctx: Any) -> dict[str, Any]:
+def run(code: str, ctx: Context) -> dict[str, Any]:
     """MCP tool. Execute Python in a namespace holding ``fl`` (the SDK),
     ``theory``, and ``Note``. Returns {"stdout": ..., "result":
     repr-of-last-expression} or {"traceback": ...} - errors read like Python, no
@@ -96,7 +96,7 @@ def run(code: str, ctx: Any) -> dict[str, Any]:
     }
 
 
-def get_notes(pattern: int, channel: int | str, ctx: Any) -> dict[str, Any]:
+def get_notes(pattern: int, channel: int | str, ctx: Context) -> dict[str, Any]:
     """MCP tool. Read-only view of a target's notes with provenance and
     size-aware compression (full list when small, summary when large).
 
@@ -137,7 +137,7 @@ def get_notes(pattern: int, channel: int | str, ctx: Any) -> dict[str, Any]:
     return result
 
 
-def fl_doctor(ctx: Any) -> dict[str, Any]:
+def fl_doctor(ctx: Context) -> dict[str, Any]:
     """MCP tool. session.doctor().model_dump() - the only place the report
     becomes a dict."""
     session = ctx.request_context.lifespan_context["session"]

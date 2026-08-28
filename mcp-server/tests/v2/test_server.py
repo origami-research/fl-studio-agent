@@ -239,3 +239,32 @@ def test_run_namespace_can_actually_write_notes(monkeypatch):
 def test_run_namespace_exposes_theory_alongside_note():
     out = server.run("theory.chord('C4')", _ctx(object()))
     assert out["result"] == "[60, 64, 67]"
+
+
+# --- MCP registration round trip (addendum A15) --------------------------------
+
+
+def test_tools_register_with_ctx_injected_and_absent_from_the_schema():
+    """The regression this guards: Context injection is ANNOTATION-based
+    (`find_context_parameter` matches the Context class). With the skeleton's
+    `ctx: Any`, ctx is not recognised, so it is NOT skipped from the input
+    schema - it becomes a required tool argument no caller can supply, and the
+    lifespan value never arrives. Verified against the installed mcp package.
+    """
+    from mcp.server.mcpserver import MCPServer
+
+    srv = MCPServer(name="fl-mcp-test")
+    for fn in (server.run, server.get_notes, server.fl_doctor):
+        srv.add_tool(fn)
+
+    tools = {t.name: t for t in srv._tool_manager.list_tools()}
+    assert set(tools) == {"run", "get_notes", "fl_doctor"}
+    for name, tool in tools.items():
+        assert tool.context_kwarg == "ctx", f"{name}: ctx not detected for injection"
+        assert "ctx" not in tool.parameters.get("properties", {}), (
+            f"{name}: ctx leaked into the input schema as a caller-supplied argument"
+        )
+    # The tools that take real arguments still expose them.
+    assert "code" in tools["run"].parameters["properties"]
+    assert {"pattern", "channel"} <= set(tools["get_notes"].parameters["properties"])
+    assert tools["fl_doctor"].parameters.get("properties", {}) == {}
