@@ -280,3 +280,43 @@ An uncommitted investigation is not work; it is a liability. Roughly an hour of 
 discovery evaporated because nothing was committed. Every lane commits evidence
 *before* it is complete and *before* it is pretty. A worker that has been running for a
 while with a clean worktree is a red flag the manager should act on early.
+
+## Manager addendum 4 (2026-08-27): SIGNATURE CHANGE, signed off
+
+### A11. `FLSession` gains `play()` / `stop()` / `undo()`
+
+Lane K flagged this rather than hiding it, which is what the process is for.
+
+**The problem.** `sdk.FL` exposes `play`/`stop`/`undo`, but `FLSession` had no
+counterpart, so `sdk.py` had to do this three times:
+
+```python
+if self._session.control is None:
+    raise errors.control_plane_unavailable("transport.start", 0.0)
+resp = self._session.control.send_request("transport.start")
+...  # + the operation-unsafe conversion, inlined again
+```
+
+That breaks three rules at once: docs/21 says Lane K "may NOT touch transport";
+`sdk.py`'s own docstring says it has no helpers because anything reusable belongs in
+session/flp/store; and AGENTS.md requires one canonical function per rule - this was
+the same conversion written three times, reaching through `session` into `wire`.
+
+**The change.** Three methods added to the `FLSession` frozen surface. Each sends its
+control op and RAISES on failure - `ToolError(control_plane_unavailable)` with no
+control plane, `ToolError(operation_unsafe)` when FL refuses the call as unsafe at
+current time (retryable - addendum A6). They return `None`; handing back a
+`ControlResponse` would just relocate the same conversion into every caller.
+
+**Why session and not wire.** `wire.send_request` returning a typed `ControlResponse`
+is correct - the transport reports what happened and does not decide policy. Deciding
+that "no control plane" and "FL refused" are *errors* is FL-state policy, and
+`FLSession` is the one owner of FL state. `sdk.FL.play()` becomes a one-line delegation
+and never touches the transport again.
+
+**Owners.** Lane S implements the three bodies (they are thin). The `sdk.py` side -
+replacing the three inlined blocks with delegation - is the manager's at integration,
+since Lane K has already completed and retired; it is a ~15-line deletion.
+
+This is the only signature change to the frozen surface so far. Everything else in
+`v2/` is unchanged from the day-0 skeleton.
