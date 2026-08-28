@@ -407,15 +407,31 @@ class FLSession:
 
     def play(self) -> None:
         """``transport.start``."""
-        raise NotImplementedError("Lane S")
+        self._transport("transport.start")
 
     def stop(self) -> None:
         """``transport.stop``."""
-        raise NotImplementedError("Lane S")
+        self._transport("transport.stop")
 
     def undo(self) -> None:
         """``general.undo``."""
-        raise NotImplementedError("Lane S")
+        self._transport("general.undo")
+
+    def _transport(self, op: str) -> None:
+        """THE control-op -> exception conversion. One implementation, so
+        "FL refused" cannot come to mean different things in different callers.
+        """
+        if self.control is None:
+            raise errors.control_plane_unavailable(op, 0.0)
+        resp = self.control.send_request(op, timeout=LIVE_SET_TIMEOUT_SECONDS)
+        if resp.ok:
+            return
+        detail = resp.err or "unknown error"
+        # Unsafe-at-current-time is FL being busy, not the call being wrong -
+        # a distinct, retryable category (addendum A6).
+        if errors.is_operation_unsafe(detail):
+            raise errors.operation_unsafe(op)
+        raise errors.fl_api_error(op, detail)
 
     def doctor(self) -> DoctorReport:
         """Typed report - control plane, note plane, project file - with a

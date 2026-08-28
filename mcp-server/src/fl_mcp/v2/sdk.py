@@ -70,34 +70,13 @@ class FL:
         return self._session.set_tempo(bpm)
 
     def play(self) -> None:
-        if self._session.control is None:
-            raise errors.control_plane_unavailable("transport.start", 0.0)
-        resp = self._session.control.send_request("transport.start")
-        if not resp.ok:
-            detail = resp.err or "unknown error"
-            if errors.is_operation_unsafe(detail):
-                raise errors.operation_unsafe("transport.start")
-            raise errors.fl_api_error("transport.start", detail)
+        self._session.play()
 
     def stop(self) -> None:
-        if self._session.control is None:
-            raise errors.control_plane_unavailable("transport.stop", 0.0)
-        resp = self._session.control.send_request("transport.stop")
-        if not resp.ok:
-            detail = resp.err or "unknown error"
-            if errors.is_operation_unsafe(detail):
-                raise errors.operation_unsafe("transport.stop")
-            raise errors.fl_api_error("transport.stop", detail)
+        self._session.stop()
 
     def undo(self) -> None:
-        if self._session.control is None:
-            raise errors.control_plane_unavailable("general.undo", 0.0)
-        resp = self._session.control.send_request("general.undo")
-        if not resp.ok:
-            detail = resp.err or "unknown error"
-            if errors.is_operation_unsafe(detail):
-                raise errors.operation_unsafe("general.undo")
-            raise errors.fl_api_error("general.undo", detail)
+        self._session.undo()
 
     def snapshot(self) -> SessionState:
         return self._session.snapshot()

@@ -502,3 +502,66 @@ def test_create_session_is_the_factory():
     except NotImplementedError as exc:
         pytest.skip(f"blocked on another lane's stub: {exc}")
     assert isinstance(session, FLSession)
+
+
+# --- transport (addendum A11) -------------------------------------------------
+#
+# These three exist so sdk.py never reaches through the session into the wire.
+# The conversion from ControlResponse to exception lives here, once, so "FL
+# refused" cannot come to mean different things in different callers.
+
+
+@pytest.mark.parametrize(
+    ("method", "op"),
+    [("play", "transport.start"), ("stop", "transport.stop"), ("undo", "general.undo")],
+)
+def test_transport_sends_its_op_and_returns_none(method, op):
+    control = FakeControl(hello=HELLO, handlers={op: lambda args: None})
+    session, _ = make_session(control=control)
+
+    assert getattr(session, method)() is None
+    assert control.calls == [(op, [])]
+
+
+@pytest.mark.parametrize("method", ["play", "stop", "undo"])
+def test_transport_without_a_control_plane_raises(method):
+    session, _ = make_session(control=None)
+
+    with pytest.raises(errors.ToolError) as exc:
+        getattr(session, method)()
+    assert exc.value.category == "control_plane_unavailable"
+
+
+@pytest.mark.parametrize(
+    ("method", "op"),
+    [("play", "transport.start"), ("stop", "transport.stop"), ("undo", "general.undo")],
+)
+def test_transport_unsafe_at_current_time_is_its_own_retryable_category(method, op):
+    """FL being busy is not the call being wrong (addendum A6) - a caller that
+    cannot tell the two apart retries the wrong things and gives up on the right
+    ones."""
+    control = FakeControl(hello=HELLO)  # no handler -> ok=False
+    control.handlers = {}
+
+    def unsafe(op_name, args=None, kwargs=None, timeout=2.0):
+        control.calls.append((op_name, args or []))
+        return ControlResponse(
+            id=1, ok=False, err="Operation unsafe at current time (deferred, gave up)"
+        )
+
+    control.send_request = unsafe
+    session, _ = make_session(control=control)
+
+    with pytest.raises(errors.ToolError) as exc:
+        getattr(session, method)()
+    assert exc.value.category == "operation_unsafe"
+    assert exc.value.retryable is True
+
+
+def test_transport_other_failure_is_an_fl_api_error_not_unsafe():
+    control = FakeControl(hello=HELLO)  # no handler for transport.start -> ok=False
+    session, _ = make_session(control=control)
+
+    with pytest.raises(errors.ToolError) as exc:
+        session.play()
+    assert exc.value.category != "operation_unsafe"
