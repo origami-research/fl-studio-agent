@@ -32,6 +32,8 @@ EVENT_PATTERN_NOTES = 224  # varint-length blob of NOTE_STRUCT records
 # Event ids confirmed against pyflp's enums (docs/21 addendum A8) and, for 219,
 # decoded straight out of FL 2026's own stock templates.
 EVENT_VERSION = 199  # ascii "major.minor..."; >= 11.5 -> text events are UTF-16-LE
+EVENT_TEMPO_COARSE = 66  # legacy u16 whole BPM (pre-156 files); 156 wins
+EVENT_TEMPO_FINE = 93  # legacy u16 milli-BPM fraction added to coarse
 EVENT_CHANNEL_NEW = 64  # u16 channel IID; starts that channel's event block
 EVENT_CHANNEL_LEVELS = 219  # 24B: pan i32, volume u32, pitch i32, filter 12B
 EVENT_VOL_WORD = 72  # legacy per-channel volume (pre-Levels files)
@@ -124,6 +126,8 @@ def read(path: Path) -> FlpProject:
     ppq = int.from_bytes(header[4:6], "little")
 
     tempo: float | None = None
+    coarse: int | None = None  # legacy tempo pair, used only when 156 is absent
+    fine = 0
     unicode_text = False  # flips when FLVersion says >= 11.5
     channels: list[dict[str, int | str]] = []  # raw fields per rack channel, in order
     current: dict[str, int | str] | None = None
@@ -136,6 +140,10 @@ def read(path: Path) -> FlpProject:
             unicode_text = _version_is_unicode(payload, off)
         elif event_id == EVENT_TEMPO and size == 4:
             tempo = int.from_bytes(payload, "little") / 1000
+        elif event_id == EVENT_TEMPO_COARSE and size == 2 and coarse is None:
+            coarse = int.from_bytes(payload, "little")
+        elif event_id == EVENT_TEMPO_FINE and size == 2 and fine == 0:
+            fine = int.from_bytes(payload, "little")
         elif event_id == EVENT_CHANNEL_NEW and size == 2:
             current = {"index": int.from_bytes(payload, "little")}
             channels.append(current)
@@ -155,6 +163,8 @@ def read(path: Path) -> FlpProject:
         elif current is not None:
             _apply_channel_event(current, event_id, payload, unicode_text, off)
 
+    if tempo is None and coarse is not None:
+        tempo = coarse + fine / 1000  # pre-156 files store tempo as a word pair
     return FlpProject(
         ppq=ppq,
         tempo=tempo,
@@ -402,6 +412,11 @@ def _chunks(data: bytes) -> tuple[bytes, memoryview]:
     if hd_len < 6 or 8 + hd_len > len(data):
         raise FlpError(f"bad FLhd length {hd_len} at offset 4")
     header = data[8 : 8 + hd_len]
+    # pyflp's FileFormat set: None_/Project/Score/Automation/ChannelState/
+    # PluginState/GeneratorState/FXState/InsertState/Patcher.
+    file_format = int.from_bytes(header[0:2], "little", signed=True)
+    if file_format not in (-1, 0, 0x10, 24, 0x20, 0x30, 0x31, 0x32, 0x40, 0x50):
+        raise FlpError(f"unknown FLP format {file_format} at offset 8")
     dt_off = 8 + hd_len
     if data[dt_off : dt_off + 4] != b"FLdt":
         raise FlpError(f"no FLdt magic at offset {dt_off}")
