@@ -5,28 +5,97 @@ v1's router cascade: a note write goes to the live plane when connected, else
 the project file (with FL reload), else raises NotePlaneUnavailable saying
 exactly what to set up. Whichever backend applies, the write-through records
 the same structured delta in the store, and every result is a READBACK.
+
+Backend names in receipts: "bridge" = applied inside the running FL via the
+spool's in-FL consumer; "live" = applied via the MIDI control wire;
+"project-write" = raw surgery on the .flp plus an FL reload.
 """
 
 from __future__ import annotations
 
+import logging
+import os
+import subprocess
+import time
 from pathlib import Path
 
+from fl_mcp import errors
+from fl_mcp.flpaths import (
+    fl_app,
+    fl_process_running,
+    piano_roll_scripts_dir,
+    primary_settings_dir,
+)
+
+from . import flp
 from .schemas import (
+    Channel,
     ChannelLevels,
     DoctorReport,
+    HelloEvent,
     Note,
     NoteWriteMode,
+    PlaneStatus,
     SessionState,
     Target,
     WriteReceipt,
 )
-from .spool import Spool
+from .spool import Spool, spool_roots
 from .store import Store
-from .wire import MidiControl
+from .wire import ControlUnavailable, MidiControl
+
+log = logging.getLogger(__name__)
 
 # Right after a SIGKILL, LaunchServices still has the dead process registered;
 # it clears in a second or two, so the relaunch waits before retrying.
 RELAUNCH_SETTLE_SECONDS = 2.0
+
+# The spool's consumer is a human-triggered piano-roll script, so waiting is
+# human-scale, not RPC-scale.
+SPOOL_RESPONSE_TIMEOUT_SECONDS = 15.0
+
+# A fast "is the controller there right now" probe - not a startup wait.
+HELLO_PROBE_SECONDS = 0.2
+
+# FL can stay "unsafe at current time" for a few seconds after a load; give the
+# controller's OnIdle deferral time to land a mutating call (v1-measured).
+LIVE_SET_TIMEOUT_SECONDS = 5.0
+LIVE_READ_TIMEOUT_SECONDS = 2.0
+
+FL_STOP_TIMEOUT_SECONDS = 20.0
+FL_OPEN_ATTEMPTS = 6
+
+# The project this session may rewrite (the project-write backend's target).
+ENV_PROJECT = "FLMCP_AGENT_PROJECT"
+DEFAULT_PROJECT_NAME = "FLMCP Agent.flp"
+
+# ActionEntry.id for writes that never went through the spool.
+NO_COMMAND_ID = 0
+
+PYSCRIPT_NAME = "MCP Write Notes.pyscript"
+_RUN_PYSCRIPT_FIX = (
+    "In FL Studio: open the piano roll and run Tools > Scripting > 'MCP Write Notes'."
+)
+_SETUP_FIX = (
+    "Either launch FL Studio with the FLMCP controller script configured (edits then "
+    f"apply via the '{PYSCRIPT_NAME.removesuffix('.pyscript')}' piano-roll script), or "
+    "configure a project file the agent may rewrite: run "
+    "`python -m fl_mcp.make_agent_project`, or set FLMCP_AGENT_PROJECT to a .flp path."
+)
+
+
+class NotePlaneUnavailable(errors.ToolError):
+    """No backend can apply this change; the fix names exactly what to set up."""
+
+    def __init__(self, message: str, fix: str = _SETUP_FIX) -> None:
+        super().__init__("note_plane_unavailable", message, fix)
+
+
+class WriteRejected(errors.ToolError):
+    """A backend took the call but did not CONFIRM the requested state."""
+
+    def __init__(self, message: str, fix: str, *, retryable: bool = True) -> None:
+        super().__init__("fl_api_error", message, fix, retryable=retryable)
 
 
 def create_session() -> FLSession:
@@ -34,7 +103,28 @@ def create_session() -> FLSession:
     ``sdk.connect()``). Builds the wire (or None when python-rtmidi is missing
     or ports can't open - tools then degrade honestly), the spool, the store,
     and resolves the project file. No lazy construction hidden in getters."""
-    raise NotImplementedError("Lane S")
+    try:
+        control: MidiControl | None = MidiControl()
+    except ControlUnavailable:
+        log.exception("control wire unavailable; tools degrade to file/spool backends")
+        control = None
+
+    override = os.environ.get(ENV_PROJECT)
+    if override:
+        project: Path | None = Path(override).expanduser()
+    else:
+        settings = primary_settings_dir()
+        candidate = (
+            settings.parent / "Projects" / DEFAULT_PROJECT_NAME if settings is not None else None
+        )
+        project = candidate if candidate is not None and candidate.is_file() else None
+
+    return FLSession(
+        control=control,
+        spool=Spool(),
+        store=Store(project_key=str(project) if project is not None else "default"),
+        project=project,
+    )
 
 
 class FLSession:
@@ -53,25 +143,160 @@ class FLSession:
         store: Store,
         project: Path | None,
     ) -> None:
-        raise NotImplementedError("Lane S")
+        self.control = control
+        self.spool = spool
+        self.store = store
+        self.project = project
+
+    def _hello(self) -> HelloEvent | None:
+        """The ONE connectivity probe: the controller's hello, or None. Every
+        backend choice keys off this so "connected" cannot drift between
+        methods (one canonical function per rule)."""
+        if self.control is None:
+            return None
+        try:
+            return self.control.await_hello(timeout=HELLO_PROBE_SECONDS)
+        except errors.ToolError:
+            return None
 
     def write_notes(self, target: Target, notes: list[Note], mode: NoteWriteMode) -> WriteReceipt:
         """Apply via the chosen backend, VERIFY BY READBACK, record the delta.
         Raises (NotePlaneUnavailable / WriteRejected) on failure - never
         returns a maybe, never falls through after a partial application."""
-        raise NotImplementedError("Lane S")
+        if self._hello() is not None:
+            cmd = self.spool.send("add_notes", target=target, notes=notes, mode=mode)
+            resp = self.spool.await_response(cmd, timeout=SPOOL_RESPONSE_TIMEOUT_SECONDS)
+            if not resp.ok or resp.notes_written is None:
+                raise WriteRejected(
+                    f"FL did not confirm note write {cmd.id}: {resp.err or 'no readback'}",
+                    fix=_RUN_PYSCRIPT_FIX,
+                )
+            delta = self.store.record_write(target, notes, mode, "bridge", cmd.id)
+            return WriteReceipt(
+                backend="bridge", target=target, confirmed_notes=resp.notes_written, delta=delta
+            )
+
+        if self.project is not None:
+            try:
+                written = flp.write_notes(
+                    self.project, notes, pattern=target.pattern, channel=target.channel, mode=mode
+                )
+            except flp.FlpError as exc:
+                raise WriteRejected(
+                    f"project-file note write did not verify: {exc}",
+                    fix="The project file was restored by the readback check failing; "
+                    "inspect the .flp and retry.",
+                ) from exc
+            delta = self.store.record_write(target, notes, mode, "project-write", NO_COMMAND_ID)
+            self._reload_fl()
+            return WriteReceipt(
+                backend="project-write",
+                target=target,
+                confirmed_notes=len(written),
+                delta=delta,
+            )
+
+        raise NotePlaneUnavailable(
+            "No backend can apply notes: the control plane is not connected and no "
+            "project file is configured."
+        )
 
     def clear_notes(self, target: Target) -> WriteReceipt:
-        raise NotImplementedError("Lane S")
+        if self._hello() is not None:
+            cmd = self.spool.send("clear_notes", target=target)
+            resp = self.spool.await_response(cmd, timeout=SPOOL_RESPONSE_TIMEOUT_SECONDS)
+            if not resp.ok or resp.notes_written is None:
+                raise WriteRejected(
+                    f"FL did not confirm clear {cmd.id}: {resp.err or 'no readback'}",
+                    fix=_RUN_PYSCRIPT_FIX,
+                )
+            delta = self.store.record_write(target, [], "replace", "bridge", cmd.id)
+            return WriteReceipt(
+                backend="bridge", target=target, confirmed_notes=resp.notes_written, delta=delta
+            )
+
+        if self.project is not None:
+            try:
+                written = flp.write_notes(
+                    self.project, [], pattern=target.pattern, channel=target.channel, mode="replace"
+                )
+            except flp.FlpError as exc:
+                raise WriteRejected(
+                    f"project-file clear did not verify: {exc}",
+                    fix="Inspect the .flp and retry.",
+                ) from exc
+            delta = self.store.record_write(target, [], "replace", "project-write", NO_COMMAND_ID)
+            self._reload_fl()
+            return WriteReceipt(
+                backend="project-write",
+                target=target,
+                confirmed_notes=len(written),
+                delta=delta,
+            )
+
+        raise NotePlaneUnavailable(
+            "No backend can clear notes: the control plane is not connected and no "
+            "project file is configured."
+        )
 
     def read_notes(self, target: Target) -> list[Note]:
         """Store first (with provenance); project-file readback on demand."""
-        raise NotImplementedError("Lane S")
+        stored = self.store.notes_at(target)
+        if stored is not None:
+            return stored
+
+        if self.project is not None:
+            ppq = flp.read(self.project).ppq
+            notes = [
+                Note(
+                    key=n.key,
+                    start=n.position / ppq,
+                    length=n.length / ppq,
+                    velocity=n.velocity / 127,
+                    pan=n.pan / 128,
+                )
+                for n in flp.notes_at(self.project, target.pattern, target.channel)
+            ]
+            self.store.mark_ground_truth(target, notes)
+            return notes
+
+        raise NotePlaneUnavailable(
+            f"Nothing recorded for pattern {target.pattern} channel {target.channel} and "
+            "no project file is configured to read from."
+        )
 
     def set_tempo(self, bpm: float) -> float:
         """Live-first (confirmed via getCurrentTempo readback, BPM x 1000);
         else the project file (flp.set_tempo) + reload. Returns the readback."""
-        raise NotImplementedError("Lane S")
+        if self._hello() is not None and self.control is not None:
+            resp = self.control.send_request(
+                "mixer.setCurrentTempo", args=[bpm, 1], timeout=LIVE_SET_TIMEOUT_SECONDS
+            )
+            if not resp.ok:
+                raise WriteRejected(
+                    f"mixer.setCurrentTempo({bpm}) failed inside FL: {resp.err}",
+                    fix="Check the value (10-999 BPM) and retry.",
+                )
+            readback = self.control.send_request(
+                "mixer.getCurrentTempo", timeout=LIVE_READ_TIMEOUT_SECONDS
+            )
+            if not readback.ok or readback.ret is None:
+                raise WriteRejected(
+                    f"tempo was sent but the readback did not answer ({readback.err}); "
+                    "the change is UNCONFIRMED.",
+                    fix="Run fl_doctor, then retry.",
+                )
+            return float(readback.ret) / 1000.0
+
+        if self.project is not None:
+            confirmed = flp.set_tempo(self.project, bpm)
+            self._reload_fl()
+            return confirmed
+
+        raise NotePlaneUnavailable(
+            "No backend can set the tempo: the control plane is not connected and no "
+            "project file is configured."
+        )
 
     def set_channel_levels(
         self,
@@ -83,15 +308,184 @@ class FLSession:
     ) -> ChannelLevels:
         """All-or-nothing per call: a field that landed is never silently
         discarded by a fallback (the v1 partial-then-reload bug)."""
-        raise NotImplementedError("Lane S")
+        if volume is None and pan is None and pitch_semitones is None:
+            raise ValueError("nothing to change - pass volume, pan and/or pitch_semitones")
+
+        if self._hello() is not None and self.control is not None:
+            # ONE backend for the whole call. A mid-call failure raises with
+            # what already landed - it never falls through to the file path,
+            # which would reload FL and discard the fields that landed live.
+            requested = [
+                ("volume", "channels.setChannelVolume", [channel, volume]),
+                ("pan", "channels.setChannelPan", [channel, pan]),
+                ("pitch_semitones", "channels.setChannelPitch", [channel, pitch_semitones, 1]),
+            ]
+            applied: list[str] = []
+            for field_name, op, args in requested:
+                if args[1] is None:
+                    continue
+                resp = self.control.send_request(op, args=args, timeout=LIVE_SET_TIMEOUT_SECONDS)
+                if not resp.ok:
+                    raise WriteRejected(
+                        f"{op} failed inside FL: {resp.err}. "
+                        f"Already applied live and KEPT: {', '.join(applied) or 'nothing'}.",
+                        fix="Retry the failed field; the fields that landed were not rolled back.",
+                    )
+                applied.append(field_name)
+
+            readbacks = {}
+            for field_name, op, args in (
+                ("volume", "channels.getChannelVolume", [channel]),
+                ("pan", "channels.getChannelPan", [channel]),
+                ("pitch_semitones", "channels.getChannelPitch", [channel, 1]),
+            ):
+                resp = self.control.send_request(op, args=args, timeout=LIVE_READ_TIMEOUT_SECONDS)
+                if not resp.ok or resp.ret is None:
+                    raise WriteRejected(
+                        f"levels were applied but {op} did not answer ({resp.err}); "
+                        "the result is UNCONFIRMED.",
+                        fix="Run fl_doctor, then retry.",
+                    )
+                readbacks[field_name] = resp.ret
+            return ChannelLevels(
+                channel=channel,
+                volume=float(readbacks["volume"]),
+                pan=float(readbacks["pan"]),
+                pitch_semitones=round(float(readbacks["pitch_semitones"])),
+            )
+
+        if self.project is not None:
+            confirmed = flp.set_channel_levels(
+                self.project, channel, volume=volume, pan=pan, pitch_semitones=pitch_semitones
+            )
+            self._reload_fl()
+            return confirmed
+
+        raise NotePlaneUnavailable(
+            "No backend can set channel levels: the control plane is not connected and "
+            "no project file is configured."
+        )
 
     def snapshot(self) -> SessionState:
-        raise NotImplementedError("Lane S")
+        state = SessionState()
+        if self.project is not None:
+            project = flp.read(self.project)
+            state.ppq = project.ppq
+            state.tempo_bpm = project.tempo
+            state.channels = [
+                Channel(
+                    index=c.index,
+                    name=c.name,
+                    volume=c.volume / flp.LEVEL_MAX,
+                    pan=(c.pan - flp.PAN_CENTRE) / flp.PAN_CENTRE,
+                )
+                for c in project.channels
+            ]
+
+        hello = self._hello()
+        if hello is not None and self.control is not None:
+            state.ppq = hello.ppq
+            tempo = self.control.send_request(
+                "mixer.getCurrentTempo", timeout=LIVE_READ_TIMEOUT_SECONDS
+            )
+            if tempo.ok and tempo.ret is not None:
+                state.tempo_bpm = float(tempo.ret) / 1000.0
+            playing = self.control.send_request(
+                "transport.isPlaying", timeout=LIVE_READ_TIMEOUT_SECONDS
+            )
+            if playing.ok and playing.ret is not None:
+                state.playing = bool(playing.ret)
+        return state
 
     def doctor(self) -> DoctorReport:
         """Typed report - control plane, note plane, project file - with a
         concrete ``fix`` string per degraded plane."""
-        raise NotImplementedError("Lane S")
+        if self.control is None:
+            control_plane = PlaneStatus(
+                connected=False,
+                detail="no MIDI control wire: python-rtmidi is missing or the virtual "
+                "ports could not be opened",
+                fix="Install python-rtmidi (`uv pip install python-rtmidi`) and restart "
+                "the MCP server.",
+            )
+        else:
+            hello = self._hello()
+            dropped = self.control.dropped_frames
+            if hello is not None:
+                control_plane = PlaneStatus(
+                    connected=True,
+                    detail=f"controller script {hello.script_ver} on FL {hello.fl_ver}, "
+                    f"ppq {hello.ppq}, dropped_frames={dropped}",
+                )
+            elif dropped:
+                control_plane = PlaneStatus(
+                    connected=False,
+                    detail=f"ports are open and frames ARRIVE but {dropped} were dropped "
+                    "as malformed - a codec mismatch, not a missing connection",
+                    fix="Reinstall the controller script so its embedded codec matches "
+                    "the server (`python -m fl_mcp.install`), then restart FL Studio.",
+                )
+            elif fl_process_running():
+                control_plane = PlaneStatus(
+                    connected=False,
+                    detail="FL Studio is running but the controller script has not said hello",
+                    fix="The virtual MIDI ports must exist BEFORE FL launches - restart "
+                    "FL Studio once, and confirm the FLMCP controller script is assigned "
+                    "in FL's MIDI settings.",
+                )
+            else:
+                control_plane = PlaneStatus(
+                    connected=False,
+                    detail="ports are open; FL Studio is not running",
+                    fix="Launch FL Studio - the FLMCP controller script connects at startup.",
+                )
+
+        scripts_dir = piano_roll_scripts_dir()
+        script_installed = scripts_dir is not None and (scripts_dir / PYSCRIPT_NAME).is_file()
+        if not spool_roots():
+            note_plane = PlaneStatus(
+                connected=False,
+                detail="FL Studio's settings folder was not found, so there is no spool",
+                fix="Install FL Studio (or run it once) so "
+                "~/Documents/Image-Line/FL Studio/Settings exists.",
+            )
+        elif not script_installed:
+            note_plane = PlaneStatus(
+                connected=False,
+                detail=f"the '{PYSCRIPT_NAME}' piano-roll script is not installed",
+                fix="Run `python -m fl_mcp.install`, then restart FL Studio.",
+            )
+        else:
+            note_plane = PlaneStatus(
+                connected=True,
+                detail=f"spool at {spool_roots()[0]}; edits apply when the user runs "
+                "Tools > Scripting > 'MCP Write Notes' in the piano roll",
+            )
+
+        if self.project is None:
+            project_file = PlaneStatus(
+                connected=False,
+                detail="no agent project configured (project-write backend unavailable)",
+                fix="Run `python -m fl_mcp.make_agent_project`, or set FLMCP_AGENT_PROJECT "
+                "to a .flp the agent may rewrite.",
+            )
+        elif not self.project.is_file():
+            project_file = PlaneStatus(
+                connected=False,
+                detail=f"configured project file does not exist: {self.project}",
+                fix="Create it (`python -m fl_mcp.make_agent_project`) or point "
+                "FLMCP_AGENT_PROJECT at a real .flp.",
+            )
+        else:
+            project_file = PlaneStatus(connected=True, detail=str(self.project))
+
+        all_connected = control_plane.connected and note_plane.connected and project_file.connected
+        return DoctorReport(
+            status="ok" if all_connected else "degraded",
+            control_plane=control_plane,
+            note_plane=note_plane,
+            project_file=project_file,
+        )
 
     # -- the one helper ---------------------------------------------------------
 
@@ -99,4 +493,36 @@ class FLSession:
         """UGLY(U5), quarantined: FL has no 'reopen this file' API and a polite
         quit blocks on save dialogs. SIGKILL, wait RELAUNCH_SETTLE_SECONDS,
         then ``open`` with bounded retries."""
-        raise NotImplementedError("Lane S")
+        if self.project is None:
+            raise ValueError("_reload_fl requires a resolved project file")
+
+        if fl_process_running():
+            # SIGKILL, because a polite quit prompts to save and would hang
+            # unattended. Only used for the project-write backend, where the
+            # file on disk - not the in-memory session - is the source of truth.
+            subprocess.run(["pkill", "-9", "-f", "FL Studio"], capture_output=True)
+            deadline = time.monotonic() + FL_STOP_TIMEOUT_SECONDS
+            while time.monotonic() < deadline and fl_process_running():
+                time.sleep(0.2)
+            time.sleep(RELAUNCH_SETTLE_SECONDS)
+
+        last = ""
+        for attempt in range(FL_OPEN_ATTEMPTS):
+            result = subprocess.run(
+                ["open", "-a", str(fl_app()), str(self.project)],
+                capture_output=True,
+                text=True,
+            )
+            if result.returncode == 0:
+                return
+            last = (result.stderr or "").strip()
+            time.sleep(1.0 + attempt)
+        # The edit already landed in the file and was recorded; only the
+        # relaunch failed - say exactly that, never "the write failed".
+        raise errors.ToolError(
+            "fl_api_error",
+            f"The change IS in {self.project.name}, but FL Studio could not be "
+            f"relaunched to show it after {FL_OPEN_ATTEMPTS} attempts: {last}",
+            "Open the project in FL Studio manually, then run fl_doctor.",
+            retryable=True,
+        )
