@@ -725,3 +725,72 @@ answered late or not at all while I was busy on FL. Lane W's went unanswered lon
 and was the most consequential. A manager who owns the only shared resource still owes
 the lanes timely decisions - being busy on the resource is not an excuse for blocking
 them on a one-word answer.
+
+### G5 (Lane V, manager-run) - PASSED 2026-08-28
+
+v2 promoted into `fl_mcp` proper; the `v2` namespace no longer exists.
+
+```
+404 passed, 8 skipped            (was 625 - the v1 tests tested deleted code)
+uvx ruff check src tests         All checks passed!
+66 files changed, 1626 insertions, 8330 deletions      net -6704
+```
+
+**Sweeps, all clean:** no `pyflp` import anywhere in `src` (comments citing it as
+evidence remain, deliberately); no reference to any deleted v1 module; no
+`fl_mcp.v2` / `tests/v2` / `fl_mcp/v2` string anywhere in src, tests, harness or
+fl-scripts; both console entry points import.
+
+**Live, post-cutover:** `tests/test_flp_live.py` PASSED, and the SDK run-tool smoke
+loads its own written file in real FL with the tempo positive control - so the whole
+product path works after the purge, not just the unit tests.
+
+**Deleted (18, not the 13 this document estimated):** actions, autonomous,
+control_midi, decompile, diff, flp_writer, hashing, kernel, live, notes, records,
+router, schemas, server, session, spool, views (+ v1 tests and `tests/integration`).
+The estimate was low because `decompile` and `autonomous` both imported pyflp, which
+G5 forbids in `src`, and `notes` was v1's *second* note parser - the exact duplication
+AGENTS.md cites. `theory` now uses the one canonical `pitch.parse_key`.
+
+**Survivors (8):** clock, errors, flpaths, install, paths, pitch, theory,
+make_agent_project.
+
+`make_agent_project` was on the delete list until a sweep caught `session.py` telling
+users to run it in two `fix` strings - deleting it would have broken the only
+documented recovery path for "no project file". Restored, importing
+`DEFAULT_PROJECT_NAME` from `session` so the constant has one home. This is why the
+sweep is part of the gate and not a formality.
+
+`install.sh`'s doctor block was also silently broken by the cutover: it called
+`FLSession()` with no arguments and treated the report as a dict. v2's session is
+built by `create_session()` and `doctor()` returns a typed `DoctorReport`. Rewritten
+and executed for real, not eyeballed:
+
+```
+[INFO] control plane (wire / controller script): Launch FL Studio - the FLMCP controller script connects at startup.
+[PASS] note plane (piano-roll script): connected
+[INFO] project file: Run `python -m fl_mcp.make_agent_project`, or set FLMCP_AGENT_PROJECT to a .flp the agent may rewrite.
+Overall: degraded
+```
+
+### Signature changes, ratified
+
+- **A11** `FLSession.play/stop/undo` - signed off during the run, implemented by Lane S.
+- **A15** `ctx: Context` on the three tools - Lane W's request, ratified late; it was a
+  real defect, not cosmetic (see addendum 6).
+- **A16** `FlpNote.pattern: int = 0` - Lane F's request, **ratified**. `FlpProject.notes`
+  is flat across patterns and `notes_in(pattern, channel)` cannot filter without it;
+  the field is additive and keyword-defaulted, so no existing construction or read
+  breaks. Lane F proceeded provisionally to keep the critical path moving, which was
+  the right call.
+
+### Still open after G5
+
+- **G3's live half**: the in-FL shortcut binding for the piano-roll script (one-time,
+  human, ~1 minute). The pyscript's logic is covered offline by 19 tests including the
+  fail-closed ledger, but nothing has yet proven FL's *embedded* interpreter accepts
+  the v2 script.
+- **`channels.setChannelPitch` mode**: Lane S assumed `mode=1` (semitones) for the
+  live pitch path and flagged it unverified. Readback guards make a wrong mode raise
+  rather than corrupt, but it is untested against FL.
+- **CI**: red for an account/billing reason, zero steps executed on every run.
