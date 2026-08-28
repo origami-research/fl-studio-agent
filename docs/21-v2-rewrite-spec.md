@@ -390,3 +390,87 @@ pinned:
 file-write without an independent marker proving FL loaded that file. A tempo patch is
 a cheap, proven positive control. Round 1 would have been read as "the map is wrong"
 when the truth was "FL was never looking at our file".
+
+## Manager addendum 5 (2026-08-28): A12 and A13 - two seam bugs the live gates caught
+
+### A12. `run()`'s namespace made the product's primary operation impossible
+
+`server.run` built its namespace as `{"fl": fl, "theory": theory}` - exactly what the
+skeleton docstring specified, so Lane W implemented its contract faithfully. But
+through that namespace there was **no way to write a note at all**:
+
+- `Track.write` takes `list[Note]`, and `Note` was not in the namespace;
+- `theory.chord`/`theory.scale` return bare MIDI ints, not notes;
+- `theory.drums` returns a **v1** `schemas.Note`, which the v2 surface rejects
+  (`ValidationError`) until the cutover flips `fl_mcp.schemas`.
+
+Every route was closed. Each lane's contract was right; the seam between them was the
+defect - which is the class of bug no lane can see from inside its own lane.
+
+Fixed: `Note` is in the namespace, with a regression test that actually writes through
+it rather than merely asserting the name exists.
+
+### A13. `write_notes` produces a file FL REFUSES TO OPEN - still open
+
+**This is the one outstanding functional defect in the rewrite.** It is exactly the
+failure mode fact 1 describes, and the G4 live smoke is what caught it - every
+file-level assertion passed:
+
+```
+run() -> WriteReceipt(backend='project-write', confirmed_notes=3)
+notes_at(saved file) = 3 notes  [(60,0,96,102), (64,96,96,114), (67,192,192,89)]
+[PASS] saved file holds exactly 3 notes
+[PASS] keys are C4/E4/G4 = 60/64/67
+[PASS] starts quantized to ticks (0, 96, 192)
+```
+
+...and then real FL will not open the result. Measured with a pristine control on the
+same template and the same harness, sampling **every** FL window (the front window can
+be an untitled child, so the earlier single-title check was unreliable):
+
+```
+control  loaded_our_file=True   error_dialog=False   ['', 'i4_control.flp - FL Studio 2026']
+notes    loaded_our_file=False  error_dialog=False   ['', 'FL Studio 2026']
+```
+
+FL stays on a blank project. An earlier run of the same file caught the dialog itself:
+the front window was titled **'Invalid data'**.
+
+**Ruled out so far** (each checked, none sufficient):
+
+1. *Framing.* `FLdt` declared length equals the actual tail and the event walk lands
+   exactly on the stream end, for every file we produce.
+2. *Splice position.* Tried three placements: stream offset 0 (ahead of `FLVersion` -
+   clearly wrong, fixed), end-of-stream (the placement live-verified for `set_tempo`),
+   and immediately before the channel section (where FL itself writes the pattern
+   block). All three rejected.
+3. *Note record fidelity.* v1 emitted `flags=0`. Every one of the **24,435** note
+   records FL wrote across its 132 bundled projects carries bit `0x4000` (23,526 as
+   `0x4000`, 909 as `0x4008`); none has `flags=0`. Corrected to `0x4000` - still
+   rejected, so this was a real fidelity bug but not the cause.
+4. *Varint length encoding.* Verified by hand for both the 1-byte and 2-byte cases.
+
+**Not a v2 regression.** v1's `write_notes` went through `pyflp.save`, whose serializer
+corrupts templates FL refuses to load (fact 1) - that is *why* this lane exists. And
+v1's live e2e (`test_flp_writer_live.py`) only ever covered `set_tempo`, never note
+writing. So the project-file note backend has most likely never worked against real FL
+in either version; v2 is the first implementation to be held to a live gate strict
+enough to prove it.
+
+**Next steps for whoever picks this up:** the most probable remaining cause is that a
+pattern block needs more than `New(65)` + `Notes(224)` to be valid - FL's own files
+show the block bracketed by other events, and a pattern likely needs its
+`PatternID.Name` (193) and/or the surrounding `146`/`216` project events that stock
+templates without patterns simply do not have. The decisive experiment is to write
+notes into a template that ALREADY has the target pattern (so only the notes blob
+changes and no block is created) and see whether FL accepts that; if it does, the bug
+is isolated to creating a pattern block from scratch, and the fix is to synthesise the
+full block rather than the two-event minimum.
+
+### A14. Process note: the window-title check is necessary but must sample all windows
+
+`front window` can return an untitled child window, so a single-shot title read gives
+false negatives - it read `''` in one run and `'Invalid data'` in another for the same
+file. Sample `name of every window` repeatedly across the load, and always run a
+pristine control through the identical harness. Two of my own runs were misleading
+before I did this.
