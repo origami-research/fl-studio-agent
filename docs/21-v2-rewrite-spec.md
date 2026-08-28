@@ -629,3 +629,34 @@ event or its surroundings that we have not identified. Remaining leads, cheapest
 This is reverse engineering an undocumented format without a spec; further progress
 needs either more live experiments or a byte-diff of FL's own edit, not more
 speculation.
+
+### A13 CONFIDENCE CORRECTION (2026-08-28) - read this before trusting the results above
+
+The live-load harness is **flaky**, and I did not realise it until late. The same
+pristine `Basic with limiter.flp` control loaded successfully in one run
+(`i4_control loaded=True`) and failed in another (`g4b_control loaded=False`), with no
+change to the file or the harness. FL sometimes does not open a project within a 60s
+sampling window.
+
+So `loaded=False` on its own is **weak evidence**. Weighting the A13 evidence honestly:
+
+| Evidence | Strength | Why |
+|---|---|---|
+| FL window titled **'Invalid data'** on a written file | **Strong** | A positive signal: FL actively raised an error dialog. Absence of a load is not the same as a rejection; a complaint is. |
+| `i6`: control loaded=True, existing loaded=False, same run | **Moderate** | The control passed *in that run*, so the comparison was internally valid at the time - but it is a single observation of a flaky measurement. |
+| Any bare `loaded=False` with no passing control in the same run | **Weak** | Indistinguishable from harness flake. |
+
+What this does NOT change: `write_notes` produced a file that made FL raise
+'Invalid data' at least once, and that alone is disqualifying for a write path whose
+whole contract is "FL accepts the result". The defect is real.
+
+What this DOES change: the conclusion "writing into an existing pattern is also
+rejected" rests on one moderate-strength observation, not a settled fact. It should be
+re-run several times, with the control interleaved, before anyone builds on it.
+
+**Fix the harness before continuing A13.** A load check needs to be repeated (3+ runs
+per case, controls interleaved, not batched) and should key off a positive signal - the
+project name appearing in a window title, or an error dialog appearing - rather than
+treating "nothing happened in 60s" as a result. Two of my conclusions in this document
+were shaped by a measurement I had not validated, and I would rather flag that than
+leave a confident-sounding record that is partly noise.
