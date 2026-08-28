@@ -32,7 +32,7 @@ import os
 import tempfile
 import threading
 import time
-from datetime import datetime, timezone
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -40,6 +40,7 @@ from watchdog.events import FileSystemEventHandler
 from watchdog.observers import Observer
 
 from . import errors, paths, schemas
+from .clock import now
 from .flpaths import SPOOL_SUBDIRS, fl_settings_dirs
 
 PROTO_VER = 1
@@ -189,12 +190,8 @@ _RESPONSE_POLL_INTERVAL = 0.05
 _STALE_SESSION_AGE = 60 * 60  # 1 hour — matches docs/02's GC-on-start failure mode
 
 
-def _now() -> datetime:
-    return datetime.now(timezone.utc)
-
-
 def _new_session_id() -> str:
-    return f"{os.getpid()}-{_now().strftime('%Y%m%dT%H%M%S%f')}"
+    return f"{os.getpid()}-{now().strftime('%Y%m%dT%H%M%S%f')}"
 
 
 class _ResponseArrived(FileSystemEventHandler):
@@ -255,14 +252,14 @@ class SpoolSession:
 
     def _write_session_file(self, *, started: bool = False) -> None:
         existing = read_json(self.dir / "session.json") if not started else None
-        started_at = (existing or {}).get("started_at") or _now().isoformat()
+        started_at = (existing or {}).get("started_at") or now().isoformat()
         write_json_atomic(
             self.dir / "session.json",
             {
                 "proto_ver": PROTO_VER,
                 "server_pid": os.getpid(),
                 "started_at": started_at,
-                "heartbeat_at": _now().isoformat(),
+                "heartbeat_at": now().isoformat(),
             },
         )
 
@@ -335,7 +332,7 @@ def gc_stale_sessions(root: Path | None = None, max_age: float = _STALE_SESSION_
         return []
 
     removed = []
-    now = _now()
+    now_ts = now()
     for entry in base.iterdir():
         if not entry.is_dir():
             continue
@@ -344,7 +341,7 @@ def gc_stale_sessions(root: Path | None = None, max_age: float = _STALE_SESSION_
         stale = True
         if heartbeat_at:
             try:
-                age = (now - datetime.fromisoformat(heartbeat_at)).total_seconds()
+                age = (now_ts - datetime.fromisoformat(heartbeat_at)).total_seconds()
                 stale = age > max_age
             except ValueError:
                 stale = True

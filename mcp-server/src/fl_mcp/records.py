@@ -15,18 +15,14 @@ from __future__ import annotations
 
 import json
 import threading
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Literal
 
 from . import hashing, paths, schemas
+from .clock import now
 from .spool import read_json, write_json_atomic
 
 Provenance = Literal["shadow", "project", "model"]
-
-
-def _now() -> datetime:
-    return datetime.now(timezone.utc)
 
 
 def note_set_id(notes: list[schemas.Note]) -> str:
@@ -89,7 +85,7 @@ class ShadowStore:
     def _store(self, notes: list[schemas.Note], provenance: Provenance) -> schemas.NoteSetRef:
         note_id = note_set_id(notes)
         self._by_id[note_id] = notes
-        return schemas.NoteSetRef(id=note_id, provenance=provenance, as_of=_now(), confidence=1.0, stale=False)
+        return schemas.NoteSetRef(id=note_id, provenance=provenance, as_of=now(), confidence=1.0, stale=False)
 
     def ref_at(self, target: schemas.Target) -> schemas.NoteSetRef | None:
         with self._lock:

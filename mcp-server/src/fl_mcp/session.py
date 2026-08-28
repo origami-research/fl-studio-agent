@@ -13,15 +13,11 @@ structured ``control_plane_unavailable`` error.
 from __future__ import annotations
 
 import json
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Protocol
 
 from . import actions, diff, errors, records, schemas, spool
-
-
-def _now() -> datetime:
-    return datetime.now(timezone.utc)
+from .clock import now
 
 
 class ControlPlane(Protocol):
@@ -74,7 +70,7 @@ class FLSession:
             after_notes = self.shadow.notes_by_id(ref.id) or []
             self.actions.append(
                 schemas.ActionEntry(
-                    ts=_now(),
+                    ts=now(),
                     id=cmd.id,
                     gen=cmd.gen,
                     op="add_notes",
@@ -98,7 +94,7 @@ class FLSession:
             ref = self.shadow.clear(target, provenance="shadow")
             self.actions.append(
                 schemas.ActionEntry(
-                    ts=_now(),
+                    ts=now(),
                     id=cmd.id,
                     gen=cmd.gen,
                     op="clear_notes",
