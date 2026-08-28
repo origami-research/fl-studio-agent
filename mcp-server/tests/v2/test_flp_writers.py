@@ -302,6 +302,22 @@ def test_set_channel_levels_validates_ranges(tmp_path):
             flp.set_channel_levels(path, 0, **kwargs)
 
 
+def test_set_channel_levels_reaches_the_implicit_channel_zero(tmp_path):
+    # 'Basic with limiter' layout: channel 0's Levels event precedes any
+    # New(64); New(64)=1.. open the named channels.
+    events = VERSION_MODERN + event(
+        flp.EVENT_CHANNEL_LEVELS, struct.pack("<iIi", 6400, 10000, 0) + b"\0" * 12
+    ) + channel_with_levels(1)
+    path = write_flp(tmp_path, events, n_channels=2)
+
+    result = flp.set_channel_levels(path, 0, volume=0.25)
+
+    assert result.volume == pytest.approx(0.25)
+    implicit, explicit = flp.read(path).channels
+    assert (implicit.index, implicit.volume) == (0, 3200)
+    assert explicit.volume == 10000  # untouched
+
+
 def test_set_channel_levels_unknown_channel_raises_index_error(tmp_path):
     path = write_flp(tmp_path, VERSION_MODERN + channel_with_levels(0))
     with pytest.raises(IndexError, match="no channel 5"):

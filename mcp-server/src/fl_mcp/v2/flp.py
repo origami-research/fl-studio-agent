@@ -64,9 +64,9 @@ FINE_PITCH_CENTER = 120
 RELEASE_DEFAULT = 64
 NOTE_PAN_CENTER = 64
 MOD_DEFAULT = 128
-# Every note FL itself has written carries bit 0x4000. Surveyed across the 132
-# bundled FL 2026 projects that contain notes: 23,526 records with flags=0x4000
-# and 909 with 0x4008 - and NOT ONE with flags=0, which is what v1 emitted.
+# Every note FL itself writes carries bit 0x4000. Surveyed across the 132 bundled
+# FL 2026 projects that contain notes: 23,526 records with flags=0x4000 and 909
+# with 0x4008 - and NOT ONE with flags=0, which is what v1 emitted.
 NOTE_FLAGS_DEFAULT = 0x4000
 
 
@@ -133,13 +133,15 @@ def read(path: Path) -> FlpProject:
     coarse: int | None = None  # legacy tempo pair, used only when 156 is absent
     fine = 0
     unicode_text = False  # flips when FLVersion says >= 11.5
-    # Keyed by rack index, not appended: New(64)=N may arrive for a channel we
-    # already opened implicitly (a stray legacy vol/pan byte can precede it), and
-    # keying makes that duplicate impossible instead of merely unlikely. dicts
-    # keep insertion order, so rack order is preserved.
-    channels: dict[int, dict[str, int | str]] = {}
+    # CHANNEL 0 IS IMPLICIT: its events can precede any New(64) event (stock
+    # 'Basic with limiter' does this; found live by the manager's G4 smoke).
+    # New(64)=N opens/switches to channel N; a channel-scoped event with no
+    # channel open yet opens channel 0. Verified corpus-wide: FLhd nChannels
+    # == |{0} union {New payloads}| on all 164 bundled projects.
+    n_channels = int.from_bytes(header[2:4], "little")
+    channel_map: dict[int, dict[str, int | str]] = {}
     current: dict[str, int | str] | None = None
-    mixer_reached = False  # past the channel section; Plugin events are inserts', not channels
+    mixer_seen = False
     pattern = 0  # 0 = before any PatternID.New (A9: stock files do this)
     notes: list[FlpNote] = []
 
@@ -153,20 +155,12 @@ def read(path: Path) -> FlpProject:
             coarse = int.from_bytes(payload, "little")
         elif event_id == EVENT_TEMPO_FINE and size == 2 and fine == 0:
             fine = int.from_bytes(payload, "little")
-        elif event_id == EVENT_CHANNEL_NEW and size == 2:
-            index = int.from_bytes(payload, "little")
-            current = channels.setdefault(index, {"index": index})
+        elif event_id == EVENT_CHANNEL_NEW and size == 2 and not mixer_seen:
+            iid = int.from_bytes(payload, "little")
+            current = channel_map.setdefault(iid, {"index": iid})
         elif event_id == EVENT_MIXER_FLAGS:
-            current = None  # mixer section began; its Plugin events are not channel names
-            mixer_reached = True
-        elif event_id in _CHANNEL_SCOPED and current is None and not mixer_reached:
-            # CHANNEL 0 IS IMPLICIT: FL opens channel N with New(64)=N, but the
-            # FIRST channel's events precede any New. Verified in FL 2026's own
-            # templates - "Basic with limiter" is Levels(219), New=1, ..., New=4
-            # with FLhd nChannels=5. Keying channels off New alone silently
-            # dropped channel 0, which surfaced as fl.track(0) -> ChannelNotFound.
-            current = channels.setdefault(0, {"index": 0})
-            _apply_channel_event(current, event_id, payload, unicode_text, off)
+            mixer_seen = True  # mixer Plugin events are not channel names
+            current = None
         elif event_id == EVENT_PATTERN_NEW and size == 2:
             pattern = int.from_bytes(payload, "little")
         elif event_id == EVENT_PATTERN_NOTES:
@@ -178,15 +172,22 @@ def read(path: Path) -> FlpProject:
                 )
                 continue
             notes.extend(replace(n, pattern=pattern) for n in _decode_notes(payload))
-        elif current is not None:
+        elif _is_channel_scoped(event_id) and not mixer_seen:
+            if current is None:
+                current = channel_map.setdefault(0, {"index": 0})
             _apply_channel_event(current, event_id, payload, unicode_text, off)
 
     if tempo is None and coarse is not None:
         tempo = coarse + fine / 1000  # pre-156 files store tempo as a word pair
+    if channel_map and len(channel_map) != n_channels:
+        log.warning(
+            "%s: decoded %d channels but the FLhd header says %d",
+            path.name, len(channel_map), n_channels,
+        )
     return FlpProject(
         ppq=ppq,
         tempo=tempo,
-        channels=tuple(_build_channel(fields) for fields in channels.values()),
+        channels=tuple(_build_channel(channel_map[iid]) for iid in sorted(channel_map)),
         notes=tuple(notes),
     )
 
@@ -222,6 +223,7 @@ def write_notes(
     pattern_end: int | None = None
     existing: tuple[int, int, int] | None = None  # (event head, payload off, size)
     anchor_end: int | None = None
+    channel_section_head: int | None = None  # where FL's channel block starts
     for event_id, off, size in _events(stream):
         head = prev_end
         prev_end = off + size
@@ -233,6 +235,12 @@ def write_notes(
             existing = (head, off, size)
         elif event_id == EVENT_CUR_GROUP_ID and anchor_end is None:
             anchor_end = off + size
+        elif (
+            channel_section_head is None
+            and anchor_end is None
+            and (event_id == EVENT_CHANNEL_NEW or _is_channel_scoped(event_id))
+        ):
+            channel_section_head = head
 
     if mode == "merge" and existing is not None:
         head, off, size = existing
@@ -261,7 +269,16 @@ def write_notes(
         # No such pattern yet - create it where FL itself writes patterns,
         # after the display-group block (v1's anchor; stream start if absent).
         new_pattern = bytes([EVENT_PATTERN_NEW]) + pattern.to_bytes(2, "little")
-        at = base + (anchor_end if anchor_end is not None else 0)
+        # NOT stream offset 0: splicing a pattern block ahead of the FLVersion
+        # event yields a file our reader parses and FL refuses to open at all
+        # (docs/21 A13). FL writes the pattern block after the project header
+        # and immediately before the channel section.
+        if anchor_end is not None:
+            at = base + anchor_end
+        elif channel_section_head is not None:
+            at = base + channel_section_head
+        else:
+            at = base + len(stream)
         _splice(data, at, new_pattern + notes_event)
 
     path.write_bytes(bytes(data))
@@ -354,22 +371,30 @@ def set_channel_levels(
     header, stream = _chunks(bytes(data))
     base = 8 + len(header) + 8  # FLdt payload's file offset
 
+    # Same attribution rule as read(): channel 0 is implicit, New(64) switches,
+    # the mixer section ends attribution.
     current: int | None = None
+    mixer_seen = False
     seen: set[int] = set()
     levels_off: int | None = None
     for event_id, off, size in _events(stream):
-        if event_id == EVENT_CHANNEL_NEW and size == 2:
+        if event_id == EVENT_CHANNEL_NEW and size == 2 and not mixer_seen:
             current = int.from_bytes(stream[off : off + size], "little")
             seen.add(current)
         elif event_id == EVENT_MIXER_FLAGS:
+            mixer_seen = True
             current = None
-        elif (
-            event_id == EVENT_CHANNEL_LEVELS
-            and size == 24
-            and current == channel
-            and levels_off is None
-        ):
-            levels_off = off
+        elif _is_channel_scoped(event_id) and not mixer_seen:
+            if current is None:
+                current = 0
+                seen.add(0)
+            if (
+                event_id == EVENT_CHANNEL_LEVELS
+                and size == 24
+                and current == channel
+                and levels_off is None
+            ):
+                levels_off = off
 
     if channel not in seen:
         raise IndexError(f"no channel {channel}; project has {len(seen)}")
@@ -542,21 +567,6 @@ def _text(payload: bytes, unicode_text: bool, offset: int) -> str:
 
 
 # Raw-field keys a channel block accumulates before _build_channel resolves them.
-# Every event id that belongs to a rack channel rather than the project. Used to
-# detect the implicit channel 0, whose events precede the first New(64).
-_CHANNEL_SCOPED = frozenset(
-    {
-        EVENT_CHANNEL_LEVELS,
-        EVENT_NAME_USER,
-        EVENT_NAME_LEGACY,
-        EVENT_NAME_INTERNAL,
-        EVENT_VOL_WORD,
-        EVENT_PAN_WORD,
-        EVENT_VOL_BYTE,
-        EVENT_PAN_BYTE,
-    }
-)
-
 _CHANNEL_EVENT_FIELDS = {
     EVENT_NAME_USER: "name_user",
     EVENT_NAME_LEGACY: "name_legacy",
@@ -566,6 +576,11 @@ _CHANNEL_EVENT_FIELDS = {
     EVENT_VOL_BYTE: "vol_byte",
     EVENT_PAN_BYTE: "pan_byte",
 }
+
+
+def _is_channel_scoped(event_id: int) -> bool:
+    """True for events that belong to the currently open rack channel."""
+    return event_id == EVENT_CHANNEL_LEVELS or event_id in _CHANNEL_EVENT_FIELDS
 
 
 def _apply_channel_event(
@@ -615,7 +630,7 @@ def _encode_notes(notes: list[Note], channel: int, ppq: int) -> bytes:
     for note in notes:
         packed += NOTE_STRUCT.pack(
             round(note.start * ppq),  # position, ticks
-            NOTE_FLAGS_DEFAULT,  # flags - FL sets 0x4000 on every note it writes
+            NOTE_FLAGS_DEFAULT,  # FL sets 0x4000 on every note it writes
             channel,  # rack_channel
             max(1, round(note.length * ppq)),  # length, ticks (never 0)
             note.key,  # MIDI number, firm int (schemas resolved any name)
