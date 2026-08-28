@@ -243,3 +243,21 @@ def test_set_tempo_live_marks_unconfirmed_when_readback_fails(tmp_path):
         assert result["status"] == "applied" and result["confirmed"] is False
     finally:
         server.set_session(None)
+
+
+def test_set_channel_mix_partial_live_failure_keeps_live_edit(tmp_path):
+    """If volume lands live and pan then fails, the file fallback (rewrite +
+    FL reload) would silently discard the live volume - report partial instead."""
+    from fl_mcp import server
+
+    session, control = _live_session(tmp_path)
+    control.fail_ops.add("channels.setChannelPan")
+    server.set_session(session)
+    try:
+        result = server.set_channel_mix(channel=0, volume=0.5, pan=-0.3)
+        assert result["status"] == "partial"
+        assert result["applied"] == {"volume": 0.5}
+        assert result["failed"] == ["pan"]
+        assert control.channels[0].volume == 0.5  # the live edit was kept
+    finally:
+        server.set_session(None)

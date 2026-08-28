@@ -613,17 +613,36 @@ def set_channel_mix(
     session = get_session()
     if session.control is not None and isinstance(channel, int) and pitch_semitones is None:
         applied: dict[str, Any] = {}
-        ok = True
-        if volume is not None:
-            ok = router.try_live_control(session, "channels.setChannelVolume", [channel, volume]) is not None
-            if ok:
-                applied["volume"] = volume
-        if ok and pan is not None:
-            ok = router.try_live_control(session, "channels.setChannelPan", [channel, pan]) is not None
-            if ok:
-                applied["pan"] = pan
-        if ok:
+        failed: list[str] = []
+        for field_name, value, op in (
+            ("volume", volume, "channels.setChannelVolume"),
+            ("pan", pan, "channels.setChannelPan"),
+        ):
+            if value is None:
+                continue
+            if router.try_live_control(session, op, [channel, value]) is not None:
+                applied[field_name] = value
+            else:
+                failed.append(field_name)
+        if applied and not failed:
             return {"status": "applied", "backend": "live", "channel": channel, **applied}
+        if applied and failed:
+            # A field already landed in the RUNNING FL session. Falling through
+            # to the file backend would rewrite the saved project and reload FL,
+            # silently discarding that live edit - so report the partial truth
+            # instead of manufacturing a clean "applied".
+            return {
+                "status": "partial",
+                "backend": "live",
+                "channel": channel,
+                "applied": applied,
+                "failed": failed,
+                "note": (
+                    f"{', '.join(applied)} applied live; {', '.join(failed)} did not - "
+                    "retry the failed field(s), the live edit was kept."
+                ),
+            }
+        # Nothing applied live: the file backend below is a clean fallback.
 
     try:
         from . import autonomous
