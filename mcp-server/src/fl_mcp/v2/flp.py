@@ -188,7 +188,30 @@ def set_tempo(path: Path, bpm: float) -> float:
     application - live-verified; mid-stream splices load-but-ignore or reject
     depending on position). Returns the readback. Port the live-verified v1
     implementation from flp_writer.set_tempo unchanged."""
-    raise NotImplementedError("Lane F")
+    if not 10.0 <= bpm <= 999.0:
+        raise ValueError(f"tempo {bpm} out of range (10-999 BPM)")
+
+    data = bytearray(path.read_bytes())
+    header, stream = _chunks(bytes(data))
+    base = 8 + len(header) + 8  # FLdt payload's file offset
+    payload = round(bpm * 1000).to_bytes(4, "little")
+
+    patched = False
+    for event_id, off, size in _events(stream):
+        if event_id == EVENT_TEMPO and size == 4:
+            data[base + off : base + off + 4] = payload
+            patched = True
+            break
+
+    if not patched:
+        _splice(data, base + len(stream), bytes([EVENT_TEMPO]) + payload)
+
+    path.write_bytes(bytes(data))
+
+    stored = read(path).tempo
+    if stored is None or round(stored * 1000) != round(bpm * 1000):
+        raise FlpError(f"tempo readback {stored!r} does not match requested {bpm}")
+    return stored
 
 
 def set_channel_levels(
@@ -278,7 +301,11 @@ def _events(stream: memoryview) -> Iterator[tuple[int, int, int]]:
 
 def _splice(data: bytearray, at: int, event: bytes) -> None:
     """Insert event bytes at ``at`` and bump the FLdt chunk length to match."""
-    raise NotImplementedError("Lane F")
+    data[at:at] = event
+    hd_len = int.from_bytes(data[4:8], "little")
+    dt_len_off = 8 + hd_len + 4
+    old_len = int.from_bytes(data[dt_len_off : dt_len_off + 4], "little")
+    data[dt_len_off : dt_len_off + 4] = (old_len + len(event)).to_bytes(4, "little")
 
 
 def _decode_notes(blob: bytes) -> list[FlpNote]:
