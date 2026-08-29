@@ -14,10 +14,13 @@ conversion to FL units happens inside FL where the real PPQ lives.
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
+
+from .clock import now
+from .pitch import parse_key
 
 SCHEMA_VERSION = 1
 
@@ -27,55 +30,37 @@ SCHEMA_VERSION = 1
 
 
 class Note(BaseModel):
-    """One note, in musical units. C4 = MIDI 60 = middle C."""
+    """One note, in musical units. C4 = MIDI 60 = middle C.
 
-    key: str | int  # "C4" / "F#3" / MIDI 0-127
+    ``key`` is firmly an int MIDI number after construction: a name like "C4" or
+    "F#3" is accepted as input and resolved once, here, so no downstream code
+    ever juggles a ``str | int`` union or re-parses. Use ``pitch.key_name`` to
+    render a MIDI number back to a name for display.
+    """
+
+    key: int = Field(ge=0, le=127)  # accepts "C4"/"F#3"/MIDI on input, stored as MIDI
     start: float = Field(ge=0)  # beats from pattern start
     length: float = Field(gt=0, le=1024)  # beats
     velocity: float = Field(default=0.8, ge=0, le=1)
     pan: float = Field(default=0.5, ge=0, le=1)
     color: int = Field(default=0, ge=0, le=15)
 
+    @field_validator("key", mode="before")
+    @classmethod
+    def _resolve_key(cls, value: object) -> int:
+        """Resolve a name or number to MIDI once, at the boundary (pitch.parse_key)."""
+        return parse_key(value)
+
     def canonical(self) -> dict[str, Any]:
         """Normalized form; the only basis for hashing and the action log."""
         return {
-            "key": _resolve_key(self.key),
+            "key": self.key,
             "start": round(self.start, 6),
             "length": round(self.length, 6),
             "velocity": round(self.velocity, 4),
             "pan": round(self.pan, 4),
             "color": self.color,
         }
-
-
-def _resolve_key(key: str | int) -> int:
-    """Note name or number -> MIDI 0-127. Raises ValueError with a model-readable message."""
-    if isinstance(key, bool):
-        raise ValueError(f"invalid key {key!r}")  # noqa: TRY004 - uniform model-readable ValueError, not TypeError
-    if isinstance(key, int):
-        if not 0 <= key <= 127:
-            raise ValueError(f"MIDI note {key} out of range (0-127)")
-        return key
-    if not isinstance(key, str) or not key.strip():
-        raise ValueError(f"invalid key {key!r}")
-    semitones = {"C": 0, "D": 2, "E": 4, "F": 5, "G": 7, "A": 9, "B": 11}
-    text = key.strip()
-    letter = text[0].upper()
-    if letter not in semitones:
-        raise ValueError(f"invalid note name {key!r}: must start with A-G")
-    semi = semitones[letter]
-    idx = 1
-    while idx < len(text) and text[idx] in "#b":
-        semi += 1 if text[idx] == "#" else -1
-        idx += 1
-    try:
-        octave = int(text[idx:])
-    except ValueError:
-        raise ValueError(f"invalid note name {key!r}: expected octave, e.g. 'C4'") from None
-    midi = semi + (octave - 4) * 12 + 60
-    if not 0 <= midi <= 127:
-        raise ValueError(f"note {key!r} resolves to MIDI {midi}, outside 0-127")
-    return midi
 
 
 # ---------------------------------------------------------------------------
@@ -208,7 +193,7 @@ class SpoolCommand(BaseModel):
     id: int
     op: str
     gen: int = 0  # project generation at issue time
-    ts: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    ts: datetime = Field(default_factory=now)
     args: dict[str, Any] = Field(default_factory=dict)
 
 

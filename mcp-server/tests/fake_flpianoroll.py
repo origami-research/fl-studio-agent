@@ -37,22 +37,22 @@ class _Score:
         self._notes: list[Note] = []
 
     @property
-    def noteCount(self) -> int:  # noqa: N802 - matches FL's API
+    def noteCount(self) -> int:
         return len(self._notes)
 
-    def addNote(self, note: Note) -> None:  # noqa: N802
+    def addNote(self, note: Note) -> None:
         self._notes.append(note)
 
-    def getNote(self, index: int) -> Note:  # noqa: N802
+    def getNote(self, index: int) -> Note:
         return self._notes[index]
 
-    def deleteNote(self, index: int) -> None:  # noqa: N802
+    def deleteNote(self, index: int) -> None:
         del self._notes[index]
 
-    def clearNotes(self, all: bool = False) -> None:  # noqa: N802, A002
+    def clearNotes(self, all: bool = False) -> None:
         self._notes.clear()
 
-    def clear(self, all: bool = False) -> None:  # noqa: A002
+    def clear(self, all: bool = False) -> None:
         self._notes.clear()
 
 
@@ -60,7 +60,7 @@ class _Utils:
     def __init__(self) -> None:
         self.messages: list[str] = []
 
-    def ShowMessage(self, message: str) -> None:  # noqa: N802
+    def ShowMessage(self, message: str) -> None:
         self.messages.append(message)
 
 

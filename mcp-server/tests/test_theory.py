@@ -61,7 +61,7 @@ def test_drums_ignores_dots_and_spaces_as_rests():
 
 def test_drums_custom_key_and_velocity():
     notes = theory.drums("x", key="C1", velocity=0.5)
-    assert notes[0].key == "C1"
+    assert notes[0].key == 24  # "C1" resolved to MIDI once, at construction
     assert notes[0].velocity == 0.5
 
 
@@ -77,7 +77,7 @@ def test_transpose_shifts_without_mutating_input():
     shifted = theory.transpose(original, 12)
 
     assert shifted[0].key == 72
-    assert original[0].key == "C4"  # input untouched
+    assert original[0].key == 60  # input untouched (C4 resolved to MIDI at construction)
 
 
 def test_transpose_out_of_range_raises():

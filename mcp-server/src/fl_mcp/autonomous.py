@@ -65,7 +65,9 @@ def list_channels() -> list[dict[str, Any]]:
     out: list[dict[str, Any]] = []
     for index, channel in enumerate(parse(project).channels):
         name = ""
-        with contextlib.suppress(Exception):  # some channel types have no name
+        # Some channel types have no name attribute; anything else PyFLP raises
+        # here is a real parsing bug and must surface, not read as "unnamed".
+        with contextlib.suppress(AttributeError):
             name = channel.name or ""
         lowered = name.lower()
         out.append(
@@ -155,12 +157,41 @@ def read_tempo() -> float | None:
     return None
 
 
-def fl_app() -> Path:
-    return Path(os.environ.get("FL_APP", "/Applications/FL Studio 2025.app"))
+fl_is_running = flpaths.fl_process_running  # one canonical check, no drifting pgrep variants
 
 
-def fl_is_running() -> bool:
-    return subprocess.run(["pgrep", "-f", "FL Studio"], capture_output=True).returncode == 0
+# Right after a SIGKILL, LaunchServices still has the dead process registered;
+# it clears in a second or two (see _open_project's retry note).
+_RELAUNCH_SETTLE_SECONDS = 2.0
+
+
+@contextlib.contextmanager
+def _project_backup(project: Path):
+    """Back the project up before a rewrite; restore it if the rewrite raises.
+
+    One rollback copy so a bad write never destroys work outright. The backup
+    itself is best-effort (a read-only backup location must not block the
+    write), but a failed write always restores when the copy exists.
+    """
+    backup = project.with_suffix(".flp.bak")
+    try:
+        shutil.copy2(project, backup)
+    except OSError:
+        backup = None
+    try:
+        yield
+    except Exception:
+        if backup is not None and backup.is_file():
+            shutil.copy2(backup, project)
+        raise
+
+
+def _reload_fl(project: Path) -> None:
+    """Restart FL on the rewritten project so the change is visible."""
+    if fl_is_running():
+        _stop_fl()
+        time.sleep(_RELAUNCH_SETTLE_SECONDS)
+    _open_project(project)
 
 
 def _stop_fl(timeout: float = 20.0) -> None:
@@ -189,7 +220,7 @@ def _open_project(project: Path, attempts: int = 6) -> None:
     last = ""
     for attempt in range(attempts):
         result = subprocess.run(
-            ["open", "-a", str(fl_app()), str(project)],
+            ["open", "-a", str(flpaths.fl_app()), str(project)],
             capture_output=True,
             text=True,
         )
@@ -230,28 +261,15 @@ def apply_notes(
             ),
         }
 
-    # The project is rewritten in place; keep one rollback copy so a bad write
-    # never destroys work outright.
-    backup = project.with_suffix(".flp.bak")
     try:
-        shutil.copy2(project, backup)
-    except OSError:
-        backup = None
-
-    try:
-        result = write_notes(project, notes, pattern=pattern, channel=channel, mode=mode)
+        with _project_backup(project):
+            result = write_notes(project, notes, pattern=pattern, channel=channel, mode=mode)
     except Exception as exc:  # noqa: BLE001 - surface any writer failure as data
-        if backup is not None and backup.is_file():
-            shutil.copy2(backup, project)
         return {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
 
     reloaded = False
     if reload_fl:
-        was_running = fl_is_running()
-        if was_running:
-            _stop_fl()
-            time.sleep(2.0)  # let LaunchServices release the dead process
-        _open_project(project)
+        _reload_fl(project)
         reloaded = True
 
     return {
@@ -278,25 +296,15 @@ def set_tempo(bpm: float, reload_fl: bool = True) -> dict[str, Any]:
     if project is None:
         return {"ok": False, "error": "no agent project configured"}
 
-    backup = project.with_suffix(".flp.bak")
     try:
-        shutil.copy2(project, backup)
-    except OSError:
-        backup = None
-
-    try:
-        stored = write_tempo(project, bpm)
+        with _project_backup(project):
+            stored = write_tempo(project, bpm)
     except Exception as exc:  # noqa: BLE001
-        if backup is not None and backup.is_file():
-            shutil.copy2(backup, project)
         return {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
 
     reloaded = False
     if reload_fl:
-        if fl_is_running():
-            _stop_fl()
-            time.sleep(2.0)
-        _open_project(project)
+        _reload_fl(project)
         reloaded = True
 
     return {"ok": True, "tempo": stored, "reloaded_fl": reloaded}
@@ -320,26 +328,16 @@ def set_levels(
     except ChannelNotFound as exc:
         return {"ok": False, "error": str(exc)}
 
-    backup = project.with_suffix(".flp.bak")
     try:
-        shutil.copy2(project, backup)
-    except OSError:
-        backup = None
-
-    try:
-        levels = set_channel_levels(
-            project, index, volume=volume, pan=pan, pitch_semitones=pitch_semitones
-        )
+        with _project_backup(project):
+            levels = set_channel_levels(
+                project, index, volume=volume, pan=pan, pitch_semitones=pitch_semitones
+            )
     except Exception as exc:  # noqa: BLE001
-        if backup is not None and backup.is_file():
-            shutil.copy2(backup, project)
         return {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
 
     if reload_fl:
-        if fl_is_running():
-            _stop_fl()
-            time.sleep(2.0)
-        _open_project(project)
+        _reload_fl(project)
 
     levels["ok"] = True
     levels["channel_name"] = next(

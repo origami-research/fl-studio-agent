@@ -153,18 +153,64 @@ def write_notes(
 
     pyflp.save(parsed, project)
 
-    written = len(blob) // NOTE_SIZE
+    # Report what the saved file actually contains, not what we intended to
+    # write: re-read via the same reader the round-trip verification uses, so a
+    # malformed event surfaces here as a wrong count instead of as an empty
+    # piano roll discovered later. (set_tempo and set_channel_levels already
+    # re-read; this path was the gap.)
+    from harness.verify import read_notes
+
+    persisted = sum(1 for row in read_notes(project) if row.pattern == pattern)
     return WriteResult(
         project=project,
         pattern=pattern,
         channel=channel,
         notes_written=len(notes),
-        notes_in_pattern=written,
+        notes_in_pattern=persisted,
     )
 
 
 def clear_notes(project: Path, pattern: int = 1) -> WriteResult:
     return write_notes(project, [], pattern=pattern, mode="replace")
+
+
+# FLP event-stream ids this module patches raw (values confirmed against pyflp's
+# enums; the stream encoding is: id<64 -> 1 data byte, 64-127 -> 2, 128-191 -> 4,
+# 192+ -> varint length + data).
+_EVENT_TEMPO = 156  # ProjectID.Tempo, u32 of BPM x 1000
+
+
+def _event_stream_bounds(data: bytes) -> tuple[int, int]:
+    """(start, end) of the FLdt event stream; raises on a non-FLP file."""
+    if data[:4] != b"FLhd":
+        raise ValueError("not an FLP file (missing FLhd header)")
+    hd_len = int.from_bytes(data[4:8], "little")
+    dt_off = 8 + hd_len
+    if data[dt_off : dt_off + 4] != b"FLdt":
+        raise ValueError("not an FLP file (missing FLdt chunk)")
+    start = dt_off + 8
+    return start, start + int.from_bytes(data[dt_off + 4 : dt_off + 8], "little")
+
+
+def _walk_events(data: bytes, start: int, end: int):
+    """Yield (event_id, data_offset, data_size) for each event in the stream."""
+    pos = start
+    while pos < end:
+        event_id = data[pos]
+        pos += 1
+        if event_id < 192:
+            size = 1 if event_id < 64 else 2 if event_id < 128 else 4
+        else:
+            size, shift = 0, 0
+            while True:  # varint length
+                byte = data[pos]
+                pos += 1
+                size |= (byte & 0x7F) << shift
+                shift += 7
+                if not byte & 0x80:
+                    break
+        yield event_id, pos, size
+        pos += size
 
 
 def set_tempo(project: Path, bpm: float) -> float:
@@ -175,25 +221,44 @@ def set_tempo(project: Path, bpm: float) -> float:
     0.13 BPM, which is the kind of failure that looks like the write did
     nothing.
 
+    Raw byte surgery, deliberately NOT pyflp.save: a live-FL probe (2026-08-27)
+    showed pyflp's serializer corrupts some templates in ways only real FL
+    rejects (wrong FLhd channel count, a mangled UTF-16 text event) - our own
+    parser happily reads the corrupt file back, so a parse-based readback
+    cannot catch it. Patching exactly the 5 tempo bytes touches nothing else.
+
+    A project at the default tempo has NO tempo event (FL expresses default by
+    omission), so one is APPENDED at the end of the event stream, where it wins
+    by sequential application and can disturb nothing after it. Verified
+    against real FL 2026 (2026-08-27): a mid-stream splice loads-but-is-ignored
+    or is rejected outright depending on position; the end-of-stream append
+    loads and reads back exactly.
+
     Re-reads the saved file before returning rather than trusting the write.
     """
-    from harness.flp_compat import import_pyflp, parse
+    from harness.flp_compat import parse
 
     if not 10.0 <= bpm <= 999.0:
         raise ValueError(f"tempo {bpm} out of range (10-999 BPM)")
 
-    pyflp = import_pyflp()
-    parsed = parse(project)
+    data = bytearray(project.read_bytes())
+    start, end = _event_stream_bounds(data)
+    payload = round(bpm * 1000).to_bytes(4, "little")
 
-    found = False
-    for event in parsed.events:
-        if str(event.id) == "ProjectID.Tempo":
-            event.value = round(bpm * 1000)
-            found = True
-    if not found:
-        raise RuntimeError("project has no ProjectID.Tempo event")
+    patched = False
+    for event_id, off, size in _walk_events(data, start, end):
+        if event_id == _EVENT_TEMPO and size == 4:
+            data[off : off + 4] = payload
+            patched = True
+            break
 
-    pyflp.save(parsed, project)
+    if not patched:
+        data[end:end] = bytes([_EVENT_TEMPO]) + payload
+        dt_len_off = start - 4
+        old_len = int.from_bytes(data[dt_len_off:start], "little")
+        data[dt_len_off:start] = (old_len + 5).to_bytes(4, "little")
+
+    project.write_bytes(bytes(data))
     return float(parse(project).tempo)
 
 

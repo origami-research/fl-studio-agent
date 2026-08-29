@@ -101,7 +101,7 @@ def run_pyscript(script_path: Path, allowed_roots: list[Path]) -> types.ModuleTy
     builtins.open = sandboxed_open(allowed_roots)
     try:
         source = script_path.read_text()
-        exec(compile(source, str(script_path), "exec"), ns)  # noqa: S102
+        exec(compile(source, str(script_path), "exec"), ns)
 
         apply_fn = ns.get("apply")
         if callable(apply_fn):

@@ -28,11 +28,12 @@ from __future__ import annotations
 
 import contextlib
 import json
+import logging
 import os
 import tempfile
 import threading
 import time
-from datetime import datetime, timezone
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -40,6 +41,7 @@ from watchdog.events import FileSystemEventHandler
 from watchdog.observers import Observer
 
 from . import errors, paths, schemas
+from .clock import now
 from .flpaths import SPOOL_SUBDIRS, fl_settings_dirs
 
 PROTO_VER = 1
@@ -95,22 +97,34 @@ def _newest(name: str) -> dict[str, Any] | None:
     return best[1] if best is not None else None
 
 
+# Command-id allocation must be serialized: MCP dispatches tool calls on
+# concurrent worker threads, and an unguarded read-modify-write of the counter
+# file can mint the same id twice - which correlates the wrong FL response to
+# the wrong command. The lock covers the whole read+write cycle.
+_counter_lock = threading.Lock()
+
+log = logging.getLogger(__name__)
+
+
 def next_command_id() -> int:
     """Monotonic command id, used to correlate a result with its command."""
     root = spool_root()
     if root is None:
         return 1
     counter = root / "counter"
-    try:
-        current = int(counter.read_text())
-    except (FileNotFoundError, ValueError, OSError):
-        current = 0
-    nxt = current + 1
-    try:
-        counter.parent.mkdir(parents=True, exist_ok=True)
-        counter.write_text(str(nxt))
-    except OSError:
-        pass
+    with _counter_lock:
+        try:
+            current = int(counter.read_text())
+        except (FileNotFoundError, ValueError, OSError):
+            current = 0
+        nxt = current + 1
+        try:
+            counter.parent.mkdir(parents=True, exist_ok=True)
+            counter.write_text(str(nxt))
+        except OSError:
+            # The next call would re-read the stale value and hand out this same
+            # id again - a correlation bug, not a cosmetic one. Surface it.
+            log.exception("could not persist command counter %s; duplicate ids possible", counter)
     return nxt
 
 
@@ -129,15 +143,15 @@ def put_command(op: str, **fields: Any) -> dict[str, Any]:
 
     cmd = {"proto": PROTO_VER, "id": next_command_id(), "op": op, **fields}
     written = []
-    errors = []
+    write_failures = []  # not `errors`: that name is the imported errors module
     for root in roots:
         try:
             write_json_atomic(root / "pending.json", cmd)
             written.append(root)
         except OSError as exc:
-            errors.append(f"{root}: {exc}")
+            write_failures.append(f"{root}: {exc}")
     if not written:
-        raise SpoolUnavailable("Could not write to any spool location:\n  " + "\n  ".join(errors))
+        raise SpoolUnavailable("Could not write to any spool location:\n  " + "\n  ".join(write_failures))
     return cmd
 
 
@@ -189,12 +203,8 @@ _RESPONSE_POLL_INTERVAL = 0.05
 _STALE_SESSION_AGE = 60 * 60  # 1 hour — matches docs/02's GC-on-start failure mode
 
 
-def _now() -> datetime:
-    return datetime.now(timezone.utc)
-
-
 def _new_session_id() -> str:
-    return f"{os.getpid()}-{_now().strftime('%Y%m%dT%H%M%S%f')}"
+    return f"{os.getpid()}-{now().strftime('%Y%m%dT%H%M%S%f')}"
 
 
 class _ResponseArrived(FileSystemEventHandler):
@@ -255,14 +265,14 @@ class SpoolSession:
 
     def _write_session_file(self, *, started: bool = False) -> None:
         existing = read_json(self.dir / "session.json") if not started else None
-        started_at = (existing or {}).get("started_at") or _now().isoformat()
+        started_at = (existing or {}).get("started_at") or now().isoformat()
         write_json_atomic(
             self.dir / "session.json",
             {
                 "proto_ver": PROTO_VER,
                 "server_pid": os.getpid(),
                 "started_at": started_at,
-                "heartbeat_at": _now().isoformat(),
+                "heartbeat_at": now().isoformat(),
             },
         )
 
@@ -335,7 +345,7 @@ def gc_stale_sessions(root: Path | None = None, max_age: float = _STALE_SESSION_
         return []
 
     removed = []
-    now = _now()
+    now_ts = now()
     for entry in base.iterdir():
         if not entry.is_dir():
             continue
@@ -344,7 +354,7 @@ def gc_stale_sessions(root: Path | None = None, max_age: float = _STALE_SESSION_
         stale = True
         if heartbeat_at:
             try:
-                age = (now - datetime.fromisoformat(heartbeat_at)).total_seconds()
+                age = (now_ts - datetime.fromisoformat(heartbeat_at)).total_seconds()
                 stale = age > max_age
             except ValueError:
                 stale = True

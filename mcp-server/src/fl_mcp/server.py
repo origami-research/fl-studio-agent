@@ -28,14 +28,8 @@ from __future__ import annotations
 
 import contextlib
 import json
-import sys
-from pathlib import Path
+import threading
 from typing import Any
-
-# The optional auto-trigger lives in the repo's harness package.
-_REPO_ROOT = Path(__file__).resolve().parents[3]
-if str(_REPO_ROOT) not in sys.path:
-    sys.path.insert(0, str(_REPO_ROOT))
 
 from mcp.server.mcpserver import MCPServer
 
@@ -52,25 +46,59 @@ _TRIGGER_HINT = (
 
 mcp = MCPServer("fl-studio")
 
-_session: FLSession | None = None
+
+def create_session() -> FLSession:
+    """Build the process's FLSession with its real dependencies, explicitly.
+
+    Called once from main() before serving (docs/14 ordering: the MIDI ports
+    must exist before FL launches and binds them). python-rtmidi missing or
+    ports failing to open degrades honestly - session.control is None and
+    control-plane tools report unavailable rather than crashing.
+    """
+    control = None
+    with contextlib.suppress(control_midi.ControlUnavailable):
+        control = control_midi.MidiControl()
+    return FLSession(control=control)
+
+
+class _SessionHolder:
+    """The one seam through which tools reach the process session.
+
+    MCP tools are module-level functions registered by signature, so the
+    session cannot arrive as a call argument; it is injected here instead -
+    explicitly, once, at the entry point (main) or by a test (set_session).
+    No `global` statements, no construction hidden in a getter's side effect.
+
+    The lock covers the lazy fallback for direct-call uses (tests that never
+    injected, a REPL): two concurrent first calls must not build two sessions,
+    because two MidiControls would open duplicate virtual MIDI ports.
+    """
+
+    def __init__(self) -> None:
+        self._session: FLSession | None = None
+        self._lock = threading.Lock()
+
+    def get(self) -> FLSession:
+        with self._lock:
+            if self._session is None:
+                self._session = create_session()
+            return self._session
+
+    def set(self, session: FLSession | None) -> None:
+        with self._lock:
+            self._session = session
+
+
+_holder = _SessionHolder()
 
 
 def get_session() -> FLSession:
-    global _session
-    if _session is None:
-        control = None
-        # python-rtmidi missing or ports couldn't open: control-plane tools then
-        # degrade honestly (session.control is None), so this is a real optional.
-        with contextlib.suppress(control_midi.ControlUnavailable):
-            control = control_midi.get_control()
-        _session = FLSession(control=control)
-    return _session
+    return _holder.get()
 
 
 def set_session(session: FLSession | None) -> None:
-    """Test seam: inject an FLSession wired to tests/fake_fl.py stand-ins."""
-    global _session
-    _session = session
+    """Inject the process session: main() at startup, tests with fakes."""
+    _holder.set(session)
 
 
 def _try_live(command_id: int) -> dict[str, Any] | None:
@@ -356,12 +384,10 @@ def get_notes(pattern: int | str, channel: int | str, key_min: int | None = None
             "note": "nothing recorded for this target yet - write_notes or sync_from_project first",
         }
     notes = session.shadow.notes_at(target) or []
-    # Note.key is "C4"-or-MIDI; resolve to MIDI before an integer range compare
-    # (comparing a note-name string to an int would raise, not filter).
     if key_min is not None:
-        notes = [n for n in notes if schemas._resolve_key(n.key) >= key_min]
+        notes = [n for n in notes if n.key >= key_min]
     if key_max is not None:
-        notes = [n for n in notes if schemas._resolve_key(n.key) <= key_max]
+        notes = [n for n in notes if n.key <= key_max]
     return {
         "status": "ok",
         "source": ref.provenance,
@@ -502,12 +528,33 @@ def set_tempo(bpm: float) -> dict:
     # give the controller's OnIdle deferral (DEFER_MAX_TICKS ~4s) time to land.
     resp = router.try_live_control(get_session(), "mixer.setCurrentTempo", args=[bpm, 1], timeout=5.0)
     if resp is not None:
-        return {
+        # Report what FL confirms, not what we requested: read the tempo back
+        # (getCurrentTempo returns BPM x 1000). A set that silently no-ops or
+        # clamps - an automation clip overriding it, quantization - surfaces
+        # here as the real value instead of as a false "applied".
+        readback = router.try_live_control(get_session(), "mixer.getCurrentTempo", timeout=2.0)
+        if readback is None or readback.ret is None:
+            return {
+                "status": "applied",
+                "backend": "live",
+                "tempo": bpm,
+                "confirmed": False,
+                "note": f"Tempo set to {bpm} BPM live, but the read-back did not answer - unconfirmed.",
+            }
+        actual = float(readback.ret) / 1000.0
+        result = {
             "status": "applied",
             "backend": "live",
-            "tempo": bpm,
-            "note": f"Project tempo is now {bpm} BPM (live, FL was not reloaded).",
+            "tempo": actual,
+            "confirmed": True,
+            "note": f"Project tempo is now {actual:g} BPM (live, FL was not reloaded).",
         }
+        if abs(actual - bpm) > 0.001:
+            result["note"] = (
+                f"FL reports {actual:g} BPM after setting {bpm:g} - the project may have "
+                "a tempo automation clip or clamped the value."
+            )
+        return result
 
     try:
         from . import autonomous
@@ -594,17 +641,36 @@ def set_channel_mix(
     session = get_session()
     if session.control is not None and isinstance(channel, int) and pitch_semitones is None:
         applied: dict[str, Any] = {}
-        ok = True
-        if volume is not None:
-            ok = router.try_live_control(session, "channels.setChannelVolume", [channel, volume]) is not None
-            if ok:
-                applied["volume"] = volume
-        if ok and pan is not None:
-            ok = router.try_live_control(session, "channels.setChannelPan", [channel, pan]) is not None
-            if ok:
-                applied["pan"] = pan
-        if ok:
+        failed: list[str] = []
+        for field_name, value, op in (
+            ("volume", volume, "channels.setChannelVolume"),
+            ("pan", pan, "channels.setChannelPan"),
+        ):
+            if value is None:
+                continue
+            if router.try_live_control(session, op, [channel, value]) is not None:
+                applied[field_name] = value
+            else:
+                failed.append(field_name)
+        if applied and not failed:
             return {"status": "applied", "backend": "live", "channel": channel, **applied}
+        if applied and failed:
+            # A field already landed in the RUNNING FL session. Falling through
+            # to the file backend would rewrite the saved project and reload FL,
+            # silently discarding that live edit - so report the partial truth
+            # instead of manufacturing a clean "applied".
+            return {
+                "status": "partial",
+                "backend": "live",
+                "channel": channel,
+                "applied": applied,
+                "failed": failed,
+                "note": (
+                    f"{', '.join(applied)} applied live; {', '.join(failed)} did not - "
+                    "retry the failed field(s), the live edit was kept."
+                ),
+            }
+        # Nothing applied live: the file backend below is a clean fallback.
 
     try:
         from . import autonomous
@@ -736,5 +802,7 @@ def get_scene(detail: str = "summary", channel: int | None = None) -> dict:
 
 
 def main() -> None:
-    get_session()  # open the MIDI ports now, before the first tool call (docs/14 ordering)
+    # Construct dependencies explicitly at the entry point and inject them -
+    # the MIDI ports open now, before the first tool call (docs/14 ordering).
+    set_session(create_session())
     mcp.run()

@@ -11,17 +11,7 @@ the project uses for read-back and reconstruction.
 
 from __future__ import annotations
 
-import sys
-from pathlib import Path
-
 import pytest
-
-_TESTS = Path(__file__).resolve().parents[1]
-if str(_TESTS) not in sys.path:
-    sys.path.insert(0, str(_TESTS))
-if str(_TESTS.parent.parent) not in sys.path:  # repo root, for harness/
-    sys.path.insert(0, str(_TESTS.parent.parent))
-
 from corpus.fetch import fetch_all
 from corpus.manifest import CORPUS, CORRUPT
 

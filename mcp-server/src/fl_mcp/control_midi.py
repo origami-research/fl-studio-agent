@@ -18,20 +18,14 @@ imports the same module directly since it has no such constraint.
 
 from __future__ import annotations
 
+import contextlib
 import itertools
-import sys
 import threading
 import time
-from pathlib import Path
 from typing import Any, Callable
 
-_REPO_ROOT = Path(__file__).resolve().parents[3]
-_CONTROLLER_DIR = _REPO_ROOT / "fl-scripts" / "controller"
-if str(_CONTROLLER_DIR) not in sys.path:
-    sys.path.insert(0, str(_CONTROLLER_DIR))
-
-import contextlib
-
+# flmcp_codec is installed by the repo-root package (pyproject dev-mode-dirs),
+# resolving to the real file beside the controller script - no sys.path surgery.
 from flmcp_codec import (
     TYPE_EVENT,
     TYPE_REQUEST,
@@ -167,8 +161,10 @@ class MidiControl:
             return self.hello
         if not self._hello_event.wait(timeout):
             raise errors.control_plane_unavailable("hello", timeout)
-        assert self.hello is not None
-        return self.hello
+        hello = self.hello
+        if hello is None:  # event set but hello cleared - a real protocol bug, not assert-fodder
+            raise errors.control_plane_unavailable("hello", timeout)
+        return hello
 
     def send_request(
         self,
@@ -200,38 +196,8 @@ class MidiControl:
                 port.close_port()
 
 
-_singleton: MidiControl | None = None
-_singleton_lock = threading.Lock()
-
-
-def get_control() -> MidiControl:
-    """Process-wide MIDI control transport, opened on first use.
-
-    Double-checked locking: ``call()`` is a blocking function, so a threaded MCP
-    server may invoke it concurrently. Constructing two MidiControls would open
-    duplicate virtual ports (FL sees duplicate devices; the losing instance's
-    callback silently swallows traffic). The lock makes first-open atomic.
-    """
-    global _singleton
-    if _singleton is None:
-        with _singleton_lock:
-            if _singleton is None:
-                _singleton = MidiControl()
-    return _singleton
-
-
-def close() -> None:
-    """Close the process-wide transport and reset the singleton.
-
-    Without the reset a later get_control()/call() would reuse the dead instance
-    and hang against closed ports; resetting makes the next call reopen cleanly.
-    """
-    global _singleton
-    with _singleton_lock:
-        if _singleton is not None:
-            _singleton.close()
-            _singleton = None
-
-
-def call(op: str, args: list | None = None, kwargs: dict | None = None, timeout: float = 5.0) -> dict:
-    return get_control().call(op, args=args, kwargs=kwargs, timeout=timeout)
+# There is deliberately no module-level singleton here. A MidiControl wraps a
+# process-unique resource (virtual MIDI ports - two instances would show FL
+# duplicate devices and silently split traffic), but uniqueness is owned by the
+# ONE caller that constructs it: server.create_session() in production, the e2e
+# fixture in tests. Hidden module state made that ownership invisible.

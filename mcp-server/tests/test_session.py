@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 import pytest
-
 from fake_fl import FakeBridge, FakeControl
+
 from fl_mcp import errors, schemas
 from fl_mcp.session import FLSession
 
@@ -44,7 +44,7 @@ def test_write_notes_confirms_and_writes_through(wired):
     # The action log records a structured delta, not just a hash: this write
     # added one note to an empty target.
     assert last.delta is not None
-    assert len(last.delta.added) == 1 and last.delta.added[0].key == "C4"
+    assert len(last.delta.added) == 1 and last.delta.added[0].key == 60
     assert not last.delta.removed and not last.delta.moved
 
 
@@ -57,7 +57,7 @@ def test_write_notes_records_delta_of_a_merge(wired):
     last = session.actions.last()
     # A merge that appends one note is a delta of exactly one added note.
     assert last.delta is not None
-    assert [n.key for n in last.delta.added] == ["G4"]
+    assert [n.key for n in last.delta.added] == [67]
     assert not last.delta.removed
 
 

@@ -1,0 +1,21 @@
+[project]
+name = "fl-mcp-repo"
+version = "0.1.0"
+description = "Repo-level packages: the FL test/ops harness and the controller wire codec"
+requires-python = ">=3.11"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+# Installed editable (`uv pip install -e .` from the repo root) alongside the
+# mcp-server package. This is the declared replacement for the per-module
+# sys.path.insert hacks (docs/19 root cause 2): `harness` and `flmcp_codec`
+# become ordinary importable packages in any venv that installs the repo.
+[tool.hatch.build.targets.wheel]
+packages = ["harness"]
+# Editable installs path the REAL source dirs (not snapshots): the repo root
+# for `harness`, and the controller dir for `flmcp_codec` - the codec is a
+# frozen-surface module that must stay beside the FL-side script it encodes
+# for, so it is pathed in place rather than moved or copied.
+dev-mode-dirs = [".", "fl-scripts/controller"]

@@ -5,7 +5,6 @@ outside the FLMCP keys, and WARNs (never corrupts) on unexpected shapes -
 including the reproduced cross-key overreach the audit flagged as CRITICAL.
 """
 
-from pathlib import Path
 
 import pytest
 
@@ -15,7 +14,7 @@ from fl_mcp import install
 @pytest.fixture
 def reg(tmp_path, monkeypatch):
     p = tmp_path / "reg.xml"
-    monkeypatch.setattr(install, "REG_XML", p)
+    monkeypatch.setattr(install, "reg_xml_path", lambda: p)
     return p
 
 
@@ -68,7 +67,7 @@ def test_normalizes_both_ports(reg):
 
 
 def test_missing_reg_warns(reg):
-    # reg fixture points REG_XML at a nonexistent path.
+    # reg fixture points reg_xml_path() at a nonexistent path.
     assert install.configure_midi().startswith("WARN")
 
 

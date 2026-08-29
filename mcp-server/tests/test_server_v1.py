@@ -3,8 +3,8 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-
 from fake_fl import FakeBridge, FakeControl
+
 from fl_mcp import errors, server
 from fl_mcp.session import FLSession
 

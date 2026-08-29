@@ -20,7 +20,7 @@ def test_record_note_write_updates_shadow_and_logs_delta(tmp_path):
     # Shadow score now holds the notes.
     assert len(shadow.notes_at(target)) == 1
     # A delta was returned and logged.
-    assert delta is not None and len(delta.added) == 1 and delta.added[0].key == "C4"
+    assert delta is not None and len(delta.added) == 1 and delta.added[0].key == 60
     last = actions.last()
     assert last.op == "add_notes" and last.after_hash is not None
     assert last.delta is not None and len(last.delta.added) == 1
@@ -34,7 +34,7 @@ def test_record_note_write_merge_delta_is_only_the_addition(tmp_path):
     router.record_note_write(shadow, actions, target, [{"key": "G4", "start": 2, "length": 1}], "merge", "live", 2)
 
     last = actions.last()
-    assert [n.key for n in last.delta.added] == ["G4"]
+    assert [n.key for n in last.delta.added] == [67]
     assert not last.delta.removed
     assert len(shadow.notes_at(target)) == 2
 
@@ -107,6 +107,7 @@ def test_set_tempo_rejects_out_of_range(tmp_path):
 
 def _live_session(tmp_path):
     from fake_fl import FakeControl
+
     from fl_mcp.session import FLSession
     control = FakeControl()
     control.send_hello()
@@ -156,7 +157,7 @@ def test_set_channel_mix_live_sets_volume_and_pan(tmp_path):
 # --- sync_from_project (ground-truth read-back) ----------------------------
 
 def test_sync_from_project_rebuilds_shadow_with_project_provenance(tmp_path, monkeypatch):
-    from fl_mcp import server, schemas
+    from fl_mcp import server
     from fl_mcp.session import FLSession
 
     session = FLSession(project_key="t", spool_root=tmp_path / "s", project_root=tmp_path / "p", control=None)
@@ -211,6 +212,53 @@ def test_get_notes_key_filter_handles_string_keys(tmp_path):
         result = server.get_notes(pattern=1, channel=0, key_min=48, key_max=72)
         assert result["status"] == "ok"
         keys = {n["key"] for n in result["notes"]}
-        assert keys == {"C4"}  # only 60 is within [48, 72]
+        assert keys == {60}  # only C4=60 is within [48, 72]
+    finally:
+        server.set_session(None)
+
+
+# --- set_tempo live tier must report FL's read-back, not the request --------
+
+def test_set_tempo_live_reports_confirmed_readback(tmp_path):
+    from fl_mcp import server
+
+    session, _control = _live_session(tmp_path)
+    server.set_session(session)
+    try:
+        result = server.set_tempo(128.5)
+        assert result["status"] == "applied" and result["backend"] == "live"
+        assert result["confirmed"] is True
+        assert result["tempo"] == 128.5  # from getCurrentTempo, not the request echo
+    finally:
+        server.set_session(None)
+
+
+def test_set_tempo_live_marks_unconfirmed_when_readback_fails(tmp_path):
+    from fl_mcp import server
+
+    session, control = _live_session(tmp_path)
+    control.fail_ops.add("mixer.getCurrentTempo")
+    server.set_session(session)
+    try:
+        result = server.set_tempo(140)
+        assert result["status"] == "applied" and result["confirmed"] is False
+    finally:
+        server.set_session(None)
+
+
+def test_set_channel_mix_partial_live_failure_keeps_live_edit(tmp_path):
+    """If volume lands live and pan then fails, the file fallback (rewrite +
+    FL reload) would silently discard the live volume - report partial instead."""
+    from fl_mcp import server
+
+    session, control = _live_session(tmp_path)
+    control.fail_ops.add("channels.setChannelPan")
+    server.set_session(session)
+    try:
+        result = server.set_channel_mix(channel=0, volume=0.5, pan=-0.3)
+        assert result["status"] == "partial"
+        assert result["applied"] == {"volume": 0.5}
+        assert result["failed"] == ["pan"]
+        assert control.channels[0].volume == 0.5  # the live edit was kept
     finally:
         server.set_session(None)

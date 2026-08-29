@@ -23,13 +23,14 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import Any, Callable
 
 from pydantic import BaseModel
 
 from . import errors, schemas
-from .notes import describe, parse_key
+from .clock import now
+from .notes import describe
 from .session import FLSession
 from .spool import write_json_atomic
 
@@ -37,10 +38,6 @@ from .spool import write_json_atomic
 # they invalidate cached channel/pattern numbers and the manifest, not the
 # shadow score.
 _STRUCTURAL_EVENTS = {"dirty_channel", "dirty_mixer_track", "refresh"}
-
-
-def _now() -> datetime:
-    return datetime.now(timezone.utc)
 
 
 def _check(resp: schemas.ControlResponse, op: str) -> schemas.ControlResponse:
@@ -85,7 +82,7 @@ class Manifest(BaseModel):
 
 def _manifest_from_snapshot(snap: dict[str, Any]) -> Manifest:
     return Manifest(
-        generated_at=_now(),
+        generated_at=now(),
         ppq=snap["ppq"],
         pattern_count=snap["pattern_count"],
         channels=[ChannelInfo(idx=c["idx"], name=c["name"]) for c in snap["channels"]],
@@ -182,12 +179,7 @@ class Track:
         self._check_fresh()
         target = self._target(pattern)
         ref = self._kernel.session.shadow.ref_at(target)
-        stored = self._kernel.session.shadow.notes_at(target) or []
-        # The shadow store keeps notes exactly as written (key may still be a
-        # name like "C4"); resolve to MIDI ints here so the model's filter
-        # predicate and the materialized notes are consistently comparable
-        # regardless of how each note was originally spelled.
-        notes = [n if isinstance(n.key, int) else n.model_copy(update={"key": parse_key(n.key)}) for n in stored]
+        notes = self._kernel.session.shadow.notes_at(target) or []
         if filter is not None:
             notes = [n for n in notes if filter(n)]
         summary = describe([n.canonical() for n in notes])
@@ -323,6 +315,11 @@ class FLKernel:
                 results.append(
                     {"op": "clear_notes", "track": item.track_name, "ok": resp.ok, "err": resp.err}
                 )
+            if not resp.ok:
+                # Later writes assumed this one landed; applying them against
+                # the wrong base state compounds the failure. Stop here - the
+                # rejected op is reported above, the remainder stays queued.
+                break
         return results
 
     @contextmanager
@@ -391,7 +388,7 @@ def bootstrap(session: FLSession, project_reader: Callable[[FLSession], None] | 
 
     session.actions.append(
         schemas.ActionEntry(
-            ts=_now(),
+            ts=now(),
             id=0,
             gen=0,
             op="bootstrap",

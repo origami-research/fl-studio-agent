@@ -18,18 +18,14 @@ never silently dropped, so a real bug in the recording path surfaces.
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
 from typing import Any, Callable, Literal
 
 from . import diff, errors, schemas
 from .actions import ActionLog
+from .clock import now
 from .records import ShadowStore
 
 log = logging.getLogger(__name__)
-
-
-def _now() -> datetime:
-    return datetime.now(timezone.utc)
 
 
 def record_note_write(
@@ -59,7 +55,7 @@ def record_note_write(
         delta = diff.diff_notes(before_notes, after_notes)
         actions.append(
             schemas.ActionEntry(
-                ts=_now(),
+                ts=now(),
                 id=command_id,
                 gen=gen,
                 op="add_notes",

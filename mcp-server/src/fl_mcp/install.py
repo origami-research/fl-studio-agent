@@ -23,7 +23,13 @@ from .flpaths import fl_settings_dirs, piano_roll_scripts_dir
 SCRIPT_FILENAME = "MCP Write Notes.pyscript"
 CONTROLLER_FILENAME = "device_FLMCP.py"
 CONTROLLER_SUBDIR = "FLMCP"  # under Settings/Hardware/
-REG_XML = Path.home() / "Library" / "Preferences" / "Image-Line" / "reg.xml"
+
+
+def reg_xml_path() -> Path:
+    """FL's MIDI-assignment registry. A function, not an import-time constant:
+    binding Path.home() at import captured ambient config before a test (or an
+    unusual HOME) could redirect it."""
+    return Path.home() / "Library" / "Preferences" / "Image-Line" / "reg.xml"
 
 # The controller assignment reg.xml expects. ScriptFolder must match the
 # controller script's `# name=` header (FL keys the device by that name).
@@ -111,9 +117,10 @@ def configure_midi() -> str:
     outside the FLMCP keys - returns WARN so the installer can fall back to a
     one-time manual assignment.
     """
-    if not REG_XML.is_file():
-        return f"WARN reg.xml not found at {REG_XML}; assign the controller once in FL's MIDI settings"
-    data = REG_XML.read_text(encoding="utf-8")
+    reg_xml = reg_xml_path()
+    if not reg_xml.is_file():
+        return f"WARN reg.xml not found at {reg_xml}; assign the controller once in FL's MIDI settings"
+    data = reg_xml.read_text(encoding="utf-8")
 
     input_key = (
         f'<Key Name="{REQ_PORT_NAME}">\n'
@@ -132,6 +139,7 @@ def configure_midi() -> str:
     )
 
     changed = False
+    enabled_missing = False
 
     # --- input key ---
     if f'<Key Name="{REQ_PORT_NAME}">' in data:
@@ -139,7 +147,8 @@ def configure_midi() -> str:
         if not ok:
             return (f"WARN {REQ_PORT_NAME} key present but has no Port value; "
                     "unexpected reg.xml shape - assign the controller once in FL")
-        data, _en = _set_int_value(data, REQ_PORT_NAME, "Enabled", 1)  # best-effort
+        data, enabled_ok = _set_int_value(data, REQ_PORT_NAME, "Enabled", 1)
+        enabled_missing = not enabled_ok  # an OK below must not overclaim this
         changed = True
     else:
         data, n = re.subn(r'(<Key Name="MIDI input">\s*)',
@@ -163,7 +172,10 @@ def configure_midi() -> str:
         changed = True
 
     if changed:
-        REG_XML.write_text(data, encoding="utf-8")
+        reg_xml.write_text(data, encoding="utf-8")
+        if enabled_missing:
+            return (f"WARN ports assigned, but {REQ_PORT_NAME} has no Enabled value to set; "
+                    "check the controller is enabled in FL's MIDI settings")
         return f"OK controller assigned to {REQ_PORT_NAME}/{RES_PORT_NAME} port {CONTROL_PORT} (reg.xml)"
     return "OK controller assignment already present"
 

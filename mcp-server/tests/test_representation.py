@@ -10,7 +10,6 @@ from fl_mcp.schemas import (
     SessionState,
 )
 
-
 # --- hashing ---------------------------------------------------------------
 
 
@@ -65,8 +64,8 @@ def test_note_view_full_when_small():
     notes = [Note(key="C4", start=0, length=1), Note(key="E4", start=1, length=0.5, velocity=0.6)]
     out = views.note_view(notes)
     assert out == [
-        {"key": "C4", "start": 0.0, "length": 1.0},
-        {"key": "E4", "start": 1.0, "length": 0.5, "velocity": 0.6},
+        {"key": 60, "start": 0.0, "length": 1.0},
+        {"key": 64, "start": 1.0, "length": 0.5, "velocity": 0.6},
     ]
 
 
@@ -86,7 +85,7 @@ def test_diff_added_and_removed():
     old = [Note(key="C4", start=0, length=1)]
     new = [Note(key="C4", start=0, length=1), Note(key="G4", start=2, length=1)]
     d = diff.diff_notes(old, new)
-    assert len(d.added) == 1 and d.added[0].key == "G4"
+    assert len(d.added) == 1 and d.added[0].key == 67
     assert d.removed == [] and d.moved == []
 
 
@@ -96,7 +95,7 @@ def test_diff_pairs_a_dragged_note_as_moved():
     d = diff.diff_notes(old, new)
     assert not d.added and not d.removed
     assert len(d.moved) == 1
-    assert d.moved[0].to.key == "E4"
+    assert d.moved[0].to.key == 64
     assert 0 < d.moved[0].confidence <= 1
 
 
@@ -119,7 +118,7 @@ def test_fold_reconstructs_state():
     d1 = NoteDelta(added=[Note(key="E4", start=1, length=1)])
     d2 = NoteDelta(added=[Note(key="G4", start=2, length=1)])
     folded = diff.fold(bootstrap, [d1, d2])
-    target = bootstrap + [Note(key="E4", start=1, length=1), Note(key="G4", start=2, length=1)]
+    target = [*bootstrap, Note(key="E4", start=1, length=1), Note(key="G4", start=2, length=1)]
     assert hashing.noteset_hash(folded) == hashing.noteset_hash(target)
 
 

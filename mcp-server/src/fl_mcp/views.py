@@ -18,7 +18,7 @@ from typing import Any
 from pydantic import BaseModel
 
 from . import hashing
-from .schemas import Note, NoteSetSummary, SessionState, _resolve_key
+from .schemas import Note, NoteSetSummary, SessionState
 
 
 def render(model: BaseModel) -> dict[str, Any]:
@@ -61,7 +61,7 @@ def summarize_notes(notes: list[Note]) -> NoteSetSummary:
     """Cheap census of a note group for the lazy path."""
     if not notes:
         return NoteSetSummary(count=0)
-    midis = [_resolve_key(n.key) for n in notes]
+    midis = [n.key for n in notes]
     span_beats = max((n.start + n.length) for n in notes)
     density = round(len(notes) / span_beats, 2) if span_beats > 0 else None
     return NoteSetSummary(

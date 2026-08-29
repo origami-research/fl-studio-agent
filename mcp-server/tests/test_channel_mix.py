@@ -2,16 +2,13 @@
 from __future__ import annotations
 
 import shutil
-from pathlib import Path
 
 import pytest
 
 from fl_mcp.flp_writer import set_channel_levels
+from fl_mcp.flpaths import fl_app
 
-STOCK = Path(
-    "/Applications/FL Studio 2025.app/Contents/Resources/FL/Data/Templates/"
-    "Utility/Create a chord progression/Create a chord progression.flp"
-)
+STOCK = fl_app() / "Contents/Resources/FL/Data/Templates/Utility/Create a chord progression/Create a chord progression.flp"
 pytestmark = pytest.mark.skipif(not STOCK.is_file(), reason="FL Studio not installed")
 
 

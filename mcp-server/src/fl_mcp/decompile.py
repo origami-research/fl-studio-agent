@@ -14,14 +14,12 @@ replay the program on an empty project, re-parse, diff against the original.
 
 from __future__ import annotations
 
-import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-_REPO = Path(__file__).resolve().parents[3]
-if str(_REPO) not in sys.path:
-    sys.path.insert(0, str(_REPO))
+from harness.flp_compat import import_pyflp, parse
+from harness.verify import read_notes
 
 
 @dataclass
@@ -53,9 +51,6 @@ def decompile(flp_path: str | Path) -> Program:
     Order matters and encodes dependencies: tempo first, then channels must
     exist before notes can be written to them, then notes per pattern/channel.
     """
-    from harness.flp_compat import import_pyflp, parse
-    from harness.verify import read_notes
-
     import_pyflp()
     project = parse(str(flp_path))
     program = Program(source=str(flp_path))

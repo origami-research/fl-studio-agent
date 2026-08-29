@@ -8,16 +8,7 @@ program half on real data.
 
 from __future__ import annotations
 
-import sys
-from pathlib import Path
-
 import pytest
-
-_TESTS = Path(__file__).resolve().parents[1]
-for p in (str(_TESTS), str(_TESTS.parent.parent), str(_TESTS.parent / "src")):
-    if p not in sys.path:
-        sys.path.insert(0, p)
-
 from corpus.fetch import fetch_all
 
 _FETCHED = fetch_all()
@@ -59,8 +50,9 @@ def test_decompile_larger_project_has_all_its_channels():
     name = "pyflp_fl_20_8_4.flp"
     if name not in _FETCHED:
         pytest.skip(f"{name} not fetched")
-    from fl_mcp.decompile import decompile
     from harness.flp_compat import import_pyflp, parse
+
+    from fl_mcp.decompile import decompile
 
     import_pyflp()
     project = parse(str(_FETCHED[name]))

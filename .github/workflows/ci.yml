@@ -9,7 +9,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
-      - run: uv pip install --system -e . ruff pytest
+      # Two editable installs: the server package, and the repo-root package
+      # that provides `harness` + `flmcp_codec` (replaces sys.path surgery).
+      - run: uv pip install --system -e . -e .. ruff pytest
       # Lint gate: the code-taste rules in AGENTS.md / docs/19 are enforced here,
       # so a regression fails the PR instead of accumulating.
       - run: ruff check src

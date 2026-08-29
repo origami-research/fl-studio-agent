@@ -22,18 +22,31 @@ from __future__ import annotations
 
 import os
 import subprocess
-import sys
 import time
-from pathlib import Path
+from typing import NamedTuple
 
 import pytest
 
-_REPO = Path(__file__).resolve().parents[3]
-for p in (str(_REPO), str(_REPO / "mcp-server" / "src")):
-    if p not in sys.path:
-        sys.path.insert(0, p)
+from fl_mcp import control_midi
+from fl_mcp.flpaths import fl_app
+from fl_mcp.session import FLSession
 
-_FL_APP = Path("/Applications/FL Studio 2026.app")
+
+class LiveFL(NamedTuple):
+    """What the live fixture provides: the wired session plus FL's hello event.
+
+    A named tuple instead of stapling the hello onto the session as an
+    undeclared attribute - fixtures return values, they don't smuggle state.
+    """
+
+    session: FLSession
+    hello: dict
+
+# The same resolver the server uses, so the e2e never launches a different app
+# than the backend targets (they had drifted: server 2025 vs this fixture 2026).
+# `fl_mcp` and `harness` are importable via pytest.ini's pythonpath, so no
+# sys.path surgery is needed here.
+_FL_APP = fl_app()
 
 
 def _osa(*lines: str) -> str:
@@ -50,11 +63,10 @@ def live_fl():
     if not _FL_APP.exists():
         pytest.skip("FL Studio not installed")
 
-    from fl_mcp import control_midi
-    from fl_mcp.session import FLSession
     from harness import flctl
 
-    ctl = control_midi.get_control()  # ports must exist before FL launches
+    # This fixture owns the transport: constructed here, closed on teardown.
+    ctl = control_midi.MidiControl()  # ports must exist before FL launches
     if flctl.is_running():
         flctl.stop(force=True)
         time.sleep(1)
@@ -79,12 +91,10 @@ def live_fl():
 
     if hello is None:
         flctl.stop(force=True)
-        control_midi.close()
+        ctl.close()
         pytest.fail("controller script never said hello within 120s")
 
-    session = FLSession(control=ctl)
-    session._e2e_hello = hello  # type: ignore[attr-defined]
-    yield session
+    yield LiveFL(session=FLSession(control=ctl), hello=hello)
 
     flctl.stop(force=True)
-    control_midi.close()
+    ctl.close()

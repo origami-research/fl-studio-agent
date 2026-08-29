@@ -129,7 +129,7 @@ def _root_motion(rows: list) -> list[str]:
     # A 32-bar dump is the noise this module exists to remove. Eight bars is
     # enough to show the harmonic pattern; the rest is usually repetition.
     if len(roots) > MAX_ROOT_MOTION_BARS:
-        return roots[:MAX_ROOT_MOTION_BARS] + [f"...+{len(roots) - MAX_ROOT_MOTION_BARS} bars"]
+        return [*roots[:MAX_ROOT_MOTION_BARS], f"...+{len(roots) - MAX_ROOT_MOTION_BARS} bars"]
     return roots
 
 

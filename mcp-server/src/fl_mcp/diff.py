@@ -17,7 +17,7 @@ diff_notes(old, new):
 from __future__ import annotations
 
 from .hashing import index_by_hash, note_hash
-from .schemas import Note, NoteDelta, NoteMove, _resolve_key
+from .schemas import Note, NoteDelta, NoteMove
 
 # A moved note must land within this window to be paired rather than counted as
 # a separate delete+insert. Beats for time, semitones for pitch.
@@ -31,7 +31,7 @@ def _distance(a: Note, b: Note) -> float | None:
     Normalized so 0 = identical position/pitch and 1 = at the window edge.
     """
     ds = abs(a.start - b.start)
-    dp = abs(_resolve_key(a.key) - _resolve_key(b.key))
+    dp = abs(a.key - b.key)
     if ds > _MOVE_START_WINDOW or dp > _MOVE_PITCH_WINDOW:
         return None
     return (ds / _MOVE_START_WINDOW + dp / _MOVE_PITCH_WINDOW) / 2
