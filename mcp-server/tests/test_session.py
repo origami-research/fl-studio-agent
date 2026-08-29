@@ -599,3 +599,24 @@ def test_create_session_is_the_factory():
     except NotImplementedError as exc:
         pytest.skip(f"blocked on another lane's stub: {exc}")
     assert isinstance(session, FLSession)
+
+
+def test_bridge_write_fires_the_injected_trigger_best_effort():
+    """The auto-trigger (FL's 'repeat last script' keystroke) fires after the
+    command is queued, and a failing trigger never fails the write - it is an
+    accelerator; the human can still run the script manually."""
+    spool = FakeSpool(
+        {"add_notes": SpoolResponse(id=1, ok=True, op="add_notes", notes_written=1)}
+    )
+    fired: list[bool] = []
+    session, _ = make_session(control=FakeControl(hello=HELLO), spool=spool)
+    session._trigger = lambda: fired.append(True)
+    session.write_notes(TARGET, NOTES, "merge")
+    assert fired == [True]
+
+    def boom() -> None:
+        raise RuntimeError("no accessibility consent")
+
+    session._trigger = boom
+    receipt = session.write_notes(TARGET, NOTES, "merge")  # must not raise
+    assert receipt.backend == "bridge"

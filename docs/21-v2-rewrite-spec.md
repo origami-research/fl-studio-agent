@@ -794,3 +794,13 @@ Overall: degraded
   live pitch path and flagged it unverified. Readback guards make a wrong mode raise
   rather than corrupt, but it is untested against FL.
 - **CI**: red for an account/billing reason, zero steps executed on every run.
+
+## Addendum 7: G3 live half PASSED (2026-08-28) - and the "binding" myth corrected
+
+The live manual-lane check passed end to end on real FL 2026 Producer Edition: a spool `add_notes` command, triggered by the keystroke, applied by the v2 pyscript inside FL's embedded interpreter, confirmed `ok=True` with a note-count readback.
+
+Correction to the setup story this proved: **there is no shortcut to bind.**
+Right-clicking the script in FL 2026 *runs* it (no assign menu exists), and `Cmd+Opt+Y` is FL's built-in "repeat last script" shortcut - so running the script once from the piano roll menu IS the entire setup.
+`harness/enable_autonomy`, `harness/doctor`, and the in-repo instructions were rewritten accordingly (they also still spoke the deleted v1 spool API - the purge's one miss, now fixed, plus a `ping` handler added to the pyscript so verification never touches the piano roll).
+
+Product consequence, shipped with this addendum: `FLSession` now takes an injected best-effort `trigger` (wired to `harness.trigger.run_piano_roll_script` by `create_session`), so bridge-path writes apply with **zero human action** on machines with Accessibility consent - restoring v1's auto-trigger capability that the rewrite had dropped. A missing trigger or missing consent degrades to the human running the script, never to a failure.

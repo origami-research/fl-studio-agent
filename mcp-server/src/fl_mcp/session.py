@@ -17,6 +17,7 @@ import logging
 import os
 import subprocess
 import time
+from collections.abc import Callable
 from pathlib import Path
 
 from fl_mcp import errors
@@ -124,11 +125,19 @@ def create_session() -> FLSession:
         )
         project = candidate if candidate is not None and candidate.is_file() else None
 
+    # The auto-trigger is optional tooling (harness may be absent in a bare
+    # install); the session treats a missing trigger as "human presses it".
+    try:
+        from harness.trigger import run_piano_roll_script
+    except ImportError:
+        run_piano_roll_script = None
+
     return FLSession(
         control=control,
         spool=Spool(),
         store=Store(project_key=str(project) if project is not None else "default"),
         project=project,
+        trigger=run_piano_roll_script,
     )
 
 
@@ -147,11 +156,27 @@ class FLSession:
         spool: Spool,
         store: Store,
         project: Path | None,
+        trigger: Callable[[], None] | None = None,
     ) -> None:
         self.control = control
         self.spool = spool
         self.store = store
         self.project = project
+        self._trigger = trigger
+
+    def _trigger_pyscript(self) -> None:
+        """Best-effort: press FL's 'repeat last script' shortcut so a queued
+        spool command applies without a human trigger (live-verified
+        2026-08-28: Cmd+Opt+Y re-runs the last piano-roll script). Needs macOS
+        Accessibility consent and one prior manual run of the script; when
+        either is missing this is a no-op and the human triggers manually -
+        an accelerator, never a requirement, so failure only logs."""
+        if self._trigger is None:
+            return
+        try:
+            self._trigger()
+        except Exception:
+            log.debug("auto-trigger unavailable; waiting for a manual script run", exc_info=True)
 
     def _hello(self) -> HelloEvent | None:
         """The ONE connectivity probe: the controller's hello, or None. Every
@@ -170,6 +195,7 @@ class FLSession:
         returns a maybe, never falls through after a partial application."""
         if self._hello() is not None:
             cmd = self.spool.send("add_notes", target=target, notes=notes, mode=mode)
+            self._trigger_pyscript()
             resp = self.spool.await_response(cmd, timeout=SPOOL_RESPONSE_TIMEOUT_SECONDS)
             if not resp.ok or resp.notes_written is None:
                 raise WriteRejected(
@@ -209,6 +235,7 @@ class FLSession:
     def clear_notes(self, target: Target) -> WriteReceipt:
         if self._hello() is not None:
             cmd = self.spool.send("clear_notes", target=target)
+            self._trigger_pyscript()
             resp = self.spool.await_response(cmd, timeout=SPOOL_RESPONSE_TIMEOUT_SECONDS)
             if not resp.ok or resp.notes_written is None:
                 raise WriteRejected(
