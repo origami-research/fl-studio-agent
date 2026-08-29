@@ -829,3 +829,9 @@ First real product session: an MCP client speaking to the `fl-mcp` binary over s
 5. **The FL-open pytest segfault root-caused and fixed**: `test_create_session_is_the_factory` built a REAL MidiControl in the fast suite; with FL open, FL hot-plugged onto test ports and teardown crashed rtmidi's C layer. The test now injects fakes (and `make_session` defaults `control_factory` to a fake). 423 tests green WITH FL running - the "close FL before the suite" rule is retired.
 
 Still unverified from the dogfood: the bridge write path + play/stop under the self-heal (needs a machine-free window; the auto-trigger steals focus), and the musical judgment by ear.
+
+## Addendum 11: flpkit extracted (2026-08-29)
+
+The FLP library is now its own open-source project - https://github.com/clarkipeng/flpkit (MIT, zero dependencies, 52 tests; create under the org later via a GitHub transfer, redirects preserved).
+`fl_mcp/flp.py` shrank to a thin adapter: `schemas.Note` satisfies flpkit's `NoteLike` protocol so writes pass straight through; only `ChannelLevels` re-wraps into the pydantic model.
+Format unit tests moved to flpkit (single owner, no drift); this repo keeps the corpus differential (pyflp oracle + compat shim live here), the live-FL gates, and the adapter-seam tests.

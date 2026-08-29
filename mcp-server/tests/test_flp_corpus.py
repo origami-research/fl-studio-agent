@@ -30,12 +30,19 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import flpkit as flp
 import pytest
+from flpkit import FlpError
 from harness.flp_compat import parse
-from test_flp_writers import pyflp_key_to_midi
 
-from fl_mcp import flp
-from fl_mcp.flp import FlpError
+# pyflp spells keys like "C5"; its octave system differs from ours by design.
+_PYFLP_NOTE_NAMES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"]
+
+
+def pyflp_key_to_midi(key: str) -> int:
+    letter = key.rstrip("0123456789")
+    return _PYFLP_NOTE_NAMES.index(letter) + 12 * int(key[len(letter) :])
+
 from fl_mcp.flpaths import fl_app
 
 _FL_DATA = fl_app() / "Contents/Resources/FL/Data"
