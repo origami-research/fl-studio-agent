@@ -817,3 +817,15 @@ Close FL (`harness.flctl.stop`) before a full suite run; root cause (real `_rtmi
 
 The one assumption left unverified at cutover is now fact: `channels.setChannelPitch(channel, n, 1)` sets **semitones** and `getChannelPitch(channel, 1)` reads them back exactly (set 7 -> read 7 on real FL 2026; `mode=0` returns the normalized knob position, 0.035 for +7 on the default ±100-cent-per-step range; value restored after the probe).
 Every live claim in the v2 session is now backed by a real-FL readback; no guard-railed guesses remain.
+
+## Addendum 10: dogfood findings (2026-08-29) - the front door tells the truth
+
+First real product session: an MCP client speaking to the `fl-mcp` binary over stdio, composing a four-part loop through the tools alone. Three shipped bugs and two reversed facts came out of it.
+
+1. **Store key was the raw project path** - pathlib's join replaces the base on an absolute right side, so the store pointed at the `.flp` file itself and every applied write reported a traceback. Fixed: `_project_key()` (stem + path hash, single component by construction) and `paths.project_dir` now rejects separators.
+2. **Recording could fail an applied write** - the store crash surfaced after the file write had landed and verified. Fixed: `_record()` logs and yields an empty delta; a landed edit is never reported as failure (receipt still carries the readback).
+3. **FL's licensed welcome screen blocks controller init entirely** - every fresh-launch failure today had it up; every success had dismissed it. Suppressed on this machine via "Do not show this in the future"; the self-heal below covers users who have it enabled.
+4. **Fact 8 reversed**: FL 2026 binds virtual ports that APPEAR while it is running (hot-plug, ~2s measured) and can MISS ports that existed at launch. `FLSession._hello` now self-heals: FL running + silent wire -> recycle the ports (rate-limited) and catch the hot-plug hello. Launch order no longer matters to users.
+5. **The FL-open pytest segfault root-caused and fixed**: `test_create_session_is_the_factory` built a REAL MidiControl in the fast suite; with FL open, FL hot-plugged onto test ports and teardown crashed rtmidi's C layer. The test now injects fakes (and `make_session` defaults `control_factory` to a fake). 423 tests green WITH FL running - the "close FL before the suite" rule is retired.
+
+Still unverified from the dogfood: the bridge write path + play/stop under the self-heal (needs a machine-free window; the auto-trigger steals focus), and the musical judgment by ear.

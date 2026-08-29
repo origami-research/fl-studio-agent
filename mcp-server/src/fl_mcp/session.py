@@ -13,6 +13,7 @@ spool's in-FL consumer; "live" = applied via the MIDI control wire;
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import os
 import subprocess
@@ -36,6 +37,7 @@ from .schemas import (
     HelloEvent,
     MixerTrack,
     Note,
+    NoteDelta,
     NoteWriteMode,
     PlaneStatus,
     SessionState,
@@ -58,6 +60,12 @@ SPOOL_RESPONSE_TIMEOUT_SECONDS = 15.0
 
 # A fast "is the controller there right now" probe - not a startup wait.
 HELLO_PROBE_SECONDS = 0.2
+
+# Hot-plug self-heal (live-measured 2026-08-29: FL binds appearing ports in
+# ~2s): how long to wait for hello after recycling, and how often a silent,
+# unconfigured FL is allowed to cost that wait.
+RECYCLE_HELLO_WAIT_SECONDS = 8.0
+RECYCLE_MIN_INTERVAL_SECONDS = 30.0
 
 # FL can stay "unsafe at current time" for a few seconds after a load; give the
 # controller's OnIdle deferral time to land a mutating call (v1-measured).
@@ -135,10 +143,23 @@ def create_session() -> FLSession:
     return FLSession(
         control=control,
         spool=Spool(),
-        store=Store(project_key=str(project) if project is not None else "default"),
+        store=Store(project_key=_project_key(project)),
         project=project,
         trigger=run_piano_roll_script,
     )
+
+
+def _project_key(project: Path | None) -> str:
+    """A filesystem-safe, stable store key for a project path.
+
+    Single path component by construction: stem for readability plus a short
+    hash of the full path for uniqueness. Passing the raw path was a live bug -
+    pathlib's join replaces the base on an absolute right-hand side, pointing
+    the store at the .flp file itself."""
+    if project is None:
+        return "default"
+    digest = hashlib.sha1(str(project).encode()).hexdigest()[:8]
+    return f"{project.stem}-{digest}"
 
 
 class FLSession:
@@ -157,12 +178,15 @@ class FLSession:
         store: Store,
         project: Path | None,
         trigger: Callable[[], None] | None = None,
+        control_factory: Callable[[], MidiControl] | None = None,
     ) -> None:
         self.control = control
         self.spool = spool
         self.store = store
         self.project = project
         self._trigger = trigger
+        self._control_factory = control_factory if control_factory is not None else MidiControl
+        self._last_recycle = 0.0
 
     def _trigger_pyscript(self) -> None:
         """Best-effort: press FL's 'repeat last script' shortcut so a queued
@@ -178,14 +202,58 @@ class FLSession:
         except Exception:
             log.debug("auto-trigger unavailable; waiting for a manual script run", exc_info=True)
 
+    def _record(
+        self,
+        target: Target,
+        notes: list[Note],
+        mode: NoteWriteMode,
+        backend: str,
+        command_id: int,
+    ) -> NoteDelta:
+        """Write-through to the store for an edit that ALREADY landed.
+
+        The edit was applied and verified before this runs, so a recording
+        failure must not fail the write - but it must not be silent either
+        (found live: a store-path bug made every applied write report a
+        traceback). Logged with the traceback; the receipt then carries an
+        empty delta, meaning "applied, history unavailable"."""
+        try:
+            return self.store.record_write(target, notes, mode, backend, command_id)
+        except Exception:
+            log.exception("write-through recording failed after the %s backend applied", backend)
+            return NoteDelta()
+
     def _hello(self) -> HelloEvent | None:
         """The ONE connectivity probe: the controller's hello, or None. Every
         backend choice keys off this so "connected" cannot drift between
-        methods (one canonical function per rule)."""
+        methods (one canonical function per rule).
+
+        Self-healing: FL 2026 reliably binds our virtual ports when they APPEAR
+        while it is running (hot-plug, ~2s live-measured) but can miss ports
+        that already existed at launch. So when FL is up and the wire is silent,
+        the ports are recycled to force a hot-plug bind - making the launch
+        order of server and FL irrelevant to the user. Rate-limited so an FL
+        that is genuinely unconfigured costs one wait per interval, not per call.
+        """
         if self.control is None:
             return None
         try:
             return self.control.await_hello(timeout=HELLO_PROBE_SECONDS)
+        except errors.ToolError:
+            pass
+        if not fl_process_running() or time.monotonic() - self._last_recycle < RECYCLE_MIN_INTERVAL_SECONDS:
+            return None
+        self._last_recycle = time.monotonic()
+        log.info("FL is running but the wire is silent; recycling ports for a hot-plug bind")
+        self.control.close()
+        try:
+            self.control = self._control_factory()
+        except ControlUnavailable:
+            log.exception("port recycle failed; control plane stays down")
+            self.control = None
+            return None
+        try:
+            return self.control.await_hello(timeout=RECYCLE_HELLO_WAIT_SECONDS)
         except errors.ToolError:
             return None
 
@@ -202,7 +270,7 @@ class FLSession:
                     f"FL did not confirm note write {cmd.id}: {resp.err or 'no readback'}",
                     fix=_RUN_PYSCRIPT_FIX,
                 )
-            delta = self.store.record_write(target, notes, mode, "bridge", cmd.id)
+            delta = self._record(target, notes, mode, "bridge", cmd.id)
             return WriteReceipt(
                 backend="bridge", target=target, confirmed_notes=resp.notes_written, delta=delta
             )
@@ -218,7 +286,7 @@ class FLSession:
                     fix="The project file was restored by the readback check failing; "
                     "inspect the .flp and retry.",
                 ) from exc
-            delta = self.store.record_write(target, notes, mode, "project-write", NO_COMMAND_ID)
+            delta = self._record(target, notes, mode, "project-write", NO_COMMAND_ID)
             self._reload_fl()
             return WriteReceipt(
                 backend="project-write",
@@ -242,7 +310,7 @@ class FLSession:
                     f"FL did not confirm clear {cmd.id}: {resp.err or 'no readback'}",
                     fix=_RUN_PYSCRIPT_FIX,
                 )
-            delta = self.store.record_write(target, [], "replace", "bridge", cmd.id)
+            delta = self._record(target, [], "replace", "bridge", cmd.id)
             return WriteReceipt(
                 backend="bridge", target=target, confirmed_notes=resp.notes_written, delta=delta
             )
@@ -257,7 +325,7 @@ class FLSession:
                     f"project-file clear did not verify: {exc}",
                     fix="Inspect the .flp and retry.",
                 ) from exc
-            delta = self.store.record_write(target, [], "replace", "project-write", NO_COMMAND_ID)
+            delta = self._record(target, [], "replace", "project-write", NO_COMMAND_ID)
             self._reload_fl()
             return WriteReceipt(
                 backend="project-write",
@@ -514,8 +582,10 @@ class FLSession:
                 "the MCP server.",
             )
         else:
-            hello = self._hello()
+            # Captured BEFORE the probe: _hello() may recycle a silent wire,
+            # and the old wire's dropped-frame count is the diagnostic.
             dropped = self.control.dropped_frames
+            hello = self._hello()
             if hello is not None:
                 control_plane = PlaneStatus(
                     connected=True,
