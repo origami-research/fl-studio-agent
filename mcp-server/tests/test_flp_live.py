@@ -24,9 +24,10 @@ import shutil
 import subprocess
 import time
 
+import flpkit as flp
 import pytest
 
-from fl_mcp import flp, wire
+from fl_mcp import wire
 from fl_mcp.flpaths import fl_app
 
 pytestmark = pytest.mark.e2e
