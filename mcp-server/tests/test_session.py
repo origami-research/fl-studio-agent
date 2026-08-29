@@ -28,7 +28,7 @@ from fl_mcp.schemas import (
     Target,
 )
 from fl_mcp.session import FLSession, NotePlaneUnavailable, WriteRejected, create_session
-from fl_mcp.spool import Spool, write_json_atomic
+from fl_mcp.spool import Spool
 from fl_mcp.store import Store
 from fl_mcp.wire import MidiControl
 
@@ -68,6 +68,10 @@ class FakeControl:
         timeout: float = 2.0,
     ) -> ControlResponse:
         self.calls.append((op, args or []))
+        if op == "ping" and "ping" not in self.handlers:
+            # Like the real controller: ping answers whenever the wire is alive,
+            # which for the fake means "whenever a hello was scripted".
+            return ControlResponse(id=len(self.calls), ok=self.hello is not None, err=None if self.hello else "dead wire")
         if op not in self.handlers:
             return ControlResponse(id=len(self.calls), ok=False, err=f"no handler for {op}")
         ret = self.handlers[op](args or [])
@@ -147,64 +151,56 @@ def no_reload(monkeypatch):
     return calls
 
 
-# --- write_notes: the bridge (spool) backend --------------------------------
+# --- write_notes: targeted notes are ALWAYS project-write ------------------
+#
+# Dogfood-found (docs/21 A12): the pyscript/spool lane is TARGET-BLIND - a
+# piano-roll script edits whichever score is open, so three "targeted" writes
+# all landed in one roll while their receipts claimed targets. A connected
+# control plane must therefore NOT divert note writes off the file.
 
 
-def test_bridge_write_confirms_readback_and_records_delta():
-    spool = FakeSpool(
-        {"add_notes": SpoolResponse(id=1, ok=True, op="add_notes", notes_written=5)}
-    )
-    session, store = make_session(control=FakeControl(hello=HELLO), spool=spool)
-
-    receipt = session.write_notes(TARGET, NOTES, "merge")
-
-    assert receipt.backend == "bridge"
-    assert receipt.confirmed_notes == 5, "receipt must carry the READBACK, not the request"
-    assert receipt.delta.added == NOTES
-    assert store.writes == [(TARGET, NOTES, "merge", "bridge", 1)]
-    assert spool.sent[0][0] == "add_notes"
-
-
-def test_bridge_rejection_raises_and_records_nothing():
-    spool = FakeSpool({"add_notes": SpoolResponse(id=1, ok=False, op="add_notes", err="boom")})
-    session, store = make_session(control=FakeControl(hello=HELLO), spool=spool)
-
-    with pytest.raises(WriteRejected, match="boom"):
-        session.write_notes(TARGET, NOTES, "merge")
-    assert store.writes == []
-
-
-def test_bridge_timeout_propagates_and_never_falls_through(no_reload):
-    """v1's cascade would fall to another backend after a timeout; v2 must not:
-    the command may still exist, and a second application path is the partial-
-    success bug this rewrite exists to kill."""
+def test_notes_go_project_write_even_when_control_is_connected(monkeypatch, tmp_path, no_reload):
+    project = tmp_path / "agent.flp"
+    monkeypatch.setattr(flp, "write_notes", lambda path, notes, *, pattern, channel, mode: list(notes))
+    spool = FakeSpool()
     session, store = make_session(
-        control=FakeControl(hello=HELLO), spool=FakeSpool(), project=Path("/tmp/agent.flp")
+        control=FakeControl(hello=HELLO), spool=spool, project=project
     )
-
-    with pytest.raises(errors.ToolError) as excinfo:
-        session.write_notes(TARGET, NOTES, "merge")
-
-    assert excinfo.value.category == "note_plane_unavailable"
-    assert store.writes == []
-    assert no_reload == [], "must not reload FL after choosing the live plane"
-
-
-def test_bridge_write_over_the_real_spool(tmp_path):
-    """End-to-end through the real file protocol, with the consumer's response
-    planted the way the pyscript writes it."""
-    spool = Spool(root=tmp_path)
-    write_json_atomic(
-        tmp_path / "responses" / "000001.json",
-        {"id": 1, "ok": True, "op": "add_notes", "notes_written": 1},
-    )
-    session, store = make_session(control=FakeControl(hello=HELLO), spool=spool)
 
     receipt = session.write_notes(TARGET, NOTES, "merge")
 
-    assert receipt.backend == "bridge"
-    assert receipt.confirmed_notes == 1
-    assert store.writes[0][4] == 1  # the spool command id, for the action log
+    assert receipt.backend == "project-write"
+    assert spool.sent == [], "the target-blind pyscript lane must never see a targeted write"
+    assert store.writes == [(TARGET, NOTES, "merge", "project-write", 0)]
+    assert no_reload == [True]
+
+
+def test_notes_without_a_project_raise_even_when_control_is_connected():
+    session, store = make_session(control=FakeControl(hello=HELLO), project=None)
+
+    with pytest.raises(NotePlaneUnavailable):
+        session.write_notes(TARGET, NOTES, "merge")
+    assert store.writes == []
+
+
+def test_recording_failure_never_fails_an_applied_write(monkeypatch, tmp_path, no_reload, caplog):
+    """Found live: the store crashed AFTER the file write landed, so every
+    applied write reported a traceback. Recording is memory - it logs and
+    yields an empty delta, and the receipt still reports the readback."""
+    project = tmp_path / "agent.flp"
+    monkeypatch.setattr(flp, "write_notes", lambda path, notes, *, pattern, channel, mode: list(notes))
+    session, store = make_session(project=project)
+
+    def boom(*a, **k):
+        raise OSError("store root unwritable")
+
+    store.record_write = boom
+    with caplog.at_level("ERROR"):
+        receipt = session.write_notes(TARGET, NOTES, "merge")
+
+    assert receipt.backend == "project-write" and receipt.confirmed_notes == 1
+    assert receipt.delta.is_empty()
+    assert any("recording failed" in r.message for r in caplog.records)
 
 
 # --- write_notes: the project-write backend ---------------------------------
@@ -251,19 +247,17 @@ def test_no_backend_raises_named_fix():
     assert "FLMCP_AGENT_PROJECT" in excinfo.value.fix
 
 
-def test_clear_notes_bridge_confirms_empty():
-    spool = FakeSpool(
-        {"clear_notes": SpoolResponse(id=1, ok=True, op="clear_notes", notes_written=0)}
+def test_clear_notes_is_project_write_even_when_connected(monkeypatch, tmp_path, no_reload):
+    monkeypatch.setattr(flp, "write_notes", lambda path, notes, *, pattern, channel, mode: [])
+    spool = FakeSpool()
+    session, store = make_session(
+        control=FakeControl(hello=HELLO), spool=spool, project=tmp_path / "agent.flp"
     )
-    session, store = make_session(control=FakeControl(hello=HELLO), spool=spool)
 
     receipt = session.clear_notes(TARGET)
 
-    assert receipt.confirmed_notes == 0
-    assert store.writes == [(TARGET, [], "replace", "bridge", 1)]
-
-
-# --- read_notes --------------------------------------------------------------
+    assert receipt.backend == "project-write" and receipt.confirmed_notes == 0
+    assert spool.sent == []
 
 
 def test_read_notes_prefers_the_store(monkeypatch):
@@ -453,7 +447,10 @@ def test_snapshot_live_uses_one_composite_round_trip(monkeypatch):
 
     state = session.snapshot()
 
-    assert control.calls == [("state.snapshot", [])], "exactly one composite round trip"
+    # the liveness ping precedes it (sticky-hello confirmation, A12)
+    assert [c for c in control.calls if c[0] != "ping"] == [("state.snapshot", [])], (
+        "exactly one composite round trip"
+    )
     assert state.tempo_bpm == 128.0
     assert state.ppq == 96
     assert state.playing is True
@@ -584,7 +581,10 @@ def test_doctor_dropped_frames_without_hello_points_at_the_codec(tmp_path, monke
     assert "codec" in report.control_plane.detail or "codec" in report.control_plane.fix
 
 
-def test_doctor_port_ordering_fix_when_fl_runs_without_hello(tmp_path, monkeypatch):
+def test_doctor_silent_wire_fix_names_the_dialog_not_a_restart(tmp_path, monkeypatch):
+    """Ports self-heal now (hot-plug, docs/21 A12), so 'restart FL' is no longer
+    the advice - the remaining silent-wire causes are a blocking dialog or a
+    missing controller assignment."""
     monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
     monkeypatch.setattr(session_mod, "fl_process_running", lambda: True)
     session, _ = make_session(control=FakeControl(hello=None))
@@ -592,7 +592,8 @@ def test_doctor_port_ordering_fix_when_fl_runs_without_hello(tmp_path, monkeypat
     report = session.doctor()
 
     assert report.control_plane.connected is False
-    assert "restart" in report.control_plane.fix.lower()
+    assert "dialog" in report.control_plane.fix.lower()
+    assert "launch order does not matter" in report.control_plane.fix.lower()
 
 
 # --- create_session ----------------------------------------------------------
@@ -608,27 +609,6 @@ def test_create_session_is_the_factory(monkeypatch):
     assert isinstance(session, FLSession)
     assert session.control is fake
     assert "/" not in session.store.project_key
-
-
-def test_bridge_write_fires_the_injected_trigger_best_effort():
-    """The auto-trigger (FL's 'repeat last script' keystroke) fires after the
-    command is queued, and a failing trigger never fails the write - it is an
-    accelerator; the human can still run the script manually."""
-    spool = FakeSpool(
-        {"add_notes": SpoolResponse(id=1, ok=True, op="add_notes", notes_written=1)}
-    )
-    fired: list[bool] = []
-    session, _ = make_session(control=FakeControl(hello=HELLO), spool=spool)
-    session._trigger = lambda: fired.append(True)
-    session.write_notes(TARGET, NOTES, "merge")
-    assert fired == [True]
-
-    def boom() -> None:
-        raise RuntimeError("no accessibility consent")
-
-    session._trigger = boom
-    receipt = session.write_notes(TARGET, NOTES, "merge")  # must not raise
-    assert receipt.backend == "bridge"
 
 
 def test_project_key_is_a_single_safe_component():
@@ -650,30 +630,6 @@ def test_project_dir_rejects_path_separators():
 
     with pytest.raises(ValueError):
         paths.project_dir("/absolute/path.flp")
-
-
-def test_recording_failure_never_fails_an_applied_write(caplog):
-    """Found live: the store crashed AFTER the file write landed, so every
-    applied write reported a traceback. Recording is memory - it logs and
-    yields an empty delta, and the receipt still reports the readback."""
-    spool = FakeSpool(
-        {"add_notes": SpoolResponse(id=1, ok=True, op="add_notes", notes_written=3)}
-    )
-    session, store = make_session(control=FakeControl(hello=HELLO), spool=spool)
-
-    def boom(*a, **k):
-        raise OSError("store root unwritable")
-
-    store.record_write = boom
-    with caplog.at_level("ERROR"):
-        receipt = session.write_notes(TARGET, NOTES, "merge")
-
-    assert receipt.backend == "bridge" and receipt.confirmed_notes == 3
-    assert receipt.delta.is_empty()
-    assert any("recording failed" in r.message for r in caplog.records)
-
-
-# --- hot-plug self-heal -------------------------------------------------------
 
 
 def test_silent_wire_recycles_ports_when_fl_is_running(monkeypatch):
@@ -724,3 +680,36 @@ def test_recycle_is_rate_limited(monkeypatch):
     assert session._hello() is None
     assert session._hello() is None  # immediately again - inside the interval
     assert factory_calls == [True]
+
+
+def test_sticky_hello_is_not_trusted_without_a_live_ping(monkeypatch):
+    """After FL dies, the wire still holds its last hello - trusting it routed
+    live ops into a void (dogfood A12). A dead ping must read as disconnected."""
+
+    class DeadWire(FakeControl):
+        def send_request(self, op, args=None, kwargs=None, timeout=2.0):
+            return ControlResponse(id=1, ok=False, err="no response")
+
+    session, _ = make_session(control=DeadWire(hello=HELLO))
+    monkeypatch.setattr(session_mod, "fl_process_running", lambda: False)
+
+    assert session._hello() is None
+
+
+def test_reload_reconnects_the_wire_fresh(monkeypatch, tmp_path):
+    """Our own reload kills FL and the old ports; a fresh wire after the
+    relaunch hits FL's reliable hot-plug bind and must replace the dead one."""
+    monkeypatch.setattr(flp, "write_notes", lambda path, notes, *, pattern, channel, mode: list(notes))
+    monkeypatch.setattr(session_mod, "fl_process_running", lambda: False)  # skip the pkill branch
+    monkeypatch.setattr(session_mod.subprocess, "run",
+                        lambda *a, **k: type("R", (), {"returncode": 0, "stderr": ""})())
+    old = FakeControl(hello=HELLO)
+    fresh = FakeControl(hello=HELLO)
+    session, _ = make_session(control=old, spool=FakeSpool(), project=tmp_path / "agent.flp")
+    session._control_factory = lambda: fresh
+    session._last_recycle = 12345.0
+
+    session.write_notes(TARGET, NOTES, "merge")
+
+    assert old.closed and session.control is fresh
+    assert session._last_recycle == 0.0

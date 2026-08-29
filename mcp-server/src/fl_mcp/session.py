@@ -1,14 +1,18 @@
 """One object owning the connection to FL: control wire + note spool + project.
 
-LANE S implements this module (docs/21). Explicit backend choice replaces
-v1's router cascade: a note write goes to the live plane when connected, else
-the project file (with FL reload), else raises NotePlaneUnavailable saying
-exactly what to set up. Whichever backend applies, the write-through records
-the same structured delta in the store, and every result is a READBACK.
+The division of labor is by CAPABILITY, dogfood-verified (docs/21 A12):
 
-Backend names in receipts: "bridge" = applied inside the running FL via the
-spool's in-FL consumer; "live" = applied via the MIDI control wire;
-"project-write" = raw surgery on the .flp plus an FL reload.
+- **Targeted note writes -> the project file** ("project-write": raw surgery
+  via flpkit + an FL reload). It is the only backend that can honor a
+  pattern/channel target - the pyscript/spool lane is TARGET-BLIND (a
+  piano-roll script edits whichever score is open), so routing notes through
+  it stamped target-claiming receipts on writes that all landed in one roll.
+  Live targeted notes arrive with the native Bridge plugin (issue #10), which
+  will consume the same spool; the Spool member stays for that day.
+- **Tempo, transport, mixer, reads -> the live control wire** when connected.
+
+Every result is a READBACK, and the write-through records the same structured
+delta in the store whichever backend applied.
 """
 
 from __future__ import annotations
@@ -54,12 +58,11 @@ log = logging.getLogger(__name__)
 # it clears in a second or two, so the relaunch waits before retrying.
 RELAUNCH_SETTLE_SECONDS = 2.0
 
-# The spool's consumer is a human-triggered piano-roll script, so waiting is
-# human-scale, not RPC-scale.
-SPOOL_RESPONSE_TIMEOUT_SECONDS = 15.0
 
 # A fast "is the controller there right now" probe - not a startup wait.
 HELLO_PROBE_SECONDS = 0.2
+# Confirming a sticky hello is a millisecond round trip when FL is alive.
+PING_CONFIRM_SECONDS = 1.0
 
 # Hot-plug self-heal (live-measured 2026-08-29: FL binds appearing ports in
 # ~2s): how long to wait for hello after recycling, and how often a silent,
@@ -69,7 +72,7 @@ RECYCLE_MIN_INTERVAL_SECONDS = 30.0
 
 # FL can stay "unsafe at current time" for a few seconds after a load; give the
 # controller's OnIdle deferral time to land a mutating call (v1-measured).
-LIVE_SET_TIMEOUT_SECONDS = 5.0
+LIVE_SET_TIMEOUT_SECONDS = 8.0
 LIVE_READ_TIMEOUT_SECONDS = 2.0
 
 # state.snapshot arrives as ~10 chunked SysEx frames (measured ~4.8KB on a
@@ -87,9 +90,6 @@ DEFAULT_PROJECT_NAME = "FLMCP Agent.flp"
 NO_COMMAND_ID = 0
 
 PYSCRIPT_NAME = "MCP Write Notes.pyscript"
-_RUN_PYSCRIPT_FIX = (
-    "In FL Studio: open the piano roll and run Tools > Scripting > 'MCP Write Notes'."
-)
 _SETUP_FIX = (
     "Either launch FL Studio with the FLMCP controller script configured (edits then "
     f"apply via the '{PYSCRIPT_NAME.removesuffix('.pyscript')}' piano-roll script), or "
@@ -133,19 +133,12 @@ def create_session() -> FLSession:
         )
         project = candidate if candidate is not None and candidate.is_file() else None
 
-    # The auto-trigger is optional tooling (harness may be absent in a bare
-    # install); the session treats a missing trigger as "human presses it".
-    try:
-        from harness.trigger import run_piano_roll_script
-    except ImportError:
-        run_piano_roll_script = None
 
     return FLSession(
         control=control,
         spool=Spool(),
         store=Store(project_key=_project_key(project)),
         project=project,
-        trigger=run_piano_roll_script,
     )
 
 
@@ -177,30 +170,47 @@ class FLSession:
         spool: Spool,
         store: Store,
         project: Path | None,
-        trigger: Callable[[], None] | None = None,
         control_factory: Callable[[], MidiControl] | None = None,
     ) -> None:
         self.control = control
         self.spool = spool
         self.store = store
         self.project = project
-        self._trigger = trigger
         self._control_factory = control_factory if control_factory is not None else MidiControl
         self._last_recycle = 0.0
 
-    def _trigger_pyscript(self) -> None:
-        """Best-effort: press FL's 'repeat last script' shortcut so a queued
-        spool command applies without a human trigger (live-verified
-        2026-08-28: Cmd+Opt+Y re-runs the last piano-roll script). Needs macOS
-        Accessibility consent and one prior manual run of the script; when
-        either is missing this is a no-op and the human triggers manually -
-        an accelerator, never a requirement, so failure only logs."""
-        if self._trigger is None:
+
+    def channel_names(self) -> list[Channel]:
+        """The channels of the TARGET universe - the project file - for name
+        resolution. File-first because targets are file coordinates and the
+        file answers instantly mid-reload; the live snapshot is the fallback
+        for sessions without a project."""
+        if self.project is not None:
+            proj = flp.read(self.project)
+            return [
+                Channel(
+                    index=c.index,
+                    name=c.name or f"Channel {c.index}",
+                    volume=c.volume / flp.LEVEL_MAX,
+                    pan=(c.pan - flp.PAN_CENTRE) / flp.PAN_CENTRE,
+                )
+                for c in proj.channels
+            ]
+        return self.snapshot().channels
+
+    def _reconnect_wire(self) -> None:
+        """Fresh ports after an FL relaunch we caused: the old wire died with
+        the killed process (and its sticky hello would lie), while ports that
+        APPEAR after FL is up hit its reliable hot-plug bind (docs/21 A12)."""
+        if self.control is None:
             return
+        self.control.close()
         try:
-            self._trigger()
-        except Exception:
-            log.debug("auto-trigger unavailable; waiting for a manual script run", exc_info=True)
+            self.control = self._control_factory()
+        except ControlUnavailable:
+            log.exception("wire re-open after reload failed; live ops degrade")
+            self.control = None
+        self._last_recycle = 0.0
 
     def _record(
         self,
@@ -238,7 +248,13 @@ class FLSession:
         if self.control is None:
             return None
         try:
-            return self.control.await_hello(timeout=HELLO_PROBE_SECONDS)
+            hello = self.control.await_hello(timeout=HELLO_PROBE_SECONDS)
+            # The stored hello is STICKY across an FL death (dogfood A12): a
+            # stale "connected" routes live ops into a void. A ping (answered
+            # from the SysEx callback, milliseconds when alive) confirms the
+            # wire is current before anything trusts it.
+            if self.control.send_request("ping", timeout=PING_CONFIRM_SECONDS).ok:
+                return hello
         except errors.ToolError:
             pass
         if not fl_process_running() or time.monotonic() - self._last_recycle < RECYCLE_MIN_INTERVAL_SECONDS:
@@ -258,23 +274,18 @@ class FLSession:
             return None
 
     def write_notes(self, target: Target, notes: list[Note], mode: NoteWriteMode) -> WriteReceipt:
-        """Apply via the chosen backend, VERIFY BY READBACK, record the delta.
+        """Apply to the PROJECT FILE, verify by readback, record the delta.
         Raises (NotePlaneUnavailable / WriteRejected) on failure - never
-        returns a maybe, never falls through after a partial application."""
-        if self._hello() is not None:
-            cmd = self.spool.send("add_notes", target=target, notes=notes, mode=mode)
-            self._trigger_pyscript()
-            resp = self.spool.await_response(cmd, timeout=SPOOL_RESPONSE_TIMEOUT_SECONDS)
-            if not resp.ok or resp.notes_written is None:
-                raise WriteRejected(
-                    f"FL did not confirm note write {cmd.id}: {resp.err or 'no readback'}",
-                    fix=_RUN_PYSCRIPT_FIX,
-                )
-            delta = self._record(target, notes, mode, "bridge", cmd.id)
-            return WriteReceipt(
-                backend="bridge", target=target, confirmed_notes=resp.notes_written, delta=delta
-            )
+        returns a maybe.
 
+        Targeted note writes deliberately do NOT use the pyscript/spool lane
+        even when the control plane is connected: a piano-roll script can only
+        edit the score it was invoked on, so it is TARGET-BLIND - dogfood-found
+        2026-08-29, three "targeted" writes all landed in whichever piano roll
+        was open, each replace destroying the previous part, while the receipts
+        claimed their targets. The file is the one backend that can honor a
+        target (and it keeps file, store, and get_scene coherent). Live
+        targeted notes arrive with the native Bridge plugin (issue #10)."""
         if self.project is not None:
             try:
                 written = flp.write_notes(
@@ -296,25 +307,12 @@ class FLSession:
             )
 
         raise NotePlaneUnavailable(
-            "No backend can apply notes: the control plane is not connected and no "
-            "project file is configured."
+            "No backend can apply targeted notes: no project file is configured. "
+            "(The pyscript lane cannot target a channel - see write_notes.)"
         )
 
     def clear_notes(self, target: Target) -> WriteReceipt:
-        if self._hello() is not None:
-            cmd = self.spool.send("clear_notes", target=target)
-            self._trigger_pyscript()
-            resp = self.spool.await_response(cmd, timeout=SPOOL_RESPONSE_TIMEOUT_SECONDS)
-            if not resp.ok or resp.notes_written is None:
-                raise WriteRejected(
-                    f"FL did not confirm clear {cmd.id}: {resp.err or 'no readback'}",
-                    fix=_RUN_PYSCRIPT_FIX,
-                )
-            delta = self._record(target, [], "replace", "bridge", cmd.id)
-            return WriteReceipt(
-                backend="bridge", target=target, confirmed_notes=resp.notes_written, delta=delta
-            )
-
+        """Project-file only, for the same target-blindness reason as write_notes."""
         if self.project is not None:
             try:
                 written = flp.write_notes(
@@ -604,9 +602,9 @@ class FLSession:
                 control_plane = PlaneStatus(
                     connected=False,
                     detail="FL Studio is running but the controller script has not said hello",
-                    fix="The virtual MIDI ports must exist BEFORE FL launches - restart "
-                    "FL Studio once, and confirm the FLMCP controller script is assigned "
-                    "in FL's MIDI settings.",
+                    fix="Close any dialog in FL (its welcome screen blocks the controller), and "
+                    "confirm the FLMCP controller script is assigned in FL's MIDI settings "
+                    "(`python -m fl_mcp.install`). Ports self-heal; launch order does not matter.",
                 )
             else:
                 control_plane = PlaneStatus(
@@ -633,8 +631,8 @@ class FLSession:
         else:
             note_plane = PlaneStatus(
                 connected=True,
-                detail=f"spool at {spool_roots()[0]}; edits apply when the user runs "
-                "Tools > Scripting > 'MCP Write Notes' in the piano roll",
+                detail=f"spool at {spool_roots()[0]} (reserved for the native Bridge "
+                "plugin; targeted notes currently apply via the project file)",
             )
 
         if self.project is None:
@@ -689,6 +687,7 @@ class FLSession:
                 text=True,
             )
             if result.returncode == 0:
+                self._reconnect_wire()
                 return
             last = (result.stderr or "").strip()
             time.sleep(1.0 + attempt)
