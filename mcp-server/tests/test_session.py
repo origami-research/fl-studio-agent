@@ -50,6 +50,10 @@ class FakeControl:
         self.handlers = handlers or {}
         self.dropped_frames = dropped
         self.calls: list[tuple[str, list[Any]]] = []
+        self.closed = False
+
+    def close(self) -> None:
+        self.closed = True
 
     def await_hello(self, timeout: float = 5.0) -> HelloEvent:
         if self.hello is None:
@@ -128,6 +132,9 @@ def make_session(
         spool=cast(Spool, spool or FakeSpool()),
         store=cast(Store, store),
         project=project,
+        # NEVER the real MidiControl in the fast suite (real ports + open FL
+        # segfault rtmidi); a recycle in a test yields another silent fake.
+        control_factory=cast(Any, lambda: FakeControl(hello=None)),
     )
     return session, store
 
@@ -591,14 +598,16 @@ def test_doctor_port_ordering_fix_when_fl_runs_without_hello(tmp_path, monkeypat
 # --- create_session ----------------------------------------------------------
 
 
-def test_create_session_is_the_factory():
-    """Turns fully green once Lanes W (wire) and K (store) land; until then the
-    stubs' NotImplementedError proves create_session reached the real deps."""
-    try:
-        session = create_session()
-    except NotImplementedError as exc:
-        pytest.skip(f"blocked on another lane's stub: {exc}")
+def test_create_session_is_the_factory(monkeypatch):
+    """Never real ports in the fast suite: a REAL MidiControl here made FL
+    (when open) hot-plug onto test ports and segfault rtmidi's C layer at
+    teardown - the live-found cause of the FL-open suite crashes."""
+    fake = FakeControl(hello=HELLO)
+    monkeypatch.setattr(session_mod, "MidiControl", lambda: fake)
+    session = create_session()
     assert isinstance(session, FLSession)
+    assert session.control is fake
+    assert "/" not in session.store.project_key
 
 
 def test_bridge_write_fires_the_injected_trigger_best_effort():
@@ -620,3 +629,98 @@ def test_bridge_write_fires_the_injected_trigger_best_effort():
     session._trigger = boom
     receipt = session.write_notes(TARGET, NOTES, "merge")  # must not raise
     assert receipt.backend == "bridge"
+
+
+def test_project_key_is_a_single_safe_component():
+    """The raw project path as a key was a live bug: pathlib's join replaces
+    the base on an absolute right-hand side, pointing the store at the .flp."""
+    from fl_mcp.session import _project_key
+
+    key = _project_key(Path("/Users/someone/Documents/FLMCP Agent.flp"))
+    assert "/" not in key and "\\" not in key
+    assert key.startswith("FLMCP Agent-")
+    assert _project_key(None) == "default"
+    # stable across calls, distinct across paths
+    assert key == _project_key(Path("/Users/someone/Documents/FLMCP Agent.flp"))
+    assert key != _project_key(Path("/elsewhere/FLMCP Agent.flp"))
+
+
+def test_project_dir_rejects_path_separators():
+    from fl_mcp import paths
+
+    with pytest.raises(ValueError):
+        paths.project_dir("/absolute/path.flp")
+
+
+def test_recording_failure_never_fails_an_applied_write(caplog):
+    """Found live: the store crashed AFTER the file write landed, so every
+    applied write reported a traceback. Recording is memory - it logs and
+    yields an empty delta, and the receipt still reports the readback."""
+    spool = FakeSpool(
+        {"add_notes": SpoolResponse(id=1, ok=True, op="add_notes", notes_written=3)}
+    )
+    session, store = make_session(control=FakeControl(hello=HELLO), spool=spool)
+
+    def boom(*a, **k):
+        raise OSError("store root unwritable")
+
+    store.record_write = boom
+    with caplog.at_level("ERROR"):
+        receipt = session.write_notes(TARGET, NOTES, "merge")
+
+    assert receipt.backend == "bridge" and receipt.confirmed_notes == 3
+    assert receipt.delta.is_empty()
+    assert any("recording failed" in r.message for r in caplog.records)
+
+
+# --- hot-plug self-heal -------------------------------------------------------
+
+
+def test_silent_wire_recycles_ports_when_fl_is_running(monkeypatch):
+    """Live-found (2026-08-29): FL binds ports that APPEAR while it runs (~2s)
+    but can miss ports that existed at launch. A silent wire with FL up must
+    recycle the ports and pick up the hot-plug hello."""
+    silent = FakeControl(hello=None)
+    silent.closed = False
+    silent.close = lambda: setattr(silent, "closed", True)
+    healed = FakeControl(hello=HELLO)
+    session, _ = make_session(control=silent)
+    session._control_factory = lambda: healed
+    monkeypatch.setattr(session_mod, "fl_process_running", lambda: True)
+
+    assert session._hello() is HELLO
+    assert silent.closed
+    assert session.control is healed
+
+
+def test_silent_wire_does_not_recycle_when_fl_is_closed(monkeypatch):
+    silent = FakeControl(hello=None)
+    calls: list[bool] = []
+    session, _ = make_session(control=silent)
+    session._control_factory = lambda: calls.append(True)
+    monkeypatch.setattr(session_mod, "fl_process_running", lambda: False)
+
+    assert session._hello() is None
+    assert calls == []
+
+
+def test_recycle_is_rate_limited(monkeypatch):
+    """An FL that is running but genuinely unconfigured must cost one recycle
+    wait per interval, not one per tool call."""
+    silent = FakeControl(hello=None)
+    silent.close = lambda: None
+    session, _ = make_session(control=silent)
+    factory_calls: list[bool] = []
+
+    def factory():
+        factory_calls.append(True)
+        still_silent = FakeControl(hello=None)
+        still_silent.close = lambda: None
+        return still_silent
+
+    session._control_factory = factory
+    monkeypatch.setattr(session_mod, "fl_process_running", lambda: True)
+
+    assert session._hello() is None
+    assert session._hello() is None  # immediately again - inside the interval
+    assert factory_calls == [True]

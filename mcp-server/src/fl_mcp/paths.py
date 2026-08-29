@@ -45,6 +45,12 @@ def projects_dir() -> Path:
 
 
 def project_dir(project_key: str) -> Path:
+    # A key containing a separator is a bug at the call site, not a layout
+    # choice: pathlib REPLACES the base when joined with an absolute path, so
+    # an absolute key would silently point the store at (say) the .flp file
+    # itself - found live when a full project path was used as the key.
+    if "/" in project_key or "\\" in project_key:
+        raise ValueError(f"project_key must be a single path component, got {project_key!r}")
     return projects_dir() / project_key
 
 
