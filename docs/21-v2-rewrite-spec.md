@@ -812,3 +812,8 @@ v1's `autonomous.py` (revived by the merge) is deleted again.
 
 Known constraint (2026-08-28): the fast suite can crash in rtmidi's C layer when a **live FL instance is holding the FLMCP virtual ports** - observed as a segfault in `test_wire` with FL open, 417/417 green with FL closed.
 Close FL (`harness.flctl.stop`) before a full suite run; root cause (real `_rtmidi` loading despite the fake) is unowned and worth a follow-up.
+
+## Addendum 9: setChannelPitch mode live-verified (2026-08-28)
+
+The one assumption left unverified at cutover is now fact: `channels.setChannelPitch(channel, n, 1)` sets **semitones** and `getChannelPitch(channel, 1)` reads them back exactly (set 7 -> read 7 on real FL 2026; `mode=0` returns the normalized knob position, 0.035 for +7 on the default ±100-cent-per-step range; value restored after the probe).
+Every live claim in the v2 session is now backed by a real-FL readback; no guard-railed guesses remain.
