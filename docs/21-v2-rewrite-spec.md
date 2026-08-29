@@ -804,3 +804,11 @@ Right-clicking the script in FL 2026 *runs* it (no assign menu exists), and `Cmd
 `harness/enable_autonomy`, `harness/doctor`, and the in-repo instructions were rewritten accordingly (they also still spoke the deleted v1 spool API - the purge's one miss, now fixed, plus a `ping` handler added to the pyscript so verification never touches the piano roll).
 
 Product consequence, shipped with this addendum: `FLSession` now takes an injected best-effort `trigger` (wired to `harness.trigger.run_piano_roll_script` by `create_session`), so bridge-path writes apply with **zero human action** on machines with Accessibility consent - restoring v1's auto-trigger capability that the rewrite had dropped. A missing trigger or missing consent degrades to the human running the script, never to a failure.
+
+## Addendum 8: get_scene ported to v2 (main merge) + a test-environment constraint
+
+PR #37 (`get_scene`, merged to main mid-rewrite) is ported rather than dropped: `scene.py`'s analysis is unchanged, but its data source moves from the dev-only pyflp reader (`harness.verify.read_notes`) to the v2 `flp` reader via a `SceneRow`/`_read_rows` seam, and the tool is registered on the v2 server reading `session.project` + `flp.read` for names and tempo.
+v1's `autonomous.py` (revived by the merge) is deleted again.
+
+Known constraint (2026-08-28): the fast suite can crash in rtmidi's C layer when a **live FL instance is holding the FLMCP virtual ports** - observed as a segfault in `test_wire` with FL open, 417/417 green with FL closed.
+Close FL (`harness.flctl.stop`) before a full suite run; root cause (real `_rtmidi` loading despite the fake) is unowned and worth a follow-up.

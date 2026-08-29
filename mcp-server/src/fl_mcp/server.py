@@ -24,7 +24,7 @@ from pydantic import ValidationError
 from fl_mcp import theory
 from fl_mcp.errors import ToolError
 
-from . import sdk
+from . import flp, scene, sdk
 from .schemas import Note, Target
 from .session import create_session
 
@@ -144,6 +144,41 @@ def fl_doctor(ctx: Context) -> dict[str, Any]:
     return session.doctor().model_dump()
 
 
+def get_scene(ctx: Context, detail: str = "summary", channel: int | None = None) -> dict[str, Any]:
+    """Read what is currently in the project - key, tempo, and what each channel has.
+
+    Call this before writing, so additions fit what is already there. It returns
+    an analysis rather than a note dump: a 56-note project summarises to about
+    20 tokens instead of ~960, and the summary answers the questions that
+    actually get asked.
+
+    Args:
+        detail: "summary" (default) for tempo, inferred key and a per-channel
+            digest - note count, span in beats, register, pitch classes, and for
+            bass-register parts the root motion. Use "notes" only when you need
+            individual notes, such as harmonising an existing line.
+        channel: With detail="notes", limit to one channel index.
+
+    Returns:
+        For "summary", a `summary` string is included that is already formatted
+        for reading. Key inference carries a confidence and can be wrong on
+        modal or chromatic material - treat "low" as "no reliable key".
+    """
+    session = ctx.request_context.lifespan_context["session"]
+    project = session.project
+    if project is None:
+        return {"error": "No project file configured. Run: python -m fl_mcp.make_agent_project"}
+
+    if detail == "notes":
+        return {"notes": scene.notes_detail(project, channel)}
+    if detail != "summary":
+        return {"error": f'detail must be "summary" or "notes", got {detail!r}'}
+
+    proj = flp.read(project)
+    names = {c.index: c.name for c in proj.channels}
+    return scene.summarize(project, names, tempo=proj.tempo)
+
+
 def main() -> None:
     """Entry point: logging.basicConfig(stream=sys.stderr, level from
     $FL_MCP_LOG), construct the MCP server with the lifespan, run."""
@@ -154,6 +189,6 @@ def main() -> None:
         force=True,  # stdout is the JSON-RPC wire; no prior handler may hold it
     )
     server = MCPServer(SERVER_NAME, lifespan=lifespan)
-    for tool in (run, get_notes, fl_doctor):
+    for tool in (run, get_notes, get_scene, fl_doctor):
         server.add_tool(tool)
     server.run()
