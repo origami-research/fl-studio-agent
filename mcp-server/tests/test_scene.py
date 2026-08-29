@@ -17,7 +17,7 @@ from fl_mcp import scene
 
 @dataclass
 class FakeRow:
-    """Stands in for harness.verify.NoteRow without needing a project file."""
+    """Stands in for scene.SceneRow without needing a project file."""
 
     midi: int
     channel: int = 0
@@ -99,9 +99,7 @@ def fake_notes(monkeypatch):
     """Patch the reader so these tests need no .flp on disk."""
 
     def install(rows):
-        import harness.verify as verify
-
-        monkeypatch.setattr(verify, "read_notes", lambda _path: rows)
+        monkeypatch.setattr(scene, "_read_rows", lambda _path: rows)
 
     return install
 

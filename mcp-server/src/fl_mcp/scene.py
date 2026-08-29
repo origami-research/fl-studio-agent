@@ -30,6 +30,34 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from . import flp
+
+
+@dataclass(frozen=True)
+class SceneRow:
+    """One note in analysis units (beats, MIDI) - what this module reasons on."""
+
+    midi: int
+    channel: int = 0
+    start_beat: float = 0.0
+    length_beats: float = 1.0
+    velocity: int = 100  # 0-127
+
+
+def _read_rows(project: Path) -> list[SceneRow]:
+    """Load rows via the v2 flp reader (ticks -> beats). The test seam."""
+    proj = flp.read(Path(project))
+    return [
+        SceneRow(
+            midi=n.key,
+            channel=n.channel,
+            start_beat=n.position / proj.ppq,
+            length_beats=n.length / proj.ppq,
+            velocity=n.velocity,
+        )
+        for n in proj.notes
+    ]
+
 NOTE_NAMES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"]
 
 # Scale degrees as semitone offsets from the tonic.
@@ -139,9 +167,7 @@ def summarize(
     tempo: float | None = None,
 ) -> dict[str, Any]:
     """Analyse the project into something a model can reason about directly."""
-    from harness.verify import read_notes
-
-    rows = read_notes(project)
+    rows = _read_rows(project)
     names = channel_names or {}
 
     if not rows:
@@ -208,7 +234,6 @@ def summarize(
 
 def notes_detail(project: Path, channel: int | None = None) -> list[dict[str, Any]]:
     """Note-level data, for the cases that genuinely need it."""
-    from harness.verify import read_notes
 
     return [
         {
@@ -217,8 +242,8 @@ def notes_detail(project: Path, channel: int | None = None) -> list[dict[str, An
             "midi": r.midi,
             "start": r.start_beat,
             "length": r.length_beats,
-            "velocity": round(r.velocity / 128, 2),
+            "velocity": round(r.velocity / 127, 2),  # FlpNote velocity is 0-127
         }
-        for r in read_notes(project)
+        for r in _read_rows(project)
         if channel is None or r.channel == channel
     ]

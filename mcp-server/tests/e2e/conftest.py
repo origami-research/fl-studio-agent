@@ -1,6 +1,6 @@
 """Live-FL end-to-end fixtures.
 
-These run the ACTUAL server code (control_midi + FLSession + the merged
+These run the ACTUAL server code (wire.MidiControl + FLSession + the merged
 controller script) against a real FL Studio session and assert closed-loop
 using FL's own read-back - no fake, no human eyeballing. This is the automated
 form of "verify first".
@@ -27,9 +27,9 @@ from typing import NamedTuple
 
 import pytest
 
-from fl_mcp import control_midi
+from fl_mcp import wire
 from fl_mcp.flpaths import fl_app
-from fl_mcp.session import FLSession
+from fl_mcp.session import FLSession, create_session
 
 
 class LiveFL(NamedTuple):
@@ -66,7 +66,7 @@ def live_fl():
     from harness import flctl
 
     # This fixture owns the transport: constructed here, closed on teardown.
-    ctl = control_midi.MidiControl()  # ports must exist before FL launches
+    ctl = wire.MidiControl()  # ports must exist before FL launches
     if flctl.is_running():
         flctl.stop(force=True)
         time.sleep(1)
@@ -94,7 +94,12 @@ def live_fl():
         ctl.close()
         pytest.fail("controller script never said hello within 120s")
 
-    yield LiveFL(session=FLSession(control=ctl), hello=hello)
+    # v2 FLSession takes its collaborators explicitly - no hidden construction.
+    session = create_session()
+    if session.control is not None:
+        session.control.close()  # the fixture owns the transport, not the factory
+    session.control = ctl
+    yield LiveFL(session=session, hello=hello)
 
     flctl.stop(force=True)
     ctl.close()

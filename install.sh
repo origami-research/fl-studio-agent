@@ -140,25 +140,27 @@ step "3/3  fl_doctor"
 
 if [ -x "$MCP_VENV_PY" ]; then
     if "$MCP_VENV_PY" -c "
-from fl_mcp.session import FLSession
+from fl_mcp.session import create_session
 
-report = FLSession().doctor()
+# v2: the session is built by THE factory (collaborators injected, never hidden)
+# and doctor() returns a typed DoctorReport, not a dict.
+session = create_session()
+try:
+    report = session.doctor()
 
+    def line(plane, name):
+        if plane.connected:
+            print(f'  [PASS] {name}: connected')
+        else:
+            print(f'  [INFO] {name}: {plane.fix or plane.detail or \"not connected\"}')
 
-def line(plane, name):
-    if plane.get('connected'):
-        print(f'  [PASS] {name}: connected')
-    elif plane.get('status') == 'pending':
-        print(f'  [PENDING] {name}: {plane.get(\"detail\")}')
-    else:
-        detail = plane.get('fix') or plane.get('message') or plane.get('detail') or 'not connected'
-        print(f'  [INFO] {name}: {detail}')
-
-
-line(report.get('control_plane', {}), 'control plane (control_midi / controller script)')
-line(report.get('note_plane', {}), 'note plane (v0 piano-roll script)')
-line(report.get('template_project', {}), 'template project')
-print(f\"  Overall: {report.get('status')}\")
+    line(report.control_plane, 'control plane (wire / controller script)')
+    line(report.note_plane, 'note plane (piano-roll script)')
+    line(report.project_file, 'project file')
+    print(f'  Overall: {report.status}')
+finally:
+    if session.control is not None:
+        session.control.close()
 " 2>/tmp/flmcp_doctor.log; then
         pass "fl_doctor ran (see plane status above — the control plane shows 'not connected' until" \
              "you start the fl-studio MCP server, which opens the ports; see docs/14 on ordering)"

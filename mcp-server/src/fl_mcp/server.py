@@ -1,773 +1,151 @@
-"""FL Studio MCP server — v0 vertical slice, growing toward the docs/06 catalog.
+"""Thin MCP layer. The product surface is the SDK; tools exist to (1) run
+Python against it, (2) read state cheaply, (3) diagnose setup.
 
-Two note-plane generations coexist here (see spool.py):
-
-- **v0**: commands go out over a single-pending-command spool; a piano roll
-  script inside FL applies them when the user triggers it manually. No
-  targeting — notes land in whichever piano roll is open. This is
-  `write_notes`/`clear_notes` called with no explicit ``pattern``/``channel``
-  (both default to -1, "current"), and is the live, interim note plane
-  (docs/14/15 fix item 4): tool descriptions state the workflow explicitly,
-  because the model needs to know the user must trigger the script.
-- **v1**: an explicit ``pattern``/``channel`` target routes through
-  `FLSession`/`SpoolSession` instead — the sequenced spool a native Bridge
-  plugin polls automatically (docs/03, docs/04). No plugin is wired into a
-  live server yet (docs/12: gated on a probe that hasn't passed), so this path
-  is just as honest as v0: it waits for a real confirmation and reports a
-  structured `note_plane_unavailable` error rather than claiming success
-  nothing has actually verified.
-
-The control plane (`get_session_state`, `fl_doctor`'s control_plane check,
-and everything the notebook kernel does) rides `control_midi.py` — the
-server-hosted, live-verified MIDI transport (docs/14) — via
-`control_midi.get_control()`. `main()` opens it eagerly at process start so
-the ports exist before FL Studio launches (docs/14's ordering requirement).
+LANE W implements this module (docs/21). No module globals: the session is
+built in the lifespan and injected into tools via the framework's Context
+(verified supported by the installed MCP version). ``main()`` configures
+logging to STDERR - stdout is the JSON-RPC wire, one stray line corrupts it.
 """
 
 from __future__ import annotations
 
+import ast
 import contextlib
-import json
-import threading
+import io
+import logging
+import os
+import sys
+import traceback
 from typing import Any
 
-from mcp.server.mcpserver import MCPServer
+from mcp.server.mcpserver import Context, MCPServer
+from pydantic import ValidationError
 
-from . import control_midi, errors, router, schemas, spool
-from .notes import NoteError, describe, normalize_notes
-from .session import FLSession
+from fl_mcp import theory
+from fl_mcp.errors import ToolError
 
-SCRIPT_NAME = "MCP Write Notes"
+from . import flp, scene, sdk
+from .schemas import Note, Target
+from .session import create_session
 
-_TRIGGER_HINT = (
-    f"In FL Studio, open the piano roll on the channel you want, then run "
-    f"Tools > Scripting > '{SCRIPT_NAME}'."
-)
+log = logging.getLogger(__name__)
 
-mcp = MCPServer("fl-studio")
-
-
-def create_session() -> FLSession:
-    """Build the process's FLSession with its real dependencies, explicitly.
-
-    Called once from main() before serving (docs/14 ordering: the MIDI ports
-    must exist before FL launches and binds them). python-rtmidi missing or
-    ports failing to open degrades honestly - session.control is None and
-    control-plane tools report unavailable rather than crashing.
-    """
-    control = None
-    with contextlib.suppress(control_midi.ControlUnavailable):
-        control = control_midi.MidiControl()
-    return FLSession(control=control)
+SERVER_NAME = "fl-studio"
+LOG_LEVEL_ENV = "FL_MCP_LOG"
+# Above this, get_notes returns a summary instead of the full list - a model
+# should not have to page through 4000 notes to learn the shape of a part.
+GET_NOTES_FULL_LIST_MAX = 200
+GET_NOTES_SAMPLE_SIZE = 20
 
 
-class _SessionHolder:
-    """The one seam through which tools reach the process session.
-
-    MCP tools are module-level functions registered by signature, so the
-    session cannot arrive as a call argument; it is injected here instead -
-    explicitly, once, at the entry point (main) or by a test (set_session).
-    No `global` statements, no construction hidden in a getter's side effect.
-
-    The lock covers the lazy fallback for direct-call uses (tests that never
-    injected, a REPL): two concurrent first calls must not build two sessions,
-    because two MidiControls would open duplicate virtual MIDI ports.
-    """
-
-    def __init__(self) -> None:
-        self._session: FLSession | None = None
-        self._lock = threading.Lock()
-
-    def get(self) -> FLSession:
-        with self._lock:
-            if self._session is None:
-                self._session = create_session()
-            return self._session
-
-    def set(self, session: FLSession | None) -> None:
-        with self._lock:
-            self._session = session
-
-
-_holder = _SessionHolder()
-
-
-def get_session() -> FLSession:
-    return _holder.get()
-
-
-def set_session(session: FLSession | None) -> None:
-    """Inject the process session: main() at startup, tests with fakes."""
-    _holder.set(session)
-
-
-def _try_live(command_id: int) -> dict[str, Any] | None:
-    """Edit the open piano roll in place — preferred when it is usable.
-
-    Ranked above the project-write backend because it is the only one that does
-    not reload FL: the user keeps their session, and sees notes appear in the
-    piano roll they are looking at. It needs two one-time grants, so it is not
-    always available; see live.readiness().
-    """
+@contextlib.asynccontextmanager
+async def lifespan(server: Any) -> Any:
+    """Async context manager: build the session (MIDI ports open BEFORE FL
+    launches - docs/14 ordering), yield {"fl": sdk.connect(session)}, close
+    the transport on shutdown."""
+    session = create_session()
+    fl = sdk.connect(session)
+    # "session" rides along because doctor() and provenance reads are session
+    # surface, deliberately not exposed on the SDK object the model drives.
     try:
-        from . import live
-    except ImportError:
-        return None
-    if not live.available():
-        return None
-    result = live.apply(command_id)
-    return result if result is not None and result.get("ok") else None
+        yield {"fl": fl, "session": session}
+    finally:
+        if session.control is not None:
+            session.control.close()
 
 
-def _try_project_write(
-    notes: list[dict[str, Any]] | None,
-    mode: str,
-    channel: str | int | None = None,
-) -> dict[str, Any] | None:
-    """Write straight into the agent project — the fully autonomous path.
+def run(code: str, ctx: Context) -> dict[str, Any]:
+    """MCP tool. Execute Python in a namespace holding ``fl`` (the SDK),
+    ``theory``, and ``Note``. Returns {"stdout": ..., "result":
+    repr-of-last-expression} or {"traceback": ...} - errors read like Python, no
+    status-string zoo.
 
-    Preferred when an agent project is configured, because it needs no user
-    action and no macOS permission. Returns None when unavailable so the caller
-    falls back to the spool, which is non-destructive to a live session.
+    ``Note`` is in the namespace because without it the product's primary
+    operation is inexpressible: ``Track.write`` takes ``list[Note]``,
+    ``theory.chord``/``scale`` return bare MIDI ints, and ``theory.drums``
+    returns a *v1* ``schemas.Note`` that v2 rejects. Verified by G4 (manager
+    addendum A12) - every route to writing a note was closed.
     """
+    fl = ctx.request_context.lifespan_context["fl"]
+    namespace: dict[str, Any] = {"fl": fl, "theory": theory, "Note": Note}
     try:
-        from . import autonomous
-    except ImportError:
-        return None
-    if not autonomous.available():
-        return None
-    result = autonomous.apply_notes(notes or [], mode=mode, channel=channel)
-    return result if result.get("ok") else None
+        tree = ast.parse(code, mode="exec")
+    except SyntaxError as exc:
+        return {"traceback": "".join(traceback.format_exception_only(exc))}
 
+    # REPL semantics: a trailing expression is evaluated and repr'd, so
+    # `fl.tempo` answers like Python instead of printing nothing.
+    last_expr: ast.Expression | None = None
+    if tree.body and isinstance(tree.body[-1], ast.Expr):
+        last_expr = ast.Expression(tree.body.pop().value)
 
-def _queued(
-    cmd: dict[str, Any], summary: str, tried_live: bool = False
-) -> dict[str, Any]:
-    """Build the response for a command that could not be applied.
-
-    `tried_live` must be True when the caller already attempted the live
-    backend. Retrying here would press FL's shortcut a second time and apply
-    the same notes twice.
-    """
-    applied = None if tried_live else _try_live(cmd["id"])
-    if applied is not None:
+    stdout = io.StringIO()
+    try:
+        with contextlib.redirect_stdout(stdout):
+            exec(compile(tree, "<fl>", "exec"), namespace)
+            result = eval(compile(last_expr, "<fl>", "eval"), namespace) if last_expr else None
+    except BaseException as exc:  # noqa: BLE001 - the REPL boundary: user code (incl. sys.exit) must never kill the server; its error IS the result
+        frames = exc.__traceback__.tb_next if exc.__traceback__ else None
         return {
-            "status": "applied",
-            "backend": "live",
-            "command_id": cmd["id"],
-            "applied": summary,
-            "notes_in_piano_roll": applied.get("note_count"),
-            "note": (
-                "Applied in place to the piano roll you have open. FL was not "
-                "reloaded and nothing was lost."
-            ),
+            "stdout": stdout.getvalue(),
+            "traceback": "".join(traceback.format_exception(type(exc), exc, frames)),
         }
-
-    from . import live
-
-    state = live.readiness()
     return {
-        "status": "queued",
-        "command_id": cmd["id"],
-        "queued": summary,
-        "next_step": _TRIGGER_HINT,
-        "live_backend_blocked_by": state.blockers(),
-        "note": (
-            "Nothing has changed in FL Studio yet. Live editing is unavailable, "
-            "so the user must run the script. Run `python -m harness.doctor` for "
-            "the fix, then call fl_status to confirm."
-        ),
+        "stdout": stdout.getvalue(),
+        "result": None if result is None else repr(result),
     }
 
 
-@mcp.tool()
-def write_notes(
-    notes: list[dict],
-    mode: str = "merge",
-    channel: str | int | None = None,
-    pattern: int | str = -1,
-) -> dict:
-    """Write notes into FL Studio's piano roll.
+def get_notes(pattern: int, channel: int | str, ctx: Context) -> dict[str, Any]:
+    """MCP tool. Read-only view of a target's notes with provenance and
+    size-aware compression (full list when small, summary when large).
 
-    Two routes (docs/17 backend router):
-    - Default (no explicit `pattern`): the backend cascade - live in-place edit
-      if the grants are set up, else the project is rewritten and FL reopened
-      (the permission-free default), else queued for the user to trigger. The
-      result reports which backend ran; `channel` targets an instrument by name
-      or index.
-    - Explicit `pattern` (and optional `channel`): targets that pattern/channel
-      directly through the Bridge plugin and blocks until it confirms the write.
-      Requires the Bridge plugin loaded and connected (run fl_doctor).
-
-    Args:
-        notes: List of note objects. Each requires:
-            - key: note name ("C4", "F#3", "Bb5") or MIDI number 0-127.
-                   C4 = MIDI 60 = middle C. FL's piano roll labels this "C5"
-                   because it displays an octave higher; the pitch is correct.
-            - start: position in beats from the start of the pattern (0 = beat 1).
-            - length: duration in beats (1.0 = a quarter note).
-          Optional per note:
-            - velocity: 0.0-1.0, default 0.8
-            - pan: 0.0-1.0, default 0.5 (centered)
-            - color: 0-15, default 0. Maps to FL's note colors / MIDI channel.
-        mode: "merge" keeps existing notes (default), "replace" clears the piano
-            roll first. Use "replace" when rewriting a part, "merge" when adding
-            a layer such as a countermelody.
-        channel: Which instrument to write to — a name ("Lead", "Bass",
-            "Chords") or a rack index. Defaults to the most melody-appropriate
-            channel, preferring a lead over a bass and never a drum. Call
-            list_channels to see what this project has.
-
-    Returns:
-        Confirmation with the backend that ran (live / project-write / queued),
-        or a structured error.
+    ``channel`` is an index (a numeric string is tolerated - JSON models pass
+    "3"); names resolve in the SDK, via ``run`` with ``fl.track("Lead")``.
     """
-    if mode not in ("merge", "replace"):
-        return {
-            "status": "error",
-            "error": f"mode must be 'merge' or 'replace', got {mode!r}",
-        }
-
+    session = ctx.request_context.lifespan_context["session"]
     try:
-        parsed = normalize_notes(notes)
-    except NoteError as exc:
+        target = Target(pattern=pattern, channel=channel)  # pydantic coerces "3" -> 3
+        notes = session.read_notes(target)
+    except ValidationError as exc:
         return {
-            "status": "error",
             "error": str(exc),
-            "hint": (
-                'Each note looks like {"key": "C4", "start": 0, "length": 1}. '
-                "start and length are in beats."
-            ),
+            "fix": 'pattern >= 1 and channel >= 0, as integers. For a channel by name, use run: fl.track("Lead").notes()',
         }
-
-    summary = describe(parsed) + (", replacing existing notes" if mode == "replace" else "")
-
-    # Explicit target -> the Bridge plugin path: targets an arbitrary
-    # pattern/channel and blocks for confirmation (docs/17 router follow-up).
-    if pattern != -1:
-        target = schemas.Target(pattern=pattern, channel=channel if channel is not None else -1)
-        parsed_notes = [schemas.Note.model_validate(n) for n in parsed]
-        try:
-            resp, cmd = get_session().write_notes(target, parsed_notes, mode)
-        except errors.ToolError as exc:
-            return exc.to_dict()
-        if not resp.ok:
-            return errors.fl_api_error("add_notes", resp.err or "unknown error").to_dict()
-        return {
-            "status": "ok",
-            "backend": "bridge",
-            "command_id": cmd.id,
-            "notes_written": resp.notes_written,
-            "target": {"pattern": target.pattern, "channel": target.channel},
-        }
-
-    # Live first: it is the only backend that edits the session the user is
-    # looking at. The alternative reloads FL, which is correct but disruptive,
-    # so it is a fallback rather than the default.
-    spool.clear_stale_results()
-    try:
-        cmd = spool.put_command("add_notes", mode=mode, notes=parsed)
-    except spool.SpoolUnavailable as exc:
-        return {"status": "error", "error": str(exc)}
-
-    applied = _try_live(cmd["id"])
-    if applied is not None:
-        # Backend-agnostic write-through: the live backend edits "whatever's
-        # open", so record against the current target (docs/17).
-        _record_cascade_write(schemas.Target(pattern=-1, channel=-1), parsed, mode, "live", cmd["id"])
-        return {
-            "status": "applied",
-            "backend": "live",
-            "applied": summary,
-            "notes_in_piano_roll": applied.get("note_count"),
-            "note": (
-                "Applied in place to the piano roll you have open. FL was not "
-                "reloaded and nothing was lost."
-            ),
-        }
-
-    written = _try_project_write(parsed, mode, channel)
-    if written is not None:
-        _record_cascade_write(
-            schemas.Target(pattern=1, channel=written.get("channel") if written.get("channel") is not None else -1),
-            parsed, mode, "project-write", cmd["id"],
-        )
-        return {
-            "status": "applied",
-            "applied": summary,
-            "backend": written["backend"],
-            "project": written["project"],
-            "notes_in_pattern": written["notes_in_pattern"],
-            "channel": written.get("channel"),
-            "channel_name": written.get("channel_name"),
-            "where_to_look": (
-                f"FL Studio reopened on the project. Double-click channel "
-                f"{written.get('channel')} ('{written.get('channel_name')}') in the "
-                f"Channel Rack to open its piano roll and see the notes."
-            ),
-            "note": (
-                "Live in-place editing was unavailable, so the project file was "
-                "rewritten and FL reopened on it. Run `python -m harness.doctor` "
-                "to enable live editing."
-            ),
-        }
-
-    return _queued(cmd, summary, tried_live=True)
-
-
-def _record_cascade_write(
-    target: schemas.Target, parsed: list[dict[str, Any]], mode: str, backend: str, command_id: int
-) -> None:
-    """Record a cascade-backend write into the shadow score + action log.
-
-    Side effect only: a recording failure must never break the user's edit,
-    which already landed (router.record_note_write swallows its own errors).
-    """
-    session = get_session()
-    router.record_note_write(session.shadow, session.actions, target, parsed, mode, backend, command_id)
-
-
-@mcp.tool()
-def clear_notes(pattern: int | str = -1, channel: int | str = -1) -> dict:
-    """Delete notes from FL Studio's piano roll.
-
-    With no pattern/channel (the default), queues the v0 workflow: it clears
-    whichever piano roll the user has open when they next run the in-FL
-    script. An explicit target clears that pattern/channel directly through
-    the Bridge plugin and blocks for confirmation - see write_notes for the
-    same v0/v1 split.
-    """
-    if pattern == -1 and channel == -1:
-        spool.clear_stale_results()
-        try:
-            cmd = spool.put_command("clear_notes")
-        except spool.SpoolUnavailable as exc:
-            return {"status": "error", "error": str(exc)}
-        return _queued(cmd, "clear all notes in the open piano roll")
-
-    target = schemas.Target(pattern=pattern, channel=channel)
-    try:
-        resp, cmd = get_session().clear_notes(target)
-    except errors.ToolError as exc:
+    except ToolError as exc:
         return exc.to_dict()
-    if not resp.ok:
-        return errors.fl_api_error("clear_notes", resp.err or "unknown error").to_dict()
-    return {
-        "status": "ok",
-        "command_id": cmd.id,
-        "notes_cleared": resp.notes_written,
-        "target": {"pattern": target.pattern, "channel": target.channel},
+
+    ref = session.store.ref_at(target)
+    result: dict[str, Any] = {
+        "target": target.model_dump(),
+        "provenance": None if ref is None else ref.provenance,
+        "as_of": None if ref is None else ref.as_of.isoformat(),
+        "note_count": len(notes),
     }
-
-
-@mcp.tool()
-def get_notes(pattern: int | str, channel: int | str, key_min: int | None = None, key_max: int | None = None) -> dict:
-    """Read notes for one pattern/channel from the shadow score (docs/06).
-
-    Always labeled with provenance: "shadow" (the server's own record of what
-    it wrote, may be stale if a human edited by hand) vs "project" (ground
-    truth parsed from the saved .flp - call sync_from_project to refresh it).
-
-    Args:
-        pattern: pattern number.
-        channel: channel number.
-        key_min / key_max: optional inclusive MIDI range to filter by.
-    """
-    target = schemas.Target(pattern=pattern, channel=channel)
-    session = get_session()
-    ref = session.shadow.ref_at(target)
-    if ref is None:
-        return {
-            "status": "ok",
-            "source": "shadow",
-            "notes": [],
-            "note": "nothing recorded for this target yet - write_notes or sync_from_project first",
-        }
-    notes = session.shadow.notes_at(target) or []
-    if key_min is not None:
-        notes = [n for n in notes if n.key >= key_min]
-    if key_max is not None:
-        notes = [n for n in notes if n.key <= key_max]
-    return {
-        "status": "ok",
-        "source": ref.provenance,
-        "as_of": ref.as_of.isoformat(),
-        "stale": ref.stale,
-        "notes": [json.loads(n.model_dump_json()) for n in notes],
-    }
-
-
-@mcp.tool()
-def sync_from_project(pattern: int = 1) -> dict:
-    """Refresh the shadow score from ground truth: parse the saved .flp.
-
-    FL can't be asked what notes exist live, so this reads them back out of the
-    project file (docs/11 readback) and rebuilds the shadow score for that
-    pattern with provenance "project" - the authoritative source after a human
-    hand-edit. Requires the project-write (autonomous) backend; without it there
-    is no saved project to parse.
-    """
-    try:
-        from . import autonomous
-    except ImportError:
-        return {"status": "error", "error": "project read-back unavailable"}
-    if not autonomous.available():
-        return {
-            "status": "error",
-            "error": "No agent project to read. Run: python -m fl_mcp.make_agent_project",
-        }
-
-    verified = autonomous.verify(pattern=pattern)
-    if not verified.get("ok"):
-        return {"status": "error", "error": verified.get("error", "read failed")}
-
-    # Group the parsed rows by channel and rebuild the shadow score per target.
-    by_channel: dict[int, list[schemas.Note]] = {}
-    for row in verified.get("notes", []):
-        by_channel.setdefault(int(row["channel"]), []).append(
-            schemas.Note(key=int(row["midi"]), start=float(row["start_beat"]), length=float(row["length_beats"]))
-        )
-    session = get_session()
-    synced = []
-    for channel, notes in by_channel.items():
-        target = schemas.Target(pattern=pattern, channel=channel)
-        ref = session.shadow.write(target, notes, mode="replace", provenance="project")
-        synced.append({"channel": channel, "notes": len(notes), "id": ref.id})
-    return {
-        "status": "ok",
-        "source": "project",
-        "pattern": pattern,
-        "note_count": verified.get("note_count", 0),
-        "synced_targets": synced,
-        "note": "Shadow score rebuilt from the saved project. get_notes now reports source 'project'.",
-    }
-
-
-@mcp.tool()
-def get_session_state() -> dict:
-    """Tempo, playing?, current pattern, channels, mixer tracks (docs/06).
-
-    Requires the control plane (the FLMCP controller script, over control_midi's
-    server-hosted MIDI transport) to be connected. Run fl_doctor if this
-    reports control_plane_unavailable.
-    """
-    session = get_session()
-    if session.control is None:
-        return errors.control_plane_unavailable("state.snapshot", 0.0).to_dict()
-    try:
-        resp = session.control.send_request("state.snapshot", timeout=2.0)
-    except errors.ToolError as exc:
-        return exc.to_dict()
-    if not resp.ok:
-        return errors.fl_api_error("state.snapshot", resp.err or "unknown error").to_dict()
-    return {"status": "ok", **(resp.ret or {})}
-
-
-@mcp.tool()
-def fl_doctor() -> dict:
-    """Is everything connected? What exactly is broken and how to fix it (docs/06)."""
-    return get_session().doctor()
-
-
-@mcp.tool()
-def undo_last() -> dict:
-    """Undo the last step via the control plane, and report what it was.
-
-    Invokes FL's own undo (`general.undo`) over the live control plane and names
-    the model's last recorded action (docs/11 action log). Note the single-writer
-    caveat: `general.undo` undoes FL's *last* step, which is the model's last
-    action only if nobody hand-edited in between. Without a control plane it
-    falls back to identifying the action so the user can Ctrl+Z it.
-    """
-    session = get_session()
-    last = session.actions.last()
-    identified = (
-        {"id": last.id, "op": last.op, "undo_step": last.undo_step} if last is not None else None
-    )
-    resp = router.try_live_control(session, "general.undo")
-    if resp is not None:
-        return {
-            "status": "applied",
-            "backend": "live",
-            "undone": identified,
-            "note": (
-                "Invoked FL's undo. This reverses FL's last step - the model's "
-                "last action unless the user hand-edited since."
-            ),
-        }
-    if identified is None:
-        return {
-            "status": "error",
-            "error": "nothing to undo",
-            "fix": "No actions recorded yet, and no live control plane to call FL's undo.",
-        }
-    return {
-        "status": "identified",
-        "would_undo": identified,
-        "note": "No live control plane; use FL's own Ctrl+Z. Run fl_doctor to connect.",
-    }
-
-
-@mcp.tool()
-def set_tempo(bpm: float) -> dict:
-    """Set the project tempo in beats per minute.
-
-    Args:
-        bpm: Tempo, 10-999. Fractional values are kept (e.g. 128.5).
-
-    Genres sit in rough ranges if you need a default: house and bass house
-    124-132, hip hop 80-95, drum and bass 172-176, trap 140-150 (often felt at
-    half time).
-    """
-    if not 10 <= bpm <= 999:
-        return {"status": "error", "error": f"bpm must be 10-999, got {bpm}"}
-
-    # Live tier first (docs/17 control cascade): a connected control plane sets
-    # the tempo in place with no FL reopen. Falls through to the file backend.
-    # 5s: FL can stay "unsafe at current time" for a few seconds after a load;
-    # give the controller's OnIdle deferral (DEFER_MAX_TICKS ~4s) time to land.
-    resp = router.try_live_control(get_session(), "mixer.setCurrentTempo", args=[bpm, 1], timeout=5.0)
-    if resp is not None:
-        # Report what FL confirms, not what we requested: read the tempo back
-        # (getCurrentTempo returns BPM x 1000). A set that silently no-ops or
-        # clamps - an automation clip overriding it, quantization - surfaces
-        # here as the real value instead of as a false "applied".
-        readback = router.try_live_control(get_session(), "mixer.getCurrentTempo", timeout=2.0)
-        if readback is None or readback.ret is None:
-            return {
-                "status": "applied",
-                "backend": "live",
-                "tempo": bpm,
-                "confirmed": False,
-                "note": f"Tempo set to {bpm} BPM live, but the read-back did not answer - unconfirmed.",
-            }
-        actual = float(readback.ret) / 1000.0
-        result = {
-            "status": "applied",
-            "backend": "live",
-            "tempo": actual,
-            "confirmed": True,
-            "note": f"Project tempo is now {actual:g} BPM (live, FL was not reloaded).",
-        }
-        if abs(actual - bpm) > 0.001:
-            result["note"] = (
-                f"FL reports {actual:g} BPM after setting {bpm:g} - the project may have "
-                "a tempo automation clip or clamped the value."
-            )
+    if len(notes) <= GET_NOTES_FULL_LIST_MAX:
+        result["notes"] = [n.canonical() for n in notes]
         return result
-
-    try:
-        from . import autonomous
-    except ImportError:
-        return {"status": "error", "error": "tempo control unavailable"}
-
-    if not autonomous.available():
-        return {
-            "status": "error",
-            "error": (
-                "No agent project configured, so there is no project to retempo. "
-                "Run: python -m fl_mcp.make_agent_project"
-            ),
-        }
-
-    result = autonomous.set_tempo(bpm)
-    if not result.get("ok"):
-        return {"status": "error", "error": result.get("error")}
-    return {
-        "status": "applied",
-        "tempo": result["tempo"],
-        "note": f"Project tempo is now {result['tempo']} BPM.",
+    result["summary"] = {
+        "keys": {"min": min(n.key for n in notes), "max": max(n.key for n in notes)},
+        "span_beats": {
+            "start": min(n.start for n in notes),
+            "end": max(n.start + n.length for n in notes),
+        },
+        "sample": [n.canonical() for n in sorted(notes, key=lambda n: n.start)[:GET_NOTES_SAMPLE_SIZE]],
+        "note": f"{len(notes)} notes is too many to list; this is a summary. Filter in run() for detail.",
     }
+    return result
 
 
-@mcp.tool()
-def list_channels() -> dict:
-    """List the instrument channels available to write notes to.
-
-    Call this when the user names an instrument, or when placing different
-    parts on different channels — a bassline on "Bass" and a melody on "Lead"
-    rather than stacking everything in one place.
-    """
-    try:
-        from . import autonomous
-    except ImportError:
-        return {"status": "error", "error": "channel listing unavailable"}
-    channels = autonomous.list_channels()
-    if not channels:
-        return {
-            "status": "error",
-            "error": "No agent project. Run: python -m fl_mcp.make_agent_project",
-        }
-    return {
-        "status": "ok",
-        "channels": channels,
-        "default": autonomous.default_channel(),
-        "note": "Pass a name or index as write_notes(channel=...).",
-    }
+def fl_doctor(ctx: Context) -> dict[str, Any]:
+    """MCP tool. session.doctor().model_dump() - the only place the report
+    becomes a dict."""
+    session = ctx.request_context.lifespan_context["session"]
+    return session.doctor().model_dump()
 
 
-@mcp.tool()
-def set_channel_mix(
-    channel: str | int | None = None,
-    volume: float | None = None,
-    pan: float | None = None,
-    pitch_semitones: int | None = None,
-) -> dict:
-    """Adjust a channel's volume, pan or pitch.
-
-    Only the values you pass are changed, so setting pan leaves a volume the
-    user already adjusted alone.
-
-    Args:
-        channel: Name ("Lead") or rack index. Defaults to the melodic channel
-            write_notes would use.
-        volume: 0.0 (silent) to 1.0 (maximum). FL's default is about 0.78.
-        pan: -1.0 hard left, 0.0 centre, 1.0 hard right.
-        pitch_semitones: -48 to 48. Use 12 or -12 to shift an octave.
-
-    This controls the channel strip, not the instrument's own sound. Preset,
-    filter cutoff, detune and envelope live inside the plugin's saved state,
-    which is an opaque blob in the project file and cannot be edited from here.
-    """
-    if volume is None and pan is None and pitch_semitones is None:
-        return {
-            "status": "error",
-            "error": "Nothing to change — pass volume, pan and/or pitch_semitones.",
-        }
-
-    # Live tier (docs/17): volume/pan in place when the control plane is up and
-    # the channel is an explicit index. Pitch and name resolution stay on the
-    # file path below (no simple live op / would need a resolve round trip).
-    session = get_session()
-    if session.control is not None and isinstance(channel, int) and pitch_semitones is None:
-        applied: dict[str, Any] = {}
-        failed: list[str] = []
-        for field_name, value, op in (
-            ("volume", volume, "channels.setChannelVolume"),
-            ("pan", pan, "channels.setChannelPan"),
-        ):
-            if value is None:
-                continue
-            if router.try_live_control(session, op, [channel, value]) is not None:
-                applied[field_name] = value
-            else:
-                failed.append(field_name)
-        if applied and not failed:
-            return {"status": "applied", "backend": "live", "channel": channel, **applied}
-        if applied and failed:
-            # A field already landed in the RUNNING FL session. Falling through
-            # to the file backend would rewrite the saved project and reload FL,
-            # silently discarding that live edit - so report the partial truth
-            # instead of manufacturing a clean "applied".
-            return {
-                "status": "partial",
-                "backend": "live",
-                "channel": channel,
-                "applied": applied,
-                "failed": failed,
-                "note": (
-                    f"{', '.join(applied)} applied live; {', '.join(failed)} did not - "
-                    "retry the failed field(s), the live edit was kept."
-                ),
-            }
-        # Nothing applied live: the file backend below is a clean fallback.
-
-    try:
-        from . import autonomous
-    except ImportError:
-        return {"status": "error", "error": "mix control unavailable"}
-    if not autonomous.available():
-        return {
-            "status": "error",
-            "error": "No agent project. Run: python -m fl_mcp.make_agent_project",
-        }
-
-    result = autonomous.set_levels(
-        channel=channel, volume=volume, pan=pan, pitch_semitones=pitch_semitones
-    )
-    if not result.get("ok"):
-        return {"status": "error", "error": result.get("error")}
-    return {
-        "status": "applied",
-        "channel": result["channel"],
-        "channel_name": result.get("channel_name"),
-        "volume": result["volume"],
-        "pan": result["pan"],
-        "pitch_semitones": result["pitch_semitones"],
-    }
-
-
-@mcp.tool()
-def fl_status() -> dict:
-    """Check the setup and whether the last queued v0 command was applied.
-
-    Call this after asking the user to run the script, to confirm the edit
-    landed and see how many notes the piano roll ended up with. Also reports
-    whether the piano roll script is installed.
-    """
-    from .install import script_installed_path  # local import: optional dependency on FL paths
-
-    # Autonomous backend first: when configured it is what write_notes uses.
-    try:
-        from . import autonomous
-
-        if autonomous.available():
-            verified = autonomous.verify()
-            return {
-                "backend": "project-write (autonomous, no user action needed)",
-                "project": str(autonomous.agent_project()),
-                "fl_running": autonomous.fl_is_running(),
-                "notes_in_project": verified.get("note_count"),
-                "notes": verified.get("notes", [])[:16],
-            }
-    except ImportError:
-        pass
-
-    installed = script_installed_path()
-    pending = spool.pending_command()
-    result = spool.read_result()
-    roots = spool.spool_roots()
-
-    status: dict[str, Any] = {
-        "script_installed": installed is not None,
-        "spool": [str(r) for r in roots] or "FL Studio settings folder not found",
-    }
-    if installed is None:
-        status["fix"] = (
-            "The piano roll script isn't installed. Run: python -m fl_mcp.install"
-        )
-    else:
-        status["script_path"] = str(installed)
-
-    if pending is not None:
-        status["pending_command"] = {"id": pending.get("id"), "op": pending.get("op")}
-        status["waiting_on"] = _TRIGGER_HINT
-    else:
-        status["pending_command"] = None
-
-    if result is None:
-        status["last_result"] = None
-    elif result.get("ok"):
-        status["last_result"] = {
-            "id": result.get("id"),
-            "ok": True,
-            "summary": result.get("summary"),
-            "notes_in_piano_roll": result.get("note_count"),
-            "spool_used": result.get("spool"),
-        }
-    else:
-        status["last_result"] = {
-            "id": result.get("id"),
-            "ok": False,
-            "error": result.get("error"),
-        }
-
-    return status
-
-
-@mcp.tool()
-def get_scene(detail: str = "summary", channel: int | None = None) -> dict:
-    """Read what is currently in the project — key, tempo, and what each channel has.
+def get_scene(ctx: Context, detail: str = "summary", channel: int | None = None) -> dict[str, Any]:
+    """Read what is currently in the project - key, tempo, and what each channel has.
 
     Call this before writing, so additions fit what is already there. It returns
     an analysis rather than a note dump: a 56-note project summarises to about
@@ -776,7 +154,7 @@ def get_scene(detail: str = "summary", channel: int | None = None) -> dict:
 
     Args:
         detail: "summary" (default) for tempo, inferred key and a per-channel
-            digest — note count, span in beats, register, pitch classes, and for
+            digest - note count, span in beats, register, pitch classes, and for
             bass-register parts the root motion. Use "notes" only when you need
             individual notes, such as harmonising an existing line.
         channel: With detail="notes", limit to one channel index.
@@ -784,25 +162,33 @@ def get_scene(detail: str = "summary", channel: int | None = None) -> dict:
     Returns:
         For "summary", a `summary` string is included that is already formatted
         for reading. Key inference carries a confidence and can be wrong on
-        modal or chromatic material — treat "low" as "no reliable key".
+        modal or chromatic material - treat "low" as "no reliable key".
     """
-    from . import autonomous, scene
-
-    project = autonomous.agent_project()
+    session = ctx.request_context.lifespan_context["session"]
+    project = session.project
     if project is None:
-        return {"error": "No agent project configured. Run: python -m fl_mcp.make_agent_project"}
+        return {"error": "No project file configured. Run: python -m fl_mcp.make_agent_project"}
 
     if detail == "notes":
         return {"notes": scene.notes_detail(project, channel)}
     if detail != "summary":
         return {"error": f'detail must be "summary" or "notes", got {detail!r}'}
 
-    names = {c["index"]: c["name"] for c in autonomous.list_channels()}
-    return scene.summarize(project, names, tempo=autonomous.read_tempo())
+    proj = flp.read(project)
+    names = {c.index: c.name for c in proj.channels}
+    return scene.summarize(project, names, tempo=proj.tempo)
 
 
 def main() -> None:
-    # Construct dependencies explicitly at the entry point and inject them -
-    # the MIDI ports open now, before the first tool call (docs/14 ordering).
-    set_session(create_session())
-    mcp.run()
+    """Entry point: logging.basicConfig(stream=sys.stderr, level from
+    $FL_MCP_LOG), construct the MCP server with the lifespan, run."""
+    logging.basicConfig(
+        stream=sys.stderr,
+        level=os.environ.get(LOG_LEVEL_ENV, "INFO").upper(),
+        format="%(asctime)s %(name)s %(levelname)s %(message)s",
+        force=True,  # stdout is the JSON-RPC wire; no prior handler may hold it
+    )
+    server = MCPServer(SERVER_NAME, lifespan=lifespan)
+    for tool in (run, get_notes, get_scene, fl_doctor):
+        server.add_tool(tool)
+    server.run()
