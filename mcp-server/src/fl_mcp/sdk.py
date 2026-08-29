@@ -48,8 +48,13 @@ class FL:
     def track(self, name_or_index: str | int) -> Track:
         """Resolve by index, exact name, then unambiguous substring; raises
         ChannelNotFound listing the real names otherwise. This is THE place
-        channel names resolve - Target is ints-only past this boundary."""
-        channels = self.channels
+        channel names resolve - Target is ints-only past this boundary.
+
+        Resolution reads the PROJECT FILE, not the live snapshot: targets are
+        file coordinates (that is what write_notes patches), and the file
+        answers instantly while FL may be mid-boot right after a reload
+        (dogfood A12: the live read raced every post-write reload)."""
+        channels = self._session.channel_names()
         listing = ", ".join(f"{c.index}: {c.name}" for c in channels) or "(none)"
         if isinstance(name_or_index, int):
             if any(c.index == name_or_index for c in channels):

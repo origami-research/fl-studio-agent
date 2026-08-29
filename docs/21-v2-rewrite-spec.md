@@ -835,3 +835,19 @@ Still unverified from the dogfood: the bridge write path + play/stop under the s
 The FLP library is now its own open-source project - https://github.com/clarkipeng/flpkit (MIT, zero dependencies, 52 tests; create under the org later via a GitHub transfer, redirects preserved).
 `fl_mcp/flp.py` shrank to a thin adapter: `schemas.Note` satisfies flpkit's `NoteLike` protocol so writes pass straight through; only `ChannelLevels` re-wraps into the pydantic model.
 Format unit tests moved to flpkit (single owner, no drift); this repo keeps the corpus differential (pyflp oracle + compat shim live here), the live-FL gates, and the adapter-seam tests.
+
+## Addendum 12: dogfood round 2 (2026-08-29) - the live plane, and the target-blindness verdict
+
+The headline: **the pyscript/spool note lane is TARGET-BLIND and was silently corrupting multi-part composition.**
+A piano-roll script edits whichever score is open (its own docstring says so); three "targeted" bridge writes all landed in the open Chords roll, each `replace` destroying the previous part, while the receipts claimed their targets and `get_scene` (reading the file) diverged from both FL and the store.
+The fix is a capability split: **targeted notes always project-write** (the file is the only backend that can honor a target - and file, store, and get_scene become coherent again); the live wire keeps tempo/transport/mixer/reads; live targeted notes arrive with the native Bridge plugin (issue #10), which now has product evidence as its justification.
+The session's auto-trigger machinery (built to fire the target-blind lane) is deleted.
+
+Other findings fixed in this round:
+- **Sticky hello**: after FL dies, the wire's last hello still answers, so the session believed it was connected and routed live ops into a void. `_hello` now confirms with a millisecond ping before anything trusts it.
+- **Reload kills the wire**: `_reload_fl` now reconnects fresh ports after the relaunch (ports appearing AFTER FL is up hit its reliable hot-plug bind) and resets the recycle rate-limit.
+- **`track()` raced FL's boot**: name resolution moved to the project file - targets are file coordinates, and the file answers instantly mid-reload.
+- **FL's welcome screen returned** because SIGKILL lifecycles never let FL persist the "do not show" preference; ticked + clean-quit once, now persisted. The screen blocks controller init AND the project-file open when present.
+- FL's licensed welcome and the transport: `fl.play()`/`stop()`/`setCurrentTempo` defer under "unsafe at current time" and a timed-out op can LAND LATE, undoing a newer op (observed: a parked stop cancelled a later play). Transport-start reliability after reloads is the remaining open item.
+
+End state, front door, one MCP client: a four-part loop (chords, bass with matching A-F-C-G root motion, melody, template drums) composes in under 7 seconds with per-part `project-write` receipts, and `get_scene` reports exactly what FL shows.
