@@ -62,10 +62,10 @@ Threat model: the socket thread wedges, the server floods us, the server dies mi
 After bind, the plugin writes `bridge_udp.json` atomically (tmp + rename) into the spool roots the server already reads (`Settings/Piano roll scripts/FLMCP`, then the fallback root - `flpaths.SPOOL_SUBDIRS`):
 
 ```json
-{"proto": 1, "transport": 1, "port": 49731, "token": "9f2c...32 hex...", "pid": 81233}
+{"proto": 2, "transport": 1, "port": 49731, "token": "9f2c...32 hex...", "pid": 81233}
 ```
 
-- The server already watches this directory for `result.json`/`consumed.json`, so discovery adds no new location - one settings tree, one source of truth.
+- The server already watches this directory for `responses/` and `consumed.json`, so discovery adds no new location - one settings tree, one source of truth.
 - `pid` lets a client distinguish a stale file (bridge crashed, port re-assigned to someone else) cheaply; the authoritative liveness check is a `ping` round trip.
 - On clean shutdown the file is unlinked (the plugin is native code - FL's Python sandbox rules do not apply to it).
 - Two FL instances: each writes the file on insert; last writer wins, matching the existing single-instance assumption of the spool itself.
@@ -95,7 +95,7 @@ The payload octets after the second space are exactly the bytes `spool.py` would
 No re-serialization anywhere: the client sends the canonical encoding, the bridge hands the raw octets to the executor.
 One protocol, two carriers (doctrine: one canonical function per rule - the command schema is defined once, in `schemas.py`).
 
-**Acks.** Every accepted datagram gets an explicit ack whose payload is the v2 result shape (`SpoolResponse`-compatible, the same JSON written to `result.json`):
+**Acks.** Every accepted datagram gets an explicit ack whose payload is the v2 result shape (`SpoolResponse`-compatible, the same JSON written to `responses/<id>.json`):
 
 ```json
 {"id": 2007, "ok": true, "op": "add_notes", "notes_written": 3, "backend": "bridge", ...}
@@ -125,19 +125,18 @@ The bridge serves BOTH carriers through one code path:
 ```
 socket thread:  recvfrom -> frame check (magic+token) -> queue.Push(payload, reply_addr)
                                                               |
-                PollSpoolOnce() -> ExecuteCommand(...)             (file result.json always written)
+                PollOnce()      -> ExecuteCommand(...)             (responses/<id>.json always written)
 ```
 
 - `bridge_core::ExecuteCommand` is the refactored body of today's `PollOnce`: parse -> ledger check -> claim-before-execute -> dispatch -> result JSON.
   `PollOnce`'s file-reading front half becomes `PollSpoolOnce`, which feeds the SAME `ExecuteCommand` - the monolith is replaced, not duplicated (net structure, not net copies).
 - One ledger (`consumed.json`) spans the pyscript, the file spool path, and UDP - exactly-once across all three consumers/carriers, unchanged.
-- `result.json` is still written for every executed command regardless of carrier, so `fl_doctor`, humans, and the file-spool server read one place.
+- `responses/<id>.json` is still written for every claimed command regardless of carrier, so `fl_doctor`, humans, and the file-spool server read one place.
 - When UDP is down (no port file, no pong, oversized command), the client uses the file spool; nothing about the spool changes.
 
-**Merge seam with workstream A (bridge-v2-sync).** Today's executor speaks the v1 command shape (`proto: 1`, flat fields); workstream A is moving spool consumption to the v2 `SpoolCommand`/`queue.json` protocol concurrently.
-This lane keeps the executor's OP SEMANTICS untouched (v1, minus the ping addition above) and confines its refactor to the enqueue/drain seam, so A's v2 parsing lands inside `ExecuteCommand` with no transport knowledge.
-Until A lands, a v2 datagram round-trips as a well-formed `protocol mismatch` ack - a correct, observable answer, not a hang.
-The seam is flagged in the PR body rather than pre-resolved here.
+**Merge seam with workstream A (bridge-v2-sync) - RESOLVED at merge.** This lane confined its refactor to the enqueue/drain seam; A's v2 protocol (PR #57: `queue.json` discovery, per-id command files and tombstones, the ppq stamp, the v2 `SpoolResponse` shape, claim-before-proto-check) merged first and now lives inside `ExecuteCommand`, where both carriers inherit it.
+`PollOnce` kept A's discovery half verbatim; the per-id tombstone in `RecordConsumed` is safe cross-carrier by construction (a UDP-carried id can only tombstone its own mirrored file).
+The ping rule agreed with A holds in the merged executor: an id-carrying ping claims (queue hygiene), an id-less ping is the stateless heartbeat.
 
 ## 6. Test plan
 

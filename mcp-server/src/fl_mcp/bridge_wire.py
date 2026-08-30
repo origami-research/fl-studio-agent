@@ -237,11 +237,6 @@ class BridgeWire:
         except (json.JSONDecodeError, UnicodeDecodeError):
             log.warning("dropping unparseable ack on the bridge wire")
             return None
-        # Merge seam (workstream A, bridge v2 sync): today's bridge writes its
-        # error text under "error"; the v2 result field is "err". Accept both
-        # until the executor speaks v2, then delete this line.
-        if isinstance(payload, dict) and "err" not in payload and "error" in payload:
-            payload["err"] = payload["error"]
         try:
             return SpoolResponse.model_validate(payload)
         except ValidationError:

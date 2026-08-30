@@ -1,5 +1,8 @@
 #include "bridge_core.h"
 
+#include <sys/stat.h>
+
+#include <algorithm>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -11,6 +14,13 @@ namespace bridge_core {
 namespace {
 
 std::string Join(const std::string &dir, const char *name) { return dir + "/" + name; }
+
+// The server's zero-padded per-command file name (spool.py f"{id:06d}.json").
+std::string CommandName(int id) {
+  char name[32];
+  snprintf(name, sizeof(name), "%06d.json", id);
+  return name;
+}
 
 bool ReadFile(const std::string &path, std::string *out) {
   FILE *f = fopen(path.c_str(), "rb");
@@ -31,11 +41,72 @@ bool WriteFile(const std::string &path, const std::string &text) {
   return written == text.size();
 }
 
-void WriteResult(const std::vector<std::string> &roots, const std::string &json) {
-  for (const std::string &root : roots) WriteFile(Join(root, "result.json"), json);
+// Pending ids listed by any root's queue index. The queue - never a directory
+// listing - is the discovery mechanism, matching the pyscript (directory
+// scanning is unmeasured in FL's sandbox; here it is just protocol fidelity).
+bool ReadQueue(const std::string &root, std::vector<int> *out) {
+  std::string text;
+  if (!ReadFile(Join(root, "commands/queue.json"), &text)) return false;
+  minijson::Value doc;
+  if (!minijson::Parse(text.c_str(), &doc)) return false;
+  const minijson::Value *list = doc.Get("ids");
+  if (list == nullptr || list->type != minijson::Type::Array) return false;
+  for (const minijson::Value &item : list->array) {
+    if (item.type == minijson::Type::Number) out->push_back(static_cast<int>(item.number));
+  }
+  return true;
+}
+
+// First readable non-tombstone copy of the command across roots (the mirrored
+// copies are equivalent; a tombstone anywhere means settled only when no root
+// still holds the real command - same rule as the pyscript's _read_command).
+// Returns the raw text so the executor receives the command JSON verbatim,
+// exactly as the UDP carrier delivers it.
+bool ReadCommand(const std::vector<std::string> &roots, int id, std::string *out_text) {
+  for (const std::string &root : roots) {
+    std::string text;
+    if (!ReadFile(Join(root, ("commands/" + CommandName(id)).c_str()), &text)) continue;
+    minijson::Value parsed;
+    if (!minijson::Parse(text.c_str(), &parsed)) continue;
+    if (parsed.type != minijson::Type::Object) continue;
+    const minijson::Value *op = parsed.Get("op");
+    if (op == nullptr || op->type != minijson::Type::String) continue;  // tombstone
+    *out_text = text;
+    return true;
+  }
+  return false;
+}
+
+void WriteResponse(const std::vector<std::string> &roots, int id, const std::string &json) {
+  for (const std::string &root : roots) {
+    // The server mkdirs responses/ at Spool construction; recreate it here so a
+    // half-provisioned root still gets its mirror copy (native code, no sandbox).
+    mkdir(Join(root, "responses").c_str(), 0755);
+    WriteFile(Join(root, ("responses/" + CommandName(id)).c_str()), json);
+  }
+}
+
+bool Contains(const std::vector<int> &ids, int id) {
+  return std::find(ids.begin(), ids.end(), id) != ids.end();
+}
+
+// SpoolResponse.op is a closed literal in schemas.py; an unexpected string
+// would fail the server's validation, so anything else is reported as op-less.
+bool IsKnownOp(const std::string &op) {
+  return op == "add_notes" || op == "clear_notes" || op == "ping";
 }
 
 }  // namespace
+
+std::vector<std::string> SpoolRoots(const char *home) {
+  std::vector<std::string> roots;
+  if (home == nullptr || home[0] == '\0') return roots;
+  const char *subdirs[] = {"Piano roll scripts/FLMCP", "Piano roll scripts"};
+  for (const char *sub : subdirs) {
+    roots.push_back(std::string(home) + "/Documents/Image-Line/FL Studio/Settings/" + sub);
+  }
+  return roots;
+}
 
 // --- transport seam ----------------------------------------------------------
 
@@ -75,20 +146,14 @@ void ResultCache::Put(int id, std::string ack_json) {
   entries_.emplace_back(id, std::move(ack_json));
 }
 
-std::vector<std::string> SpoolRoots(const char *home) {
-  std::vector<std::string> roots;
-  if (home == nullptr || home[0] == '\0') return roots;
-  const char *subdirs[] = {"Piano roll scripts/FLMCP", "Piano roll scripts"};
-  for (const char *sub : subdirs) {
-    roots.push_back(std::string(home) + "/Documents/Image-Line/FL Studio/Settings/" + sub);
-  }
-  return roots;
-}
-
 // --- NotesParamsBuffer -------------------------------------------------------
 
 NotesParamsBuffer::NotesParamsBuffer(NotesParamsBuffer &&other) noexcept
-    : params(other.params), bytes(other.bytes), count(other.count) {
+    : params(other.params),
+      bytes(other.bytes),
+      count(other.count),
+      ppq(other.ppq),
+      used_default_ppq(other.used_default_ppq) {
   other.params = nullptr;
   other.bytes = 0;
   other.count = 0;
@@ -100,6 +165,8 @@ NotesParamsBuffer &NotesParamsBuffer::operator=(NotesParamsBuffer &&other) noexc
     params = other.params;
     bytes = other.bytes;
     count = other.count;
+    ppq = other.ppq;
+    used_default_ppq = other.used_default_ppq;
     other.params = nullptr;
     other.bytes = 0;
     other.count = 0;
@@ -109,19 +176,28 @@ NotesParamsBuffer &NotesParamsBuffer::operator=(NotesParamsBuffer &&other) noexc
 
 NotesParamsBuffer::~NotesParamsBuffer() { free(params); }
 
-NotesParamsBuffer BuildNotesParams(const minijson::Value &command, int ppq_default) {
+NotesParamsBuffer BuildNotesParams(const minijson::Value &args, int ppq_default, bool empty_first) {
   NotesParamsBuffer buf;
 
-  const minijson::Value *notes = command.Get("notes");
+  const minijson::Value *notes = args.Get("notes");
   int count = 0;
   if (notes != nullptr && notes->type == minijson::Type::Array) {
     count = static_cast<int>(notes->array.size());
   }
-  if (count < 0) count = 0;
   if (count > kMaxNotesPerCommand) count = kMaxNotesPerCommand;
 
-  const double ppq = command.Num("ppq", static_cast<double>(ppq_default));
-  const bool replace = command.Str("mode", "merge") == "replace";
+  // The v2 ppq stamp (schemas.AddNotesArgs.ppq). None serializes as JSON null,
+  // so anything but a positive number falls back - flagged, so the response
+  // summary can carry the warning.
+  const minijson::Value *ppq_field = args.Get("ppq");
+  buf.used_default_ppq =
+      ppq_field == nullptr || ppq_field->type != minijson::Type::Number || ppq_field->number <= 0;
+  const double ppq = buf.used_default_ppq ? static_cast<double>(ppq_default) : ppq_field->number;
+  buf.ppq = static_cast<int>(ppq);
+
+  const bool replace = empty_first || args.Str("mode", "merge") == "replace";
+  const minijson::Value *target = args.Get("target");
+  const bool has_target = target != nullptr && target->type == minijson::Type::Object;
 
   // TNoteParams is #pragma pack(1) and TNotesParams ends in a flexible array,
   // so size from offsetof, not sizeof (which would fold in the trailing
@@ -134,8 +210,8 @@ NotesParamsBuffer BuildNotesParams(const minijson::Value &command, int ppq_defau
 
   params->Target = 1;  // piano roll
   params->Flags = replace ? NPF_EmptyFirst : 0;
-  params->PatNum = command.Int("pattern", -1);   // -1 = current pattern
-  params->ChanNum = command.Int("channel", -1);  // -1 = selected channel (effect only)
+  params->PatNum = has_target ? target->Int("pattern", -1) : -1;   // -1 = current pattern
+  params->ChanNum = has_target ? target->Int("channel", -1) : -1;  // -1 = selected (effect only)
   params->Count = count;
 
   for (int i = 0; i < count; ++i) {
@@ -164,7 +240,20 @@ NotesParamsBuffer BuildNotesParams(const minijson::Value &command, int ppq_defau
   return buf;
 }
 
-// --- consumed-id ledger ------------------------------------------------------
+// --- queue + consumed-id ledger ----------------------------------------------
+
+std::vector<int> QueueIds(const std::vector<std::string> &roots) {
+  std::vector<int> ids;
+  for (const std::string &root : roots) {
+    std::vector<int> from_root;
+    if (!ReadQueue(root, &from_root)) continue;
+    for (int id : from_root) {
+      if (!Contains(ids, id)) ids.push_back(id);
+    }
+  }
+  std::sort(ids.begin(), ids.end());
+  return ids;
+}
 
 std::vector<int> ReadConsumedIds(const std::vector<std::string> &roots) {
   std::vector<int> ids;
@@ -178,26 +267,19 @@ std::vector<int> ReadConsumedIds(const std::vector<std::string> &roots) {
     for (const minijson::Value &item : list->array) {
       if (item.type != minijson::Type::Number) continue;
       int id = static_cast<int>(item.number);
-      bool seen = false;
-      for (int existing : ids) seen = seen || existing == id;
-      if (!seen) ids.push_back(id);
+      if (!Contains(ids, id)) ids.push_back(id);
     }
   }
   return ids;
 }
 
 bool AlreadyConsumed(const std::vector<std::string> &roots, int id) {
-  for (int existing : ReadConsumedIds(roots)) {
-    if (existing == id) return true;
-  }
-  return false;
+  return Contains(ReadConsumedIds(roots), id);
 }
 
 int RecordConsumed(const std::vector<std::string> &roots, int id) {
   std::vector<int> ids = ReadConsumedIds(roots);
-  bool seen = false;
-  for (int existing : ids) seen = seen || existing == id;
-  if (!seen) ids.push_back(id);
+  if (!Contains(ids, id)) ids.push_back(id);
   if (static_cast<int>(ids.size()) > kMaxConsumedIds) {
     ids.erase(ids.begin(), ids.begin() + (ids.size() - kMaxConsumedIds));
   }
@@ -209,12 +291,19 @@ int RecordConsumed(const std::vector<std::string> &roots, int id) {
   }
   json += "]}";
 
-  // Ledger only. Mailbox disposal (tombstoning pending.json) is the file
-  // carrier's job in PollOnce: a UDP-carried command must never clobber an
-  // unrelated command sitting in the file mailbox.
+  // Same tombstone the server writes on timeout and the pyscript writes on
+  // consume; the ledger, not the tombstone, is what correctness depends on
+  // (a root may be readable but not writable). Keyed by id, so a UDP-carried
+  // command tombstones only its own mirrored file (usually absent) and can
+  // never clobber a different command queued on disk.
+  std::string tombstone = "{\"consumed\": true, \"id\": " + std::to_string(id) + "}";
+
   int accepted = 0;
   for (const std::string &root : roots) {
     if (WriteFile(Join(root, "consumed.json"), json)) ++accepted;
+    std::string command = Join(root, ("commands/" + CommandName(id)).c_str());
+    std::string existing;
+    if (ReadFile(command, &existing)) WriteFile(command, tombstone);
   }
   return accepted;
 }
@@ -223,23 +312,21 @@ int RecordConsumed(const std::vector<std::string> &roots, int id) {
 
 ExecResult ExecuteCommand(TFruityPlugHost *host, std::intptr_t host_tag,
                           const std::vector<std::string> &roots, int ppq_default,
-                          const std::string &payload_json, const std::string &carrier,
-                          ResultCache *cache) {
+                          const std::string &payload_json, ResultCache *cache) {
   ExecResult result;
   PollOutcome &outcome = result.outcome;
 
   minijson::Value command;
   if (!minijson::Parse(payload_json.c_str(), &command) || command.type != minijson::Type::Object) {
-    result.ack_json = "{\"id\": 0, \"ok\": false, \"error\": \"unparseable command\", "
-                      "\"backend\": \"bridge\"}";
+    result.ack_json =
+        "{\"id\": 0, \"ok\": false, \"err\": \"unparseable command\", \"backend\": \"bridge\"}";
     return result;
   }
 
-  int id = command.Int("id", 0);
   const minijson::Value *op_value = command.Get("op");
   if (op_value == nullptr || op_value->type != minijson::Type::String) {
-    result.ack_json = "{\"id\": " + std::to_string(id) +
-                      ", \"ok\": false, \"error\": \"command has no op\", \"backend\": \"bridge\"}";
+    result.ack_json = "{\"id\": " + std::to_string(command.Int("id", 0)) +
+                      ", \"ok\": false, \"err\": \"command has no op\", \"backend\": \"bridge\"}";
     return result;
   }
   const std::string op = op_value->text;
@@ -249,8 +336,8 @@ ExecResult ExecuteCommand(TFruityPlugHost *host, std::intptr_t host_tag,
   // filesystem, or FL, so heartbeats can never evict real ids from the ledger
   // ring. The ack carries our proto so a mismatched client learns it from the
   // pong itself. A ping that CARRIES an id is a queued command like any other
-  // and takes the claim path below - the claim is what prunes it from the v2
-  // queue when the server dies before doing so (bridge-v2-sync seam).
+  // and takes the claim path below - the claim is what prunes it from the
+  // queue when the server dies before doing so.
   if (op == "ping" && command.Get("id") == nullptr) {
     outcome.had_command = true;
     outcome.op = op;
@@ -260,9 +347,10 @@ ExecResult ExecuteCommand(TFruityPlugHost *host, std::intptr_t host_tag,
     return result;
   }
 
+  const int id = command.Int("id", 0);
   if (AlreadyConsumed(roots, id)) {
     // A retransmit (or the other carrier / the pyscript got there first).
-    // Re-ack the recorded result verbatim when we still have it; otherwise a
+    // Re-ack the recorded response verbatim when we still have it; otherwise a
     // minimal consumed ack. Never re-execute.
     result.duplicate = true;
     outcome.id = id;
@@ -271,8 +359,7 @@ ExecResult ExecuteCommand(TFruityPlugHost *host, std::intptr_t host_tag,
     result.ack_json = cached != nullptr
                           ? *cached
                           : "{\"id\": " + std::to_string(id) +
-                                ", \"ok\": true, \"consumed\": true, \"duplicate\": true, "
-                                "\"backend\": \"bridge\"}";
+                                ", \"ok\": true, \"duplicate\": true, \"backend\": \"bridge\"}";
     return result;
   }
 
@@ -280,43 +367,30 @@ ExecResult ExecuteCommand(TFruityPlugHost *host, std::intptr_t host_tag,
   outcome.id = id;
   outcome.op = op;
 
-  int proto = command.Int("proto", 0);
+  // Claim before executing: a command that crashes FL must not replay on
+  // restart and crash it again. Same ordering as the pyscript (_consume_all
+  // runs before the proto check and the handler). THE crash-safety invariant -
+  // do not reorder.
+  RecordConsumed(roots, id);
+
+  std::string summary;
+  const int proto = command.Int("proto", 0);
   if (proto != kProtoVersion) {
-    RecordConsumed(roots, id);
     outcome.error = "protocol mismatch: command is v" + std::to_string(proto) + ", bridge is v" +
                     std::to_string(kProtoVersion);
-    result.ack_json = "{\"id\": " + std::to_string(id) + ", \"ok\": false, \"error\": \"" +
-                      minijson::Escape(outcome.error) + "\", \"backend\": \"bridge\"}";
-    if (cache != nullptr) cache->Put(id, result.ack_json);
-    WriteResult(roots, result.ack_json);
-    return result;
-  }
-
-  // Claim before executing: a command that crashes FL must not replay on
-  // restart and crash it again.
-  int accepted = RecordConsumed(roots, id);
-
-  if (op == "ping") {
-    // Claimed like any id-carrying command (queue hygiene); no host calls.
+  } else if (op == "ping") {
     outcome.ok = true;
+    summary = "pong";
   } else if (op == "add_notes" || op == "clear_notes") {
-    minijson::Value clear_cmd;
-    const minijson::Value *apply_cmd = &command;
-    if (op == "clear_notes") {
-      // A clear is an add of zero notes with replace mode.
-      clear_cmd.type = minijson::Type::Object;
-      clear_cmd.object.emplace_back("mode", minijson::Value());
-      clear_cmd.object.back().second.type = minijson::Type::String;
-      clear_cmd.object.back().second.text = "replace";
-      // carry channel/pattern through if present
-      if (const minijson::Value *ch = command.Get("channel")) clear_cmd.object.emplace_back("channel", *ch);
-      if (const minijson::Value *pt = command.Get("pattern")) clear_cmd.object.emplace_back("pattern", *pt);
-      apply_cmd = &clear_cmd;
-    }
+    const minijson::Value *args = command.Get("args");
+    minijson::Value no_args;
+    no_args.type = minijson::Type::Object;
+    const minijson::Value &checked_args =
+        (args != nullptr && args->type == minijson::Type::Object) ? *args : no_args;
     if (host == nullptr) {
       outcome.error = "no plugin host";
     } else {
-      NotesParamsBuffer buf = BuildNotesParams(*apply_cmd, ppq_default);
+      NotesParamsBuffer buf = BuildNotesParams(checked_args, ppq_default, op == "clear_notes");
       if (buf.params == nullptr) {
         outcome.error = "out of memory building notes";
       } else {
@@ -324,25 +398,36 @@ ExecResult ExecuteCommand(TFruityPlugHost *host, std::intptr_t host_tag,
         host->Dispatcher(host_tag, FHD_SetDirty, 0, 0);
         outcome.notes_written = buf.count;
         outcome.ok = true;
+        summary = "applied " + std::to_string(buf.count) + " note(s) via FHD_AddNotesToPR at ppq " +
+                  std::to_string(buf.ppq);
+        if (buf.used_default_ppq && op == "add_notes") {
+          summary += " (WARNING: command carried no ppq stamp; assumed default " +
+                     std::to_string(ppq_default) + " - horizontal placement unverified)";
+        }
       }
     }
   } else {
     outcome.error = "unknown op: " + op;
   }
 
+  // The v2 SpoolResponse shape ({id, ok, op, notes_written, err}) plus
+  // diagnostic extras (backend, summary) that pydantic ignores on validate.
+  // notes_written is this consumer's applied count - an ECHO, not a readback
+  // (FHD_AddNotesToPR returns nothing); the session's receipts must not (and
+  // do not) trust it.
   std::string json = "{\"id\": " + std::to_string(id);
   json += outcome.ok ? ", \"ok\": true" : ", \"ok\": false";
-  if (!outcome.ok) json += ", \"error\": \"" + minijson::Escape(outcome.error) + "\"";
-  json += ", \"op\": \"" + minijson::Escape(op) + "\"";
-  json += ", \"notes_written\": " + std::to_string(outcome.notes_written);
-  json += ", \"consumed\": " + std::string(accepted > 0 ? "true" : "false");
+  if (IsKnownOp(op)) json += ", \"op\": \"" + op + "\"";
+  if (outcome.ok) json += ", \"notes_written\": " + std::to_string(outcome.notes_written);
+  if (!outcome.ok) json += ", \"err\": \"" + minijson::Escape(outcome.error) + "\"";
   json += ", \"backend\": \"bridge\"";
-  json += ", \"spool\": \"" + minijson::Escape(carrier) + "\"";
-  json += ", \"summary\": \"applied " + std::to_string(outcome.notes_written) +
-          " note(s) via FHD_AddNotesToPR\"}";
+  if (!summary.empty()) json += ", \"summary\": \"" + minijson::Escape(summary) + "\"";
+  json += "}";
   result.ack_json = json;
   if (cache != nullptr) cache->Put(id, json);
-  WriteResult(roots, json);
+  // Written for every claimed command regardless of carrier: fl_doctor, the
+  // differential tests, and the server's await_response all read one place.
+  WriteResponse(roots, id, json);
   return result;
 }
 
@@ -351,38 +436,28 @@ ExecResult ExecuteCommand(TFruityPlugHost *host, std::intptr_t host_tag,
 PollOutcome PollOnce(TFruityPlugHost *host, std::intptr_t host_tag,
                      const std::vector<std::string> &roots, int ppq_default,
                      ResultCache *cache) {
-  // Find the newest readable pending command across roots.
+  // Lowest fresh id first: the server allocates ids in send order, and the
+  // pyscript applies in the same order, so both consumers agree on sequencing.
+  std::vector<int> pending = QueueIds(roots);
+  if (pending.empty()) return PollOutcome();
+  std::vector<int> consumed = ReadConsumedIds(roots);
+
   std::string text;
-  std::string source_root;
-  for (const std::string &root : roots) {
-    std::string candidate;
-    if (!ReadFile(Join(root, "pending.json"), &candidate)) continue;
-    minijson::Value parsed;
-    if (!minijson::Parse(candidate.c_str(), &parsed)) continue;
-    if (parsed.type != minijson::Type::Object) continue;
-    const minijson::Value *op = parsed.Get("op");
-    if (op == nullptr || op->type != minijson::Type::String) continue;  // tombstone or malformed
-    text = candidate;
-    source_root = root;
-    break;  // preferred root first; one command per poll
-  }
-  if (source_root.empty()) return PollOutcome();  // nothing to do
-
-  ExecResult result = ExecuteCommand(host, host_tag, roots, ppq_default, text, source_root, cache);
-
-  // Mailbox disposal: tombstone pending.json wherever it exists (commands are
-  // mirrored to every root) once the command is settled - claimed, refused, or
-  // a duplicate. The mailbox must clear or this file would repoll forever.
-  if (result.outcome.had_command || result.duplicate) {
-    std::string tombstone =
-        "{\"consumed\": true, \"id\": " + std::to_string(result.outcome.id) + "}";
-    for (const std::string &root : roots) {
-      std::string pending = Join(root, "pending.json");
-      std::string existing;
-      if (ReadFile(pending, &existing)) WriteFile(pending, tombstone);
+  bool found = false;
+  for (int candidate : pending) {
+    if (Contains(consumed, candidate)) continue;
+    if (ReadCommand(roots, candidate, &text)) {
+      found = true;
+      break;
     }
+    // Tombstoned everywhere (server-cancelled) or unreadable: skip, never
+    // block the ids queued behind it.
   }
-  return result.outcome;
+  if (!found) return PollOutcome();
+
+  // The one executor; disposal (the per-id tombstone) happens inside via
+  // RecordConsumed, and the response lands in responses/<id>.json.
+  return ExecuteCommand(host, host_tag, roots, ppq_default, text, cache).outcome;
 }
 
 }  // namespace bridge_core

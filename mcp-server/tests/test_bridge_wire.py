@@ -52,7 +52,7 @@ class FakeBridge:
         self._stop = threading.Event()
         root.mkdir(parents=True, exist_ok=True)
         (root / PORT_FILE).write_text(
-            json.dumps({"proto": 1, "transport": 1, "port": self.port, "token": token, "pid": 1})
+            json.dumps({"proto": 2, "transport": 1, "port": self.port, "token": token, "pid": 1})
         )
         self.roots = [root]
         self._thread = threading.Thread(target=self._serve, daemon=True)
@@ -93,7 +93,7 @@ class FakeBridge:
                 "id": command.get("id", 0),
                 "ok": True,
                 "op": "ping",
-                "proto": 1,
+                "proto": 2,
                 "backend": "bridge",
             }
         notes = command.get("args", {}).get("notes", [])
@@ -133,7 +133,7 @@ def test_discover_ignores_malformed_port_file(tmp_path: Path) -> None:
 def test_discover_reads_endpoint(fake_bridge: FakeBridge) -> None:
     endpoint = discover(fake_bridge.roots)
     assert endpoint == BridgeEndpoint(
-        proto=1, transport=1, port=fake_bridge.port, token=TOKEN, pid=1
+        proto=2, transport=1, port=fake_bridge.port, token=TOKEN, pid=1
     )
 
 

@@ -1,33 +1,31 @@
-"""Live-FL end-to-end fixtures.
+"""Live-FL end-to-end fixtures, built on the one FLHost harness (fl_host.py).
 
-These run the ACTUAL server code (wire.MidiControl + FLSession + the merged
-controller script) against a real FL Studio session and assert closed-loop
-using FL's own read-back - no fake, no human eyeballing. This is the automated
-form of "verify first".
+These run the ACTUAL server code against a real FL Studio session and assert
+closed-loop using FL's own read-back - no fake, no human eyeballing.
 
-They never run in normal CI: the `live_fl` fixture skips unless FL_E2E=1 is set
-AND FL Studio is installed, so `pytest tests/` on a CI box (or a dev machine you
+They never run in normal CI: `fl_host` skips unless FL_E2E=1 is set AND FL
+Studio is installed, so `pytest tests/` on a CI box (or a dev machine you
 don't want hijacked) collects them as skips. Run them deliberately with:
 
-    FL_E2E=1 uv run pytest tests/e2e -m e2e
+    FL_E2E=1 .venv/bin/python -m pytest tests/e2e -m e2e
 
-Lifecycle (docs/14 ordering): open the control-plane ports FIRST, then launch
-FL via harness.flctl so it binds them at startup, wait for the controller's
-hello, yield a connected FLSession, and stop FL + close ports on teardown. The
-trial/welcome modal is dismissed while waiting for hello (a licensed FL skips
-the trial dialog; the welcome screen can also be disabled in FL's settings).
+(See RUNBOOK_E2E.md at the repo root for the orchestrator's full live window.)
+
+Lifecycle (docs/14 ordering): FLHost opens the control-plane ports FIRST,
+then launches FL so it binds them at startup, waits for the controller's
+hello (dismissing any trial/welcome modal), and stops FL + closes ports on
+teardown. Module scope so a module that must run with FL closed (the render
+gate) is not held hostage by a session-long FL.
 """
 
 from __future__ import annotations
 
 import os
-import subprocess
-import time
 from typing import NamedTuple
 
 import pytest
 
-from fl_mcp import wire
+from e2e.fl_host import FLHost
 from fl_mcp.flpaths import fl_app
 from fl_mcp.session import FLSession, create_session
 
@@ -42,64 +40,25 @@ class LiveFL(NamedTuple):
     session: FLSession
     hello: dict
 
-# The same resolver the server uses, so the e2e never launches a different app
-# than the backend targets (they had drifted: server 2025 vs this fixture 2026).
-# `fl_mcp` and `harness` are importable via pytest.ini's pythonpath, so no
-# sys.path surgery is needed here.
-_FL_APP = fl_app()
 
-
-def _osa(*lines: str) -> str:
-    cmd = ["osascript"]
-    for line in lines:
-        cmd += ["-e", line]
-    return subprocess.run(cmd, capture_output=True, text=True).stdout.strip()
-
-
-@pytest.fixture(scope="session")
-def live_fl():
+@pytest.fixture(scope="module")
+def fl_host():
     if not os.environ.get("FL_E2E"):
         pytest.skip("live-FL e2e disabled; set FL_E2E=1 to run")
-    if not _FL_APP.exists():
+    if not fl_app().exists():
         pytest.skip("FL Studio not installed")
 
-    from harness import flctl
+    host = FLHost()
+    host.launch()
+    yield host
+    host.close()
 
-    # This fixture owns the transport: constructed here, closed on teardown.
-    ctl = wire.MidiControl()  # ports must exist before FL launches
-    if flctl.is_running():
-        flctl.stop(force=True)
-        time.sleep(1)
-    flctl.start()
 
-    hello = None
-    deadline = time.time() + 120
-    dismissed = 0
-    while time.time() < deadline:
-        for ev in ctl.drain_events():
-            if ev.get("op") == "hello":
-                hello = ev
-        if hello:
-            break
-        # Clear the trial/welcome modal a few times while FL boots.
-        if dismissed < 5 and _osa(
-            'tell application "System Events" to name of first process whose frontmost is true'
-        ) == "OsxFL":
-            _osa('tell application "System Events" to key code 53')
-            dismissed += 1
-        time.sleep(1)
-
-    if hello is None:
-        flctl.stop(force=True)
-        ctl.close()
-        pytest.fail("controller script never said hello within 120s")
-
+@pytest.fixture(scope="module")
+def live_fl(fl_host):
     # v2 FLSession takes its collaborators explicitly - no hidden construction.
     session = create_session()
     if session.control is not None:
-        session.control.close()  # the fixture owns the transport, not the factory
-    session.control = ctl
-    yield LiveFL(session=session, hello=hello)
-
-    flctl.stop(force=True)
-    ctl.close()
+        session.control.close()  # the host owns the transport, not the factory
+    session.control = fl_host.ctl
+    return LiveFL(session=session, hello=fl_host.hello)

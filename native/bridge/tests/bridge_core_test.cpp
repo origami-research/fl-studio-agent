@@ -1,23 +1,93 @@
-// Host-shim test for bridge_core: drives PollOnce with a fake spool command
-// against a mock TFruityPlugHost and asserts the exact TNotesParams the Bridge
-// would hand FHD_AddNotesToPR, plus the consumed-ledger / result-file / tombstone
-// protocol shared with the piano roll .pyscript. Built with ASan+UBSan (see the
-// bridge_core_test target in native/CMakeLists.txt).
+// Host-shim test for bridge_core: drives PollOnce over a fake v2 spool
+// (commands/queue.json + per-id command files, as mcp-server/src/fl_mcp/spool.py
+// writes them) against a mock TFruityPlugHost, and asserts the exact
+// TNotesParams the Bridge would hand FHD_AddNotesToPR plus the consumed-ledger
+// / response-file / tombstone protocol shared with the piano roll .pyscript.
+// Built with ASan+UBSan (see the bridge_core_test target in
+// native/CMakeLists.txt).
 //
-// Hand-rolled asserts, no test framework — same dependency-free convention as
-// native/spike1/tests/dispatcher_probe_test.cpp. The CHECK macro, MockHost and
-// file helpers are shared with bridge_udp_test via test_support.h.
+// Hand-rolled asserts, no test framework — dependency-free convention.
 
+#include <sys/stat.h>
 #include <unistd.h>
 
 #include <cstdint>
+#include <cstdio>
 #include <cstdlib>
+#include <cstring>
+#include <fstream>
+#include <sstream>
 #include <string>
 #include <vector>
 
 #include "bridge_core.h"
 #include "fp_plugclass.h"
-#include "test_support.h"
+#include "mock_host.h"
+
+namespace {
+
+using bridge_mock::CapturedChord;
+using bridge_mock::MockHost;
+
+int g_failures = 0;
+
+#define CHECK(cond)                                                        \
+  do {                                                                     \
+    if (!(cond)) {                                                         \
+      fprintf(stderr, "FAIL %s:%d: %s\n", __FILE__, __LINE__, #cond);      \
+      g_failures++;                                                        \
+    }                                                                      \
+  } while (0)
+
+bool MakeDirs(const std::string &path) {
+  std::string partial;
+  for (size_t i = 0; i <= path.size(); ++i) {
+    if (i == path.size() || path[i] == '/') {
+      if (!partial.empty() && mkdir(partial.c_str(), 0755) != 0 && errno != EEXIST) return false;
+    }
+    if (i < path.size()) partial.push_back(path[i]);
+  }
+  return true;
+}
+
+void WriteFile(const std::string &path, const std::string &text) {
+  std::ofstream f(path, std::ios::trunc);
+  f << text;
+}
+
+std::string ReadFile(const std::string &path) {
+  std::ifstream f(path);
+  std::stringstream ss;
+  ss << f.rdbuf();
+  return ss.str();
+}
+
+bool Contains(const std::string &haystack, const std::string &needle) {
+  return haystack.find(needle) != std::string::npos;
+}
+
+std::string ZeroPadded(int id) {
+  char name[32];
+  snprintf(name, sizeof(name), "%06d.json", id);
+  return name;
+}
+
+std::string CmdPath(const std::string &root, int id) { return root + "/commands/" + ZeroPadded(id); }
+
+std::string RespPath(const std::string &root, int id) { return root + "/responses/" + ZeroPadded(id); }
+
+// The server's queue index ({"proto": 2, "ids": [...]}).
+void WriteQueue(const std::string &root, const std::vector<int> &ids) {
+  std::string json = "{\"proto\": 2, \"ids\": [";
+  for (size_t i = 0; i < ids.size(); ++i) {
+    if (i != 0) json += ", ";
+    json += std::to_string(ids[i]);
+  }
+  json += "]}";
+  WriteFile(root + "/commands/queue.json", json);
+}
+
+}  // namespace
 
 int main() {
   char home_tmpl[] = "/tmp/bridge_core_test_XXXXXX";
@@ -29,51 +99,71 @@ int main() {
   CHECK(roots.size() == 2);
   CHECK(Contains(roots[0], "Piano roll scripts/FLMCP"));
   const std::string preferred = roots[0];
-  CHECK(MakeDirs(preferred));
+  CHECK(MakeDirs(preferred + "/commands"));
+  CHECK(MakeDirs(preferred + "/responses"));
 
-  // --- 1. BuildNotesParams unit conversion -----------------------------------
+  // --- 1. BuildNotesParams: v2 args shape, explicit ppq stamp -----------------
   {
     const char *json =
-        "{\"proto\":1,\"id\":7,\"op\":\"add_notes\",\"mode\":\"replace\",\"channel\":2,"
-        "\"pattern\":-1,\"notes\":["
+        "{\"target\":{\"pattern\":4,\"channel\":2},\"mode\":\"replace\",\"ppq\":192,"
+        "\"notes\":["
         "{\"key\":60,\"start\":0.0,\"length\":1.0,\"velocity\":1.0,\"pan\":0.5,\"color\":3},"
         "{\"key\":72,\"start\":2.5,\"length\":0.5,\"velocity\":0.5,\"pan\":1.0,\"color\":0}"
         "]}";
-    minijson::Value cmd;
-    CHECK(minijson::Parse(json, &cmd));
-    bridge_core::NotesParamsBuffer buf = bridge_core::BuildNotesParams(cmd, bridge_core::kDefaultPPQ);
+    minijson::Value args;
+    CHECK(minijson::Parse(json, &args));
+    bridge_core::NotesParamsBuffer buf =
+        bridge_core::BuildNotesParams(args, bridge_core::kDefaultPPQ, /*empty_first=*/false);
     CHECK(buf.params != nullptr);
     CHECK(buf.count == 2);
-    CHECK(buf.params->Target == 1);                 // piano roll
-    CHECK(buf.params->Flags == NPF_EmptyFirst);     // mode=replace
-    CHECK(buf.params->PatNum == -1);
-    CHECK(buf.params->ChanNum == 2);                // command's channel
-    // note 0: start 0 beats -> 0 ticks; length 1 beat -> 96 ticks; vel 1.0 -> 128
+    CHECK(buf.ppq == 192);
+    CHECK(!buf.used_default_ppq);
+    CHECK(buf.params->Target == 1);              // piano roll
+    CHECK(buf.params->Flags == NPF_EmptyFirst);  // mode=replace
+    CHECK(buf.params->PatNum == 4);
+    CHECK(buf.params->ChanNum == 2);
+    // note 0: start 0 beats -> 0 ticks; length 1 beat -> 192 ticks; vel 1.0 -> 128
     CHECK(buf.params->NoteParams[0].Note == 60);
     CHECK(buf.params->NoteParams[0].Position == 0);
-    CHECK(buf.params->NoteParams[0].Length == 96);
+    CHECK(buf.params->NoteParams[0].Length == 192);
     CHECK(buf.params->NoteParams[0].Vol == 128);
-    CHECK(buf.params->NoteParams[0].Pan == 0);       // pan 0.5 -> centre 0
+    CHECK(buf.params->NoteParams[0].Pan == 0);  // pan 0.5 -> centre 0
     CHECK(buf.params->NoteParams[0].Color == 3);
-    // note 1: start 2.5 beats -> 240 ticks; length 0.5 -> 48; vel 0.5 -> 64; pan 1.0 -> +64
+    // note 1: start 2.5 beats -> 480 ticks; length 0.5 -> 96; vel 0.5 -> 64; pan 1.0 -> +64
     CHECK(buf.params->NoteParams[1].Note == 72);
-    CHECK(buf.params->NoteParams[1].Position == 240);
-    CHECK(buf.params->NoteParams[1].Length == 48);
+    CHECK(buf.params->NoteParams[1].Position == 480);
+    CHECK(buf.params->NoteParams[1].Length == 96);
     CHECK(buf.params->NoteParams[1].Vol == 64);
     CHECK(buf.params->NoteParams[1].Pan == 64);
   }
 
-  // --- 2. PollOnce end-to-end: fake command -> host call + ledger + result ---
+  // --- 2. BuildNotesParams: null/missing ppq falls back, flagged --------------
   {
     const char *json =
-        "{\"proto\":1,\"id\":42,\"op\":\"add_notes\",\"channel\":5,\"notes\":["
-        "{\"key\":64,\"start\":1.0,\"length\":2.0,\"velocity\":0.8,\"pan\":0.5,\"color\":1}"
-        "]}";
-    WriteTestFile(preferred + "/pending.json", json);
+        "{\"target\":{\"pattern\":1,\"channel\":0},\"ppq\":null,"
+        "\"notes\":[{\"key\":60,\"start\":1.0,\"length\":1.0}]}";
+    minijson::Value args;
+    CHECK(minijson::Parse(json, &args));
+    bridge_core::NotesParamsBuffer buf =
+        bridge_core::BuildNotesParams(args, bridge_core::kDefaultPPQ, false);
+    CHECK(buf.used_default_ppq);
+    CHECK(buf.ppq == 96);
+    CHECK(buf.params->Flags == 0);  // no mode -> merge
+    CHECK(buf.params->NoteParams[0].Position == 96);
+  }
+
+  // --- 3. PollOnce end-to-end: v2 command -> host call + ledger + response ----
+  {
+    WriteFile(CmdPath(preferred, 42),
+              "{\"proto\":2,\"id\":42,\"op\":\"add_notes\",\"args\":{"
+              "\"target\":{\"pattern\":2,\"channel\":5},\"mode\":\"merge\",\"ppq\":96,"
+              "\"notes\":[{\"key\":64,\"start\":1.0,\"length\":2.0,\"velocity\":0.8,"
+              "\"pan\":0.5,\"color\":1}]}}");
+    WriteQueue(preferred, {42});
 
     MockHost host;
-    bridge_core::PollOutcome out =
-        bridge_core::PollOnce(&host, /*host_tag=*/0x1122334455667788LL, roots, bridge_core::kDefaultPPQ);
+    bridge_core::PollOutcome out = bridge_core::PollOnce(
+        &host, /*host_tag=*/0x1122334455667788LL, roots, bridge_core::kDefaultPPQ);
 
     CHECK(out.had_command);
     CHECK(out.ok);
@@ -81,79 +171,184 @@ int main() {
     CHECK(out.op == "add_notes");
     CHECK(out.notes_written == 1);
 
-    // Host received exactly one chord with the converted note.
+    // Host received exactly one chord with the converted note and the target.
     CHECK(host.chords.size() == 1);
     CHECK(host.set_dirty_calls == 1);
     if (!host.chords.empty()) {
       const CapturedChord &c = host.chords[0];
       CHECK(c.target == 1);
-      CHECK(c.flags == 0);              // no replace -> merge
+      CHECK(c.flags == 0);  // merge
+      CHECK(c.pat_num == 2);
       CHECK(c.chan_num == 5);
       CHECK(c.count == 1);
       CHECK(c.notes.size() == 1);
       CHECK(c.notes[0].Note == 64);
-      CHECK(c.notes[0].Position == 96);  // 1 beat
-      CHECK(c.notes[0].Length == 192);   // 2 beats
+      CHECK(c.notes[0].Position == 96);   // 1 beat
+      CHECK(c.notes[0].Length == 192);    // 2 beats
     }
 
-    // Ledger records id 42; result.json written; pending tombstoned.
+    // Ledger records id 42; SpoolResponse written; command tombstoned; the
+    // queue index is untouched (the SERVER prunes it, never a consumer).
     CHECK(bridge_core::AlreadyConsumed(roots, 42));
-    std::string result = ReadTestFile(preferred + "/result.json");
-    CHECK(Contains(result, "\"id\": 42"));
-    CHECK(Contains(result, "\"ok\": true"));
-    CHECK(Contains(result, "\"backend\": \"bridge\""));
-    std::string pending_after = ReadTestFile(preferred + "/pending.json");
-    CHECK(Contains(pending_after, "\"consumed\": true"));
+    std::string resp = ReadFile(RespPath(preferred, 42));
+    CHECK(Contains(resp, "\"id\": 42"));
+    CHECK(Contains(resp, "\"ok\": true"));
+    CHECK(Contains(resp, "\"op\": \"add_notes\""));
+    CHECK(Contains(resp, "\"notes_written\": 1"));
+    CHECK(Contains(resp, "\"backend\": \"bridge\""));
+    CHECK(Contains(ReadFile(CmdPath(preferred, 42)), "\"consumed\": true"));
+    CHECK(Contains(ReadFile(preferred + "/commands/queue.json"), "42"));
   }
 
-  // --- 3. Idempotency: the same command is not applied twice ------------------
+  // --- 4. Idempotency: the same id is never applied twice ---------------------
   {
-    // pending.json is a tombstone now; re-poll must be a no-op.
+    // The command is a tombstone now and the id is in the ledger; re-poll no-ops.
     MockHost host;
-    bridge_core::PollOutcome out =
-        bridge_core::PollOnce(&host, 0, roots, bridge_core::kDefaultPPQ);
+    bridge_core::PollOutcome out = bridge_core::PollOnce(&host, 0, roots, bridge_core::kDefaultPPQ);
     CHECK(!out.had_command);
     CHECK(host.chords.empty());
 
     // Even if a stale live command with the same id reappears, the ledger blocks it.
-    WriteTestFile(preferred + "/pending.json",
-              "{\"proto\":1,\"id\":42,\"op\":\"add_notes\",\"notes\":[]}");
-    bridge_core::PollOutcome out2 =
-        bridge_core::PollOnce(&host, 0, roots, bridge_core::kDefaultPPQ);
+    WriteFile(CmdPath(preferred, 42),
+              "{\"proto\":2,\"id\":42,\"op\":\"add_notes\",\"args\":{\"notes\":[]}}");
+    bridge_core::PollOutcome out2 = bridge_core::PollOnce(&host, 0, roots, bridge_core::kDefaultPPQ);
     CHECK(!out2.had_command);
     CHECK(host.chords.empty());
   }
 
-  // --- 4. clear_notes maps to a replace with zero notes ----------------------
+  // --- 5. One command per poll, lowest id first -------------------------------
   {
-    WriteTestFile(preferred + "/pending.json",
-              "{\"proto\":1,\"id\":43,\"op\":\"clear_notes\",\"channel\":1}");
+    WriteFile(CmdPath(preferred, 51),
+              "{\"proto\":2,\"id\":51,\"op\":\"ping\",\"args\":{}}");
+    WriteFile(CmdPath(preferred, 50),
+              "{\"proto\":2,\"id\":50,\"op\":\"ping\",\"args\":{}}");
+    WriteQueue(preferred, {42, 51, 50});  // 42 already consumed
+
     MockHost host;
-    bridge_core::PollOutcome out =
-        bridge_core::PollOnce(&host, 0, roots, bridge_core::kDefaultPPQ);
+    bridge_core::PollOutcome first = bridge_core::PollOnce(&host, 0, roots, bridge_core::kDefaultPPQ);
+    CHECK(first.had_command);
+    CHECK(first.id == 50);
+    CHECK(first.ok);
+    bridge_core::PollOutcome second = bridge_core::PollOnce(&host, 0, roots, bridge_core::kDefaultPPQ);
+    CHECK(second.had_command);
+    CHECK(second.id == 51);
+    // ping never touches the host.
+    CHECK(host.chords.empty());
+    CHECK(host.set_dirty_calls == 0);
+    CHECK(Contains(ReadFile(RespPath(preferred, 50)), "\"ok\": true"));
+    CHECK(Contains(ReadFile(RespPath(preferred, 50)), "\"op\": \"ping\""));
+  }
+
+  // --- 6. clear_notes maps to NPF_EmptyFirst with zero notes, target honored --
+  {
+    WriteFile(CmdPath(preferred, 60),
+              "{\"proto\":2,\"id\":60,\"op\":\"clear_notes\",\"args\":{"
+              "\"target\":{\"pattern\":3,\"channel\":1}}}");
+    WriteQueue(preferred, {60});
+    MockHost host;
+    bridge_core::PollOutcome out = bridge_core::PollOnce(&host, 0, roots, bridge_core::kDefaultPPQ);
     CHECK(out.had_command);
     CHECK(out.ok);
     CHECK(host.chords.size() == 1);
     if (!host.chords.empty()) {
       CHECK(host.chords[0].flags == NPF_EmptyFirst);
       CHECK(host.chords[0].count == 0);
+      CHECK(host.chords[0].pat_num == 3);
       CHECK(host.chords[0].chan_num == 1);
     }
+    CHECK(Contains(ReadFile(RespPath(preferred, 60)), "\"notes_written\": 0"));
   }
 
-  // --- 5. protocol mismatch is reported, not applied -------------------------
+  // --- 7. protocol mismatch is claimed and refused, never applied -------------
   {
-    WriteTestFile(preferred + "/pending.json",
-              "{\"proto\":99,\"id\":44,\"op\":\"add_notes\",\"notes\":[{\"key\":60,\"start\":0,\"length\":1}]}");
+    WriteFile(CmdPath(preferred, 70),
+              "{\"proto\":1,\"id\":70,\"op\":\"add_notes\",\"args\":{"
+              "\"notes\":[{\"key\":60,\"start\":0,\"length\":1}]}}");
+    WriteQueue(preferred, {70});
     MockHost host;
-    bridge_core::PollOutcome out =
-        bridge_core::PollOnce(&host, 0, roots, bridge_core::kDefaultPPQ);
+    bridge_core::PollOutcome out = bridge_core::PollOnce(&host, 0, roots, bridge_core::kDefaultPPQ);
     CHECK(out.had_command);
     CHECK(!out.ok);
     CHECK(host.chords.empty());
-    CHECK(bridge_core::AlreadyConsumed(roots, 44));  // claimed so it can't loop
-    std::string result = ReadTestFile(preferred + "/result.json");
-    CHECK(Contains(result, "protocol mismatch"));
+    CHECK(bridge_core::AlreadyConsumed(roots, 70));  // claimed so it can't loop
+    std::string resp = ReadFile(RespPath(preferred, 70));
+    CHECK(Contains(resp, "\"ok\": false"));
+    CHECK(Contains(resp, "protocol mismatch"));
+  }
+
+  // --- 8. claim-before-execute: a command that fails is still consumed --------
+  {
+    WriteFile(CmdPath(preferred, 80),
+              "{\"proto\":2,\"id\":80,\"op\":\"add_notes\",\"args\":{"
+              "\"notes\":[{\"key\":60,\"start\":0,\"length\":1}]}}");
+    WriteQueue(preferred, {80});
+    bridge_core::PollOutcome out =
+        bridge_core::PollOnce(/*host=*/nullptr, 0, roots, bridge_core::kDefaultPPQ);
+    CHECK(out.had_command);
+    CHECK(!out.ok);
+    CHECK(out.error == "no plugin host");
+    // The claim landed even though execution failed: no replay after a crash.
+    CHECK(bridge_core::AlreadyConsumed(roots, 80));
+    CHECK(Contains(ReadFile(RespPath(preferred, 80)), "no plugin host"));
+  }
+
+  // --- 9. server-cancelled tombstones are skipped, not applied and not stuck --
+  {
+    WriteFile(CmdPath(preferred, 90), "{\"consumed\": true, \"id\": 90}");  // cancelled
+    WriteFile(CmdPath(preferred, 91),
+              "{\"proto\":2,\"id\":91,\"op\":\"ping\",\"args\":{}}");
+    WriteQueue(preferred, {90, 91});
+    MockHost host;
+    bridge_core::PollOutcome out = bridge_core::PollOnce(&host, 0, roots, bridge_core::kDefaultPPQ);
+    CHECK(out.had_command);
+    CHECK(out.id == 91);
+    CHECK(!bridge_core::AlreadyConsumed(roots, 90));  // never claimed, only skipped
+  }
+
+  // --- 10. fallback root: commands mirrored only there still apply ------------
+  {
+    const std::string fallback = roots[1];
+    CHECK(MakeDirs(fallback + "/commands"));
+    WriteFile(CmdPath(fallback, 100),
+              "{\"proto\":2,\"id\":100,\"op\":\"add_notes\",\"args\":{"
+              "\"target\":{\"pattern\":1,\"channel\":0},\"ppq\":96,"
+              "\"notes\":[{\"key\":62,\"start\":0,\"length\":1}]}}");
+    WriteQueue(preferred, {});  // preferred root knows nothing
+    WriteQueue(fallback, {100});
+    MockHost host;
+    bridge_core::PollOutcome out = bridge_core::PollOnce(&host, 0, roots, bridge_core::kDefaultPPQ);
+    CHECK(out.had_command);
+    CHECK(out.id == 100);
+    CHECK(out.ok);
+    CHECK(host.chords.size() == 1);
+    // The response mirrors into both roots (mkdir on demand for the fallback).
+    CHECK(Contains(ReadFile(RespPath(preferred, 100)), "\"ok\": true"));
+    CHECK(Contains(ReadFile(RespPath(fallback, 100)), "\"ok\": true"));
+  }
+
+  // --- 11. missing ppq stamp: applied with default, WARNING in the summary ----
+  {
+    WriteFile(CmdPath(preferred, 110),
+              "{\"proto\":2,\"id\":110,\"op\":\"add_notes\",\"args\":{"
+              "\"target\":{\"pattern\":1,\"channel\":0},"
+              "\"notes\":[{\"key\":60,\"start\":1,\"length\":1}]}}");
+    WriteQueue(preferred, {110});
+    MockHost host;
+    bridge_core::PollOutcome out = bridge_core::PollOnce(&host, 0, roots, bridge_core::kDefaultPPQ);
+    CHECK(out.ok);
+    CHECK(host.chords.size() == 1);
+    if (!host.chords.empty()) CHECK(host.chords[0].notes[0].Position == 96);
+    std::string resp = ReadFile(RespPath(preferred, 110));
+    CHECK(Contains(resp, "WARNING"));
+    CHECK(Contains(resp, "assumed default 96"));
+  }
+
+  // --- 12. junk queue index is ignored, never fatal ---------------------------
+  {
+    WriteFile(preferred + "/commands/queue.json", "{not json");
+    MockHost host;
+    bridge_core::PollOutcome out = bridge_core::PollOnce(&host, 0, roots, bridge_core::kDefaultPPQ);
+    CHECK(!out.had_command);
   }
 
   if (g_failures == 0) {

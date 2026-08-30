@@ -1,34 +1,17 @@
-// Shared support for the bridge's host-shim tests: the CHECK macro, the mock
-// TFruityPlugHost, and tiny file helpers. Hand-rolled, no test framework -
-// same dependency-free convention as native/spike1's tests. One canonical
-// MockHost so bridge_core_test and bridge_udp_test cannot drift.
+// Mock TFruityPlugHost shared by bridge_core_test and bridge_spool_cli: only
+// Dispatcher does anything (recording FHD_AddNotesToPR payloads and
+// FHD_SetDirty), everything else is a never-called stub. The captured chords
+// are deep copies so assertions survive the caller freeing the real
+// (flexible-array) TNotesParams.
 #pragma once
 
-#include <sys/stat.h>
-
-#include <cerrno>
 #include <cstdint>
-#include <cstdio>
-#include <fstream>
-#include <sstream>
-#include <string>
-#include <utility>
 #include <vector>
 
 #include "fp_plugclass.h"
 
-inline int g_failures = 0;
+namespace bridge_mock {
 
-#define CHECK(cond)                                                        \
-  do {                                                                     \
-    if (!(cond)) {                                                         \
-      fprintf(stderr, "FAIL %s:%d: %s\n", __FILE__, __LINE__, #cond);      \
-      g_failures++;                                                        \
-    }                                                                      \
-  } while (0)
-
-// A deep copy of the note payload FL would receive, so assertions survive the
-// caller freeing the real (flexible-array) struct.
 struct CapturedChord {
   int target = 0;
   int flags = 0;
@@ -38,8 +21,6 @@ struct CapturedChord {
   std::vector<TNoteParams> notes;
 };
 
-// Mocks TFruityPlugHost. Only Dispatcher is used; it records FHD_AddNotesToPR /
-// FHD_SetDirty calls. Every other method is a never-called stub.
 class MockHost : public TFruityPlugHost {
  public:
   std::vector<CapturedChord> chords;
@@ -110,29 +91,4 @@ class MockHost : public TFruityPlugHost {
   void _stdcall ResumeOutput(TPluginTag) override {}
 };
 
-inline bool MakeDirs(const std::string &path) {
-  std::string partial;
-  for (size_t i = 0; i <= path.size(); ++i) {
-    if (i == path.size() || path[i] == '/') {
-      if (!partial.empty() && mkdir(partial.c_str(), 0755) != 0 && errno != EEXIST) return false;
-    }
-    if (i < path.size()) partial.push_back(path[i]);
-  }
-  return true;
-}
-
-inline void WriteTestFile(const std::string &path, const std::string &text) {
-  std::ofstream f(path, std::ios::trunc);
-  f << text;
-}
-
-inline std::string ReadTestFile(const std::string &path) {
-  std::ifstream f(path);
-  std::stringstream ss;
-  ss << f.rdbuf();
-  return ss.str();
-}
-
-inline bool Contains(const std::string &haystack, const std::string &needle) {
-  return haystack.find(needle) != std::string::npos;
-}
+}  // namespace bridge_mock

@@ -1,28 +1,99 @@
 // Host-shim test for the UDP transport seam (docs/22): queue discipline,
-// the one-executor equivalence across carriers, datagram auth/parse failures,
-// idempotent re-acks, a real-socket round trip, and bounded shutdown. Built
-// with ASan+UBSan; MockHost and helpers shared with bridge_core_test via
-// test_support.h.
+// the one-executor equivalence across carriers (UDP datagram vs the v2 file
+// spool), datagram auth/parse failures, idempotent re-acks, a real-socket
+// round trip, and bounded shutdown. Built with ASan+UBSan; MockHost shared
+// with bridge_core_test via mock_host.h.
 
 #include <arpa/inet.h>
 #include <netinet/in.h>
 #include <poll.h>
 #include <sys/socket.h>
+#include <sys/stat.h>
 #include <unistd.h>
 
 #include <chrono>
 #include <cstdint>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <fstream>
+#include <sstream>
 #include <string>
 #include <vector>
 
 #include "bridge_core.h"
 #include "bridge_udp.h"
 #include "fp_plugclass.h"
-#include "test_support.h"
+#include "mock_host.h"
 
 namespace {
+
+using bridge_mock::CapturedChord;
+using bridge_mock::MockHost;
+
+int g_failures = 0;
+
+#define CHECK(cond)                                                        \
+  do {                                                                     \
+    if (!(cond)) {                                                         \
+      fprintf(stderr, "FAIL %s:%d: %s\n", __FILE__, __LINE__, #cond);      \
+      g_failures++;                                                        \
+    }                                                                      \
+  } while (0)
+
+bool MakeDirs(const std::string &path) {
+  std::string partial;
+  for (size_t i = 0; i <= path.size(); ++i) {
+    if (i == path.size() || path[i] == '/') {
+      if (!partial.empty() && mkdir(partial.c_str(), 0755) != 0 && errno != EEXIST) return false;
+    }
+    if (i < path.size()) partial.push_back(path[i]);
+  }
+  return true;
+}
+
+void WriteFile(const std::string &path, const std::string &text) {
+  std::ofstream f(path, std::ios::trunc);
+  f << text;
+}
+
+std::string ReadFile(const std::string &path) {
+  std::ifstream f(path);
+  std::stringstream ss;
+  ss << f.rdbuf();
+  return ss.str();
+}
+
+bool Contains(const std::string &haystack, const std::string &needle) {
+  return haystack.find(needle) != std::string::npos;
+}
+
+std::string ZeroPadded(int id) {
+  char name[32];
+  snprintf(name, sizeof(name), "%06d.json", id);
+  return name;
+}
+
+// The server's queue index ({"proto": 2, "ids": [...]}).
+void WriteQueue(const std::string &root, const std::vector<int> &ids) {
+  std::string json = "{\"proto\": 2, \"ids\": [";
+  for (size_t i = 0; i < ids.size(); ++i) {
+    if (i != 0) json += ", ";
+    json += std::to_string(ids[i]);
+  }
+  json += "]}";
+  WriteFile(root + "/commands/queue.json", json);
+}
+
+// A v2 add_notes command with one fixed note, as spool.py would serialize it.
+std::string AddNotesCommand(int id, int channel) {
+  return "{\"proto\":2,\"id\":" + std::to_string(id) +
+         ",\"op\":\"add_notes\",\"args\":{"
+         "\"target\":{\"pattern\":2,\"channel\":" + std::to_string(channel) +
+         "},\"mode\":\"merge\",\"ppq\":96,"
+         "\"notes\":[{\"key\":64,\"start\":1.0,\"length\":2.0,\"velocity\":0.8,"
+         "\"pan\":0.5,\"color\":1}]}}";
+}
 
 // A minimal UDP client for the tests: what bridge_wire.py does, in C.
 class TestClient {
@@ -70,7 +141,7 @@ std::string PumpUntilAck(bridge_udp::UdpTransport *transport, MockHost *host,
   for (int attempt = 0; attempt < 200; ++attempt) {
     for (bridge_core::InboundDatagram &datagram : transport->queue().Drain(4)) {
       bridge_core::ExecResult result = bridge_core::ExecuteCommand(
-          host, 0, roots, bridge_core::kDefaultPPQ, datagram.payload, "udp", cache);
+          host, 0, roots, bridge_core::kDefaultPPQ, datagram.payload, cache);
       transport->SendAck(datagram.reply_to, result.ack_json);
     }
     std::string ack = client->Recv(10);
@@ -89,7 +160,8 @@ int main() {
 
   std::vector<std::string> roots = bridge_core::SpoolRoots(home);
   const std::string preferred = roots[0];
-  CHECK(MakeDirs(preferred));
+  CHECK(MakeDirs(preferred + "/commands"));
+  CHECK(MakeDirs(preferred + "/responses"));
 
   // --- 1. CommandQueue: FIFO, bounded, drop-oldest, bounded drain -------------
   {
@@ -125,27 +197,28 @@ int main() {
   {
     MockHost host;
     bridge_core::ResultCache cache;
-    // The heartbeat probe carries no id: no ledger slot, no file, no FL - even
-    // with a mismatched proto (the pong itself reports ours).
+    // The heartbeat probe carries no id: no ledger slot, no response file, no
+    // FL - even with a mismatched proto (the pong itself reports ours).
     bridge_core::ExecResult stateless = bridge_core::ExecuteCommand(
-        &host, 0, roots, bridge_core::kDefaultPPQ,
-        "{\"proto\":99,\"op\":\"ping\"}", "udp", &cache);
+        &host, 0, roots, bridge_core::kDefaultPPQ, "{\"proto\":99,\"op\":\"ping\"}", &cache);
     CHECK(stateless.outcome.ok);
     CHECK(Contains(stateless.ack_json, "\"id\": 0"));
     CHECK(Contains(stateless.ack_json, "\"ok\": true"));
     CHECK(Contains(stateless.ack_json, "\"op\": \"ping\""));
-    CHECK(Contains(stateless.ack_json, "\"proto\": 1"));
-    CHECK(ReadTestFile(preferred + "/result.json").empty());    // never written
+    CHECK(Contains(stateless.ack_json, "\"proto\": 2"));
+    CHECK(bridge_core::ReadConsumedIds(roots).empty());
     CHECK(host.chords.empty());
 
     // An id-carrying ping is a queued command: claimed (that claim is what
-    // prunes it from the v2 queue), result recorded, still no host calls.
+    // prunes it from the queue), response recorded, still no host calls.
     bridge_core::ExecResult claimed = bridge_core::ExecuteCommand(
         &host, 0, roots, bridge_core::kDefaultPPQ,
-        "{\"proto\":1,\"id\":900,\"op\":\"ping\"}", "udp", &cache);
+        "{\"proto\":2,\"id\":900,\"op\":\"ping\"}", &cache);
     CHECK(claimed.outcome.ok);
     CHECK(bridge_core::AlreadyConsumed(roots, 900));
-    CHECK(Contains(ReadTestFile(preferred + "/result.json"), "\"id\": 900"));
+    std::string pong = ReadFile(preferred + "/responses/" + ZeroPadded(900));
+    CHECK(Contains(pong, "\"id\": 900"));
+    CHECK(Contains(pong, "\"summary\": \"pong\""));
     CHECK(host.chords.empty());
   }
 
@@ -153,38 +226,34 @@ int main() {
   {
     MockHost host;
     bridge_core::ExecResult bad_json = bridge_core::ExecuteCommand(
-        &host, 0, roots, bridge_core::kDefaultPPQ, "{not json", "udp", nullptr);
+        &host, 0, roots, bridge_core::kDefaultPPQ, "{not json", nullptr);
     CHECK(!bad_json.outcome.had_command);
     CHECK(Contains(bad_json.ack_json, "unparseable"));
+    CHECK(Contains(bad_json.ack_json, "\"err\": "));
     bridge_core::ExecResult no_op = bridge_core::ExecuteCommand(
-        &host, 0, roots, bridge_core::kDefaultPPQ, "{\"id\": 7}", "udp", nullptr);
+        &host, 0, roots, bridge_core::kDefaultPPQ, "{\"id\": 7}", nullptr);
     CHECK(Contains(no_op.ack_json, "no op"));
     CHECK(host.chords.empty());
   }
 
-  // --- 5. One executor, two carriers: UDP apply == file-spool apply -----------
+  // --- 5. One executor, two carriers: UDP apply == v2 file-spool apply --------
   {
-    const std::string command =
-        "{\"proto\":1,\"id\":50,\"op\":\"add_notes\",\"channel\":5,\"notes\":["
-        "{\"key\":64,\"start\":1.0,\"length\":2.0,\"velocity\":0.8,\"pan\":0.5,\"color\":1}]}";
-
     MockHost udp_host;
     bridge_core::ResultCache cache;
     bridge_core::ExecResult via_udp = bridge_core::ExecuteCommand(
-        &udp_host, 0, roots, bridge_core::kDefaultPPQ, command, "udp", &cache);
+        &udp_host, 0, roots, bridge_core::kDefaultPPQ, AddNotesCommand(50, 5), &cache);
     CHECK(via_udp.outcome.ok);
     CHECK(bridge_core::AlreadyConsumed(roots, 50));
-    CHECK(Contains(ReadTestFile(preferred + "/result.json"), "\"id\": 50"));
+    CHECK(Contains(ReadFile(preferred + "/responses/" + ZeroPadded(50)), "\"id\": 50"));
 
-    // The identical command with a fresh id through the file carrier.
-    const std::string command51 =
-        "{\"proto\":1,\"id\":51,\"op\":\"add_notes\",\"channel\":5,\"notes\":["
-        "{\"key\":64,\"start\":1.0,\"length\":2.0,\"velocity\":0.8,\"pan\":0.5,\"color\":1}]}";
-    WriteTestFile(preferred + "/pending.json", command51);
+    // The identical command with a fresh id through the v2 file carrier.
+    WriteFile(preferred + "/commands/" + ZeroPadded(51), AddNotesCommand(51, 5));
+    WriteQueue(preferred, {51});
     MockHost file_host;
     bridge_core::PollOutcome via_file =
         bridge_core::PollOnce(&file_host, 0, roots, bridge_core::kDefaultPPQ, &cache);
     CHECK(via_file.ok);
+    CHECK(via_file.id == 51);
 
     // Same dispatches: identical TNotesParams either way.
     CHECK(udp_host.chords.size() == 1 && file_host.chords.size() == 1);
@@ -193,33 +262,36 @@ int main() {
       const CapturedChord &a = udp_host.chords[0];
       const CapturedChord &b = file_host.chords[0];
       CHECK(a.target == b.target && a.flags == b.flags && a.chan_num == b.chan_num);
+      CHECK(a.pat_num == b.pat_num);
       CHECK(a.count == b.count && a.notes.size() == 1 && b.notes.size() == 1);
       CHECK(memcmp(&a.notes[0], &b.notes[0], sizeof(TNoteParams)) == 0);
     }
 
-    // One ledger across carriers: id 50 retried via the FILE spool is refused...
-    WriteTestFile(preferred + "/pending.json", command);
+    // One ledger across carriers: id 50 (applied via UDP) queued on disk is
+    // skipped by the file carrier without a host call...
+    WriteFile(preferred + "/commands/" + ZeroPadded(50), AddNotesCommand(50, 5));
+    WriteQueue(preferred, {50});
     MockHost replay_host;
     bridge_core::PollOutcome replay =
         bridge_core::PollOnce(&replay_host, 0, roots, bridge_core::kDefaultPPQ, &cache);
     CHECK(!replay.had_command);
     CHECK(replay_host.chords.empty());
-    CHECK(Contains(ReadTestFile(preferred + "/pending.json"), "\"consumed\": true"));
 
-    // ...and id 51 retried via UDP re-acks the recorded result verbatim,
-    // without re-executing.
+    // ...and id 51 (applied via the file spool) retransmitted over UDP re-acks
+    // the recorded response verbatim, without re-executing.
     MockHost dup_host;
     bridge_core::ExecResult dup = bridge_core::ExecuteCommand(
-        &dup_host, 0, roots, bridge_core::kDefaultPPQ, command51, "udp", &cache);
+        &dup_host, 0, roots, bridge_core::kDefaultPPQ, AddNotesCommand(51, 5), &cache);
     CHECK(dup.duplicate);
     CHECK(dup_host.chords.empty());
     CHECK(Contains(dup.ack_json, "\"id\": 51"));
     CHECK(Contains(dup.ack_json, "\"ok\": true"));
+    CHECK(Contains(dup.ack_json, "\"notes_written\": 1"));  // the cached original
 
-    // A duplicate whose result predates the cache still gets a consumed ack.
+    // A duplicate whose response predates the cache still gets a consumed ack.
     bridge_core::ResultCache empty_cache;
     bridge_core::ExecResult cold_dup = bridge_core::ExecuteCommand(
-        &dup_host, 0, roots, bridge_core::kDefaultPPQ, command51, "udp", &empty_cache);
+        &dup_host, 0, roots, bridge_core::kDefaultPPQ, AddNotesCommand(51, 5), &empty_cache);
     CHECK(cold_dup.duplicate);
     CHECK(Contains(cold_dup.ack_json, "\"duplicate\": true"));
   }
@@ -239,10 +311,11 @@ int main() {
       CHECK(transport->token_hex().size() == bridge_udp::kTokenHexLen);
 
       // Port file published where the server reads, with port + token + pid.
-      std::string port_file = ReadTestFile(preferred + "/" + bridge_udp::kPortFileName);
+      std::string port_file = ReadFile(preferred + "/" + bridge_udp::kPortFileName);
       CHECK(Contains(port_file, "\"port\": " + std::to_string(transport->port())));
       CHECK(Contains(port_file, transport->token_hex()));
       CHECK(Contains(port_file, "\"pid\": "));
+      CHECK(Contains(port_file, "\"proto\": 2"));
 
       MockHost host;
       bridge_core::ResultCache cache;
@@ -251,25 +324,21 @@ int main() {
       // Bad frames never reach the queue: wrong magic, wrong token.
       CHECK(client.Send("NOTMCP garbage"));
       std::string wrong_token(bridge_udp::kTokenHexLen, 'f');
-      CHECK(client.Send(bridge_udp::BuildFrame(wrong_token, "{\"op\":\"ping\",\"id\":1}")));
+      CHECK(client.Send(bridge_udp::BuildFrame(wrong_token, "{\"op\":\"ping\"}")));
 
-      // A good ping round-trips through queue -> executor -> ack, and the ack
-      // frame carries the bridge's token (the client's proof of origin).
-      CHECK(client.Send(bridge_udp::BuildFrame(transport->token_hex(),
-                                               "{\"proto\":1,\"id\":901,\"op\":\"ping\"}")));
+      // A good id-less ping round-trips through queue -> executor -> ack, and
+      // the ack frame carries the bridge's token (the client's proof of origin).
+      CHECK(client.Send(bridge_udp::BuildFrame(transport->token_hex(), "{\"op\":\"ping\"}")));
       std::string ack = PumpUntilAck(transport.get(), &host, roots, &cache, &client);
       CHECK(!ack.empty());
       CHECK(ack.size() > bridge_udp::kHeaderLen);
       CHECK(memcmp(ack.data(), bridge_udp::kMagic, bridge_udp::kMagicLen) == 0);
       CHECK(Contains(ack, transport->token_hex()));
-      CHECK(Contains(ack, "\"id\": 901"));
       CHECK(Contains(ack, "\"ok\": true"));
+      CHECK(Contains(ack, "\"proto\": 2"));
 
-      // An add_notes datagram drives the host through the same executor.
-      CHECK(client.Send(bridge_udp::BuildFrame(
-          transport->token_hex(),
-          "{\"proto\":1,\"id\":902,\"op\":\"add_notes\",\"channel\":3,\"notes\":["
-          "{\"key\":60,\"start\":0.0,\"length\":1.0,\"velocity\":1.0,\"pan\":0.5}]}")));
+      // A v2 add_notes datagram drives the host through the same executor.
+      CHECK(client.Send(bridge_udp::BuildFrame(transport->token_hex(), AddNotesCommand(902, 3))));
       std::string note_ack = PumpUntilAck(transport.get(), &host, roots, &cache, &client);
       CHECK(Contains(note_ack, "\"id\": 902"));
       CHECK(Contains(note_ack, "\"notes_written\": 1"));
@@ -303,7 +372,7 @@ int main() {
                          .count();
       CHECK(elapsed <= bridge_udp::kJoinTimeoutMs + 100);
       CHECK(transport->stopped_cleanly());
-      CHECK(ReadTestFile(preferred + "/" + bridge_udp::kPortFileName).empty());
+      CHECK(ReadFile(preferred + "/" + bridge_udp::kPortFileName).empty());
     }
   }
 

@@ -80,20 +80,18 @@ EOF
 
 Expected: p50 in the low tens of milliseconds - the floor is FL's tick cadence (~20 ms per tick, the bridge polls every 3rd tick), NOT the network. Anything under ~100 ms p50 proves the transport adds nothing material.
 
-File-spool comparison (same machine, same FL session) - write a v1 command file and time until `result.json` answers:
+File-spool comparison (same machine, same FL session) - send the same v2 command through the `Spool` class and time until the response file answers:
 
 ```bash
 $PY - <<'EOF'
-import json, time
-from pathlib import Path
-D = Path.home() / "Documents/Image-Line/FL Studio/Settings/Piano roll scripts/FLMCP"
+import time
+from fl_mcp.spool import Spool
+spool = Spool()
 samples = []
-for i in range(20):
-    cid = 800000 + i
+for _ in range(20):
     t0 = time.perf_counter()
-    (D / "pending.json").write_text(json.dumps({"proto": 1, "id": cid, "op": "ping"}))
-    while json.loads((D / "result.json").read_text() or "{}").get("id") != cid:
-        time.sleep(0.005)
+    cmd = spool.send("ping")
+    spool.await_response(cmd, timeout=10.0)
     samples.append((time.perf_counter() - t0) * 1000)
 samples.sort()
 print(f"file rtt ms: p50={samples[10]:.1f} max={samples[-1]:.1f}")
@@ -102,35 +100,50 @@ EOF
 
 Record both numbers in the verdict. Expected: UDP p50 <= file p50 (both are tick-bound; UDP removes the filesystem polling and write amplification, the win grows under load and on slower disks).
 
-## 4. Note write over UDP (v1 payload, until the v2 executor sync lands)
+## 4. Note write over UDP (the v2 command, end to end)
 
-The executor still speaks the v1 command shape (merge seam, workstream A - see the PR body). `bridge_wire` sends v2 `SpoolCommand`s, which today's executor refuses as a well-formed `protocol mismatch` ack - correct, observable, and NOT a note write. To exercise a real note write over UDP today, send the v1 JSON raw:
+Both carriers speak the same v2 protocol through one executor, so this is the plain client path:
 
 ```bash
 # Open a piano roll on the target channel first.
 $PY - <<'EOF'
+from fl_mcp import bridge_wire
+wire = bridge_wire.BridgeWire(bridge_wire.discover())
+cmd = wire.send(
+    "add_notes",
+    target={"pattern": 1, "channel": 0},
+    notes=[{"key": 60, "start": 0, "length": 1, "velocity": 0.8},
+           {"key": 64, "start": 1, "length": 1},
+           {"key": 67, "start": 2, "length": 1}],
+)
+print("command id:", cmd.id)
+print(wire.await_response(cmd, timeout=3.0))
+EOF
+```
+
+Expected: a `SpoolResponse` with `ok=True, op='add_notes', notes_written=3`, the notes visible in the piano roll with no click or trigger, `"$D/consumed.json"` containing the printed id, and `"$D/responses/<id>.json"` holding the same payload the ack carried.
+The response summary will carry a PPQ WARNING if the command had no ppq stamp - `bridge_wire` sends whatever the caller passes, and the session stamps ppq on its own sends; a warning here is expected for this hand-built command and is not a failure.
+
+Then idempotency, live: re-send the SAME id raw (the client never reuses ids on its own):
+
+```bash
+$PY - <<'EOF'
 import json, socket
 from fl_mcp import bridge_wire
 endpoint = bridge_wire.discover()
-frame = lambda payload: bridge_wire.MAGIC + endpoint.token.encode() + b" " + json.dumps(payload).encode()
+cid = int(input("id printed by the previous step: "))
+cmd = {"proto": 2, "id": cid, "op": "add_notes",
+       "args": {"target": {"pattern": 1, "channel": 0}, "mode": "merge",
+                 "notes": [{"key": 60, "start": 0, "length": 1}]}}
 sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 sock.connect(("127.0.0.1", endpoint.port))
 sock.settimeout(3.0)
-cmd = {"proto": 1, "id": 810001, "op": "add_notes", "channel": -1,
-       "notes": [{"key": 60, "start": 0, "length": 1, "velocity": 0.8},
-                 {"key": 64, "start": 1, "length": 1},
-                 {"key": 67, "start": 2, "length": 1}]}
-sock.send(frame(cmd))
+sock.send(bridge_wire.MAGIC + endpoint.token.encode() + b" " + json.dumps(cmd).encode())
 print(sock.recv(65536).decode())
 EOF
 ```
 
-Expected: an ack frame containing `"id": 810001, "ok": true ... "notes_written": 3`, the notes visible in the piano roll with no click or trigger, `"$D/consumed.json"` containing 810001, and `"$D/result.json"` matching the ack payload byte-for-byte after the frame header.
-
-Then idempotency, live: run the same block again (same id).
-Expected: an ack for 810001 again (`duplicate`/cached), and NO second chord in the piano roll.
-
-After the v2 executor sync merges, replace this step with `wire.send("add_notes", target=..., notes=...)` / `await_response` and expect the same shape.
+Expected: an ack for the same id again (the recorded response or a `"duplicate": true` ack), and NO second chord in the piano roll.
 
 ## 5. Soak: 1000 commands
 
