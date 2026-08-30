@@ -74,25 +74,7 @@ class Spool:
                 # A root that refuses mkdir may still be readable by FL; keep it
                 # for reads, and let send() report if no root accepts writes.
                 log.exception("could not create spool directories under %s", r)
-        self._next_id = self._resume_next_id()
-
-    def _resume_next_id(self) -> int:
-        """Never reuse an id: the consumer's ledger is keyed by id, and a reused
-        id would be refused as already applied (or worse, correlated wrongly).
-        Resume past everything any root has seen - files, queue, and ledger."""
-        seen = 0
-        for root in self._roots:
-            for d in (root / "commands", root / "responses"):
-                if d.is_dir():
-                    seen = max(
-                        seen, *(int(p.stem) for p in d.glob("*.json") if p.stem.isdigit()), 0
-                    )
-            for name in (Path("commands") / QUEUE_FILE, Path(LEDGER_FILE)):
-                payload = read_json(root / name)
-                if payload is not None:
-                    ids = [i for i in payload.get("ids", []) if isinstance(i, int)]
-                    seen = max(seen, *ids, 0)
-        return seen + 1
+        self._next_id = resume_next_id(self._roots)
 
     def send(self, op: str, **args: Any) -> SpoolCommand:
         """Schema-validated (schemas.OP_ARGS), sequence-numbered (lock-guarded
@@ -195,6 +177,27 @@ class Spool:
 
 
 # -- helpers --------------------------------------------------------------------
+
+
+def resume_next_id(roots: list[Path]) -> int:
+    """Never reuse an id: the consumer's ledger is keyed by id, and a reused
+    id would be refused as already applied (or worse, correlated wrongly).
+    Resume past everything any root has seen - files, queue, and ledger.
+
+    THE id allocator resume for every carrier (this file spool and the
+    Bridge's UDP client, bridge_wire) - they share one consumer ledger, so
+    they must share one id space."""
+    seen = 0
+    for root in roots:
+        for d in (root / "commands", root / "responses"):
+            if d.is_dir():
+                seen = max(seen, *(int(p.stem) for p in d.glob("*.json") if p.stem.isdigit()), 0)
+        for name in (Path("commands") / QUEUE_FILE, Path(LEDGER_FILE)):
+            payload = read_json(root / name)
+            if payload is not None:
+                ids = [i for i in payload.get("ids", []) if isinstance(i, int)]
+                seen = max(seen, *ids, 0)
+    return seen + 1
 
 
 def write_json_atomic(path: Path, payload: dict[str, Any]) -> None:
