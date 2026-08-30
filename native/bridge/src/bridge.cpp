@@ -24,13 +24,23 @@
 //     region on the extended path and may write host-side state past the
 //     classic fields; this zeroed tail keeps such access inside memory we own.
 //
+// THREADING: slot 27 is a mixer-side callback, so FL calls it inside the
+// plugin lock, where the SDK forbids calling back into the host - and doing it
+// anyway deadlocked FHD_AddNotesToPR live. The tick therefore does no host work
+// itself: it hands one pump at a time to the GUI thread (bridge_gui.h, which
+// carries the full post-mortem) and returns. The executor - and every host
+// Dispatcher call under it - runs only there.
+//
 // The note-writing and spool logic lives in bridge_core.* so it is unit-tested
 // under ASan/UBSan against a mock host (bridge/tests/bridge_core_test.cpp) with
 // no FL in the loop. This file is only the ABI shell + the extended-slot map.
 
+#include <sys/stat.h>
 #include <unistd.h>
 
+#include <atomic>
 #include <cstddef>
+#include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -40,8 +50,13 @@
 #include <vector>
 
 #include "bridge_core.h"
+#include "bridge_gui.h"
 #include "bridge_udp.h"
 #include "fp_plugclass.h"
+
+#if defined(__APPLE__)
+#include <mach-o/dyld.h>
+#endif
 
 namespace {
 
@@ -79,17 +94,11 @@ void WriteStatus(const char *status) {
   WriteSmall("bridge_status.txt", text);
 }
 
-void WriteHeartbeat(long long tick, int applied, int udp_port, long long udp_dropped) {
-  char text[224];
-  snprintf(text, sizeof(text),
-           "tick=%lld\napplied=%d\npid=%d\nunix_time=%lld\nbackend=bridge\n"
-           "udp_port=%d\nudp_dropped=%lld\n",
-           tick, applied, (int)getpid(), (long long)time(nullptr), udp_port, udp_dropped);
-  WriteSmall("bridge_heartbeat.txt", text);
-}
-
 // Extended-slot discovery log, capped per slot. Turns FL 2026's undocumented
 // extended ABI into evidence instead of a crash, without growing without bound.
+// `gui=` is the load-bearing column: it is what identifies a slot as a
+// mixer-side (M) callback, and mixer-side is why the note write had to move off
+// the tick thread (bridge_gui.h).
 constexpr int kExtSlotCount = 64;
 constexpr int kExtLogCapPerSlot = 4;
 int gExtSlotHits[kExtSlotCount] = {0};
@@ -103,8 +112,182 @@ void LogExtSlot(int slot, intptr_t a, intptr_t b, intptr_t c) {
   snprintf(path, sizeof(path), "%s/bridge_ext_slots.txt", gSpoolDir);
   FILE *f = fopen(path, "a");
   if (f == nullptr) return;
-  fprintf(f, "ext slot=%d a=%lld b=%lld c=%lld\n", slot, (long long)a, (long long)b, (long long)c);
+  fprintf(f, "ext slot=%d a=%lld b=%lld c=%lld gui=%d\n", slot, (long long)a, (long long)b,
+          (long long)c, bridge_gui::OnGuiThread() ? 1 : 0);
   fclose(f);
+}
+
+// The extended tick (FL 2026 slot 27) fires often; polling the filesystem on
+// every one is wasteful. Poll every Nth tick — still sub-second responsiveness.
+constexpr int kPollEveryNTicks = 3;
+
+// Bounded work per pump: a UDP burst must never turn one GUI-thread pump into
+// a stall of FL's UI (docs/22 s2). The rest of the burst drains on later pumps.
+constexpr std::size_t kMaxUdpCommandsPerPump = 4;
+constexpr std::size_t kUdpQueueCapacity = 64;
+
+// The state dump is the only checkpoint that costs real work (two spool reads),
+// so it stays off unless a human asks for it: `touch <spool>/bridge_debug.enable`
+// enables it mid-session and deleting the file disables it, neither of which
+// needs FL relaunched (an env var would - FL is launched from Finder).
+constexpr char kDebugFlagName[] = "bridge_debug.enable";
+constexpr int kDebugEveryNPumps = 100;
+
+// How many Bridge instances are live in this process. Two instances sharing one
+// ledger is a candidate explanation for the first-insert anomaly (a freshly
+// menu-inserted instance consumed nothing, while the same dylib auto-loaded
+// from the saved project consumed immediately), so it is worth one counter.
+std::atomic<int> gLiveInstances{0};
+
+// Which binary is this instance living in? If FL 2026 ever hosts the plugin in
+// a separate helper process, that helper's HOME - and so its spool - can differ
+// from the one the server writes. Cheap to record, and it settles that question
+// in one live read.
+std::string ExecutablePath() {
+#if defined(__APPLE__)
+  char path[1024];
+  uint32_t size = sizeof(path);
+  if (_NSGetExecutablePath(path, &size) == 0) return path;
+#endif
+  return "(unknown)";
+}
+
+std::string JoinIds(const std::vector<int> &ids) {
+  std::string out;
+  for (int id : ids) {
+    if (!out.empty()) out += ",";
+    out += std::to_string(id);
+  }
+  return out;
+}
+
+// Everything the executor touches, co-owned by the plugin instance and by any
+// GUI-thread pump still queued when that instance goes away. A pump therefore
+// never dereferences a destroyed Bridge: the lifetime hazard the marshal would
+// otherwise introduce does not exist.
+struct TickState : std::enable_shared_from_this<TickState> {
+  TFruityPlugHost *host = nullptr;
+  std::intptr_t host_tag = 0;
+  std::unique_ptr<bridge_udp::UdpTransport> udp;
+  bridge_core::ResultCache cache;  // GUI thread only, so unsynchronised
+
+  std::atomic<bool> alive{true};
+  std::atomic<bool> pump_queued{false};
+  std::atomic<long long> pumps_requested{0};
+  std::atomic<long long> pumps_ran{0};
+  std::atomic<long long> debug_pumps{0};  // pumps counted only while the debug flag is on
+  // `applied` counts COMMANDS handled, not notes: a consumed ping writes no
+  // notes, and liveness is exactly what a ping is asking about. Notes get their
+  // own counter rather than overloading this one.
+  std::atomic<int> commands_applied{0};
+  std::atomic<int> notes_written{0};
+
+  // Called from the tick, on whatever thread FL ticks us on. Never touches the
+  // host. At most one pump is in flight, so a GUI thread that stalls can only
+  // ever leave one queued - and `gui_pending` in the heartbeat says so.
+  //
+  // A pump that never runs costs nothing: the ledger claim lives inside
+  // ExecuteCommand, inside Pump, so a request that is dropped (FL quits, the
+  // instance goes away) has claimed no id and owes no response. The command is
+  // still queued and still absent from the ledger, so the next pump - this
+  // session or the next - picks it up unchanged. The marshal therefore adds no
+  // claimed-but-lost window; claim and response remain the same two
+  // back-to-back statements on one thread they always were.
+  void RequestPump();
+  // GUI thread only. Drains both carriers through the one executor.
+  void Pump();
+  void Count(const bridge_core::PollOutcome &outcome);
+};
+
+void WriteHeartbeat(const TickState &state, long long tick) {
+  char text[384];
+  snprintf(text, sizeof(text),
+           "tick=%lld\napplied=%d\nnotes=%d\npid=%d\nunix_time=%lld\nbackend=bridge\n"
+           "udp_port=%d\nudp_dropped=%lld\n"
+           "gui_pumps=%lld\ngui_pending=%lld\ntick_on_gui=%d\ninstances=%d\n",
+           tick, state.commands_applied.load(), state.notes_written.load(), (int)getpid(),
+           (long long)time(nullptr), state.udp != nullptr ? state.udp->port() : 0,
+           state.udp != nullptr ? (long long)state.udp->queue().dropped() : 0,
+           state.pumps_ran.load(), state.pumps_requested.load() - state.pumps_ran.load(),
+           bridge_gui::OnGuiThread() ? 1 : 0, gLiveInstances.load());
+  WriteSmall("bridge_heartbeat.txt", text);
+}
+
+// The last host call we entered, and whether FL gave it back. Always on: it is
+// bounded by command rate (not tick rate), and a host call that never returns
+// destroys every other kind of evidence - no crash report, no response file, no
+// stack. A checkpoint left reading ":enter" names the call that hung.
+void WriteHostCallTrace(const char *phase, int id, int notes) {
+  char text[256];
+  snprintf(text, sizeof(text), "phase=%s\nid=%d\nnotes=%d\ngui_thread=%d\nunix_time=%lld\n",
+           phase, id, notes, bridge_gui::OnGuiThread() ? 1 : 0, (long long)time(nullptr));
+  WriteSmall("bridge_dispatch.txt", text);
+}
+
+bool DebugEnabled() {
+  if (gSpoolDir[0] == '\0') return false;
+  char path[600];
+  snprintf(path, sizeof(path), "%s/%s", gSpoolDir, kDebugFlagName);
+  struct stat unused;
+  return stat(path, &unused) == 0;
+}
+
+// What the poll actually sees, from inside the plugin: the roots it resolved,
+// the ids it believes are pending, the ids the ledger says are settled, and the
+// process identity behind all of it. Answers "the spool looks right from
+// outside, so why is nothing consumed?" without a debugger.
+void WriteDebugDump(const TickState &state) {
+  const char *home = getenv("HOME");
+  std::string text = "pid=" + std::to_string((int)getpid());
+  text += "\nexe=" + ExecutablePath();
+  text += std::string("\nHOME=") + (home != nullptr ? home : "(null)");
+  text += "\ninstances=" + std::to_string(gLiveInstances.load());
+  text += "\ngui_thread=" + std::to_string(bridge_gui::OnGuiThread() ? 1 : 0);
+  text += "\nudp_port=" + std::to_string(state.udp != nullptr ? state.udp->port() : 0);
+  text += "\nroots=" + std::to_string(gSpoolRoots.size());
+  for (const std::string &root : gSpoolRoots) text += "\nroot=" + root;
+  text += "\npending=" + JoinIds(bridge_core::QueueIds(gSpoolRoots));
+  text += "\nconsumed=" + JoinIds(bridge_core::ReadConsumedIds(gSpoolRoots));
+  text += "\n";
+  WriteSmall("bridge_debug.txt", text.c_str());
+}
+
+void TickState::Count(const bridge_core::PollOutcome &outcome) {
+  if (!outcome.had_command) return;
+  ++commands_applied;
+  notes_written += outcome.notes_written;
+}
+
+void TickState::RequestPump() {
+  if (pump_queued.exchange(true)) return;
+  ++pumps_requested;
+  std::shared_ptr<TickState> self = shared_from_this();
+  bridge_gui::RunOnGuiThread([self] {
+    if (self->alive.load()) self->Pump();
+    self->pump_queued.store(false);
+  });
+}
+
+void TickState::Pump() {
+  ++pumps_ran;
+  try {
+    // UDP first (the latency path), then the file spool (the fallback). Both
+    // feed the one executor and one ledger; only the carrier differs.
+    if (udp != nullptr) {
+      for (bridge_core::InboundDatagram &datagram : udp->queue().Drain(kMaxUdpCommandsPerPump)) {
+        bridge_core::ExecResult result = bridge_core::ExecuteCommand(
+            host, host_tag, gSpoolRoots, bridge_core::kDefaultPPQ, datagram.payload, &cache);
+        udp->SendAck(datagram.reply_to, result.ack_json);
+        Count(result.outcome);
+      }
+    }
+    Count(bridge_core::PollOnce(host, host_tag, gSpoolRoots, bridge_core::kDefaultPPQ, &cache));
+    if (DebugEnabled() && debug_pumps++ % kDebugEveryNPumps == 0) WriteDebugDump(*this);
+  } catch (...) {
+    // This runs off FL's run loop, where an escaping exception kills the
+    // process; the tick's own catch cannot cover it.
+    WriteStatus("pump_exception");
+  }
 }
 
 char gLongName[] = "FL MCP Bridge";
@@ -130,15 +313,6 @@ void InitPlugInfo() {
   gPlugInfo.LongName = gLongName;
   gPlugInfo.ShortName = gShortName;
 }
-
-// The extended tick (FL 2026 slot 27) fires often; polling the filesystem on
-// every one is wasteful. Poll every Nth tick — still sub-second responsiveness.
-constexpr int kPollEveryNTicks = 3;
-
-// Bounded work per tick: a UDP burst must never turn one tick into a stall of
-// FL's GUI thread (docs/22 s2). The rest of the burst drains on later ticks.
-constexpr std::size_t kMaxUdpCommandsPerTick = 4;
-constexpr std::size_t kUdpQueueCapacity = 64;
 
 }  // namespace
 
@@ -233,14 +407,14 @@ class Bridge {
   // the vtable entirely.
   ~Bridge() = default;
 
-  TFruityPlugHost *host_ = nullptr;
   int tick_counter_ = 0;
   long long heartbeat_tick_ = 0;
-  int applied_total_ = 0;
-  // UDP transport + the shared ack cache (docs/22). Members sit after the
-  // ExtReserved tail like the counters above, outside the host-visible layout.
-  bridge_core::ResultCache result_cache_;
-  std::unique_ptr<bridge_udp::UdpTransport> udp_;
+  // The live half of the plugin: host pointer, UDP transport, ack cache and
+  // counters, shared with any GUI-thread pump this instance queued so the pump
+  // can outlive the instance. Never null - allocation failure would throw out
+  // of CreatePlugInstance instead, so the tick needs no null check. Members sit
+  // after the ExtReserved tail, outside the host-visible layout.
+  std::shared_ptr<TickState> state_ = std::make_shared<TickState>();
 };
 
 // Layout contract with the fetched SDK header: if it ever disagrees, fail the
@@ -260,59 +434,60 @@ static_assert(sizeof(((Bridge *)nullptr)->Reserved) == sizeof(((TFruityPlug *)nu
 
 Bridge::Bridge(TPluginTag tag, TFruityPlugHost *host) {
   try {
+    ++gLiveInstances;
     BuildSpoolState();
     WriteStatus("constructing");
     InitPlugInfo();
     Info = &gPlugInfo;
     HostTag = tag;
     EditorHandle = 0;
-    host_ = host;
+    state_->host = host;
+    state_->host_tag = tag;
+    bridge_core::SetHostCallTrace(WriteHostCallTrace);
     // Deliberately no FHD_WantIdle: the base-free ABI gets its autonomous
     // callback from the extended tick (slot 27), and FHD_WantIdle was the
     // dispatcher call implicated in the earlier crash chain (run 5).
-    // A failed UDP start (no urandom, no writable root) leaves udp_ null and
+    // A failed UDP start (no urandom, no writable root) leaves udp null and
     // the plugin serves the file spool alone - the transport is an upgrade,
     // never a requirement.
-    udp_ = bridge_udp::UdpTransport::Start(gSpoolRoots, kUdpQueueCapacity);
-    WriteHeartbeat(0, 0, udp_ != nullptr ? udp_->port() : 0, 0);
+    state_->udp = bridge_udp::UdpTransport::Start(gSpoolRoots, kUdpQueueCapacity);
+    WriteHeartbeat(*state_, 0);
     WriteStatus("loaded");
   } catch (...) {
     WriteStatus("constructor_exception");
   }
 }
 
+// Runs on whatever thread FL ticks us on - slot 27 is mixer-side, inside the
+// plugin lock. So this does NO host work: it asks for a GUI-thread pump and
+// writes the heartbeat. The heartbeat staying on this thread is deliberate -
+// liveness keeps reporting even if the GUI thread is the thing that stalls, and
+// `gui_pending` is then the number that says so.
 void Bridge::Tick() {
   if (++tick_counter_ < kPollEveryNTicks) return;
   tick_counter_ = 0;
   try {
-    // UDP first (the latency path), then the file spool (the fallback). Both
-    // feed the one executor and one ledger; only the carrier differs.
-    if (udp_ != nullptr) {
-      for (bridge_core::InboundDatagram &datagram : udp_->queue().Drain(kMaxUdpCommandsPerTick)) {
-        bridge_core::ExecResult result =
-            bridge_core::ExecuteCommand(host_, HostTag, gSpoolRoots, bridge_core::kDefaultPPQ,
-                                        datagram.payload, &result_cache_);
-        udp_->SendAck(datagram.reply_to, result.ack_json);
-        if (result.outcome.had_command && result.outcome.ok) {
-          applied_total_ += result.outcome.notes_written;  // pings contribute 0
-        }
-      }
-    }
-    bridge_core::PollOutcome out = bridge_core::PollOnce(host_, HostTag, gSpoolRoots,
-                                                         bridge_core::kDefaultPPQ, &result_cache_);
-    if (out.had_command) applied_total_ += out.ok ? out.notes_written : 0;
+    state_->RequestPump();
   } catch (...) {
     WriteStatus("tick_exception");
   }
-  WriteHeartbeat(++heartbeat_tick_, applied_total_, udp_ != nullptr ? udp_->port() : 0,
-                 udp_ != nullptr ? (long long)udp_->queue().dropped() : 0);
+  WriteHeartbeat(*state_, ++heartbeat_tick_);
 }
 
 void _stdcall Bridge::DestroyObject() {
   WriteStatus("destroyed");
-  // ~Bridge runs ~UdpTransport, whose Stop() waits at most kJoinTimeoutMs for
-  // the socket thread before detaching (docs/22 s2) - this (G)-thread call is
-  // bounded no matter how wedged the socket is.
+  // A pump already queued on the GUI thread co-owns TickState and re-checks
+  // `alive`, so it degrades to a no-op instead of a use-after-free - and a
+  // no-op is exactly right, because it had claimed nothing yet (see
+  // RequestPump). DestroyObject is (G) and so is the pump, so this can never
+  // interleave with one mid-command; if a future FL broke that, the shared
+  // ownership means the running pump still finishes and writes its response
+  // rather than tearing down underneath itself.
+  state_->alive.store(false);
+  --gLiveInstances;
+  // ~TickState runs ~UdpTransport, whose Stop() waits at most kJoinTimeoutMs
+  // for the socket thread before detaching (docs/22 s2) - bounded no matter how
+  // wedged the socket is.
   delete this;
 }
 
@@ -325,8 +500,9 @@ intptr_t _stdcall Bridge::Dispatcher(intptr_t id, intptr_t index, intptr_t value
   return id == FPD_UseIncreasedMIDIResolution ? 1 : 0;
 }
 void _stdcall Bridge::Idle_Public() {
-  // If FL ever calls the classic idle unsolicited, use it as a poll source too
-  // (harmless; shares the same throttle path). Primary driver is slot 27.
+  // The SDK's (G) callback. If FL ever calls it unsolicited it is the ideal
+  // poll source - already on the GUI thread, so the pump runs inline with no
+  // queueing at all. Primary driver is still slot 27.
   Tick();
 }
 void _stdcall Bridge::SaveRestoreState(IStream *stream, BOOL save) {

@@ -88,4 +88,5 @@ echo "     If it does not appear: Options > Manage plugins > Find installed plug
 echo "  3. Ask the MCP server to write notes; the Bridge applies them on its"
 echo "     tick with no further trigger. Watch the spool:"
 echo "     ~/Documents/Image-Line/FL Studio/Settings/Piano roll scripts/FLMCP/"
-echo "     (bridge_status.txt, bridge_heartbeat.txt, result.json)"
+echo "     (bridge_status.txt, bridge_heartbeat.txt, bridge_dispatch.txt,"
+echo "      responses/<id>.json; touch bridge_debug.enable for the state dump)"

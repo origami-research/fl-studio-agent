@@ -59,6 +59,7 @@ target_compile_options(fl_sdk PUBLIC
 add_library(bridge SHARED
     bridge/src/bridge.cpp
     bridge/src/bridge_core.cpp
+    bridge/src/bridge_gui.cpp
     bridge/src/bridge_udp.cpp
 )
 target_include_directories(bridge PRIVATE "${FL_SDK_DIR}" bridge/src)
@@ -84,6 +85,24 @@ target_compile_options(bridge_core_test PRIVATE
     -Wno-ignored-attributes
 )
 target_link_options(bridge_core_test PRIVATE -fsanitize=address,undefined)
+
+# GUI-thread marshal test: the property the FHD_AddNotesToPR deadlock fix rests
+# on - work handed over from a worker thread runs on the MAIN thread, and only
+# once the main thread's run loop gets a turn. Links CoreFoundation on Apple so
+# the test can drain the main queue the same way FL's run loop does.
+add_executable(bridge_gui_test
+    bridge/tests/bridge_gui_test.cpp
+    bridge/src/bridge_gui.cpp
+)
+target_include_directories(bridge_gui_test PRIVATE "${FL_SDK_DIR}" bridge/src)
+target_compile_options(bridge_gui_test PRIVATE
+    -fsanitize=address,undefined -g
+    -Wno-ignored-attributes
+)
+target_link_options(bridge_gui_test PRIVATE -fsanitize=address,undefined)
+if(APPLE)
+    target_link_libraries(bridge_gui_test PRIVATE "-framework CoreFoundation")
+endif()
 
 # UDP transport test: queue discipline, executor equivalence across carriers,
 # datagram auth/parse failures, real-socket round trip, bounded shutdown.
@@ -141,18 +160,22 @@ target_link_options(probe_core_test PRIVATE -fsanitize=address,undefined)
 
 enable_testing()
 add_test(NAME bridge_core_test COMMAND bridge_core_test)
+add_test(NAME bridge_gui_test COMMAND bridge_gui_test)
 add_test(NAME bridge_udp_test COMMAND bridge_udp_test)
 add_test(NAME probe_core_test COMMAND probe_core_test)
 
 # ABI invariant check: the load-bearing property the data static_asserts do NOT
-# cover is the vtable slot count. Assert the built probe dylib has exactly 64
-# vtable slots (base-free, no virtual destructor), the same technique
-# BRIDGE_FINDINGS.md documents for the Bridge. macOS/Mach-O only; the script
-# no-ops (passes) elsewhere so ctest stays green cross-platform.
+# cover is the vtable slot count. Assert each plugin dylib has exactly 64 vtable
+# slots (base-free, no virtual destructor) - the technique BRIDGE_FINDINGS.md
+# documents. macOS/Mach-O only; the script no-ops (passes) elsewhere so ctest
+# stays green cross-platform.
 if(APPLE)
+    add_test(NAME bridge_abi_check
+        COMMAND "${CMAKE_CURRENT_SOURCE_DIR}/scripts/check_vtable.sh"
+                "$<TARGET_FILE:bridge>" Bridge)
     add_test(NAME probe_abi_check
-        COMMAND "${CMAKE_CURRENT_SOURCE_DIR}/probe/check_vtable.sh"
-                "$<TARGET_FILE:probe>")
+        COMMAND "${CMAKE_CURRENT_SOURCE_DIR}/scripts/check_vtable.sh"
+                "$<TARGET_FILE:probe>" Probe)
 endif()
 
 # Differential-test shim: same PollOnce + mock host, driven by the Python suite

@@ -96,7 +96,15 @@ bool IsKnownOp(const std::string &op) {
   return op == "add_notes" || op == "clear_notes" || op == "ping";
 }
 
+HostCallTrace g_host_call_trace = nullptr;
+
+void Trace(const char *phase, int id, int notes) {
+  if (g_host_call_trace != nullptr) g_host_call_trace(phase, id, notes);
+}
+
 }  // namespace
+
+void SetHostCallTrace(HostCallTrace trace) { g_host_call_trace = trace; }
 
 std::vector<std::string> SpoolRoots(const char *home) {
   std::vector<std::string> roots;
@@ -394,8 +402,11 @@ ExecResult ExecuteCommand(TFruityPlugHost *host, std::intptr_t host_tag,
       if (buf.params == nullptr) {
         outcome.error = "out of memory building notes";
       } else {
+        Trace("FHD_AddNotesToPR:enter", id, buf.count);
         host->Dispatcher(host_tag, FHD_AddNotesToPR, 0, reinterpret_cast<intptr_t>(buf.params));
+        Trace("FHD_AddNotesToPR:return", id, buf.count);
         host->Dispatcher(host_tag, FHD_SetDirty, 0, 0);
+        Trace("FHD_SetDirty:return", id, buf.count);
         outcome.notes_written = buf.count;
         outcome.ok = true;
         summary = "applied " + std::to_string(buf.count) + " note(s) via FHD_AddNotesToPR at ppq " +
