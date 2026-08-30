@@ -870,3 +870,11 @@ Instead of hardcoding the era list, flpkit DETECTS the stride per blob: the smal
 All 52 corpus files with playlists resolve unambiguously under that rule (27,010 items, zero out-of-bounds), and on legacy strides 16,434 items compare field-identical to pyflp's `PlaylistEvent` construct STRUCT.
 `get_scene` now carries a `playlist` digest (clip list when small, count/tracks/span always) so a composing model can see the arrangement, not just the patterns.
 Writing clips is the open half of E3 and waits on a live-FL window: author a one-clip save in FL, byte-diff, splice, FL-verify.
+
+## Addendum 15: automation clips open up - reading (2026-08-29)
+
+flpkit 0.3.0 decodes event 234: every type-5 channel (the automation marker, uniform across all 1,100 automation blobs in FL's own projects) carries `FlpChannel.automation` - points with position in beats from clip start (delta-encoded f64, cumulative-summed), value 0..1, and tension.
+Validation is the strongest differential yet: all 9,676 points across the corpus compare point-identical to pyflp's `AutomationEvent` STRUCT, and the reader survives the two 136-byte-trailer outliers by passing trailers through untouched.
+FL names automation channels after their target ("Volume - Master"), so a read carries the human-meaningful target without decoding the link bytes.
+`get_scene` lists each automation channel with point count, span, and endpoint values.
+Writing points is the open half: the 112-byte trailer and the target-link encoding are still opaque - byte-diff an FL-authored edit in a live window.

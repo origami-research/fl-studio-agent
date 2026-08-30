@@ -98,9 +98,10 @@ def test_root_motion_is_capped_to_stay_compact():
 def fake_notes(monkeypatch):
     """Patch the readers so these tests need no .flp on disk."""
 
-    def install(rows, clips=()):
+    def install(rows, clips=(), automations=()):
         monkeypatch.setattr(scene, "_read_rows", lambda _path: rows)
         monkeypatch.setattr(scene, "_read_clips", lambda _path: list(clips))
+        monkeypatch.setattr(scene, "_read_automations", lambda _path: list(automations))
 
     return install
 
@@ -213,3 +214,34 @@ def test_empty_project_still_carries_the_playlist(fake_notes):
     fake_notes([], clips=[scene.ClipRow(track=1, start_beat=0.0, length_beats=4.0, pattern=1)])
     out = scene.summarize("ignored.flp", {})
     assert out["playlist"]["clip_count"] == 1
+
+
+# --- automation ----------------------------------------------------------------
+
+
+def test_summary_reports_automation_channels(fake_notes):
+    fake_notes(
+        [FakeRow(midi=60, channel=0)],
+        automations=[
+            scene.AutomationRow(
+                channel=5, name="Volume - Master", points=3,
+                span_beats=16.0, from_value=1.0, to_value=0.0,
+            )
+        ],
+    )
+    out = scene.summarize("ignored.flp", {})
+    assert out["automations"] == [
+        {
+            "channel": 5,
+            "name": "Volume - Master",
+            "points": 3,
+            "span_beats": 16.0,
+            "values": [1.0, 0.0],
+        }
+    ]
+    assert "automation: Volume - Master (3 pts over 16 beats, 1.00 -> 0.00)" in out["summary"]
+
+
+def test_summary_omits_automation_key_when_none(fake_notes):
+    fake_notes([FakeRow(midi=60, channel=0)])
+    assert "automations" not in scene.summarize("ignored.flp", {})

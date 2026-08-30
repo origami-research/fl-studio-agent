@@ -295,3 +295,44 @@ def test_playlist_matches_pyflp_struct_or_is_sane(path):
                 assert item.channel == theirs.item_index
             assert item.group == theirs.group
     assert cursor == len(ours.playlist)
+
+
+# --- automation ----------------------------------------------------------------
+
+
+@requires_fl
+@pytest.mark.parametrize(
+    "path", CORPUS, ids=[str(p.relative_to(p.parents[2])) for p in CORPUS]
+)
+def test_automation_matches_pyflp_struct(path):
+    """Automation parity: every point of every automation blob must match
+    pyflp's AutomationEvent STRUCT decoded over the same bytes (positions are
+    the cumulative sum of its per-point x-offsets). Unlike the full-parse
+    oracle, the STRUCT itself has no known-desync class, so this holds
+    unconditionally across the corpus (1100 blobs, 9676 points at last count).
+    """
+    from pyflp.channel import AutomationEvent
+
+    try:
+        ours = flp.read(path)
+    except FlpError:
+        return  # the read-parity test owns this case
+
+    auto_by_iid = {c.index: c.automation for c in ours.channels}
+    data = path.read_bytes()
+    _, stream = flp._chunks(data)
+    iid = 0
+    for eid, off, size in flp._events(stream):
+        if eid == flp.EVENT_CHANNEL_NEW and size == 2:
+            iid = int.from_bytes(bytes(stream[off : off + size]), "little")
+        elif eid == flp.EVENT_CHANNEL_AUTOMATION:
+            blob = bytes(stream[off : off + size])
+            mine = auto_by_iid.get(iid, ())
+            oracle = list(AutomationEvent.STRUCT.parse(blob)["points"])
+            assert len(oracle) == len(mine), (path.name, iid)
+            position = 0.0
+            for theirs, point in zip(oracle, mine):
+                position += theirs["_offset"]
+                assert point.position == pytest.approx(position, abs=1e-9)
+                assert point.value == pytest.approx(theirs["value"], abs=1e-12)
+                assert point.tension == pytest.approx(theirs["tension"], abs=1e-6)
