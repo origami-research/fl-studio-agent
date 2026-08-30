@@ -87,6 +87,36 @@ def _read_clips(project: Path) -> list[ClipRow]:
     ]
 
 
+@dataclass(frozen=True)
+class AutomationRow:
+    """One automation channel's clip, digested: FL names these channels after
+    what they automate ("Volume - Master"), so the name IS the target."""
+
+    channel: int
+    name: str
+    points: int
+    span_beats: float
+    from_value: float
+    to_value: float
+
+
+def _read_automations(project: Path) -> list[AutomationRow]:
+    """Load automation channels via the flp reader. The test seam."""
+    proj = flp.read(Path(project))
+    return [
+        AutomationRow(
+            channel=c.index,
+            name=c.name,
+            points=len(c.automation),
+            span_beats=c.automation[-1].position,
+            from_value=c.automation[0].value,
+            to_value=c.automation[-1].value,
+        )
+        for c in proj.channels
+        if c.automation
+    ]
+
+
 NOTE_NAMES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"]
 
 # Scale degrees as semitone offsets from the tonic.
@@ -236,6 +266,28 @@ def summarize(
     rows = _read_rows(project)
     names = channel_names or {}
     playlist, playlist_line = _playlist_digest(_read_clips(project))
+    automations = _read_automations(project)
+    automation_section = (
+        {
+            "automations": [
+                {
+                    "channel": a.channel,
+                    "name": a.name,
+                    "points": a.points,
+                    "span_beats": a.span_beats,
+                    "values": [a.from_value, a.to_value],
+                }
+                for a in automations
+            ]
+        }
+        if automations
+        else {}
+    )
+    automation_lines = [
+        f"automation: {a.name} ({a.points} pts over {a.span_beats:g} beats, "
+        f"{a.from_value:.2f} -> {a.to_value:.2f})"
+        for a in automations
+    ]
 
     if not rows:
         return {
@@ -244,6 +296,7 @@ def summarize(
             "channels": [],
             "note_count": 0,
             "playlist": playlist,
+            **automation_section,
             "summary": f"tempo {tempo:g}, no notes yet" if tempo else "empty project",
         }
 
@@ -279,6 +332,7 @@ def summarize(
     lines.append(f"key {key} (confidence: {confidence})")
     lines += [s.describe() for s in summaries]
     lines.append(playlist_line)
+    lines += automation_lines
 
     return {
         "tempo": tempo,
@@ -286,6 +340,7 @@ def summarize(
         "key_confidence": confidence,
         "note_count": len(rows),
         "playlist": playlist,
+        **automation_section,
         "channels": [
             {
                 "index": s.index,
