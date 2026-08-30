@@ -136,6 +136,7 @@ add_library(probe SHARED
     probe/src/probe.cpp
     probe/src/probe_core.cpp
     probe/src/probe_io.cpp
+    probe/src/probe_pascal.cpp
 )
 target_include_directories(probe PRIVATE "${FL_SDK_DIR}" "${FL_ABI_DIR}" probe/src)
 target_compile_options(probe PRIVATE
@@ -155,6 +156,7 @@ add_executable(probe_core_test
     probe/tests/probe_core_test.cpp
     probe/src/probe_core.cpp
     probe/src/probe_io.cpp
+    probe/src/probe_pascal.cpp
 )
 target_include_directories(probe_core_test PRIVATE "${FL_SDK_DIR}" "${FL_ABI_DIR}" probe/src)
 target_compile_options(probe_core_test PRIVATE
