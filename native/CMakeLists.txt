@@ -137,3 +137,17 @@ if(APPLE)
         COMMAND "${CMAKE_CURRENT_SOURCE_DIR}/probe/check_vtable.sh"
                 "$<TARGET_FILE:probe>")
 endif()
+
+# Differential-test shim: same PollOnce + mock host, driven by the Python suite
+# (mcp-server/tests/test_bridge_differential.py) over a spool written by the
+# real v2 Spool class. Plain build (no sanitizers) so pytest can spawn it
+# without sanitizer runtime concerns; the sanitized coverage of the same code
+# is bridge_core_test.
+add_executable(bridge_spool_cli
+    bridge/tools/bridge_spool_cli.cpp
+    bridge/src/bridge_core.cpp
+)
+target_include_directories(bridge_spool_cli PRIVATE "${FL_SDK_DIR}" bridge/src bridge/tests)
+target_compile_options(bridge_spool_cli PRIVATE
+    -Wno-ignored-attributes -Wno-macro-redefined -Wno-deprecated-declarations
+)

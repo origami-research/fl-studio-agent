@@ -135,6 +135,12 @@ class AddNotesArgs(BaseModel):
     target: Target
     notes: list[Note] = Field(min_length=1, max_length=5000)
     mode: NoteWriteMode = "merge"
+    # The project's PPQ, stamped by the session (project file first, hello as
+    # fallback). Notes travel in beats; a consumer with its own PPQ source (the
+    # pyscript reads flp.score.PPQ) may ignore the stamp, but the native Bridge
+    # has no PPQ source of its own and falls back to 96 with a logged warning
+    # when the stamp is absent.
+    ppq: int | None = Field(default=None, ge=1)
 
 
 class ClearNotesArgs(BaseModel):
