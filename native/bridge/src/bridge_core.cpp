@@ -161,7 +161,8 @@ NotesParamsBuffer::NotesParamsBuffer(NotesParamsBuffer &&other) noexcept
       bytes(other.bytes),
       count(other.count),
       ppq(other.ppq),
-      used_default_ppq(other.used_default_ppq) {
+      used_default_ppq(other.used_default_ppq),
+      error(other.error) {
   other.params = nullptr;
   other.bytes = 0;
   other.count = 0;
@@ -175,6 +176,7 @@ NotesParamsBuffer &NotesParamsBuffer::operator=(NotesParamsBuffer &&other) noexc
     count = other.count;
     ppq = other.ppq;
     used_default_ppq = other.used_default_ppq;
+    error = other.error;
     other.params = nullptr;
     other.bytes = 0;
     other.count = 0;
@@ -183,6 +185,40 @@ NotesParamsBuffer &NotesParamsBuffer::operator=(NotesParamsBuffer &&other) noexc
 }
 
 NotesParamsBuffer::~NotesParamsBuffer() { free(params); }
+
+// --- the FL 2026 note-params layout contract ---------------------------------
+// Derived from FLEngine_x64.dylib's own FPC record RTTI (FL Studio 2026,
+// 26.1.5 build 5384, arm64): TNoteParams is 32 bytes with fields at
+// 0/4/8/12/16/18/20/24/28, TNotesParams is 52 bytes with the note array at 20.
+// The fetched C++ header agrees on every offset, so pin them here: if it ever
+// drifts, fail the build, not FL Studio. The single disagreement is the TYPE of
+// the field at offset 12 (Single, not int), which SetNoteVol/NoteVol own.
+static_assert(sizeof(TNoteParams) == 32, "FL 2026 TNoteParams is 32 bytes");
+static_assert(offsetof(TNoteParams, Position) == 0, "TNoteParams.Position @0");
+static_assert(offsetof(TNoteParams, Length) == 4, "TNoteParams.Length @4");
+static_assert(offsetof(TNoteParams, Pan) == 8, "TNoteParams.Pan @8");
+static_assert(offsetof(TNoteParams, Vol) == 12, "TNoteParams.Vol @12");
+static_assert(sizeof(((TNoteParams *)nullptr)->Vol) == sizeof(float), "TNoteParams.Vol is 4 bytes");
+static_assert(offsetof(TNoteParams, Note) == 16, "TNoteParams.Note @16");
+static_assert(offsetof(TNoteParams, Color) == 18, "TNoteParams.Color @18");
+static_assert(offsetof(TNoteParams, Pitch) == 20, "TNoteParams.Pitch @20");
+static_assert(offsetof(TNoteParams, FCut) == 24, "TNoteParams.FCut @24");
+static_assert(offsetof(TNoteParams, FRes) == 28, "TNoteParams.FRes @28");
+static_assert(offsetof(TNotesParams, Target) == 0, "TNotesParams.Target @0");
+static_assert(offsetof(TNotesParams, Flags) == 4, "TNotesParams.Flags @4");
+static_assert(offsetof(TNotesParams, PatNum) == 8, "TNotesParams.PatNum @8");
+static_assert(offsetof(TNotesParams, ChanNum) == 12, "TNotesParams.ChanNum @12");
+static_assert(offsetof(TNotesParams, Count) == 16, "TNotesParams.Count @16");
+static_assert(offsetof(TNotesParams, NoteParams) == 20, "TNotesParams.NoteParams @20");
+static_assert(sizeof(TNotesParams) == 52, "FL 2026 TNotesParams is 52 bytes with one note");
+
+void SetNoteVol(TNoteParams *note, float vol) { std::memcpy(&note->Vol, &vol, sizeof(float)); }
+
+float NoteVol(const TNoteParams &note) {
+  float vol = 0.0f;
+  std::memcpy(&vol, &note.Vol, sizeof(float));
+  return vol;
+}
 
 NotesParamsBuffer BuildNotesParams(const minijson::Value &args, int ppq_default, bool empty_first) {
   NotesParamsBuffer buf;
@@ -204,22 +240,39 @@ NotesParamsBuffer BuildNotesParams(const minijson::Value &args, int ppq_default,
   buf.ppq = static_cast<int>(ppq);
 
   const bool replace = empty_first || args.Str("mode", "merge") == "replace";
+
+  // A concrete target or nothing - see the header for why -1 is not an option.
   const minijson::Value *target = args.Get("target");
-  const bool has_target = target != nullptr && target->type == minijson::Type::Object;
+  if (target == nullptr || target->type != minijson::Type::Object) {
+    buf.error = "command carries no target object";
+    return buf;
+  }
+  const int pat_num = target->Int("pattern", 0);
+  const int chan_num = target->Int("channel", -1);
+  if (pat_num < 1 || chan_num < 0) {
+    buf.error = "target must name a concrete pattern (>= 1) and channel (>= 0)";
+    return buf;
+  }
 
   // TNoteParams is #pragma pack(1) and TNotesParams ends in a flexible array,
   // so size from offsetof, not sizeof (which would fold in the trailing
-  // element). Always allocate at least one slot so a pure clear (count 0 +
-  // replace) still has a valid, if unused, NoteParams[0].
-  const int alloc_slots = count > 0 ? count : 1;
+  // element). ONE SPARE ZEROED SLOT past Count, always: it gives a pure clear
+  // (count 0 + replace) a valid NoteParams[0], and an inclusive
+  // `for i := 0 to Count` on FL's side still lands in memory we own and
+  // zeroed - the same medicine bridge.cpp's ExtReserved tail applies to the
+  // object, for the same reason (FL 2026 reads past documented struct ends).
+  const int alloc_slots = count + 1;
   size_t bytes = offsetof(TNotesParams, NoteParams) + static_cast<size_t>(alloc_slots) * sizeof(TNoteParams);
   TNotesParams *params = static_cast<TNotesParams *>(calloc(1, bytes));
-  if (params == nullptr) return buf;  // count stays 0; caller reports out-of-memory
+  if (params == nullptr) {
+    buf.error = "out of memory building notes";
+    return buf;
+  }
 
   params->Target = 1;  // piano roll
   params->Flags = replace ? NPF_EmptyFirst : 0;
-  params->PatNum = has_target ? target->Int("pattern", -1) : -1;   // -1 = current pattern
-  params->ChanNum = has_target ? target->Int("channel", -1) : -1;  // -1 = selected (effect only)
+  params->PatNum = pat_num;
+  params->ChanNum = chan_num;
   params->Count = count;
 
   for (int i = 0; i < count; ++i) {
@@ -230,9 +283,11 @@ NotesParamsBuffer BuildNotesParams(const minijson::Value &args, int ppq_default,
     int length = static_cast<int>(n.Num("length", 1.0) * ppq + 0.5);
     out->Length = length > 0 ? length : 1;
     out->Note = static_cast<short>(n.Int("key", 60));
-    // Server sends velocity 0..1; FL's Vol default is 100/128.
-    int vol = static_cast<int>(n.Num("velocity", 0.8) * 128.0 + 0.5);
-    out->Vol = vol < 0 ? 0 : (vol > 128 ? 128 : vol);
+    // Server velocity and FL's Vol are the same 0..1 scale (FL's default note
+    // velocity, 100/128, is this field's documented default), so this is a
+    // clamp, not a conversion - but Vol is a Single, hence SetNoteVol.
+    const double vel = n.Num("velocity", 0.8);
+    SetNoteVol(out, static_cast<float>(vel < 0.0 ? 0.0 : (vel > 1.0 ? 1.0 : vel)));
     // Server pan is 0..1 centred at 0.5; TNoteParams.Pan is centred at 0.
     double pan = (n.Num("pan", 0.5) - 0.5) * 128.0;
     out->Pan = static_cast<int>(pan + (pan >= 0 ? 0.5 : -0.5));
@@ -400,7 +455,7 @@ ExecResult ExecuteCommand(TFruityPlugHost *host, std::intptr_t host_tag,
     } else {
       NotesParamsBuffer buf = BuildNotesParams(checked_args, ppq_default, op == "clear_notes");
       if (buf.params == nullptr) {
-        outcome.error = "out of memory building notes";
+        outcome.error = buf.error;
       } else {
         Trace("FHD_AddNotesToPR:enter", id, buf.count);
         host->Dispatcher(host_tag, FHD_AddNotesToPR, 0, reinterpret_cast<intptr_t>(buf.params));

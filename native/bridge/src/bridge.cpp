@@ -300,8 +300,8 @@ TFruityPlugInfo gPlugInfo = {
     CurrentSDKVersion,
     nullptr,  // LongName  — set in InitPlugInfo()
     nullptr,  // ShortName — set in InitPlugInfo()
-    FPF_Type_Effect,  // effect (not generator): TNotesParams.ChanNum retargets to
-                      // the selected channel only for effects (fp_plugclass.h)
+    FPF_Type_Effect,  // effect (not generator): it lives on a mixer insert and
+                      // owns no channel, so every write names TNotesParams.ChanNum
     0,  // NumParams
     0,  // DefPoly
     0,  // NumOutCtrls

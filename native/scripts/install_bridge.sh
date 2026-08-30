@@ -9,9 +9,10 @@
 # `codesign -d --entitlements` against the installed app), so it loads an
 # unsigned third-party dylib.
 #
-# The Bridge is an EFFECT: TNotesParams.ChanNum retargets to the selected
-# channel only for effects (fp_plugclass.h), which is what lets the note plane
-# address an arbitrary channel. It has no editor and no UI; once inserted on any
+# The Bridge is an EFFECT: it lives on a mixer insert rather than owning a
+# channel, so every note write names its channel explicitly (TNotesParams.ChanNum
+# is always concrete - the Bridge never sends the SDK's -1 "selected channel"
+# sentinel, see bridge_core.h). It has no editor and no UI; once inserted on any
 # mixer insert it silently consumes the FLMCP note spool on its extended tick.
 #
 # Usage:
