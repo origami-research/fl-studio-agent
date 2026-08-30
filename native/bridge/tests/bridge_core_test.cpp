@@ -74,6 +74,15 @@ std::string ZeroPadded(int id) {
 
 std::string CmdPath(const std::string &root, int id) { return root + "/commands/" + ZeroPadded(id); }
 
+// The HostCallTrace sink is a plain function pointer (it is installed once by
+// the plugin shell and never captures), so the recorder it feeds is file-scope.
+std::vector<std::string> g_trace;
+
+void RecordTrace(const char *phase, int id, int notes) {
+  g_trace.push_back(std::string(phase) + " id=" + std::to_string(id) + " notes=" +
+                    std::to_string(notes));
+}
+
 std::string RespPath(const std::string &root, int id) { return root + "/responses/" + ZeroPadded(id); }
 
 // The server's queue index ({"proto": 2, "ids": [...]}).
@@ -343,7 +352,49 @@ int main() {
     CHECK(Contains(resp, "assumed default 96"));
   }
 
-  // --- 12. junk queue index is ignored, never fatal ---------------------------
+  // --- 12. host-call breadcrumbs bracket every Dispatcher call ---------------
+  // A host call that never returns leaves no crash report, no response file and
+  // no stack; the ":enter" record with no matching ":return" is the ONLY
+  // evidence a live retest can collect. Assert the enter/return pairs exist and
+  // carry the id and note count.
+  {
+    bridge_core::SetHostCallTrace(RecordTrace);
+    g_trace.clear();
+    WriteFile(CmdPath(preferred, 120),
+              "{\"proto\":2,\"id\":120,\"op\":\"add_notes\",\"args\":{"
+              "\"target\":{\"pattern\":1,\"channel\":0},\"ppq\":96,"
+              "\"notes\":[{\"key\":60,\"start\":0,\"length\":1},"
+              "{\"key\":64,\"start\":1,\"length\":1}]}}");
+    WriteQueue(preferred, {120});
+    MockHost host;
+    bridge_core::PollOutcome out = bridge_core::PollOnce(&host, 0, roots, bridge_core::kDefaultPPQ);
+    CHECK(out.ok);
+    CHECK(g_trace.size() == 3);
+    if (g_trace.size() == 3) {
+      CHECK(g_trace[0] == "FHD_AddNotesToPR:enter id=120 notes=2");
+      CHECK(g_trace[1] == "FHD_AddNotesToPR:return id=120 notes=2");
+      CHECK(g_trace[2] == "FHD_SetDirty:return id=120 notes=2");
+    }
+
+    // A ping touches no host call, so it must leave no breadcrumb - the file is
+    // "the last thing we asked FL to do", not "the last thing that happened".
+    g_trace.clear();
+    WriteFile(CmdPath(preferred, 121), "{\"proto\":2,\"id\":121,\"op\":\"ping\"}");
+    WriteQueue(preferred, {121});
+    CHECK(bridge_core::PollOnce(&host, 0, roots, bridge_core::kDefaultPPQ).ok);
+    CHECK(g_trace.empty());
+
+    bridge_core::SetHostCallTrace(nullptr);  // no sink installed: silent, never fatal
+    g_trace.clear();
+    WriteFile(CmdPath(preferred, 122),
+              "{\"proto\":2,\"id\":122,\"op\":\"add_notes\",\"args\":{\"ppq\":96,"
+              "\"notes\":[{\"key\":60,\"start\":0,\"length\":1}]}}");
+    WriteQueue(preferred, {122});
+    CHECK(bridge_core::PollOnce(&host, 0, roots, bridge_core::kDefaultPPQ).ok);
+    CHECK(g_trace.empty());
+  }
+
+  // --- 13. junk queue index is ignored, never fatal ---------------------------
   {
     WriteFile(preferred + "/commands/queue.json", "{not json");
     MockHost host;

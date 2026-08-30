@@ -131,6 +131,18 @@ class ResultCache {
   std::deque<std::pair<int, std::string>> entries_;
 };
 
+// Forensic breadcrumb around every host Dispatcher call. A host call that
+// never returns (the FHD_AddNotesToPR deadlock - see bridge_gui.h) leaves no
+// stack, no crash report and no response file, so the only evidence a live
+// retest can collect is what we wrote just BEFORE entering FL. `phase` is
+// "<op>:enter" / "<op>:return"; a checkpoint stuck on ":enter" names the exact
+// host call that hung and the id it was carrying.
+//
+// Set once by the plugin shell at construction; null (silent) in tests that do
+// not install one.
+using HostCallTrace = void (*)(const char *phase, int id, int notes);
+void SetHostCallTrace(HostCallTrace trace);
+
 struct ExecResult {
   PollOutcome outcome;
   // The transport ack payload (the same v2 SpoolResponse-shaped JSON written
@@ -141,6 +153,9 @@ struct ExecResult {
 };
 
 // THE executor - both carriers feed this with the v2 command JSON verbatim.
+// GUI THREAD ONLY: it calls back into the host, which FL forbids from a locked
+// mixer callback and which deadlocked live from the extended tick. The shell
+// guarantees the thread by construction (bridge_gui.h); nothing here checks.
 // Answers an ID-LESS "ping" statelessly, touching neither the ledger nor the
 // filesystem nor FL (heartbeat probes must not evict real ids from the ledger
 // ring; an id-carrying ping is claimed like any command, which is what prunes
