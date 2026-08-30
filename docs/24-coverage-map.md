@@ -13,10 +13,12 @@ North star: an agent that **produces** music in FL (not just arranges MIDI notes
 
 | Capability | Coverage | Care | Path to close / note |
 |---|---|---|---|
-| Notes - read | file | T1 | live read needs a host readback getter (probe Q1) |
+| Notes - read | file | T1 | **PROBE VERDICT: no readback getter exists** - reads stay file-based (Cmd+S + flpkit) |
 | Notes - write, SELECTED target | **live** (bridge) | T1 | done 2026-08-29 (#65); FL-save-confirmed |
-| Notes - write, ANY target | file+reload | T1 | select-then-write; needs select/activate host call (probe Q2). Retires the reload lane for notes |
-| Observe user actions | NONE | T1 | undo-history read (probe Q3) + lazy checkpoint reads |
+| Notes - write, ANY PATTERN | **live** (bridge) | T1 | **PROBE VERDICT: PatNum honored** - bridge writes any pattern live (switches current pattern as a side effect). Retires reload for pattern-targeted notes |
+| Notes - write, ANY CHANNEL | file+reload | T1 | **PROBE VERDICT: ChanNum ignored, no channel object** - channel targeting stays file-lane |
+| Observe user actions - transport/selection/routing | **push-capable** | T1 | **PROBE VERDICT: FL pushes SetPlaying/SongPosChanged/SetFocus/ContextInfoChanged/RoutingChanged** live |
+| Observe user actions - score edits | poll-and-diff | T1 | no edit push; poll cost ~0ms vs 8.7ms tick (affordable) |
 | Tempo / transport | live (wire) | T2 | covered |
 | Plugin params (existing plugin) | live (wire) | T2 | covered (read/set, #50) |
 | Channel levels (vol/pan/pitch) | file | T2 | covered (flpkit) |
