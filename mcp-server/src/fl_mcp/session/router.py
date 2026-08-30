@@ -11,11 +11,12 @@ from __future__ import annotations
 import math
 import time
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal, Protocol
 
 from fl_mcp import errors
+from fl_mcp.profile import load_profile as load_profile  # re-export: facade's one profile seam
 from fl_mcp.schemas import Note, NoteWriteMode, Target, WriteReceipt
 from fl_mcp.spool import Spool, spool_roots
 
@@ -70,32 +71,6 @@ class CapabilityProfileLike(Protocol):
     capabilities: ProfileCapabilitiesLike
 
 
-@dataclass(frozen=True)
-class _BuiltinCapabilities:
-    # ChanNum is ignored live (PROBE_VERDICT_2026-08-30 Q2): notes land in the
-    # selected channel, so channel targeting is NOT live until a profile with
-    # live channel selection (R2 select-then-write) says otherwise.
-    channel_targeting_live: bool = False
-
-
-@dataclass(frozen=True)
-class _BuiltinProfile:
-    capabilities: _BuiltinCapabilities = field(default_factory=_BuiltinCapabilities)
-
-
-# The warned fallback: current constants, used until L2's loader is installed.
-BUILTIN_PROFILE = _BuiltinProfile()
-
-
-def load_profile() -> CapabilityProfileLike:
-    """L2's loader (fl_mcp.profile) when installed; the BUILTIN fallback keeps
-    this package importable and testable in isolation. Once L2 lands, this
-    delegates automatically - no wiring to flip."""
-    try:
-        from fl_mcp.profile import load_profile as real_load
-    except ImportError:
-        return BUILTIN_PROFILE
-    return real_load()
 
 
 @dataclass(frozen=True)
