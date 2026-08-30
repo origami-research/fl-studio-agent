@@ -878,3 +878,11 @@ Validation is the strongest differential yet: all 9,676 points across the corpus
 FL names automation channels after their target ("Volume - Master"), so a read carries the human-meaningful target without decoding the link bytes.
 `get_scene` lists each automation channel with point count, span, and endpoint values.
 Writing points is the open half: the 112-byte trailer and the target-link encoding are still opaque - byte-diff an FL-authored edit in a live window.
+
+## Addendum 16: the experiment matrix closes (2026-08-29)
+
+Every runnable experiment now has a verdict. E3-live: **playlist writing works** - FL 2026 loads flpkit-written clips and its own re-save round-trips them byte-identically; the decisive byte find is that record bytes 24-31 are a u32 tick cut-window (start, end), not pyflp's f32 offsets (1536 ticks reads as a ~0.0 float denormal, which is how the misreading hid).
+E7: **the settle gate works** - 3/3 post-reload transport starts after polling `state.snapshot` until it answers (~12s); now baked into `FLSession._reload_fl`, closing issue #47's practical half.
+E4: **macOS headless render works** - `OsxFL -R song.flp` (dash, not Windows slash) writes a WAV next to the project with no GUI session.
+E1 strategy 2 is closed WONTFIX (a pass would only revive the rejected target-blind lane); E8 (Windows) stays parked on hardware.
+Verification stack for format work, in order of authority: live FL readback, byte-level invariants, pyflp differential where it still has coverage.

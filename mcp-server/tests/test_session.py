@@ -703,6 +703,7 @@ def test_reload_reconnects_the_wire_fresh(monkeypatch, tmp_path):
     monkeypatch.setattr(session_mod, "fl_process_running", lambda: False)  # skip the pkill branch
     monkeypatch.setattr(session_mod.subprocess, "run",
                         lambda *a, **k: type("R", (), {"returncode": 0, "stderr": ""})())
+    monkeypatch.setattr(session_mod, "SETTLE_TIMEOUT_SECONDS", 0.0)  # no FL to settle on
     old = FakeControl(hello=HELLO)
     fresh = FakeControl(hello=HELLO)
     session, _ = make_session(control=old, spool=FakeSpool(), project=tmp_path / "agent.flp")
@@ -780,3 +781,29 @@ def test_plugin_params_without_a_wire_is_an_honest_error():
     with pytest.raises(errors.ToolError) as excinfo:
         session.plugin_params(0)
     assert excinfo.value.category == "control_plane_unavailable"
+
+
+# --- settle after reload (issue #47 / experiment E7) ---------------------------
+
+
+def test_settle_returns_once_snapshot_answers(monkeypatch):
+    answers = iter([False, False, True])
+    control = FakeControl(
+        handlers={"state.snapshot": lambda args: ControlResponse(
+            id=1, ok=next(answers), err=None
+        )},
+    )
+    session, _ = make_session(control=control)
+    monkeypatch.setattr(session_mod, "SETTLE_POLL_SECONDS", 0.0)
+    session._settle()
+    snapshot_calls = [c for c in control.calls if c[0] == "state.snapshot"]
+    assert len(snapshot_calls) == 3
+
+
+def test_settle_times_out_quietly_when_fl_never_answers(monkeypatch, caplog):
+    control = FakeControl(handlers={})  # snapshot always errors
+    session, _ = make_session(control=control)
+    monkeypatch.setattr(session_mod, "SETTLE_POLL_SECONDS", 0.0)
+    monkeypatch.setattr(session_mod, "SETTLE_TIMEOUT_SECONDS", 0.05)
+    session._settle()  # must not raise: the reload itself succeeded
+    assert any("settle" in r.message for r in caplog.records)
