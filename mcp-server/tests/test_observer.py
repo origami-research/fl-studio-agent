@@ -79,6 +79,7 @@ def test_detail_is_privately_copied() -> None:
 
 
 def test_drain_maps_each_push_callback_to_its_kind(tmp_path: Path) -> None:
+    observer = Observer(roots=[tmp_path])
     append_events(
         tmp_path,
         {"seq": 1, "id": 12, "index": 0, "value": 1},  # FPD_SetPlaying
@@ -87,29 +88,50 @@ def test_drain_maps_each_push_callback_to_its_kind(tmp_path: Path) -> None:
         {"seq": 4, "id": 41, "index": 5, "value": 2},  # FPD_ContextInfoChanged
         {"seq": 5, "id": 25, "index": 0, "value": 0},  # FPD_RoutingChanged
     )
-    actions = Observer(roots=[tmp_path]).drain_pushes()
+    actions = observer.drain_pushes()
     assert [a.kind for a in actions] == ["transport", "position", "focus", "context", "routing"]
     assert actions[0].detail == {"index": 0, "value": 1, "seq": 1, "callback": "FPD_SetPlaying"}
     assert all(a.at.tzinfo is not None for a in actions)
 
 
-def test_drain_maps_probe_style_host_msg_lines_by_name(tmp_path: Path) -> None:
-    # The native side may forward the probe's line shape (kind=host_msg,
-    # name=FPD_*); mapping must key on the callback, not that label.
+def test_drain_maps_the_pinned_l4_line_shape(tmp_path: Path) -> None:
+    # The full pinned schema (L4 ack 2026-08-30): raw FPD id + name + both
+    # clocks + gui + cumulative dropped. `at` is the event's OWN wall clock
+    # (drains are lazy), and a name-only line still maps (names outlive ids).
+    observer = Observer(roots=[tmp_path])
     append_events(
         tmp_path,
-        {"ts_ns": 1, "kind": "host_msg", "id": 12, "name": "FPD_SetPlaying", "index": 0, "value": 1},
-        {"ts_ns": 2, "kind": "host_msg", "name": "FPD_RoutingChanged", "index": 0, "value": 0},
+        {
+            "seq": 1,
+            "ts_ns": 110650236040000,
+            "unix_ms": 1788120000000,
+            "id": 12,
+            "name": "FPD_SetPlaying",
+            "index": 0,
+            "value": 1,
+            "gui": 1,
+            "dropped": 0,
+        },
+        {"ts_ns": 2, "name": "FPD_RoutingChanged", "index": 0, "value": 0},
     )
-    actions = Observer(roots=[tmp_path]).drain_pushes()
+    actions = observer.drain_pushes()
     assert [a.kind for a in actions] == ["transport", "routing"]
+    assert actions[0].at == datetime.fromtimestamp(1788120000.0, tz=timezone.utc)
     assert actions[1].detail["callback"] == "FPD_RoutingChanged"
 
 
-def test_drain_accepts_premapped_kind_lines(tmp_path: Path) -> None:
-    append_events(tmp_path, {"seq": 9, "kind": "transport", "value": 1})
-    actions = Observer(roots=[tmp_path]).drain_pushes()
-    assert [a.kind for a in actions] == ["transport"]
+def test_drain_surfaces_ring_drops_once_per_increase(tmp_path: Path) -> None:
+    observer = Observer(roots=[tmp_path])
+    append_events(
+        tmp_path,
+        {"seq": 1, "id": 12, "value": 1, "dropped": 0},
+        {"seq": 2, "id": 12, "value": 0, "dropped": 3},
+        {"seq": 3, "id": 25, "value": 0, "dropped": 3},
+    )
+    actions = observer.drain_pushes()
+    assert "dropped_events" not in actions[0].detail
+    assert actions[1].detail["dropped_events"] == 3  # stamped on the revealer
+    assert "dropped_events" not in actions[2].detail  # cumulative, not repeated
 
 
 def test_drain_is_incremental_across_calls(tmp_path: Path) -> None:
@@ -123,13 +145,14 @@ def test_drain_is_incremental_across_calls(tmp_path: Path) -> None:
 
 
 def test_drain_skips_corrupt_unknown_and_blank_lines(tmp_path: Path) -> None:
+    observer = Observer(roots=[tmp_path])
     append_lines(tmp_path, "{not json\n", "\n")
     append_events(
         tmp_path,
         {"seq": 1, "id": 4, "value": 44100},  # FPD_SetSampleRate: not a user action
         {"seq": 2, "id": 12, "value": 1},
     )
-    actions = Observer(roots=[tmp_path]).drain_pushes()
+    actions = observer.drain_pushes()
     assert [a.kind for a in actions] == ["transport"]
 
 
@@ -153,14 +176,38 @@ def test_drain_restarts_from_zero_when_the_file_shrinks(tmp_path: Path) -> None:
     assert [a.kind for a in actions] == ["routing"]
 
 
-def test_drain_dedupes_the_same_seq_across_roots(tmp_path: Path) -> None:
+def test_drain_dedupes_the_event_mirrored_to_both_roots(tmp_path: Path) -> None:
+    # The bridge writes every event to both spool roots (pinned schema);
+    # identity is the exact line, so the second sighting is dropped.
     roots = [tmp_path / "a", tmp_path / "b"]
     for root in roots:
         root.mkdir()
-        append_events(root, {"seq": 7, "id": 12, "value": 1})
-    append_events(roots[1], {"seq": 8, "id": 13, "value": 96})
-    actions = Observer(roots=roots).drain_pushes()
+    observer = Observer(roots=roots)
+    for root in roots:
+        append_events(root, {"seq": 7, "ts_ns": 500, "id": 12, "value": 1})
+    append_events(roots[1], {"seq": 8, "ts_ns": 600, "id": 13, "value": 96})
+    actions = observer.drain_pushes()
     assert [a.detail["seq"] for a in actions] == [7, 8]
+
+
+def test_drain_survives_a_seq_restart_without_truncation(tmp_path: Path) -> None:
+    # A plugin reload restarts seq at 1 but only truncates past ~4MB (pinned
+    # schema): the new session's lines APPEND after the old ones and must
+    # flow - a seq-keyed dedupe would eat the whole new session.
+    observer = Observer(roots=[tmp_path])
+    append_events(tmp_path, {"seq": 1, "ts_ns": 100, "id": 12, "value": 1})
+    assert len(observer.drain_pushes()) == 1
+    append_events(tmp_path, {"seq": 1, "ts_ns": 999, "id": 12, "value": 0})  # new session
+    actions = observer.drain_pushes()
+    assert [a.detail["ts_ns"] for a in actions] == [999]
+
+
+def test_history_before_attach_is_state_not_news(tmp_path: Path) -> None:
+    append_events(tmp_path, {"seq": 1, "id": 12, "value": 1}, {"seq": 2, "id": 12, "value": 0})
+    observer = Observer(roots=[tmp_path])  # attaches at the file's end
+    assert observer.drain_pushes() == []
+    append_events(tmp_path, {"seq": 3, "id": 25, "value": 0})
+    assert [a.kind for a in observer.drain_pushes()] == ["routing"]
 
 
 def test_drain_with_no_events_file_is_quiet(tmp_path: Path) -> None:

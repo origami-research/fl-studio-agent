@@ -24,12 +24,13 @@ never presented (or guarded) as user activity.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 import threading
 from collections import deque
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable, Iterator, Literal
 
@@ -43,16 +44,23 @@ from fl_mcp.store import diff_notes
 
 log = logging.getLogger(__name__)
 
-# The bridge appends one JSON object per line (docs/27 §6); we tail it.
+# The bridge appends one JSON object per line (docs/27 §6; schema pinned with
+# L4 2026-08-30): {"seq", "ts_ns", "unix_ms", "id", "name", "index", "value",
+# "gui", "dropped"} - raw FPD ids, no pre-mapped kinds, every subscribed push
+# one line (no coalescing; ring overflow shows ONLY in the cumulative
+# "dropped" counter). Both spool roots get every write, append-only while one
+# bridge instance lives; on plugin load the file is truncated iff it exceeds
+# ~4MB and seq restarts at 1 either way.
 BRIDGE_EVENTS_FILE = "bridge_events.jsonl"
 
 # How long after a user score_edit an agent write to the same target defers.
 GUARD_WINDOW_SECONDS = 5.0
 
-# Push events older than this ring are forgotten for de-duplication purposes;
-# far larger than the bridge's 256-slot event ring, so a seq can only repeat
-# across roots or re-reads, both of which land well inside the window.
-_SEEN_SEQ_CAPACITY = 4096
+# De-duplication window, in exact line bytes: the same event arrives via both
+# spool roots, and seq restarts at 1 per plugin load, so identity is the LINE
+# (unique in-session by monotonic seq, across sessions by its timestamps) -
+# never the seq alone. Twice the bridge's 4096-slot ring.
+_SEEN_LINE_CAPACITY = 8192
 
 UserActionKind = Literal[
     "transport", "position", "selection", "focus", "context", "routing", "score_edit"
@@ -61,14 +69,15 @@ UserActionKind = Literal[
 _KINDS: frozenset[str] = frozenset(
     ("transport", "position", "selection", "focus", "context", "routing", "score_edit")
 )
-_PUSH_KINDS: frozenset[str] = _KINDS - {"score_edit"}
 
 # FL push callback -> event kind (docs/27 §5; ids live-confirmed, VERDICT Q3
 # via probe_events.jsonl). FPD_SetFocus carries both selection and focus in
 # FL's model; without a discriminator it maps to "focus" - "selection" stays
 # in the vocabulary for the day a discriminating surface exists.
 # FPD_SetTimeSig / FPD_ProjLoaded are forwarded context changes with no kind
-# of their own; the detail's "callback" keeps them distinguishable.
+# of their own; the detail's "callback" keeps them distinguishable. NOTE:
+# FPD_SetTimeSig's value is a host-side POINTER (per SDK) - opaque, never
+# dereferenceable from here; it passes through untouched.
 _PUSH_BY_ID: dict[int, tuple[str, UserActionKind]] = {
     12: ("FPD_SetPlaying", "transport"),
     13: ("FPD_SongPosChanged", "position"),
@@ -151,9 +160,17 @@ class Observer:
         self._roots = list(roots) if roots is not None else spool_roots()
         self._clock = clock
         self._lock = threading.RLock()
+        # Attach point: history already in an events file is state, not news -
+        # a file existing NOW starts at its end; one created later starts at 0
+        # (everything in it happened after us).
         self._offsets: dict[Path, int] = {}
-        self._seen_seqs: set[int] = set()
-        self._seen_ring: deque[int] = deque(maxlen=_SEEN_SEQ_CAPACITY)
+        for root in self._roots:
+            path = root / BRIDGE_EVENTS_FILE
+            with contextlib.suppress(OSError):
+                self._offsets[path] = path.stat().st_size
+        self._seen_lines: set[bytes] = set()
+        self._seen_ring: deque[bytes] = deque(maxlen=_SEEN_LINE_CAPACITY)
+        self._drop_counts: dict[Path, int] = {}
         # None until the first poll SEEDS it: pre-existing notes are state,
         # not actions, so the first read never emits events.
         self._baseline: dict[tuple[int, int], list[Note]] | None = None
@@ -165,20 +182,34 @@ class Observer:
     def drain_pushes(self) -> list[UserAction]:
         """New forwarded FL callbacks since the last drain, mapped to
         UserAction. Unknown callbacks and torn/corrupt lines are skipped (and
-        logged), never raised - a foreign line must not wedge the stream."""
+        logged), never raised - a foreign line must not wedge the stream.
+        The bridge mirrors every event into both spool roots, so identity is
+        the exact line and the second sighting is dropped."""
         actions: list[UserAction] = []
         with self._lock:
             for root in self._roots:
-                for record in self._tail(root / BRIDGE_EVENTS_FILE):
-                    action = self._action_from_push(record)
+                path = root / BRIDGE_EVENTS_FILE
+                for line in self._tail(path):
+                    if not self._remember_line(line):
+                        continue
+                    try:
+                        record = json.loads(line)
+                    except (json.JSONDecodeError, UnicodeDecodeError):
+                        log.warning("skipping unparseable line in %s: %r", path, line[:120])
+                        continue
+                    if not isinstance(record, dict):
+                        log.warning("skipping non-object line in %s: %r", path, line[:120])
+                        continue
+                    action = self._action_from_push(record, path)
                     if action is not None:
                         actions.append(action)
         return actions
 
-    def _tail(self, path: Path) -> Iterator[dict[str, Any]]:
+    def _tail(self, path: Path) -> Iterator[bytes]:
         """Complete new lines since the last read of this file. A shrunken
-        file means the bridge restarted: start over from byte 0. A tail
-        without a newline is a torn append: leave it for the next drain."""
+        file means the bridge restarted past its size cap: start over from
+        byte 0 (everything there is the new session's). A tail without a
+        newline is a torn append: leave it for the next drain."""
         try:
             size = path.stat().st_size
         except OSError:
@@ -200,34 +231,18 @@ class Observer:
             return
         self._offsets[path] = offset + end + 1
         for line in blob[: end + 1].splitlines():
-            if not line.strip():
-                continue
-            try:
-                record = json.loads(line)
-            except (json.JSONDecodeError, UnicodeDecodeError):
-                log.warning("skipping unparseable line in %s: %r", path, line[:120])
-                continue
-            if isinstance(record, dict):
-                yield record
-            else:
-                log.warning("skipping non-object line in %s: %r", path, line[:120])
+            if line.strip():
+                yield line
 
-    def _action_from_push(self, record: dict[str, Any]) -> UserAction | None:
-        """One forwarded callback record -> UserAction, or None (duplicate
-        seq, or a callback outside the docs/27 §5 mapping)."""
-        seq = record.get("seq")
-        if isinstance(seq, int) and not self._remember_seq(seq):
-            return None
-        name: str | None = None
-        kind: UserActionKind | None = None
-        raw_kind = record.get("kind")
+    def _action_from_push(self, record: dict[str, Any], path: Path) -> UserAction | None:
+        """One forwarded callback record -> UserAction, or None for a
+        callback outside the docs/27 §5 mapping. The id maps first and the
+        name is the fallback - names outlive ids across FL versions."""
         fpd_id = record.get("id")
         raw_name = record.get("name")
-        if isinstance(raw_kind, str) and raw_kind in _PUSH_KINDS:
-            # A pre-mapped line (the producer already speaks §5 kinds).
-            kind = raw_kind  # type: ignore[assignment]  # membership-checked above
-            name = raw_name if isinstance(raw_name, str) else None
-        elif isinstance(fpd_id, int) and fpd_id in _PUSH_BY_ID:
+        name: str | None = None
+        kind: UserActionKind | None = None
+        if isinstance(fpd_id, int) and fpd_id in _PUSH_BY_ID:
             name, kind = _PUSH_BY_ID[fpd_id]
         elif isinstance(raw_name, str) and raw_name in _PUSH_BY_NAME:
             name, kind = raw_name, _PUSH_BY_NAME[raw_name]
@@ -237,17 +252,50 @@ class Observer:
         detail = {key: record[key] for key in ("index", "value", "seq", "ts_ns") if key in record}
         if name is not None:
             detail["callback"] = name
-        return UserAction(kind=kind, at=self._clock(), detail=detail)
+        dropped = self._dropped_since_last(record, path)
+        if dropped:
+            detail["dropped_events"] = dropped
+        return UserAction(kind=kind, at=self._event_time(record), detail=detail)
 
-    def _remember_seq(self, seq: int) -> bool:
-        """False for a seq already seen (the same event read from a second
-        root, or re-read after a partial failure); bounded memory."""
-        if seq in self._seen_seqs:
+    def _event_time(self, record: dict[str, Any]) -> datetime:
+        """The event's own wall-clock stamp (unix_ms) - drains are LAZY, so
+        arrival time can lag the action by minutes; drain time only when the
+        line carries no usable stamp."""
+        unix_ms = record.get("unix_ms")
+        if isinstance(unix_ms, int):
+            try:
+                return datetime.fromtimestamp(unix_ms / 1000, tz=timezone.utc)
+            except (OverflowError, OSError, ValueError):
+                log.warning("bridge event carries an unusable unix_ms %r", unix_ms)
+        return self._clock()
+
+    def _dropped_since_last(self, record: dict[str, Any], path: Path) -> int:
+        """How many pushes the bridge's ring dropped since this file's last
+        line ('dropped' is cumulative per bridge session; a decrease is a new
+        session's counter starting over). Never silent: an increase is
+        logged AND stamped on the event that revealed it."""
+        total = record.get("dropped")
+        if not isinstance(total, int):
+            return 0
+        previous = self._drop_counts.get(path, 0)
+        self._drop_counts[path] = total
+        lost = total - previous
+        if lost > 0:
+            log.warning("the bridge dropped %d push event(s) before %s", lost, path)
+            return lost
+        return 0
+
+    def _remember_line(self, line: bytes) -> bool:
+        """False for an exact line already seen - the same event mirrored to
+        the second spool root, or re-read after a truncation reset. Lines are
+        unique within a bridge session (monotonic seq) and across sessions
+        (timestamps), so content IS identity; bounded memory."""
+        if line in self._seen_lines:
             return False
         if len(self._seen_ring) == self._seen_ring.maxlen:
-            self._seen_seqs.discard(self._seen_ring[0])
-        self._seen_ring.append(seq)
-        self._seen_seqs.add(seq)
+            self._seen_lines.discard(self._seen_ring[0])
+        self._seen_ring.append(line)
+        self._seen_lines.add(line)
         return True
 
     # -- score edits (lazy poll-and-diff at checkpoints) -------------------------
