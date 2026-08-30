@@ -211,7 +211,6 @@ class Channel(BaseModel):
     volume: float = 0.78
     pan: float = 0.0
     muted: bool = False
-    melodic: bool = True
 
 
 class MixerTrack(BaseModel):
@@ -226,9 +225,44 @@ class SessionState(BaseModel):
     tempo_bpm: float | None = None
     ppq: int | None = None
     playing: bool = False
-    current_pattern: int = 1
+    # None on the file lane, where the live pattern is unknown - a consumer
+    # must never mistake a default for a fact.
+    current_pattern: int | None = None
     channels: list[Channel] = Field(default_factory=list)
     mixer: list[MixerTrack] = Field(default_factory=list)
+
+    @classmethod
+    def from_wire(cls, snap: Any) -> SessionState:
+        """The live ``state.snapshot`` payload, exactly as the controller sends
+        it (tempo is getCurrentTempo's BPM x 1000). Raises KeyError/TypeError/
+        ValueError on a malformed payload; the session wraps that into its
+        typed error."""
+        return cls(
+            tempo_bpm=float(snap["tempo"]) / 1000.0,
+            ppq=int(snap["ppq"]),
+            playing=bool(snap["playing"]),
+            current_pattern=int(snap["current_pattern"]),
+            channels=[
+                Channel(
+                    index=c["idx"],
+                    name=c["name"],
+                    volume=float(c["vol"]),
+                    pan=float(c["pan"]),
+                    muted=bool(c["muted"]),
+                )
+                for c in snap["channels"]
+            ],
+            mixer=[
+                MixerTrack(
+                    index=t["idx"],
+                    name=t["name"],
+                    volume=float(t["vol"]),
+                    pan=float(t["pan"]),
+                    muted=bool(t["muted"]),
+                )
+                for t in snap["mixer"]
+            ],
+        )
 
 
 # -- history ------------------------------------------------------------------

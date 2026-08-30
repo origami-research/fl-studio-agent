@@ -53,6 +53,7 @@
 #include <vector>
 
 #include "bridge_core.h"
+#include "bridge_events.h"
 #include "bridge_gui.h"
 #include "bridge_udp.h"
 #include "fp_plugclass.h"
@@ -129,6 +130,13 @@ constexpr int kPollEveryNTicks = 3;
 constexpr std::size_t kMaxUdpCommandsPerPump = 4;
 constexpr std::size_t kUdpQueueCapacity = 64;
 
+// Event ring capacity and per-pump drain bound. The ring holds bursts (FL fired
+// FPD_ContextInfoChanged x29 in one short window - VERDICT Q3) between pumps;
+// the drain writes at most this many lines per pump so one GUI pump is never a
+// long file write. Anything past the bound drains on the next pump.
+constexpr unsigned kEventRingCapacity = 4096;
+constexpr std::size_t kMaxEventsPerPump = 512;
+
 // The state dump is the only checkpoint that costs real work (two spool reads),
 // so it stays off unless a human asks for it: `touch <spool>/bridge_debug.enable`
 // enables it mid-session and deleting the file disables it, neither of which
@@ -155,6 +163,22 @@ std::string ExecutablePath() {
   return "(unknown)";
 }
 
+// Two vDSO-backed clocks, safe to call from any thread including FL's mixing
+// thread (the (GM) events): no lock, no allocation, no real syscall. The event
+// ring stamps each push with both so the observer has a monotonic order and a
+// wall-clock time without the tick having to guess either at drain time.
+long long MonotonicNanos() {
+  struct timespec ts;
+  clock_gettime(CLOCK_MONOTONIC, &ts);
+  return static_cast<long long>(ts.tv_sec) * 1000000000LL + ts.tv_nsec;
+}
+
+long long UnixMillis() {
+  struct timespec ts;
+  clock_gettime(CLOCK_REALTIME, &ts);
+  return static_cast<long long>(ts.tv_sec) * 1000LL + ts.tv_nsec / 1000000LL;
+}
+
 std::string JoinIds(const std::vector<int> &ids) {
   std::string out;
   for (int id : ids) {
@@ -173,6 +197,18 @@ struct TickState : std::enable_shared_from_this<TickState> {
   std::intptr_t host_tag = 0;
   std::unique_ptr<bridge_udp::UdpTransport> udp;
   bridge_core::ResultCache cache;  // GUI thread only, so unsynchronised
+
+  // FL push events -> bridge_events.jsonl. The ring is filled from the
+  // Dispatcher callback (any thread; some FPD_* are (GM)) and drained by the
+  // GUI-thread pump into the log. `event_log` is null until the spool roots
+  // resolve at construction; a null log just means events accumulate and drop
+  // in the ring, never a crash.
+  bridge_events::EventRing events{kEventRingCapacity};
+  std::unique_ptr<bridge_events::EventLog> event_log;
+  // FL's current pattern, learned from our own writes' SetCurrentPattern side
+  // effect and reset to -1 (unknown) on FPD_ProjLoaded. Published as heartbeat
+  // `pat=` for L1's detect(); there is no host getter for it (VERDICT Q2).
+  std::atomic<int> current_pattern{-1};
 
   std::atomic<bool> alive{true};
   std::atomic<bool> pump_queued{false};
@@ -203,17 +239,24 @@ struct TickState : std::enable_shared_from_this<TickState> {
 };
 
 void WriteHeartbeat(const TickState &state, long long tick) {
-  char text[384];
-  snprintf(text, sizeof(text),
-           "tick=%lld\napplied=%d\nnotes=%d\npid=%d\nunix_time=%lld\nbackend=bridge\n"
-           "udp_port=%d\nudp_dropped=%lld\n"
-           "gui_pumps=%lld\ngui_pending=%lld\ntick_on_gui=%d\ninstances=%d\n",
-           tick, state.commands_applied.load(), state.notes_written.load(), (int)getpid(),
-           (long long)time(nullptr), state.udp != nullptr ? state.udp->port() : 0,
-           state.udp != nullptr ? (long long)state.udp->queue().dropped() : 0,
-           state.pumps_ran.load(), state.pumps_requested.load() - state.pumps_ran.load(),
-           bridge_gui::OnGuiThread() ? 1 : 0, gLiveInstances.load());
-  WriteSmall("bridge_heartbeat.txt", text);
+  bridge_core::HeartbeatState hb;
+  hb.tick = tick;
+  hb.applied = state.commands_applied.load();
+  hb.notes = state.notes_written.load();
+  hb.pid = (int)getpid();
+  hb.unix_time = (long long)time(nullptr);
+  hb.udp_port = state.udp != nullptr ? state.udp->port() : 0;
+  hb.udp_dropped = state.udp != nullptr ? (long long)state.udp->queue().dropped() : 0;
+  hb.gui_pumps = state.pumps_ran.load();
+  hb.gui_pending = state.pumps_requested.load() - state.pumps_ran.load();
+  hb.tick_on_gui = bridge_gui::OnGuiThread() ? 1 : 0;
+  hb.instances = gLiveInstances.load();
+  hb.proto = bridge_core::kProtoVersion;
+  hb.pattern = state.current_pattern.load();
+  hb.channel = -1;  // no FL selected-channel getter exists (VERDICT Q2); always unknown
+  hb.event_seq = (long long)state.events.last_seq();
+  hb.event_dropped = (long long)state.events.dropped();
+  WriteSmall("bridge_heartbeat.txt", bridge_core::FormatHeartbeat(hb).c_str());
 }
 
 // The last host call we entered, and whether FL gave it back. Always on: it is
@@ -259,6 +302,8 @@ void TickState::Count(const bridge_core::PollOutcome &outcome) {
   if (!outcome.had_command) return;
   ++commands_applied;
   notes_written += outcome.notes_written;
+  // A note write switched FL's current pattern; track it for the heartbeat.
+  if (outcome.pattern_after >= 1) current_pattern.store(outcome.pattern_after);
 }
 
 void TickState::RequestPump() {
@@ -285,6 +330,13 @@ void TickState::Pump() {
       }
     }
     Count(bridge_core::PollOnce(host, host_tag, gSpoolRoots, bridge_core::kDefaultPPQ, &cache));
+    // Drain forwarded FL events after the command drain (same thread discipline
+    // as the transport: the ring is the only cross-thread surface, the write is
+    // GUI-thread only). A null log means the roots never resolved; events then
+    // just accumulate and drop in the ring, harmlessly.
+    if (event_log != nullptr) {
+      event_log->AppendBatch(events.Drain(kMaxEventsPerPump));
+    }
     if (DebugEnabled() && debug_pumps++ % kDebugEveryNPumps == 0) WriteDebugDump(*this);
   } catch (...) {
     // This runs off FL's run loop, where an escaping exception kills the
@@ -462,6 +514,17 @@ Bridge::Bridge(TPluginTag tag, TFruityPlugHost *host) {
     // the plugin serves the file spool alone - the transport is an upgrade,
     // never a requirement.
     state_->udp = bridge_udp::UdpTransport::Start(gSpoolRoots, kUdpQueueCapacity);
+    // The event log lives in every spool root (mirrors the response/heartbeat
+    // discipline), so the server finds it in whichever root it resolves. Over-
+    // sized logs are truncated here, at load, before the first append.
+    std::vector<std::string> event_paths;
+    event_paths.reserve(gSpoolRoots.size());
+    for (const std::string &root : gSpoolRoots) {
+      event_paths.push_back(root + "/" + bridge_events::kEventsFileName);
+    }
+    if (!event_paths.empty()) {
+      state_->event_log = std::make_unique<bridge_events::EventLog>(std::move(event_paths));
+    }
     WriteHeartbeat(*state_, 0);
     WriteStatus("loaded");
   } catch (...) {
@@ -513,6 +576,18 @@ intptr_t _stdcall Bridge::Dispatcher(intptr_t id, intptr_t index, intptr_t value
   // answers 0 ("not handled") - the same answer the pad build returned when it
   // loaded and ran stably. Logged so a future need is visible.
   LogExtSlot(26, id, index, value);
+  // Forward the subscribed push events to the ring (docs/27 s5-6). This runs on
+  // whatever thread FL sends the message on - some FPD_* are (GM), i.e. the
+  // mixing thread - so it must only stamp the lock-free ring, never touch the
+  // socket, the log file, or the host. The GUI-thread pump drains it.
+  const int msg = static_cast<int>(id);
+  if (bridge_events::IsSubscribed(msg)) {
+    state_->events.Push(msg, static_cast<int>(index), static_cast<int>(value),
+                        bridge_gui::OnGuiThread() ? 1 : 0, MonotonicNanos(), UnixMillis());
+  }
+  // A new project invalidates the tracked current pattern: FL's selection is
+  // whatever the loaded project had, which our writes have not set yet.
+  if (id == FPD_ProjLoaded) state_->current_pattern.store(-1);
   return id == FPD_UseIncreasedMIDIResolution ? 1 : 0;
 }
 void _stdcall Bridge::Idle_Public() {

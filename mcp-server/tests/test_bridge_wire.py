@@ -21,6 +21,7 @@ from fl_mcp.bridge_wire import (
     BridgeEndpoint,
     BridgeUnavailable,
     BridgeWire,
+    connect,
     discover,
 )
 from fl_mcp.schemas import SpoolResponse
@@ -214,6 +215,31 @@ def test_oversized_command_is_refused_toward_the_file_spool(fake_bridge: FakeBri
     notes = [{"key": 60, "start": float(i), "length": 1.0} for i in range(5000)]
     with pytest.raises(BridgeUnavailable, match="file spool"):
         wire.send("add_notes", target={"pattern": 1, "channel": 0}, notes=notes)
+
+
+def test_connect_adopts_udp_when_the_bridge_pongs(fake_bridge: FakeBridge) -> None:
+    # THE carrier decision (R4 B3-1): a live endpoint means UDP, end to end.
+    wire = connect(fake_bridge.roots)
+    assert isinstance(wire, BridgeWire)
+    try:
+        cmd = wire.send("ping")
+        assert wire.await_response(cmd, timeout=2.0).ok
+    finally:
+        wire.close()
+
+
+def test_connect_falls_back_to_the_spool_without_an_endpoint(tmp_path: Path) -> None:
+    assert connect([tmp_path]) is None
+
+
+def test_connect_falls_back_when_the_endpoint_is_stale(tmp_path: Path) -> None:
+    # A port file left behind by a crashed FL validates but cannot pong;
+    # freshness is the round trip, not the file (R4 B2-7).
+    bridge = FakeBridge(tmp_path / "root", silent=True)
+    try:
+        assert connect(bridge.roots, ping_timeout=0.3) is None
+    finally:
+        bridge.close()
 
 
 def test_ids_resume_past_existing_spool_state(fake_bridge: FakeBridge) -> None:

@@ -39,7 +39,7 @@ class FpcHost {
   FpcHost(const FpcHost &) = delete;
   FpcHost &operator=(const FpcHost &) = delete;
 
-  // The pointer to hand to bridge_core / probe_core, exactly as FL hands one in.
+  // The pointer to hand to bridge_core, exactly as FL hands one in.
   TFruityPlugHost *as_host() { return reinterpret_cast<TFruityPlugHost *>(&image_); }
 
   // Calls that arrived through a VMT *header* slot - i.e. through the C++

@@ -43,8 +43,8 @@ North star: an agent that **produces** music in FL (not just arranges MIDI notes
 ## Enablers (T4) - not features, but they gate scale/safety
 - CI is DEAD (org billing) - no automated gate; merges rely on local runs. OWNER lever.
 - Windows - parked on hardware (E8).
-- Bridge is OFF by default - promote only after select-then-write + live verdicts.
-- Robustness unbuilt: bulkhead (bridge crash = FL down), circuit breaker, agent-vs-human concurrency rules. See #54.
+- Bridge routes by capability detection (no flag): fresh heartbeat + proto match + ping = eligible, file lane otherwise. LIVE-UNVERIFIED post-integration; the RUNBOOK_BRIDGE_V3 window is the promotion gate.
+- Robustness built offline, unverified live: bulkhead invariant set, circuit breaker, agent-vs-human guard (observer). See #54.
 - Licensing/template project deferred (pending license).
 
 ## The five surfaces FL exposes (enumeration method per surface)
