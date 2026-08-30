@@ -28,6 +28,16 @@
 // The SDK types (TFruityPlugHost, TNotesParams, ...) are anonymous-struct
 // typedefs, so they cannot be forward-declared; include the header directly.
 #include "fp_plugclass.h"
+
+// L2's generated capability profile (gen_layout output): version-specific
+// constants + the struct-assert wall. Included here AFTER fp_plugclass.h so a
+// TU that defines FLMCP_ASSERT_STRUCTS before including this header gets the
+// asserts materialized against the SDK types. Absent (pre-integration), the
+// fallback constants below stand in and the tree builds in isolation.
+#if __has_include("fl_profile_generated.h")
+#include "fl_profile_generated.h"
+#endif
+
 #include "minijson.h"
 
 namespace bridge_core {
@@ -35,7 +45,13 @@ namespace bridge_core {
 // Must match mcp-server/src/fl_mcp/schemas.py SCHEMA_VERSION and the pyscript's
 // PROTO_VER; a mismatched command is claimed and refused with an error response.
 constexpr int kProtoVersion = 2;
-constexpr int kDefaultPPQ = 96;       // last-resort only; v2 commands carry a ppq stamp
+// Last-resort only; v2 commands carry a ppq stamp. ONE home when the generated
+// profile is present (docs/27 s6), warned fallback otherwise.
+#ifdef FLMCP_PROFILE_GENERATED
+constexpr int kDefaultPPQ = fl_profile::kDefaultPPQ;
+#else
+constexpr int kDefaultPPQ = 96;
+#endif
 constexpr int kMaxConsumedIds = 64;   // ledger ring size
 constexpr int kMaxNotesPerCommand = 5000;  // schemas.AddNotesArgs max_length
 
@@ -103,9 +119,45 @@ struct PollOutcome {
   int id = 0;
   bool ok = false;
   int notes_written = 0;
+  // The pattern this command made current, or -1. A successful note write to
+  // PatNum >= 1 switches FL's current pattern (the SetCurrentPattern side
+  // effect decoded from FL's id-17 handler, FINDINGS); the plugin tracks it so
+  // the heartbeat can publish `pat=` for L1's detect() without a getter (no
+  // host call reads the current pattern - VERDICT Q2).
+  int pattern_after = -1;
   std::string op;
   std::string error;
 };
+
+// Everything the heartbeat file publishes, so the format is pure string work a
+// test can pin without the plugin shell. The three fields the shared-surfaces
+// contract (docs/27 s6) adds for L1's detect() are `proto`, `pattern` and
+// `channel`; `pattern`/`channel` are -1 when unknown (channel is ALWAYS -1 -
+// FL exposes no selected-channel getter, so the router proves the channel via
+// the wire, not the heartbeat).
+struct HeartbeatState {
+  long long tick = 0;
+  int applied = 0;
+  int notes = 0;
+  int pid = 0;
+  long long unix_time = 0;
+  int udp_port = 0;
+  long long udp_dropped = 0;
+  long long gui_pumps = 0;
+  long long gui_pending = 0;
+  int tick_on_gui = 0;
+  int instances = 0;
+  int proto = kProtoVersion;
+  int pattern = -1;
+  int channel = -1;
+  long long event_seq = 0;    // highest forwarded event seq (resync point for L3)
+  long long event_dropped = 0;
+};
+
+// The heartbeat text, newline-terminated key=value lines. The key set and
+// order are a consumed contract (L1's detect() parses proto/pat/chan; existing
+// tools read the rest), so a test pins them.
+std::string FormatHeartbeat(const HeartbeatState &state);
 
 // --- transport seam (docs/22) ------------------------------------------------
 // A carrier's job is delivery and disposal (UDP: ack datagram; file spool:

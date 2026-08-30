@@ -14,6 +14,12 @@ set(FL_SDK_DIR "${CMAKE_CURRENT_SOURCE_DIR}/sdk" CACHE PATH "FL Studio SDK direc
 # test: one contract, one place, no per-target copy to drift.
 set(FL_ABI_DIR "${CMAKE_CURRENT_SOURCE_DIR}/abi")
 
+# L2's codegen emits native/generated/fl_profile_generated.h (per-install ABI
+# facts: handled_max_id, unsafe ids, PPQ, struct asserts). It is on the include
+# path unconditionally; the consumers guard on __has_include so this tree builds
+# in isolation before L2 lands, and picks up the generated values when present.
+set(FL_GENERATED_DIR "${CMAKE_CURRENT_SOURCE_DIR}/generated")
+
 if(NOT EXISTS "${FL_SDK_DIR}/fp_plugclass.h")
     message(FATAL_ERROR
         "FL Studio SDK not found at ${FL_SDK_DIR}\n"
@@ -64,10 +70,13 @@ target_compile_options(fl_sdk PUBLIC
 add_library(bridge SHARED
     bridge/src/bridge.cpp
     bridge/src/bridge_core.cpp
+    bridge/src/bridge_discover.cpp
+    bridge/src/bridge_events.cpp
     bridge/src/bridge_gui.cpp
     bridge/src/bridge_udp.cpp
+    abi/fl_pascal.cpp
 )
-target_include_directories(bridge PRIVATE "${FL_SDK_DIR}" "${FL_ABI_DIR}" bridge/src)
+target_include_directories(bridge PRIVATE "${FL_SDK_DIR}" "${FL_ABI_DIR}" "${FL_GENERATED_DIR}" bridge/src)
 target_compile_options(bridge PRIVATE
     -Wno-ignored-attributes -Wno-macro-redefined -Wno-deprecated-declarations
 )
@@ -78,18 +87,38 @@ set_target_properties(bridge PROPERTIES
     CXX_VISIBILITY_PRESET hidden
 )
 
-# Bridge core unit test: drives PollOnce/BuildNotesParams against a mock host
-# with a temp spool dir, no FL needed. ASan+UBSan.
+# Bridge core unit test: drives PollOnce/BuildNotesParams and the wp_* discovery
+# ops against a mock host with a temp spool dir, no FL needed. ASan+UBSan.
 add_executable(bridge_core_test
     bridge/tests/bridge_core_test.cpp
     bridge/src/bridge_core.cpp
+    bridge/src/bridge_discover.cpp
+    abi/fl_pascal.cpp
 )
-target_include_directories(bridge_core_test PRIVATE "${FL_SDK_DIR}" "${FL_ABI_DIR}" bridge/src)
+target_include_directories(bridge_core_test PRIVATE "${FL_SDK_DIR}" "${FL_ABI_DIR}" "${FL_GENERATED_DIR}" bridge/src)
 target_compile_options(bridge_core_test PRIVATE
     -fsanitize=address,undefined -g
     -Wno-ignored-attributes
 )
 target_link_options(bridge_core_test PRIVATE -fsanitize=address,undefined)
+
+# Event forwarding + heartbeat format unit test: the lock-free ring under a
+# producer/consumer race, the pinned JSONL schema, the log's truncation cap,
+# and FormatHeartbeat's proto/pat/chan lines. ASan+UBSan (the race harness is
+# the point). No FL needed.
+add_executable(bridge_events_test
+    bridge/tests/bridge_events_test.cpp
+    bridge/src/bridge_events.cpp
+    bridge/src/bridge_core.cpp
+    bridge/src/bridge_discover.cpp
+    abi/fl_pascal.cpp
+)
+target_include_directories(bridge_events_test PRIVATE "${FL_SDK_DIR}" "${FL_ABI_DIR}" "${FL_GENERATED_DIR}" bridge/src)
+target_compile_options(bridge_events_test PRIVATE
+    -fsanitize=address,undefined -g
+    -Wno-ignored-attributes
+)
+target_link_options(bridge_events_test PRIVATE -fsanitize=address,undefined)
 
 # GUI-thread marshal test: the property the FHD_AddNotesToPR deadlock fix rests
 # on - work handed over from a worker thread runs on the MAIN thread, and only
@@ -115,73 +144,23 @@ endif()
 add_executable(bridge_udp_test
     bridge/tests/bridge_udp_test.cpp
     bridge/src/bridge_core.cpp
+    bridge/src/bridge_discover.cpp
     bridge/src/bridge_udp.cpp
+    abi/fl_pascal.cpp
 )
-target_include_directories(bridge_udp_test PRIVATE "${FL_SDK_DIR}" "${FL_ABI_DIR}" bridge/src)
+target_include_directories(bridge_udp_test PRIVATE "${FL_SDK_DIR}" "${FL_ABI_DIR}" "${FL_GENERATED_DIR}" bridge/src)
 target_compile_options(bridge_udp_test PRIVATE
     -fsanitize=address,undefined -g
     -Wno-ignored-attributes
 )
 target_link_options(bridge_udp_test PRIVATE -fsanitize=address,undefined)
 
-# --- FL MCP Probe: a throwaway diagnostic plugin (NOT production) -------------
-# Answers three live questions (note readback? project PPQ query? which FHD_*
-# getters cover the controller read surface?) then is deleted once its verdict
-# lands - the same lifecycle as the v1 Spike 1.5 probe. It reproduces the
-# Bridge's proven base-free 64-slot ABI shape (pinned by the same layout
-# static_asserts plus the vtable-slot check below) but forks none of the
-# Bridge's logic. All probe logic is in probe_core.* and unit-tested under
-# ASan/UBSan against a mock host (native/probe/tests/probe_core_test.cpp).
-add_library(probe SHARED
-    probe/src/probe.cpp
-    probe/src/probe_core.cpp
-    probe/src/probe_io.cpp
-    probe/src/probe_pascal.cpp
-)
-target_include_directories(probe PRIVATE "${FL_SDK_DIR}" "${FL_ABI_DIR}" probe/src)
-target_compile_options(probe PRIVATE
-    -Wno-ignored-attributes -Wno-macro-redefined -Wno-deprecated-declarations
-)
-set_target_properties(probe PROPERTIES
-    OUTPUT_NAME "FL MCP Probe_x64"
-    PREFIX ""
-    SUFFIX ".dylib"
-    CXX_VISIBILITY_PRESET hidden
-)
-
-# Probe core unit test: drives the getters/sweep/deepprobe/validate passes,
-# checkpoint/resume, static-ledger skip, and crash quarantine against a mock
-# host with a temp spool dir, no FL needed. ASan+UBSan.
-add_executable(probe_core_test
-    probe/tests/probe_core_test.cpp
-    probe/src/probe_core.cpp
-    probe/src/probe_io.cpp
-    probe/src/probe_pascal.cpp
-)
-target_include_directories(probe_core_test PRIVATE "${FL_SDK_DIR}" "${FL_ABI_DIR}" probe/src)
-target_compile_options(probe_core_test PRIVATE
-    -fsanitize=address,undefined -g
-    -Wno-ignored-attributes
-)
-target_link_options(probe_core_test PRIVATE -fsanitize=address,undefined)
-
 enable_testing()
 
-# The two Probe operator artifacts prove themselves offline, so they are gated
-# like the code is. make_fst.py regenerates plugin-database entries FL itself
-# wrote and byte-compares; stamp_probe_project.py renames a mixer-insert plugin
-# in FL's own shipped projects and asserts the rename is byte-reversible. Both
-# no-op (pass) where there is nothing to compare against, the same stance
-# check_vtable.sh takes off macOS.
-add_test(NAME probe_fst_selftest
-    COMMAND python3 "${CMAKE_CURRENT_SOURCE_DIR}/probe/make_fst.py" --selftest)
-add_test(NAME probe_stamp_selftest
-    COMMAND python3 "${CMAKE_CURRENT_SOURCE_DIR}/probe/stamp_probe_project.py" --selftest)
-
 add_test(NAME bridge_core_test COMMAND bridge_core_test)
+add_test(NAME bridge_events_test COMMAND bridge_events_test)
 add_test(NAME bridge_gui_test COMMAND bridge_gui_test)
 add_test(NAME bridge_udp_test COMMAND bridge_udp_test)
-add_test(NAME probe_core_test COMMAND probe_core_test)
 
 # ABI invariant check: the load-bearing property the data static_asserts do NOT
 # cover is the vtable slot count. Assert each plugin dylib has exactly 64 vtable
@@ -195,12 +174,6 @@ if(APPLE)
                 25=DestroyObject 26=Dispatcher 27=Idle_Public
                 28=SaveRestoreState 29=GetName 30=ProcessEvent
                 31=ProcessParam 32=Eff_Render)
-    add_test(NAME probe_abi_check
-        COMMAND "${CMAKE_CURRENT_SOURCE_DIR}/scripts/check_vtable.sh"
-                "$<TARGET_FILE:probe>" Probe
-                25=DestroyObject 26=Dispatcher 27=Idle_Public
-                28=SaveRestoreState 29=GetName 30=ProcessEvent
-                31=ProcessParam 32=Eff_Render)
 endif()
 
 # Differential-test shim: same PollOnce + mock host, driven by the Python suite
@@ -211,8 +184,10 @@ endif()
 add_executable(bridge_spool_cli
     bridge/tools/bridge_spool_cli.cpp
     bridge/src/bridge_core.cpp
+    bridge/src/bridge_discover.cpp
+    abi/fl_pascal.cpp
 )
-target_include_directories(bridge_spool_cli PRIVATE "${FL_SDK_DIR}" "${FL_ABI_DIR}" bridge/src bridge/tests)
+target_include_directories(bridge_spool_cli PRIVATE "${FL_SDK_DIR}" "${FL_ABI_DIR}" "${FL_GENERATED_DIR}" bridge/src bridge/tests)
 target_compile_options(bridge_spool_cli PRIVATE
     -Wno-ignored-attributes -Wno-macro-redefined -Wno-deprecated-declarations
 )
