@@ -83,6 +83,31 @@ def discover(roots: list[Path] | None = None) -> BridgeEndpoint | None:
     return None
 
 
+def connect(roots: list[Path] | None = None, *, ping_timeout: float = 0.5) -> BridgeWire | None:
+    """THE carrier decision (R4 B3-1, adopted): a ready ``BridgeWire`` when
+    the bridge published an endpoint AND answers one id-less ping round
+    trip; None means use the file spool for this session. Capability
+    detection, never a flag - and freshness is proven by the round trip,
+    not a stamp (R4 B2-7): a port file left behind by a crashed FL cannot
+    pong, and a wedged GUI thread cannot ack, so both correctly fall back.
+
+    The canonical wiring is one expression at session setup:
+    ``carrier = bridge_wire.connect() or spool``."""
+    endpoint = discover(roots)
+    if endpoint is None:
+        return None
+    wire = BridgeWire(endpoint, roots=roots)
+    if wire.ping(timeout=ping_timeout):
+        return wire
+    wire.close()
+    log.info(
+        "bridge UDP endpoint on port %d is published but not answering pings; "
+        "using the file spool",
+        endpoint.port,
+    )
+    return None
+
+
 class BridgeWire:
     """``Spool``-shaped client (``send`` / ``await_response``) over UDP."""
 
