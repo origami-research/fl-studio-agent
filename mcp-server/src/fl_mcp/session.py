@@ -87,6 +87,12 @@ SNAPSHOT_TIMEOUT_SECONDS = 10.0
 
 FL_STOP_TIMEOUT_SECONDS = 20.0
 FL_OPEN_ATTEMPTS = 6
+# E7 (2026-08-29, 3/3 PASS): FL parks "unsafe at current time" ops for OnIdle
+# retry during boot, and a parked op can land LATE, undoing a newer one
+# (issue #47). Waiting until a composite read answers makes transport ops
+# reliable; measured settle was ~12s, so the bound leaves headroom.
+SETTLE_TIMEOUT_SECONDS = 45.0
+SETTLE_POLL_SECONDS = 1.0
 
 # The project this session may rewrite (the project-write backend's target).
 ENV_PROJECT = "FLMCP_AGENT_PROJECT"
@@ -749,6 +755,23 @@ class FLSession:
 
     # -- the one helper ---------------------------------------------------------
 
+    def _settle(self) -> None:
+        """Block until FL answers a composite read, so no live op lands in the
+        boot window where FL parks it for a LATE OnIdle retry (issue #47,
+        settled by experiment E7). A timeout is logged, not raised: the reload
+        itself succeeded, and the next live op will surface its own error."""
+        if self.control is None:
+            return
+        deadline = time.monotonic() + SETTLE_TIMEOUT_SECONDS
+        while time.monotonic() < deadline:
+            try:
+                if self.control.send_request("state.snapshot", timeout=5.0).ok:
+                    return
+            except errors.ToolError:
+                pass
+            time.sleep(SETTLE_POLL_SECONDS)
+        log.warning("FL did not settle within %ss of relaunch", SETTLE_TIMEOUT_SECONDS)
+
     def _reload_fl(self) -> None:
         """UGLY(U5), quarantined: FL has no 'reopen this file' API and a polite
         quit blocks on save dialogs. SIGKILL, wait RELAUNCH_SETTLE_SECONDS,
@@ -775,6 +798,7 @@ class FLSession:
             )
             if result.returncode == 0:
                 self._reconnect_wire()
+                self._settle()
                 return
             last = (result.stderr or "").strip()
             time.sleep(1.0 + attempt)
