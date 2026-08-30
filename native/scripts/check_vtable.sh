@@ -15,8 +15,16 @@
 # real gate is a macOS build, which is where FL runs.
 set -euo pipefail
 
-DYLIB="${1:?usage: check_vtable.sh <dylib> <class>}"
-CLASS="${2:?usage: check_vtable.sh <dylib> <class>}"
+# Optional trailing args assert WHICH method sits in a given slot, as
+# "<slot>=<MethodName>". That is the second load-bearing property: FL 2026
+# indexes this object as a Free Pascal class, so its VMT header pushes the SDK
+# virtuals to slot 25 onward (native/abi/fl_host_abi.h). If a method is added,
+# removed or reordered above slot 25, every host->plugin call silently shifts by
+# one and lands on the wrong handler - which no data static_assert can catch.
+DYLIB="${1:?usage: check_vtable.sh <dylib> <class> [slot=Method ...]}"
+CLASS="${2:?usage: check_vtable.sh <dylib> <class> [slot=Method ...]}"
+shift 2 || true
+SLOT_ASSERTS="$*"
 if [ ! -f "$DYLIB" ]; then
     echo "check_vtable: no dylib at $DYLIB (skip)"
     exit 0
@@ -57,6 +65,58 @@ for arch in $(lipo -archs "$DYLIB" 2>/dev/null || true); do
         exit 1
     fi
     echo "check_vtable[$arch]: OK $span bytes == $EXPECT_SLOTS slots"
+
+    [ -n "$SLOT_ASSERTS" ] || continue
+    if ! command -v python3 >/dev/null 2>&1; then
+        echo "check_vtable[$arch]: python3 unavailable, slot assertions skipped"
+        continue
+    fi
+    thin="$(mktemp -t vtslice)"
+    trap 'rm -f "$thin"' EXIT
+    lipo -thin "$arch" "$DYLIB" -output "$thin" 2>/dev/null || cp "$DYLIB" "$thin"
+    python3 - "$thin" "$VT" $SLOT_ASSERTS <<'PYEOF' || exit 1
+import re, struct, subprocess, sys
+
+path, vt_name, *asserts = sys.argv[1:]
+syms = {}
+for line in subprocess.run(["nm", "-n", path], capture_output=True, text=True).stdout.splitlines():
+    parts = line.split(None, 2)
+    if len(parts) == 3 and parts[0].strip():
+        try:
+            syms[int(parts[0], 16)] = parts[2]
+        except ValueError:
+            pass
+blob = open(path, "rb").read()
+vt = next((a for a, n in syms.items() if n == vt_name), None)
+if vt is None:
+    print(f"check_vtable: {vt_name} absent from the thin slice, slot assertions skipped")
+    sys.exit(0)
+
+def method_at(slot):
+    # +16 skips the Itanium offset-to-top and typeinfo words. The stored value
+    # carries chained-fixup tag bits in the high half; the low 32 bits are the
+    # in-image address.
+    raw = struct.unpack_from("<Q", blob, vt + 16 + slot * 8)[0] & 0xFFFFFFFF
+    return syms.get(raw, "<unresolved>")
+
+bad = 0
+for spec in asserts:
+    slot_s, _, want = spec.partition("=")
+    slot = int(slot_s)
+    got = method_at(slot)
+    # Itanium mangling is _ZN<len>Bridge<len><Method>E<params>, so an exact
+    # match is the length-prefixed name followed by the nested-name terminator.
+    if re.search(r"(?<!\d)" + str(len(want)) + re.escape(want) + r"E", got):
+        print(f"check_vtable: OK slot {slot} (VMT byte {200 + (slot - 25) * 8 if slot >= 25 else slot * 8}) == {want}")
+    else:
+        print(f"check_vtable: FAIL slot {slot} should be {want}, found {got}", file=sys.stderr)
+        bad += 1
+if bad:
+    print("  FL 2026 calls this object at VMT byte 200 + 8*i (FPC VMT header);", file=sys.stderr)
+    print("  a shifted vtable sends every host call to the wrong method.", file=sys.stderr)
+    sys.exit(1)
+PYEOF
+    rm -f "$thin"
 done
 
 if [ "$checked_any" -eq 0 ]; then

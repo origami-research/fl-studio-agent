@@ -292,11 +292,20 @@ int main() {
     // header's `host->Dispatcher(...)` resolves to slot 0 - vInstanceSize - and
     // is what took FL down live, on every payload including zero notes.
     CHECK(host.header_slot_calls() == 0);
-    // Sender is the plugin tag FL handed us, verbatim on every call. Fruity
-    // Convolver passes its own the same way (from [plug+8]).
-    CHECK(host.senders.size() == 2);  // FHD_AddNotesToPR, then FHD_SetDirty
-    for (std::intptr_t sender : host.senders) {
-      CHECK(sender == static_cast<std::intptr_t>(0x1122334455667788LL));
+    // The full argument shape, against Fruity Convolver's - FL 2026's own
+    // shipping Fruity effect, which calls its host with x0=Self, x1=Sender
+    // (its HostTag, loaded from [plug+8]), x2=ID, x3=Index, x4=Value.
+    CHECK(host.calls.size() == 2);  // FHD_AddNotesToPR, then FHD_SetDirty
+    if (host.calls.size() == 2) {
+      const std::intptr_t kTag = static_cast<std::intptr_t>(0x1122334455667788LL);
+      CHECK(host.calls[0].sender == kTag);
+      CHECK(host.calls[0].id == FHD_AddNotesToPR);
+      CHECK(host.calls[0].index == 0);
+      CHECK(host.calls[0].value != 0);  // the TNotesParams pointer
+      CHECK(host.calls[1].sender == kTag);
+      CHECK(host.calls[1].id == FHD_SetDirty);
+      CHECK(host.calls[1].index == 0);
+      CHECK(host.calls[1].value == 0);
     }
   }
 

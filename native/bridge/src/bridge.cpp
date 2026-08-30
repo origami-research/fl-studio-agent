@@ -333,65 +333,73 @@ class Bridge {
 
   Bridge(TPluginTag tag, TFruityPlugHost *host);
 
-  // --- classic vtable, slots 0..19, SDK declaration order --------------------
-  virtual void _stdcall DestroyObject();                                              // 0
-  virtual intptr_t _stdcall Dispatcher(intptr_t id, intptr_t index, intptr_t value);  // 1
-  virtual void _stdcall Idle_Public();                                                // 2
-  virtual void _stdcall SaveRestoreState(IStream *stream, BOOL save);                 // 3
-  virtual void _stdcall GetName(int section, int index, int value, char *name);       // 4
-  virtual int _stdcall ProcessEvent(int event_id, int event_value, int flags);        // 5
-  virtual int _stdcall ProcessParam(int index, int value, int rec_flags);             // 6
-  virtual void _stdcall Eff_Render(PWAV32FS source, PWAV32FS dest, int length);       // 7
-  virtual void _stdcall Gen_Render(PWAV32FS dest, int &length);                       // 8
-  virtual TVoiceHandle _stdcall TriggerVoice(PVoiceParams voice_params, intptr_t set_tag);  // 9
-  virtual void _stdcall Voice_Release(TVoiceHandle handle);                           // 10
-  virtual void _stdcall Voice_Kill(TVoiceHandle handle);                              // 11
-  virtual int _stdcall Voice_ProcessEvent(TVoiceHandle handle, intptr_t event_id,
-                                          intptr_t event_value, intptr_t flags);      // 12
-  virtual int _stdcall Voice_Render(TVoiceHandle handle, PWAV32FS dest, int &length);  // 13
-  virtual void _stdcall NewTick();                                                    // 14
-  virtual void _stdcall MIDITick();                                                   // 15
-  virtual void _stdcall MIDIIn(int &msg);                                             // 16
-  virtual void _stdcall MsgIn(intptr_t msg);                                          // 17
-  virtual int _stdcall OutputVoice_ProcessEvent(TOutVoiceHandle handle, intptr_t event_id,
-                                                intptr_t event_value, intptr_t flags);  // 18
-  virtual void _stdcall OutputVoice_Kill(TVoiceHandle handle);                        // 19
+  // --- vtable, laid out for FL 2026's FPC VMT indexing -----------------------
+  //
+  // FL is Free Pascal and indexes this object as an FPC class: a class's first
+  // DECLARED method sits at VMT byte 200, past the header FPC puts in front
+  // (native/abi/fl_host_abi.h). So the SDK's virtuals must start at C++ vtable
+  // slot 25, not slot 0, or every host->plugin call lands on the wrong method.
+  //
+  // Slots 0..24 stand in for that header. FL never calls them (it only ever
+  // indexes from byte 200), and it has never been observed READING them either
+  // - it does not ask our object for its ClassName or InstanceSize. They are
+  // pads so that if it ever does, the read is inside memory we own.
+#define BRIDGE_VMT_HEADER_SLOT(n)                                             \
+  virtual intptr_t _stdcall VmtHeader##n(intptr_t a, intptr_t b, intptr_t c) { \
+    LogExtSlot(n, a, b, c);                                                   \
+    return 0;                                                                 \
+  }
+  BRIDGE_VMT_HEADER_SLOT(0) BRIDGE_VMT_HEADER_SLOT(1) BRIDGE_VMT_HEADER_SLOT(2)
+  BRIDGE_VMT_HEADER_SLOT(3) BRIDGE_VMT_HEADER_SLOT(4) BRIDGE_VMT_HEADER_SLOT(5)
+  BRIDGE_VMT_HEADER_SLOT(6) BRIDGE_VMT_HEADER_SLOT(7) BRIDGE_VMT_HEADER_SLOT(8)
+  BRIDGE_VMT_HEADER_SLOT(9) BRIDGE_VMT_HEADER_SLOT(10) BRIDGE_VMT_HEADER_SLOT(11)
+  BRIDGE_VMT_HEADER_SLOT(12) BRIDGE_VMT_HEADER_SLOT(13) BRIDGE_VMT_HEADER_SLOT(14)
+  BRIDGE_VMT_HEADER_SLOT(15) BRIDGE_VMT_HEADER_SLOT(16) BRIDGE_VMT_HEADER_SLOT(17)
+  BRIDGE_VMT_HEADER_SLOT(18) BRIDGE_VMT_HEADER_SLOT(19) BRIDGE_VMT_HEADER_SLOT(20)
+  BRIDGE_VMT_HEADER_SLOT(21) BRIDGE_VMT_HEADER_SLOT(22) BRIDGE_VMT_HEADER_SLOT(23)
+  BRIDGE_VMT_HEADER_SLOT(24)
+#undef BRIDGE_VMT_HEADER_SLOT
 
-  // --- extended-ABI slots 20..63 ---------------------------------------------
-  // FL 2026 host-calls into this range (observed live: 26/27/30/32). Signatures
-  // are undocumented, so each takes three integer args (harmless to read extra
-  // arg registers on both AAPCS64 and x86_64 SysV) and returns 0 ("unsupported")
-  // — except slot 27, the tick, which drives the spool poll. NO virtual
+  // --- the SDK's TFruityPlug virtuals, in SDK declaration order --------------
+  // C++ slot 25 == VMT byte 200 == the FPC "first declared method". Every entry
+  // below is therefore the method FL actually calls at that offset, verified
+  // live for 200/208/216/240/256 (see BRIDGE_FINDINGS.md).
+  virtual void _stdcall DestroyObject();                                              // 25 / +200
+  virtual intptr_t _stdcall Dispatcher(intptr_t id, intptr_t index, intptr_t value);  // 26 / +208
+  virtual void _stdcall Idle_Public();                                                // 27 / +216
+  virtual void _stdcall SaveRestoreState(IStream *stream, BOOL save);                 // 28 / +224
+  virtual void _stdcall GetName(int section, int index, int value, char *name);       // 29 / +232
+  virtual int _stdcall ProcessEvent(int event_id, int event_value, int flags);        // 30 / +240
+  virtual int _stdcall ProcessParam(int index, int value, int rec_flags);             // 31 / +248
+  virtual void _stdcall Eff_Render(PWAV32FS source, PWAV32FS dest, int length);       // 32 / +256
+  virtual void _stdcall Gen_Render(PWAV32FS dest, int &length);                       // 33
+  virtual TVoiceHandle _stdcall TriggerVoice(PVoiceParams voice_params, intptr_t set_tag);  // 34
+  virtual void _stdcall Voice_Release(TVoiceHandle handle);                           // 35
+  virtual void _stdcall Voice_Kill(TVoiceHandle handle);                              // 36
+  virtual int _stdcall Voice_ProcessEvent(TVoiceHandle handle, intptr_t event_id,
+                                          intptr_t event_value, intptr_t flags);      // 37
+  virtual int _stdcall Voice_Render(TVoiceHandle handle, PWAV32FS dest, int &length);  // 38
+  virtual void _stdcall NewTick();                                                    // 39
+  virtual void _stdcall MIDITick();                                                   // 40
+  virtual void _stdcall MIDIIn(int &msg);                                             // 41
+  virtual void _stdcall MsgIn(intptr_t msg);                                          // 42
+  virtual int _stdcall OutputVoice_ProcessEvent(TOutVoiceHandle handle, intptr_t event_id,
+                                                intptr_t event_value, intptr_t flags);  // 43
+  virtual void _stdcall OutputVoice_Kill(TVoiceHandle handle);                        // 44
+
+  // --- tail pads, slots 45..63 -----------------------------------------------
+  // The SDK declares 20 virtuals; FL 2026 has never been seen calling past
+  // +256. These keep the vtable 64 slots long so a call to an offset we have
+  // not characterised lands on a defined method that returns 0 instead of
+  // running off the end into the adjacent RTTI - the run-11 crash. NO virtual
   // destructor exists anywhere in this class ON PURPOSE: implicit dtor slots
-  // would sit at 20/21, where a host call would run `delete this`.
+  // would shift every offset above them.
 #define BRIDGE_PAD_SLOT(n)                                                    \
   virtual intptr_t _stdcall ExtSlot##n(intptr_t a, intptr_t b, intptr_t c) {  \
     LogExtSlot(n, a, b, c);                                                   \
     return 0;                                                                 \
   }
-  BRIDGE_PAD_SLOT(20) BRIDGE_PAD_SLOT(21) BRIDGE_PAD_SLOT(22) BRIDGE_PAD_SLOT(23)
-  BRIDGE_PAD_SLOT(24) BRIDGE_PAD_SLOT(25)
-  // slot 26: a host query (observed a=query-id, c=value, e.g. a=4/c=44100
-  // samplerate). We do not need any of these to write notes, so the sane
-  // response is 0 ("not handled") — the same value the pure-pad build returned
-  // when it loaded and ran stably. Logged for future refinement.
-  virtual intptr_t _stdcall ExtSlot26(intptr_t a, intptr_t b, intptr_t c) {
-    LogExtSlot(26, a, b, c);
-    return 0;
-  }
-  // slot 27: the tick. FL calls this repeatedly while the plugin is live; it is
-  // our autonomous entry point (the base-free ABI never calls FHD_WantIdle, the
-  // dispatcher call implicated in earlier crashes). Poll the spool here.
-  virtual intptr_t _stdcall ExtSlot27(intptr_t a, intptr_t b, intptr_t c) {
-    LogExtSlot(27, a, b, c);
-    Tick();
-    return 0;
-  }
-  BRIDGE_PAD_SLOT(28) BRIDGE_PAD_SLOT(29)
-  BRIDGE_PAD_SLOT(30) BRIDGE_PAD_SLOT(31) BRIDGE_PAD_SLOT(32) BRIDGE_PAD_SLOT(33)
-  BRIDGE_PAD_SLOT(34) BRIDGE_PAD_SLOT(35) BRIDGE_PAD_SLOT(36) BRIDGE_PAD_SLOT(37)
-  BRIDGE_PAD_SLOT(38) BRIDGE_PAD_SLOT(39) BRIDGE_PAD_SLOT(40) BRIDGE_PAD_SLOT(41)
-  BRIDGE_PAD_SLOT(42) BRIDGE_PAD_SLOT(43) BRIDGE_PAD_SLOT(44) BRIDGE_PAD_SLOT(45)
+  BRIDGE_PAD_SLOT(45)
   BRIDGE_PAD_SLOT(46) BRIDGE_PAD_SLOT(47) BRIDGE_PAD_SLOT(48) BRIDGE_PAD_SLOT(49)
   BRIDGE_PAD_SLOT(50) BRIDGE_PAD_SLOT(51) BRIDGE_PAD_SLOT(52) BRIDGE_PAD_SLOT(53)
   BRIDGE_PAD_SLOT(54) BRIDGE_PAD_SLOT(55) BRIDGE_PAD_SLOT(56) BRIDGE_PAD_SLOT(57)
@@ -491,18 +499,24 @@ void _stdcall Bridge::DestroyObject() {
   delete this;
 }
 
-// Classic slots: silent no-ops matching the SDK defaults. Eff_Render passes
-// audio through untouched (this plugin is sonically inert). None of these are
-// the note path — that runs on the tick.
+// The SDK virtuals FL actually reaches. Silent no-ops matching the SDK
+// defaults, except Idle_Public (the tick) and Eff_Render (passes audio through
+// untouched, so this plugin is sonically inert).
 intptr_t _stdcall Bridge::Dispatcher(intptr_t id, intptr_t index, intptr_t value) {
-  (void)index;
-  (void)value;
+  // VMT +208. Live, FL sends the ordinary FPD_* setup messages here
+  // (FPD_SetBlockSize with 128, FPD_SetSampleRate with 44100). The Bridge needs
+  // none of them to write notes, so everything but the MIDI-resolution query
+  // answers 0 ("not handled") - the same answer the pad build returned when it
+  // loaded and ran stably. Logged so a future need is visible.
+  LogExtSlot(26, id, index, value);
   return id == FPD_UseIncreasedMIDIResolution ? 1 : 0;
 }
 void _stdcall Bridge::Idle_Public() {
-  // The SDK's (G) callback. If FL ever calls it unsolicited it is the ideal
-  // poll source - already on the GUI thread, so the pump runs inline with no
-  // queueing at all. Primary driver is still slot 27.
+  // VMT +216, and THE tick. This is the SDK's own (G) idle callback - FL 2026
+  // drives it from the Cocoa main run loop, so the pump runs inline with no
+  // queueing at all and no FHD_WantIdle is needed. Before the FPC VMT offsets
+  // were understood this same callback was reached as an unnamed "slot 27".
+  LogExtSlot(27, 0, 0, 0);
   Tick();
 }
 void _stdcall Bridge::SaveRestoreState(IStream *stream, BOOL save) {

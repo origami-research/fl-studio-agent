@@ -20,6 +20,14 @@
 
 namespace bridge_mock {
 
+// One host->FL dispatcher call, in Convolver's argument order.
+struct HostCall {
+  std::intptr_t sender = 0;
+  std::intptr_t id = 0;
+  std::intptr_t index = 0;
+  std::intptr_t value = 0;
+};
+
 struct CapturedChord {
   int target = 0;
   int flags = 0;
@@ -33,14 +41,16 @@ class MockHost : public fl_mock::FpcHost {
  public:
   std::vector<CapturedChord> chords;
   int set_dirty_calls = 0;
-  // Every (sender, id, index) the host was called with, so a test can assert
-  // the argument shape and not just the payload.
-  std::vector<std::intptr_t> senders;
+  // Every call verbatim, so a test can assert the full argument shape and not
+  // just the payload. The shape is Fruity Convolver's, read off FL 2026's own
+  // shipping effect: x0=Self, x1=Sender (the plugin's HostTag, from [plug+8]),
+  // x2=ID, x3=Index, x4=Value.
+  std::vector<HostCall> calls;
 
  protected:
-  std::intptr_t Dispatch(std::intptr_t sender, std::intptr_t id, std::intptr_t /*index*/,
+  std::intptr_t Dispatch(std::intptr_t sender, std::intptr_t id, std::intptr_t index,
                          std::intptr_t value) override {
-    senders.push_back(sender);
+    calls.push_back({sender, id, index, value});
     if (id == FHD_AddNotesToPR && value != 0) {
       const TNotesParams *p = reinterpret_cast<const TNotesParams *>(value);
       CapturedChord c;

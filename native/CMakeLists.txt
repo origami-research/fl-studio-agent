@@ -177,10 +177,16 @@ add_test(NAME probe_core_test COMMAND probe_core_test)
 if(APPLE)
     add_test(NAME bridge_abi_check
         COMMAND "${CMAKE_CURRENT_SOURCE_DIR}/scripts/check_vtable.sh"
-                "$<TARGET_FILE:bridge>" Bridge)
+                "$<TARGET_FILE:bridge>" Bridge
+                25=DestroyObject 26=Dispatcher 27=Idle_Public
+                28=SaveRestoreState 29=GetName 30=ProcessEvent
+                31=ProcessParam 32=Eff_Render)
     add_test(NAME probe_abi_check
         COMMAND "${CMAKE_CURRENT_SOURCE_DIR}/scripts/check_vtable.sh"
-                "$<TARGET_FILE:probe>" Probe)
+                "$<TARGET_FILE:probe>" Probe
+                25=DestroyObject 26=Dispatcher 27=Idle_Public
+                28=SaveRestoreState 29=GetName 30=ProcessEvent
+                31=ProcessParam 32=Eff_Render)
 endif()
 
 # Differential-test shim: same PollOnce + mock host, driven by the Python suite
