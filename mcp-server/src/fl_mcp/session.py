@@ -44,6 +44,7 @@ from .schemas import (
     NoteDelta,
     NoteWriteMode,
     PlaneStatus,
+    PluginParam,
     SessionState,
     Target,
     WriteReceipt,
@@ -74,6 +75,11 @@ RECYCLE_MIN_INTERVAL_SECONDS = 30.0
 # controller's OnIdle deferral time to land a mutating call (v1-measured).
 LIVE_SET_TIMEOUT_SECONDS = 8.0
 LIVE_READ_TIMEOUT_SECONDS = 2.0
+
+# Plugin-parameter surface: FL quantizes values to each control's own grid
+# (E2: set 0.42 -> stored 0.41875), and big synths are big - bound the listing.
+PLUGIN_PARAMS_DEFAULT_LIMIT = 40
+PLUGIN_PARAM_TOLERANCE = 0.02
 
 # state.snapshot arrives as ~10 chunked SysEx frames (measured ~4.8KB on a
 # 5-channel/18-track project, addendum A5); give bigger projects headroom.
@@ -469,6 +475,87 @@ class FLSession:
             "No backend can set channel levels: the control plane is not connected and "
             "no project file is configured."
         )
+
+    # -- plugin parameters (live-only; E2-verified ops) --------------------------
+    #
+    # A generator's parameters exist only inside the running plugin - there is
+    # no file representation we can honestly edit (plugin state is an opaque
+    # vendor blob). So this surface is live-or-error, never a file fallback.
+
+    def _plugin_read(self, op: str, args: list) -> object:
+        if self._hello() is None or self.control is None:
+            raise errors.control_plane_unavailable(op, 0.0)
+        resp = self.control.send_request(op, args=args, timeout=LIVE_READ_TIMEOUT_SECONDS)
+        if not resp.ok:
+            detail = resp.err or "no detail"
+            if errors.is_operation_unsafe(detail):
+                raise errors.operation_unsafe(op)
+            raise errors.fl_api_error(op, detail)
+        return resp.ret
+
+    def plugin_params(
+        self,
+        channel: int,
+        *,
+        query: str | None = None,
+        limit: int = PLUGIN_PARAMS_DEFAULT_LIMIT,
+    ) -> list[PluginParam]:
+        """The channel generator's parameters (name + normalized value).
+
+        ``query`` filters by case-insensitive substring; ``limit`` bounds the
+        result because big synths are BIG (Sytrus: 597 params) and every name
+        is a wire round trip."""
+        count = int(self._plugin_read("plugins.getParamCount", [channel, -1]) or 0)
+        out: list[PluginParam] = []
+        for index in range(count):
+            if len(out) >= limit:
+                break
+            name = str(self._plugin_read("plugins.getParamName", [index, channel, -1]))
+            if query is not None and query.lower() not in name.lower():
+                continue
+            value = float(self._plugin_read("plugins.getParamValue", [index, channel, -1]))
+            out.append(PluginParam(index=index, name=name, value=min(max(value, 0.0), 1.0)))
+        return out
+
+    def set_plugin_param(self, channel: int, param: int | str, value: float) -> PluginParam:
+        """Set one parameter (by index, or by unique name/substring) and return
+        the READBACK. FL quantizes to the plugin's own step grid, so the
+        confirmed value may differ slightly from the request - beyond
+        PLUGIN_PARAM_TOLERANCE it raises instead of pretending."""
+        if not 0.0 <= value <= 1.0:
+            raise ValueError(f"plugin param values are normalized 0..1, got {value}")
+        if isinstance(param, str):
+            matches = self.plugin_params(channel, query=param, limit=8)
+            exact = [p for p in matches if p.name.lower() == param.lower()]
+            chosen = exact or matches
+            if len(chosen) != 1:
+                names = ", ".join(p.name for p in matches) or "(no matches)"
+                raise errors.fl_api_error(
+                    "plugins.setParamValue",
+                    f"param {param!r} is {'ambiguous' if matches else 'unknown'} on channel "
+                    f"{channel}: {names}",
+                )
+            index = chosen[0].index
+        else:
+            index = param
+
+        if self.control is None:
+            raise errors.control_plane_unavailable("plugins.setParamValue", 0.0)
+        resp = self.control.send_request(
+            "plugins.setParamValue", args=[value, index, channel, -1], timeout=LIVE_SET_TIMEOUT_SECONDS
+        )
+        if not resp.ok:
+            raise errors.fl_api_error("plugins.setParamValue", resp.err or "no detail")
+
+        name = str(self._plugin_read("plugins.getParamName", [index, channel, -1]))
+        confirmed = float(self._plugin_read("plugins.getParamValue", [index, channel, -1]))
+        if abs(confirmed - value) > PLUGIN_PARAM_TOLERANCE:
+            raise WriteRejected(
+                f"param {name!r} readback {confirmed} is not the requested {value}",
+                fix="The plugin may quantize this control coarsely; read plugin_params "
+                "and pick a supported value.",
+            )
+        return PluginParam(index=index, name=name, value=confirmed)
 
     def snapshot(self) -> SessionState:
         """Live: ONE composite ``state.snapshot`` round trip (chunked response;

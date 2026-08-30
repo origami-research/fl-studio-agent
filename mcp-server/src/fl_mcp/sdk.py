@@ -14,7 +14,7 @@ from __future__ import annotations
 
 from fl_mcp import errors
 
-from .schemas import Channel, Note, NoteWriteMode, SessionState, Target, WriteReceipt
+from .schemas import Channel, Note, NoteWriteMode, PluginParam, SessionState, Target, WriteReceipt
 from .session import FLSession, create_session
 
 
@@ -108,3 +108,14 @@ class Track:
     def notes(self) -> list[Note]:
         target = Target(pattern=self.pattern, channel=self.channel)
         return self._fl._session.read_notes(target)
+
+    def params(self, query: str | None = None, limit: int = 40) -> list[PluginParam]:
+        """The channel generator's live parameters (E2: Sytrus exposes 597).
+        ``query`` filters by substring; live-only - raises when FL is not
+        connected, because plugin state has no honest file representation."""
+        return self._fl._session.plugin_params(self.channel, query=query, limit=limit)
+
+    def set_param(self, param: int | str, value: float) -> PluginParam:
+        """Set one parameter (index, or unique name/substring), 0..1 normalized.
+        Returns the READBACK - FL may quantize to the control's own grid."""
+        return self._fl._session.set_plugin_param(self.channel, param, value)

@@ -713,3 +713,70 @@ def test_reload_reconnects_the_wire_fresh(monkeypatch, tmp_path):
 
     assert old.closed and session.control is fresh
     assert session._last_recycle == 0.0
+
+
+# --- plugin parameters (live-only; E2-verified ops) --------------------------
+
+
+def _param_control(values: dict[int, float] | None = None) -> FakeControl:
+    """A generator with three params, mirroring the real wire ops."""
+    state = values if values is not None else {0: 0.8, 1: 1.0, 2: 0.75}
+    names = {0: "Main - Master level", 1: "Main - Master LFO level", 2: "Main - Master pitch"}
+    quantum = 1 / 64  # FL quantizes to the control's grid (E2: 0.42 -> 0.41875)
+
+    def set_value(args):
+        value, index, _ch, _slot = args
+        state[index] = round(value / quantum) * quantum
+        return None
+
+    return FakeControl(
+        hello=HELLO,
+        handlers={
+            "plugins.getParamCount": lambda args: len(state),
+            "plugins.getParamName": lambda args: names[args[0]],
+            "plugins.getParamValue": lambda args: state[args[0]],
+            "plugins.setParamValue": set_value,
+        },
+    )
+
+
+def test_plugin_params_lists_and_filters():
+    session, _ = make_session(control=_param_control())
+
+    all_params = session.plugin_params(0)
+    assert [(p.index, p.name) for p in all_params] == [
+        (0, "Main - Master level"),
+        (1, "Main - Master LFO level"),
+        (2, "Main - Master pitch"),
+    ]
+    lfo = session.plugin_params(0, query="lfo")
+    assert [p.index for p in lfo] == [1]
+    assert session.plugin_params(0, limit=2) == all_params[:2]
+
+
+def test_set_plugin_param_returns_quantized_readback():
+    session, _ = make_session(control=_param_control())
+
+    confirmed = session.set_plugin_param(0, 0, 0.42)
+    assert confirmed.name == "Main - Master level"
+    assert confirmed.value == pytest.approx(0.421875)  # the grid, not the echo
+
+
+def test_set_plugin_param_resolves_unique_name_and_rejects_ambiguity():
+    session, _ = make_session(control=_param_control())
+
+    confirmed = session.set_plugin_param(0, "master pitch", 0.5)
+    assert confirmed.index == 2
+
+    with pytest.raises(errors.ToolError, match="ambiguous"):
+        session.set_plugin_param(0, "Master", 0.5)
+    with pytest.raises(errors.ToolError, match="unknown"):
+        session.set_plugin_param(0, "cutoff", 0.5)
+
+
+def test_plugin_params_without_a_wire_is_an_honest_error():
+    """Plugin state has no file representation - live-or-error, no fallback."""
+    session, _ = make_session(control=None)
+    with pytest.raises(errors.ToolError) as excinfo:
+        session.plugin_params(0)
+    assert excinfo.value.category == "control_plane_unavailable"
