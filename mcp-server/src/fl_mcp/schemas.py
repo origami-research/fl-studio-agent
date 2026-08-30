@@ -93,6 +93,19 @@ class WriteReceipt(BaseModel):
     delta: NoteDelta
 
 
+class PluginParam(BaseModel):
+    """One plugin parameter, value normalized 0..1 (FL's own scale; live-read).
+
+    E2-verified 2026-08-29: a generator exposes its full parameter surface
+    over the wire (597 named params on Sytrus), set + readback exact up to
+    FL's own quantization.
+    """
+
+    index: int = Field(ge=0)
+    name: str
+    value: float = Field(ge=0, le=1)
+
+
 class ChannelLevels(BaseModel):
     """A channel's mix state, in tool units (readback, post-write)."""
 
