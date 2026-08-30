@@ -45,10 +45,11 @@ class FL:
             raise errors.control_plane_unavailable("mixer.getCurrentTempo", 0.0)
         return tempo
 
-    def track(self, name_or_index: str | int) -> Track:
+    def track(self, name_or_index: str | int, pattern: int = 1) -> Track:
         """Resolve by index, exact name, then unambiguous substring; raises
         ChannelNotFound listing the real names otherwise. This is THE place
         channel names resolve - Target is ints-only past this boundary.
+        ``pattern`` targets that pattern's roll (B3-3: PatNum is honored live).
 
         Resolution reads the PROJECT FILE, not the live snapshot: targets are
         file coordinates (that is what write_notes patches), and the file
@@ -58,14 +59,14 @@ class FL:
         listing = ", ".join(f"{c.index}: {c.name}" for c in channels) or "(none)"
         if isinstance(name_or_index, int):
             if any(c.index == name_or_index for c in channels):
-                return Track(self, name_or_index)
+                return Track(self, name_or_index, pattern)
             raise ChannelNotFound(f"No channel at index {name_or_index}. Channels: {listing}")
         exact = [c for c in channels if c.name == name_or_index]
         if len(exact) == 1:
-            return Track(self, exact[0].index)
+            return Track(self, exact[0].index, pattern)
         partial = [c for c in channels if name_or_index.lower() in c.name.lower()]
         if len(partial) == 1:
-            return Track(self, partial[0].index)
+            return Track(self, partial[0].index, pattern)
         if len(exact) > 1 or len(partial) > 1:
             raise ChannelNotFound(f"{name_or_index!r} is ambiguous. Channels: {listing}")
         raise ChannelNotFound(f"No channel matching {name_or_index!r}. Channels: {listing}")

@@ -14,8 +14,10 @@ import os
 from collections.abc import Callable
 from pathlib import Path
 
-from fl_mcp import errors
+from fl_mcp import bridge_wire, errors
+from fl_mcp.bridge_wire import BridgeWire
 from fl_mcp.flpaths import primary_settings_dir
+from fl_mcp.observer import Observer
 from fl_mcp.schemas import (
     Channel,
     ChannelLevels,
@@ -71,9 +73,13 @@ def create_session() -> FLSession:
         )
         project = candidate if candidate is not None and candidate.is_file() else None
 
+    # Carrier by capability (docs/26 A4): the bridge's UDP endpoint when its
+    # advert is fresh and it answers a ping, the file spool otherwise. Both are
+    # Spool-shaped (send/await_response, shared id space, one consumed-ledger),
+    # so everything downstream is carrier-blind.
     return FLSession(
         control=control,
-        spool=Spool(),
+        spool=bridge_wire.connect() or Spool(),
         store=Store(project_key=_project_key(project)),
         project=project,
     )
@@ -106,7 +112,7 @@ class FLSession:
         self,
         *,
         control: MidiControl | None,
-        spool: Spool,
+        spool: Spool | BridgeWire,
         store: Store,
         project: Path | None,
         control_factory: Callable[[], MidiControl] | None = None,
@@ -120,6 +126,7 @@ class FLSession:
         self.breaker = BridgeBreaker(ping=self._bridge_ping)
         self.file_lane = FileLane(self)
         self.bridge_lane = BridgeLane(self)
+        self.observer = Observer(project=project)
 
     @property
     def control(self) -> MidiControl | None:

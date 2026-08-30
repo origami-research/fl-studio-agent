@@ -50,6 +50,10 @@ def write_notes(
             "No backend can apply targeted notes: no project file is configured. "
             "(The pyscript lane cannot target a channel - see write_notes.)"
         )
+    # The concurrency rule (docs/27 §5): never clobber a mid-edit user note.
+    # Merge writes are purely additive, so they skip the guard.
+    if mode != "merge":
+        session.observer.guard_write(target)
     return _route(session, target).write(target, notes, mode)
 
 
@@ -60,6 +64,7 @@ def clear_notes(session: FLSession, target: Target) -> WriteReceipt:
             "No backend can clear notes: the control plane is not connected and no "
             "project file is configured."
         )
+    session.observer.guard_write(target)
     return _route(session, target).clear(target)
 
 
@@ -144,6 +149,9 @@ class FileLane:
         except flp.FlpError as exc:
             raise WriteRejected(f"project-file {what} did not verify: {exc}", fix=fix) from exc
         delta = _record(session, target, notes, mode, self.name, NO_COMMAND_ID)
+        # The agent-echo suppressant (docs/27 §5): report the READBACK so the
+        # observer's next diff never attributes this write to the user.
+        session.observer.record_agent_write(target, written)
         session._reload_fl()
         return WriteReceipt(
             backend=self.name,
@@ -182,20 +190,24 @@ class BridgeLane:
     def write(self, target: Target, notes: list[Note], mode: NoteWriteMode) -> WriteReceipt:
         command_id = self._send("add_notes", target=target, notes=notes, mode=mode, ppq=self._ppq())
         delta = _record(self._session, target, notes, mode, self.name, command_id)
+        readback = self._file_lane_readback(target, command_id)
+        self._session.observer.record_agent_write(target, readback)
         return WriteReceipt(
             backend=self.name,
             target=target,
-            confirmed_notes=self._file_lane_note_count(target, command_id),
+            confirmed_notes=len(readback),
             delta=delta,
         )
 
     def clear(self, target: Target) -> WriteReceipt:
         command_id = self._send("clear_notes", target=target)
         delta = _record(self._session, target, [], "replace", self.name, command_id)
+        readback = self._file_lane_readback(target, command_id)
+        self._session.observer.record_agent_write(target, readback)
         return WriteReceipt(
             backend=self.name,
             target=target,
-            confirmed_notes=self._file_lane_note_count(target, command_id),
+            confirmed_notes=len(readback),
             delta=delta,
         )
 
@@ -245,15 +257,15 @@ class BridgeLane:
         hello = session._ensure_hello()
         return hello.ppq if hello is not None else None
 
-    def _file_lane_note_count(self, target: Target, command_id: int) -> int:
-        """Readback-only count for a bridge receipt - never the bridge's echo
+    def _file_lane_readback(self, target: Target, command_id: int) -> list[Note]:
+        """Readback notes for a bridge receipt - never the bridge's echo
         (FHD_AddNotesToPR returns nothing, so its notes_written is what it
         SENT). The only read of record today is the project file, which LAGS
-        the live session until FL saves - so this count may exclude the very
+        the live session until FL saves - so this may exclude the very
         write it confirms. That gap is deliberate until a live note readback
         exists (the observer's poll-and-diff read, R2)."""
         try:
-            return len(flp.notes_at(self._session.project, target.pattern, target.channel))
+            return flp.notes_at(self._session.project, target.pattern, target.channel)
         except flp.FlpError as exc:
             raise WriteRejected(
                 f"the bridge applied command {command_id} but the file readback "
