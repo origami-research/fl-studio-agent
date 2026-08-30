@@ -21,6 +21,7 @@
 #include <vector>
 
 #include "bridge_core.h"
+#include "fl_host_abi.h"
 #include "fp_plugclass.h"
 #include "mock_host.h"
 
@@ -250,7 +251,7 @@ int main() {
 
     MockHost host;
     bridge_core::PollOutcome out = bridge_core::PollOnce(
-        &host, /*host_tag=*/0x1122334455667788LL, roots, bridge_core::kDefaultPPQ);
+        host.as_host(), /*host_tag=*/0x1122334455667788LL, roots, bridge_core::kDefaultPPQ);
 
     CHECK(out.had_command);
     CHECK(out.ok);
@@ -285,20 +286,41 @@ int main() {
     CHECK(Contains(resp, "\"backend\": \"bridge\""));
     CHECK(Contains(ReadFile(CmdPath(preferred, 42)), "\"consumed\": true"));
     CHECK(Contains(ReadFile(preferred + "/commands/queue.json"), "42"));
+
+    // Both host calls arrived through TFruityPlugHost's FIRST DECLARED method
+    // (VMT+200), never through a VMT header slot. A regression to the C++
+    // header's `host->Dispatcher(...)` resolves to slot 0 - vInstanceSize - and
+    // is what took FL down live, on every payload including zero notes.
+    CHECK(host.header_slot_calls() == 0);
+    // The full argument shape, against Fruity Convolver's - FL 2026's own
+    // shipping Fruity effect, which calls its host with x0=Self, x1=Sender
+    // (its HostTag, loaded from [plug+8]), x2=ID, x3=Index, x4=Value.
+    CHECK(host.calls.size() == 2);  // FHD_AddNotesToPR, then FHD_SetDirty
+    if (host.calls.size() == 2) {
+      const std::intptr_t kTag = static_cast<std::intptr_t>(0x1122334455667788LL);
+      CHECK(host.calls[0].sender == kTag);
+      CHECK(host.calls[0].id == FHD_AddNotesToPR);
+      CHECK(host.calls[0].index == 0);
+      CHECK(host.calls[0].value != 0);  // the TNotesParams pointer
+      CHECK(host.calls[1].sender == kTag);
+      CHECK(host.calls[1].id == FHD_SetDirty);
+      CHECK(host.calls[1].index == 0);
+      CHECK(host.calls[1].value == 0);
+    }
   }
 
   // --- 4. Idempotency: the same id is never applied twice ---------------------
   {
     // The command is a tombstone now and the id is in the ledger; re-poll no-ops.
     MockHost host;
-    bridge_core::PollOutcome out = bridge_core::PollOnce(&host, 0, roots, bridge_core::kDefaultPPQ);
+    bridge_core::PollOutcome out = bridge_core::PollOnce(host.as_host(), 0, roots, bridge_core::kDefaultPPQ);
     CHECK(!out.had_command);
     CHECK(host.chords.empty());
 
     // Even if a stale live command with the same id reappears, the ledger blocks it.
     WriteFile(CmdPath(preferred, 42),
               "{\"proto\":2,\"id\":42,\"op\":\"add_notes\",\"args\":{\"notes\":[]}}");
-    bridge_core::PollOutcome out2 = bridge_core::PollOnce(&host, 0, roots, bridge_core::kDefaultPPQ);
+    bridge_core::PollOutcome out2 = bridge_core::PollOnce(host.as_host(), 0, roots, bridge_core::kDefaultPPQ);
     CHECK(!out2.had_command);
     CHECK(host.chords.empty());
   }
@@ -312,11 +334,11 @@ int main() {
     WriteQueue(preferred, {42, 51, 50});  // 42 already consumed
 
     MockHost host;
-    bridge_core::PollOutcome first = bridge_core::PollOnce(&host, 0, roots, bridge_core::kDefaultPPQ);
+    bridge_core::PollOutcome first = bridge_core::PollOnce(host.as_host(), 0, roots, bridge_core::kDefaultPPQ);
     CHECK(first.had_command);
     CHECK(first.id == 50);
     CHECK(first.ok);
-    bridge_core::PollOutcome second = bridge_core::PollOnce(&host, 0, roots, bridge_core::kDefaultPPQ);
+    bridge_core::PollOutcome second = bridge_core::PollOnce(host.as_host(), 0, roots, bridge_core::kDefaultPPQ);
     CHECK(second.had_command);
     CHECK(second.id == 51);
     // ping never touches the host.
@@ -333,7 +355,7 @@ int main() {
               "\"target\":{\"pattern\":3,\"channel\":1}}}");
     WriteQueue(preferred, {60});
     MockHost host;
-    bridge_core::PollOutcome out = bridge_core::PollOnce(&host, 0, roots, bridge_core::kDefaultPPQ);
+    bridge_core::PollOutcome out = bridge_core::PollOnce(host.as_host(), 0, roots, bridge_core::kDefaultPPQ);
     CHECK(out.had_command);
     CHECK(out.ok);
     CHECK(host.chords.size() == 1);
@@ -353,7 +375,7 @@ int main() {
               "\"notes\":[{\"key\":60,\"start\":0,\"length\":1}]}}");
     WriteQueue(preferred, {70});
     MockHost host;
-    bridge_core::PollOutcome out = bridge_core::PollOnce(&host, 0, roots, bridge_core::kDefaultPPQ);
+    bridge_core::PollOutcome out = bridge_core::PollOnce(host.as_host(), 0, roots, bridge_core::kDefaultPPQ);
     CHECK(out.had_command);
     CHECK(!out.ok);
     CHECK(host.chords.empty());
@@ -386,7 +408,7 @@ int main() {
               "{\"proto\":2,\"id\":91,\"op\":\"ping\",\"args\":{}}");
     WriteQueue(preferred, {90, 91});
     MockHost host;
-    bridge_core::PollOutcome out = bridge_core::PollOnce(&host, 0, roots, bridge_core::kDefaultPPQ);
+    bridge_core::PollOutcome out = bridge_core::PollOnce(host.as_host(), 0, roots, bridge_core::kDefaultPPQ);
     CHECK(out.had_command);
     CHECK(out.id == 91);
     CHECK(!bridge_core::AlreadyConsumed(roots, 90));  // never claimed, only skipped
@@ -403,7 +425,7 @@ int main() {
     WriteQueue(preferred, {});  // preferred root knows nothing
     WriteQueue(fallback, {100});
     MockHost host;
-    bridge_core::PollOutcome out = bridge_core::PollOnce(&host, 0, roots, bridge_core::kDefaultPPQ);
+    bridge_core::PollOutcome out = bridge_core::PollOnce(host.as_host(), 0, roots, bridge_core::kDefaultPPQ);
     CHECK(out.had_command);
     CHECK(out.id == 100);
     CHECK(out.ok);
@@ -421,7 +443,7 @@ int main() {
               "\"notes\":[{\"key\":60,\"start\":1,\"length\":1}]}}");
     WriteQueue(preferred, {110});
     MockHost host;
-    bridge_core::PollOutcome out = bridge_core::PollOnce(&host, 0, roots, bridge_core::kDefaultPPQ);
+    bridge_core::PollOutcome out = bridge_core::PollOnce(host.as_host(), 0, roots, bridge_core::kDefaultPPQ);
     CHECK(out.ok);
     CHECK(host.chords.size() == 1);
     if (!host.chords.empty()) CHECK(host.chords[0].notes[0].Position == 96);
@@ -445,7 +467,7 @@ int main() {
               "{\"key\":64,\"start\":1,\"length\":1}]}}");
     WriteQueue(preferred, {120});
     MockHost host;
-    bridge_core::PollOutcome out = bridge_core::PollOnce(&host, 0, roots, bridge_core::kDefaultPPQ);
+    bridge_core::PollOutcome out = bridge_core::PollOnce(host.as_host(), 0, roots, bridge_core::kDefaultPPQ);
     CHECK(out.ok);
     CHECK(g_trace.size() == 3);
     if (g_trace.size() == 3) {
@@ -459,7 +481,7 @@ int main() {
     g_trace.clear();
     WriteFile(CmdPath(preferred, 121), "{\"proto\":2,\"id\":121,\"op\":\"ping\"}");
     WriteQueue(preferred, {121});
-    CHECK(bridge_core::PollOnce(&host, 0, roots, bridge_core::kDefaultPPQ).ok);
+    CHECK(bridge_core::PollOnce(host.as_host(), 0, roots, bridge_core::kDefaultPPQ).ok);
     CHECK(g_trace.empty());
 
     bridge_core::SetHostCallTrace(nullptr);  // no sink installed: silent, never fatal
@@ -469,7 +491,7 @@ int main() {
               "\"target\":{\"pattern\":1,\"channel\":0},"
               "\"notes\":[{\"key\":60,\"start\":0,\"length\":1}]}}");
     WriteQueue(preferred, {122});
-    CHECK(bridge_core::PollOnce(&host, 0, roots, bridge_core::kDefaultPPQ).ok);
+    CHECK(bridge_core::PollOnce(host.as_host(), 0, roots, bridge_core::kDefaultPPQ).ok);
     CHECK(g_trace.empty());
   }
 
@@ -477,8 +499,44 @@ int main() {
   {
     WriteFile(preferred + "/commands/queue.json", "{not json");
     MockHost host;
-    bridge_core::PollOutcome out = bridge_core::PollOnce(&host, 0, roots, bridge_core::kDefaultPPQ);
+    bridge_core::PollOutcome out = bridge_core::PollOnce(host.as_host(), 0, roots, bridge_core::kDefaultPPQ);
     CHECK(!out.had_command);
+  }
+
+  // --- 14. the FL 2026 host call contract (native/abi/fl_host_abi.h) ---------
+  // The 2026-08-29 crash was not the payload: `clear_notes` with ZERO notes
+  // died with the same three frames as a three-note chord, because FL never
+  // reached the buffer. FL 2026 macOS is Free Pascal, its TFruityPlugHost is an
+  // FPC class, and an FPC VMT puts 200 bytes of header in front of the first
+  // declared method - so the C++ header's slot 0 is vInstanceSize, not
+  // Dispatcher. This section is the offline reproduction: the mock host is
+  // FPC-shaped, so a call at the wrong offset is counted rather than fatal.
+  {
+    CHECK(fl_abi::kFpcVmtHeaderSlots == 25);
+    CHECK(fl_abi::kFpcVmtHeaderBytes == 200);
+    CHECK(fl_abi::kHostDispatcherOffset == 200);
+    // The header field table we step over, as decoded from FL's own VMTs: 25
+    // contiguous pointer-sized slots, 0..192.
+    for (std::size_t i = 0; i < fl_abi::kFpcVmtHeaderSlots; ++i) {
+      CHECK(fl_abi::kFpcVmtHeader[i].offset == i * sizeof(void *));
+    }
+    CHECK(fl_abi::HostMethodOffset(0) == 200);
+    CHECK(fl_abi::HostMethodOffset(1) == 208);
+
+    // The zero-note command - the one that proved the payload was innocent -
+    // still reaches FL, and still through the FPC slot.
+    WriteFile(CmdPath(preferred, 140),
+              "{\"proto\":2,\"id\":140,\"op\":\"clear_notes\",\"args\":{"
+              "\"target\":{\"pattern\":1,\"channel\":0}}}");
+    WriteQueue(preferred, {140});
+    MockHost host;
+    bridge_core::PollOutcome out =
+        bridge_core::PollOnce(host.as_host(), 0, roots, bridge_core::kDefaultPPQ);
+    CHECK(out.ok);
+    CHECK(host.chords.size() == 1);
+    CHECK(host.set_dirty_calls == 1);
+    CHECK(host.header_slot_calls() == 0);
+    if (!host.chords.empty()) CHECK(host.chords[0].count == 0);
   }
 
   if (g_failures == 0) {

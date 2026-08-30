@@ -9,6 +9,11 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 # with scripts/fetch_sdk.sh, or point FL_SDK_DIR at your own copy.
 set(FL_SDK_DIR "${CMAKE_CURRENT_SOURCE_DIR}/sdk" CACHE PATH "FL Studio SDK directory")
 
+# The FL 2026 host call contract (native/abi/fl_host_abi.h) and the FPC-shaped
+# mock host that proves it offline. Shared by the Bridge, the Probe, and every
+# test: one contract, one place, no per-target copy to drift.
+set(FL_ABI_DIR "${CMAKE_CURRENT_SOURCE_DIR}/abi")
+
 if(NOT EXISTS "${FL_SDK_DIR}/fp_plugclass.h")
     message(FATAL_ERROR
         "FL Studio SDK not found at ${FL_SDK_DIR}\n"
@@ -62,7 +67,7 @@ add_library(bridge SHARED
     bridge/src/bridge_gui.cpp
     bridge/src/bridge_udp.cpp
 )
-target_include_directories(bridge PRIVATE "${FL_SDK_DIR}" bridge/src)
+target_include_directories(bridge PRIVATE "${FL_SDK_DIR}" "${FL_ABI_DIR}" bridge/src)
 target_compile_options(bridge PRIVATE
     -Wno-ignored-attributes -Wno-macro-redefined -Wno-deprecated-declarations
 )
@@ -79,7 +84,7 @@ add_executable(bridge_core_test
     bridge/tests/bridge_core_test.cpp
     bridge/src/bridge_core.cpp
 )
-target_include_directories(bridge_core_test PRIVATE "${FL_SDK_DIR}" bridge/src)
+target_include_directories(bridge_core_test PRIVATE "${FL_SDK_DIR}" "${FL_ABI_DIR}" bridge/src)
 target_compile_options(bridge_core_test PRIVATE
     -fsanitize=address,undefined -g
     -Wno-ignored-attributes
@@ -94,7 +99,7 @@ add_executable(bridge_gui_test
     bridge/tests/bridge_gui_test.cpp
     bridge/src/bridge_gui.cpp
 )
-target_include_directories(bridge_gui_test PRIVATE "${FL_SDK_DIR}" bridge/src)
+target_include_directories(bridge_gui_test PRIVATE "${FL_SDK_DIR}" "${FL_ABI_DIR}" bridge/src)
 target_compile_options(bridge_gui_test PRIVATE
     -fsanitize=address,undefined -g
     -Wno-ignored-attributes
@@ -112,7 +117,7 @@ add_executable(bridge_udp_test
     bridge/src/bridge_core.cpp
     bridge/src/bridge_udp.cpp
 )
-target_include_directories(bridge_udp_test PRIVATE "${FL_SDK_DIR}" bridge/src)
+target_include_directories(bridge_udp_test PRIVATE "${FL_SDK_DIR}" "${FL_ABI_DIR}" bridge/src)
 target_compile_options(bridge_udp_test PRIVATE
     -fsanitize=address,undefined -g
     -Wno-ignored-attributes
@@ -132,7 +137,7 @@ add_library(probe SHARED
     probe/src/probe_core.cpp
     probe/src/probe_io.cpp
 )
-target_include_directories(probe PRIVATE "${FL_SDK_DIR}" probe/src)
+target_include_directories(probe PRIVATE "${FL_SDK_DIR}" "${FL_ABI_DIR}" probe/src)
 target_compile_options(probe PRIVATE
     -Wno-ignored-attributes -Wno-macro-redefined -Wno-deprecated-declarations
 )
@@ -151,7 +156,7 @@ add_executable(probe_core_test
     probe/src/probe_core.cpp
     probe/src/probe_io.cpp
 )
-target_include_directories(probe_core_test PRIVATE "${FL_SDK_DIR}" probe/src)
+target_include_directories(probe_core_test PRIVATE "${FL_SDK_DIR}" "${FL_ABI_DIR}" probe/src)
 target_compile_options(probe_core_test PRIVATE
     -fsanitize=address,undefined -g
     -Wno-ignored-attributes
@@ -172,10 +177,16 @@ add_test(NAME probe_core_test COMMAND probe_core_test)
 if(APPLE)
     add_test(NAME bridge_abi_check
         COMMAND "${CMAKE_CURRENT_SOURCE_DIR}/scripts/check_vtable.sh"
-                "$<TARGET_FILE:bridge>" Bridge)
+                "$<TARGET_FILE:bridge>" Bridge
+                25=DestroyObject 26=Dispatcher 27=Idle_Public
+                28=SaveRestoreState 29=GetName 30=ProcessEvent
+                31=ProcessParam 32=Eff_Render)
     add_test(NAME probe_abi_check
         COMMAND "${CMAKE_CURRENT_SOURCE_DIR}/scripts/check_vtable.sh"
-                "$<TARGET_FILE:probe>" Probe)
+                "$<TARGET_FILE:probe>" Probe
+                25=DestroyObject 26=Dispatcher 27=Idle_Public
+                28=SaveRestoreState 29=GetName 30=ProcessEvent
+                31=ProcessParam 32=Eff_Render)
 endif()
 
 # Differential-test shim: same PollOnce + mock host, driven by the Python suite
@@ -187,7 +198,7 @@ add_executable(bridge_spool_cli
     bridge/tools/bridge_spool_cli.cpp
     bridge/src/bridge_core.cpp
 )
-target_include_directories(bridge_spool_cli PRIVATE "${FL_SDK_DIR}" bridge/src bridge/tests)
+target_include_directories(bridge_spool_cli PRIVATE "${FL_SDK_DIR}" "${FL_ABI_DIR}" bridge/src bridge/tests)
 target_compile_options(bridge_spool_cli PRIVATE
     -Wno-ignored-attributes -Wno-macro-redefined -Wno-deprecated-declarations
 )

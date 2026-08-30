@@ -135,7 +135,7 @@ class TestClient {
 
 // Simulate the plugin tick until an ack arrives at `client` or attempts run
 // out: drain the queue, execute through the one executor, ack.
-std::string PumpUntilAck(bridge_udp::UdpTransport *transport, MockHost *host,
+std::string PumpUntilAck(bridge_udp::UdpTransport *transport, TFruityPlugHost *host,
                          const std::vector<std::string> &roots,
                          bridge_core::ResultCache *cache, TestClient *client) {
   for (int attempt = 0; attempt < 200; ++attempt) {
@@ -200,7 +200,7 @@ int main() {
     // The heartbeat probe carries no id: no ledger slot, no response file, no
     // FL - even with a mismatched proto (the pong itself reports ours).
     bridge_core::ExecResult stateless = bridge_core::ExecuteCommand(
-        &host, 0, roots, bridge_core::kDefaultPPQ, "{\"proto\":99,\"op\":\"ping\"}", &cache);
+        host.as_host(), 0, roots, bridge_core::kDefaultPPQ, "{\"proto\":99,\"op\":\"ping\"}", &cache);
     CHECK(stateless.outcome.ok);
     CHECK(Contains(stateless.ack_json, "\"id\": 0"));
     CHECK(Contains(stateless.ack_json, "\"ok\": true"));
@@ -212,7 +212,7 @@ int main() {
     // An id-carrying ping is a queued command: claimed (that claim is what
     // prunes it from the queue), response recorded, still no host calls.
     bridge_core::ExecResult claimed = bridge_core::ExecuteCommand(
-        &host, 0, roots, bridge_core::kDefaultPPQ,
+        host.as_host(), 0, roots, bridge_core::kDefaultPPQ,
         "{\"proto\":2,\"id\":900,\"op\":\"ping\"}", &cache);
     CHECK(claimed.outcome.ok);
     CHECK(bridge_core::AlreadyConsumed(roots, 900));
@@ -226,12 +226,12 @@ int main() {
   {
     MockHost host;
     bridge_core::ExecResult bad_json = bridge_core::ExecuteCommand(
-        &host, 0, roots, bridge_core::kDefaultPPQ, "{not json", nullptr);
+        host.as_host(), 0, roots, bridge_core::kDefaultPPQ, "{not json", nullptr);
     CHECK(!bad_json.outcome.had_command);
     CHECK(Contains(bad_json.ack_json, "unparseable"));
     CHECK(Contains(bad_json.ack_json, "\"err\": "));
     bridge_core::ExecResult no_op = bridge_core::ExecuteCommand(
-        &host, 0, roots, bridge_core::kDefaultPPQ, "{\"id\": 7}", nullptr);
+        host.as_host(), 0, roots, bridge_core::kDefaultPPQ, "{\"id\": 7}", nullptr);
     CHECK(Contains(no_op.ack_json, "no op"));
     CHECK(host.chords.empty());
   }
@@ -241,7 +241,7 @@ int main() {
     MockHost udp_host;
     bridge_core::ResultCache cache;
     bridge_core::ExecResult via_udp = bridge_core::ExecuteCommand(
-        &udp_host, 0, roots, bridge_core::kDefaultPPQ, AddNotesCommand(50, 5), &cache);
+        udp_host.as_host(), 0, roots, bridge_core::kDefaultPPQ, AddNotesCommand(50, 5), &cache);
     CHECK(via_udp.outcome.ok);
     CHECK(bridge_core::AlreadyConsumed(roots, 50));
     CHECK(Contains(ReadFile(preferred + "/responses/" + ZeroPadded(50)), "\"id\": 50"));
@@ -251,7 +251,7 @@ int main() {
     WriteQueue(preferred, {51});
     MockHost file_host;
     bridge_core::PollOutcome via_file =
-        bridge_core::PollOnce(&file_host, 0, roots, bridge_core::kDefaultPPQ, &cache);
+        bridge_core::PollOnce(file_host.as_host(), 0, roots, bridge_core::kDefaultPPQ, &cache);
     CHECK(via_file.ok);
     CHECK(via_file.id == 51);
 
@@ -273,7 +273,7 @@ int main() {
     WriteQueue(preferred, {50});
     MockHost replay_host;
     bridge_core::PollOutcome replay =
-        bridge_core::PollOnce(&replay_host, 0, roots, bridge_core::kDefaultPPQ, &cache);
+        bridge_core::PollOnce(replay_host.as_host(), 0, roots, bridge_core::kDefaultPPQ, &cache);
     CHECK(!replay.had_command);
     CHECK(replay_host.chords.empty());
 
@@ -281,7 +281,7 @@ int main() {
     // the recorded response verbatim, without re-executing.
     MockHost dup_host;
     bridge_core::ExecResult dup = bridge_core::ExecuteCommand(
-        &dup_host, 0, roots, bridge_core::kDefaultPPQ, AddNotesCommand(51, 5), &cache);
+        dup_host.as_host(), 0, roots, bridge_core::kDefaultPPQ, AddNotesCommand(51, 5), &cache);
     CHECK(dup.duplicate);
     CHECK(dup_host.chords.empty());
     CHECK(Contains(dup.ack_json, "\"id\": 51"));
@@ -291,7 +291,7 @@ int main() {
     // A duplicate whose response predates the cache still gets a consumed ack.
     bridge_core::ResultCache empty_cache;
     bridge_core::ExecResult cold_dup = bridge_core::ExecuteCommand(
-        &dup_host, 0, roots, bridge_core::kDefaultPPQ, AddNotesCommand(51, 5), &empty_cache);
+        dup_host.as_host(), 0, roots, bridge_core::kDefaultPPQ, AddNotesCommand(51, 5), &empty_cache);
     CHECK(cold_dup.duplicate);
     CHECK(Contains(cold_dup.ack_json, "\"duplicate\": true"));
   }
@@ -329,7 +329,7 @@ int main() {
       // A good id-less ping round-trips through queue -> executor -> ack, and
       // the ack frame carries the bridge's token (the client's proof of origin).
       CHECK(client.Send(bridge_udp::BuildFrame(transport->token_hex(), "{\"op\":\"ping\"}")));
-      std::string ack = PumpUntilAck(transport.get(), &host, roots, &cache, &client);
+      std::string ack = PumpUntilAck(transport.get(), host.as_host(), roots, &cache, &client);
       CHECK(!ack.empty());
       CHECK(ack.size() > bridge_udp::kHeaderLen);
       CHECK(memcmp(ack.data(), bridge_udp::kMagic, bridge_udp::kMagicLen) == 0);
@@ -339,7 +339,7 @@ int main() {
 
       // A v2 add_notes datagram drives the host through the same executor.
       CHECK(client.Send(bridge_udp::BuildFrame(transport->token_hex(), AddNotesCommand(902, 3))));
-      std::string note_ack = PumpUntilAck(transport.get(), &host, roots, &cache, &client);
+      std::string note_ack = PumpUntilAck(transport.get(), host.as_host(), roots, &cache, &client);
       CHECK(Contains(note_ack, "\"id\": 902"));
       CHECK(Contains(note_ack, "\"notes_written\": 1"));
       CHECK(host.chords.size() == 1);

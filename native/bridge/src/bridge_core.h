@@ -183,7 +183,8 @@ struct ExecResult {
 // claims the id in the ledger BEFORE anything else - same ordering as the
 // pyscript; this is the crash-safety invariant, do not reorder - then checks
 // proto, dispatches the op (add_notes/clear_notes via
-// host->Dispatcher(host_tag, FHD_AddNotesToPR, ...) + FHD_SetDirty), and
+// fl_abi::HostDispatch(host, host_tag, FHD_AddNotesToPR, ...) + FHD_SetDirty -
+// see native/abi/fl_host_abi.h for why it is never `host->Dispatcher(...)`), and
 // writes responses/<id>.json in the SpoolResponse shape regardless of
 // carrier. Duplicates re-ack from `cache` (nullable) or with a minimal
 // consumed ack, and never re-execute.

@@ -1,16 +1,32 @@
-// Mock TFruityPlugHost shared by bridge_core_test and bridge_spool_cli: only
-// Dispatcher does anything (recording FHD_AddNotesToPR payloads and
-// FHD_SetDirty), everything else is a never-called stub. The captured chords
-// are deep copies so assertions survive the caller freeing the real
-// (flexible-array) TNotesParams.
+// Mock TFruityPlugHost shared by bridge_core_test, bridge_udp_test and
+// bridge_spool_cli.
+//
+// It is shaped like FL 2026's real host - an FPC object whose VMT carries a
+// 200-byte header in front of Dispatcher (native/abi/fl_host_mock.h). That
+// shape is the point: a mock that inherited the C++ `TFruityPlugHost` would put
+// Dispatcher at vtable slot 0 and so would agree with the call that takes FL
+// down. This one disagrees, and `header_slot_calls()` names the disagreement.
+//
+// Only Dispatcher does anything - recording FHD_AddNotesToPR payloads and
+// counting FHD_SetDirty. The captured chords are deep copies so assertions
+// survive the caller freeing the real (flexible-array) TNotesParams.
 #pragma once
 
 #include <cstdint>
 #include <vector>
 
+#include "fl_host_mock.h"
 #include "fp_plugclass.h"
 
 namespace bridge_mock {
+
+// One host->FL dispatcher call, in Convolver's argument order.
+struct HostCall {
+  std::intptr_t sender = 0;
+  std::intptr_t id = 0;
+  std::intptr_t index = 0;
+  std::intptr_t value = 0;
+};
 
 struct CapturedChord {
   int target = 0;
@@ -21,15 +37,22 @@ struct CapturedChord {
   std::vector<TNoteParams> notes;
 };
 
-class MockHost : public TFruityPlugHost {
+class MockHost : public fl_mock::FpcHost {
  public:
   std::vector<CapturedChord> chords;
   int set_dirty_calls = 0;
+  // Every call verbatim, so a test can assert the full argument shape and not
+  // just the payload. The shape is Fruity Convolver's, read off FL 2026's own
+  // shipping effect: x0=Self, x1=Sender (the plugin's HostTag, from [plug+8]),
+  // x2=ID, x3=Index, x4=Value.
+  std::vector<HostCall> calls;
 
-  intptr_t _stdcall Dispatcher(TPluginTag /*Sender*/, intptr_t ID, intptr_t /*Index*/,
-                               intptr_t Value) override {
-    if (ID == FHD_AddNotesToPR && Value != 0) {
-      TNotesParams *p = (TNotesParams *)Value;
+ protected:
+  std::intptr_t Dispatch(std::intptr_t sender, std::intptr_t id, std::intptr_t index,
+                         std::intptr_t value) override {
+    calls.push_back({sender, id, index, value});
+    if (id == FHD_AddNotesToPR && value != 0) {
+      const TNotesParams *p = reinterpret_cast<const TNotesParams *>(value);
       CapturedChord c;
       c.target = p->Target;
       c.flags = p->Flags;
@@ -38,57 +61,11 @@ class MockHost : public TFruityPlugHost {
       c.count = p->Count;
       for (int i = 0; i < p->Count; ++i) c.notes.push_back(p->NoteParams[i]);
       chords.push_back(std::move(c));
-    } else if (ID == FHD_SetDirty) {
+    } else if (id == FHD_SetDirty) {
       set_dirty_calls++;
     }
     return 0;
   }
-
-  // --- unused stubs ---
-  void _stdcall OnParamChanged(TPluginTag, int, int) override {}
-  void _stdcall OnHint(TPluginTag, char *) override {}
-  void _stdcall ComputeLRVol_Old(float &, float &, int, float) override {}
-  void _stdcall Voice_Release(intptr_t) override {}
-  void _stdcall Voice_Kill(intptr_t, BOOL) override {}
-  int _stdcall Voice_ProcessEvent(intptr_t, intptr_t, intptr_t, intptr_t) override { return 0; }
-  void _stdcall LockMix_Old() override {}
-  void _stdcall UnlockMix_Old() override {}
-  void _stdcall MIDIOut_Delayed(TPluginTag, intptr_t) override {}
-  void _stdcall MIDIOut(TPluginTag, intptr_t) override {}
-  void _stdcall AddWave_32FM_32FS_Ramp(void *, void *, int, float, float, float &, float &) override {}
-  void _stdcall AddWave_32FS_32FS_Ramp(void *, void *, int, float, float, float &, float &) override {}
-  bool _stdcall LoadSample(TSampleHandle &, char *, PWaveFormatExtensible, int) override { return false; }
-  void *_stdcall GetSampleData(TSampleHandle, int &) override { return nullptr; }
-  void _stdcall CloseSample(TSampleHandle) override {}
-  int _stdcall GetSongMixingTime() override { return 0; }
-  double _stdcall GetSongMixingTime_A() override { return 0; }
-  double _stdcall GetSongPlayingTime() override { return 0; }
-  void _stdcall OnControllerChanged(TPluginTag, intptr_t, intptr_t) override {}
-  void *_stdcall GetSendBuffer(intptr_t) override { return nullptr; }
-  void _stdcall PlugMsg_Delayed(TPluginTag, intptr_t) override {}
-  void _stdcall PlugMsg_Kill(TPluginTag, intptr_t) override {}
-  void _stdcall GetSampleInfo(TSampleHandle, PSampleInfo) override {}
-  void _stdcall DistWave_32FM(int, int, void *, int, float, float, float) override {}
-  void *_stdcall GetMixBuffer(int) override { return nullptr; }
-  void *_stdcall GetInsBuffer(TPluginTag, int) override { return nullptr; }
-  BOOL _stdcall PromptEdit(int, int, char *, char *, int &) override { return 0; }
-  void _stdcall SuspendOutput_Old() override {}
-  void _stdcall ResumeOutput_Old() override {}
-  void _stdcall GetSampleRegion(TSampleHandle, int, PSampleRegion) override {}
-  void _stdcall ComputeLRVol(float &, float &, float, float) override {}
-  void _stdcall LockPlugin(TPluginTag) override {}
-  void _stdcall UnlockPlugin(TPluginTag) override {}
-  void _stdcall LockMix_Shared_Old() override {}
-  void _stdcall UnlockMix_Shared_Old() override {}
-  void _stdcall GetInBuffer(TPluginTag, intptr_t, PIOBuffer) override {}
-  void _stdcall GetOutBuffer(TPluginTag, intptr_t, PIOBuffer) override {}
-  TOutVoiceHandle _stdcall TriggerOutputVoice(TVoiceParams *, intptr_t, intptr_t) override { return 0; }
-  void _stdcall OutputVoice_Release(TOutVoiceHandle) override {}
-  void _stdcall OutputVoice_Kill(TOutVoiceHandle) override {}
-  int _stdcall OutputVoice_ProcessEvent(TOutVoiceHandle, intptr_t, intptr_t, intptr_t) override { return 0; }
-  BOOL _stdcall PromptEdit_Ex(int, int, const char *, char *, int &, int &, int &, int, int) override { return 0; }
-  void _stdcall SuspendOutput(TPluginTag) override {}
-  void _stdcall ResumeOutput(TPluginTag) override {}
 };
 
 }  // namespace bridge_mock
