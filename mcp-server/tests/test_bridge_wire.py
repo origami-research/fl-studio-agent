@@ -86,9 +86,16 @@ class FakeBridge:
             self._sock.sendto(frame, addr)
 
     def _ack_for(self, command: dict) -> dict:
-        # Field-for-field what bridge_core::ExecuteCommand emits.
+        # Field-for-field what bridge_core::ExecuteCommand emits. An id-less
+        # ping (the heartbeat probe) is answered statelessly with id 0.
         if command["op"] == "ping":
-            return {"id": command["id"], "ok": True, "op": "ping", "proto": 1, "backend": "bridge"}
+            return {
+                "id": command.get("id", 0),
+                "ok": True,
+                "op": "ping",
+                "proto": 1,
+                "backend": "bridge",
+            }
         notes = command.get("args", {}).get("notes", [])
         return {
             "id": command["id"],
@@ -151,8 +158,10 @@ def test_round_trip_add_notes(fake_bridge: FakeBridge) -> None:
     assert [n["key"] for n in fake_bridge.received[0]["args"]["notes"]] == [60, 64]
 
 
-def test_ping_round_trip(fake_bridge: FakeBridge) -> None:
+def test_ping_round_trip_is_idless(fake_bridge: FakeBridge) -> None:
     assert wire_for(fake_bridge).ping(timeout=2.0) is True
+    # Heartbeat probes carry no id, so the bridge never claims a ledger slot.
+    assert "id" not in fake_bridge.received[0]
 
 
 def test_retransmit_recovers_a_dropped_datagram(tmp_path: Path) -> None:

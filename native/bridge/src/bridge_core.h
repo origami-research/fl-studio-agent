@@ -130,14 +130,17 @@ struct ExecResult {
   bool duplicate = false;  // id already in the ledger; nothing was executed
 };
 
-// THE executor - both carriers feed this. Parses `payload_json`; answers "ping"
-// without touching the ledger, the filesystem, or FL (liveness probes must not
-// evict real ids from the ledger ring); refuses proto mismatches; claims fresh
-// ids in the ledger BEFORE executing (a command that crashes FL is never
-// replayed); applies via host->Dispatcher(host_tag, FHD_AddNotesToPR, ...) +
-// FHD_SetDirty; writes result.json for every claimed command regardless of
-// carrier; re-acks duplicates from `cache` (nullable) or with a minimal
-// consumed ack. `carrier` is reported in the result's "spool" field.
+// THE executor - both carriers feed this. Parses `payload_json`; answers an
+// ID-LESS "ping" statelessly, touching neither the ledger nor the filesystem
+// nor FL (heartbeat probes must not evict real ids from the ledger ring - an
+// id-carrying ping is claimed like any command, which is what prunes it from
+// the v2 queue); refuses proto mismatches; claims fresh ids in the ledger
+// BEFORE executing (a command that crashes FL is never replayed - this
+// ordering is the crash-safety invariant, do not reorder); applies via
+// host->Dispatcher(host_tag, FHD_AddNotesToPR, ...) + FHD_SetDirty; writes
+// result.json for every claimed command regardless of carrier; re-acks
+// duplicates from `cache` (nullable) or with a minimal consumed ack.
+// `carrier` is reported in the result's "spool" field.
 ExecResult ExecuteCommand(TFruityPlugHost *host, std::intptr_t host_tag,
                           const std::vector<std::string> &roots, int ppq_default,
                           const std::string &payload_json, const std::string &carrier,

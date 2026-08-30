@@ -244,16 +244,18 @@ ExecResult ExecuteCommand(TFruityPlugHost *host, std::intptr_t host_tag,
   }
   const std::string op = op_value->text;
 
-  // Liveness probe: answered end to end (transport -> queue -> tick -> ack)
-  // but never touches the ledger, the filesystem, or FL. The ack carries our
-  // proto so a mismatched client learns it from the pong itself.
-  if (op == "ping") {
+  // Liveness probe: an ID-LESS ping is stateless - answered end to end
+  // (transport -> queue -> tick -> ack) without touching the ledger, the
+  // filesystem, or FL, so heartbeats can never evict real ids from the ledger
+  // ring. The ack carries our proto so a mismatched client learns it from the
+  // pong itself. A ping that CARRIES an id is a queued command like any other
+  // and takes the claim path below - the claim is what prunes it from the v2
+  // queue when the server dies before doing so (bridge-v2-sync seam).
+  if (op == "ping" && command.Get("id") == nullptr) {
     outcome.had_command = true;
-    outcome.id = id;
     outcome.op = op;
     outcome.ok = true;
-    result.ack_json = "{\"id\": " + std::to_string(id) +
-                      ", \"ok\": true, \"op\": \"ping\", \"proto\": " +
+    result.ack_json = "{\"id\": 0, \"ok\": true, \"op\": \"ping\", \"proto\": " +
                       std::to_string(kProtoVersion) + ", \"backend\": \"bridge\"}";
     return result;
   }
@@ -294,7 +296,10 @@ ExecResult ExecuteCommand(TFruityPlugHost *host, std::intptr_t host_tag,
   // restart and crash it again.
   int accepted = RecordConsumed(roots, id);
 
-  if (op == "add_notes" || op == "clear_notes") {
+  if (op == "ping") {
+    // Claimed like any id-carrying command (queue hygiene); no host calls.
+    outcome.ok = true;
+  } else if (op == "add_notes" || op == "clear_notes") {
     minijson::Value clear_cmd;
     const minijson::Value *apply_cmd = &command;
     if (op == "clear_notes") {
@@ -366,11 +371,9 @@ PollOutcome PollOnce(TFruityPlugHost *host, std::intptr_t host_tag,
   ExecResult result = ExecuteCommand(host, host_tag, roots, ppq_default, text, source_root, cache);
 
   // Mailbox disposal: tombstone pending.json wherever it exists (commands are
-  // mirrored to every root) once the command is settled - claimed, refused, a
-  // duplicate, or a ping (whose pong goes to result.json so the sender can see
-  // it; the mailbox must clear either way or this file would repoll forever).
+  // mirrored to every root) once the command is settled - claimed, refused, or
+  // a duplicate. The mailbox must clear or this file would repoll forever.
   if (result.outcome.had_command || result.duplicate) {
-    if (result.outcome.op == "ping") WriteResult(roots, result.ack_json);
     std::string tombstone =
         "{\"consumed\": true, \"id\": " + std::to_string(result.outcome.id) + "}";
     for (const std::string &root : roots) {

@@ -293,8 +293,8 @@ void Bridge::Tick() {
             bridge_core::ExecuteCommand(host_, HostTag, gSpoolRoots, bridge_core::kDefaultPPQ,
                                         datagram.payload, "udp", &result_cache_);
         udp_->SendAck(datagram.reply_to, result.ack_json);
-        if (result.outcome.had_command && result.outcome.ok && result.outcome.op != "ping") {
-          applied_total_ += result.outcome.notes_written;
+        if (result.outcome.had_command && result.outcome.ok) {
+          applied_total_ += result.outcome.notes_written;  // pings contribute 0
         }
       }
     }

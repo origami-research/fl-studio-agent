@@ -103,7 +103,8 @@ One protocol, two carriers (doctrine: one canonical function per rule - the comm
 
 - Correlation is by `id`, exactly like the file spool and the SysEx wire.
 - Acks answer the state the bridge CONFIRMED (dispatcher issued, ledger recorded), never an echo of the request (AGENTS.md: boundaries verify).
-- `ping` is answered `ok` with the bridge's `proto` in the ack, without touching FL's API and without consuming a ledger slot - liveness probes must not evict real ids from the 64-entry ledger ring.
+- The liveness probe is an ID-LESS `ping`: answered statelessly (`ok`, ack id 0, the bridge's `proto` in the ack) without touching FL's API or the ledger, so heartbeats can never evict real ids from the 64-entry ledger ring.
+  A `ping` that CARRIES an id is a queued command like any other and is claimed - in the v2 file spool that claim is what prunes a ping from the queue when the server dies before pruning it (agreed with workstream A, whose consumer relies on it).
 
 **Idempotency and retransmits.** UDP delivers zero or more times, so the client retransmits until acked or deadline.
 Safety comes from the SAME consumed-ledger ids as the file spool: a retransmitted id already in the ledger is not re-executed; the bridge re-acks it from a small in-memory result cache (last 64 results), or with a minimal `consumed` ack if the id predates the cache (e.g. it was applied via the file spool by a previous process).

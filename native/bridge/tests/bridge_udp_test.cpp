@@ -121,19 +121,31 @@ int main() {
     CHECK(cache.Find(3) != nullptr && *cache.Find(3) == "three");
   }
 
-  // --- 3. Executor: ping answers without touching ledger or filesystem --------
+  // --- 3. Executor: id-less ping is stateless; an id'd ping claims ------------
   {
     MockHost host;
     bridge_core::ResultCache cache;
-    bridge_core::ExecResult result = bridge_core::ExecuteCommand(
+    // The heartbeat probe carries no id: no ledger slot, no file, no FL - even
+    // with a mismatched proto (the pong itself reports ours).
+    bridge_core::ExecResult stateless = bridge_core::ExecuteCommand(
+        &host, 0, roots, bridge_core::kDefaultPPQ,
+        "{\"proto\":99,\"op\":\"ping\"}", "udp", &cache);
+    CHECK(stateless.outcome.ok);
+    CHECK(Contains(stateless.ack_json, "\"id\": 0"));
+    CHECK(Contains(stateless.ack_json, "\"ok\": true"));
+    CHECK(Contains(stateless.ack_json, "\"op\": \"ping\""));
+    CHECK(Contains(stateless.ack_json, "\"proto\": 1"));
+    CHECK(ReadTestFile(preferred + "/result.json").empty());    // never written
+    CHECK(host.chords.empty());
+
+    // An id-carrying ping is a queued command: claimed (that claim is what
+    // prunes it from the v2 queue), result recorded, still no host calls.
+    bridge_core::ExecResult claimed = bridge_core::ExecuteCommand(
         &host, 0, roots, bridge_core::kDefaultPPQ,
         "{\"proto\":1,\"id\":900,\"op\":\"ping\"}", "udp", &cache);
-    CHECK(result.outcome.ok);
-    CHECK(Contains(result.ack_json, "\"ok\": true"));
-    CHECK(Contains(result.ack_json, "\"op\": \"ping\""));
-    CHECK(Contains(result.ack_json, "\"proto\": 1"));
-    CHECK(!bridge_core::AlreadyConsumed(roots, 900));           // never claimed
-    CHECK(ReadTestFile(preferred + "/result.json").empty());    // never written
+    CHECK(claimed.outcome.ok);
+    CHECK(bridge_core::AlreadyConsumed(roots, 900));
+    CHECK(Contains(ReadTestFile(preferred + "/result.json"), "\"id\": 900"));
     CHECK(host.chords.empty());
   }
 

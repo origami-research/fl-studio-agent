@@ -39,7 +39,7 @@ from typing import Any, cast
 from pydantic import BaseModel, Field, ValidationError
 
 from fl_mcp import errors
-from fl_mcp.schemas import OP_ARGS, SpoolCommand, SpoolOp, SpoolResponse
+from fl_mcp.schemas import OP_ARGS, SCHEMA_VERSION, SpoolCommand, SpoolOp, SpoolResponse
 from fl_mcp.spool import read_json, resume_next_id, spool_roots
 
 log = logging.getLogger(__name__)
@@ -132,36 +132,54 @@ class BridgeWire:
     def await_response(self, command: SpoolCommand, timeout: float) -> SpoolResponse:
         """Block for the bridge's ack; retransmits until acked (the ledger
         dedupes), raises the note plane's retryable ToolError on timeout."""
-        deadline = time.monotonic() + timeout
-        next_retransmit = time.monotonic() + _RETRANSMIT_INTERVAL
+        with self._lock:
+            frame = self._pending.get(command.id)
         try:
-            while True:
-                with self._lock:
-                    ack = self._acks.pop(command.id, None)
-                    frame = self._pending.get(command.id)
-                if ack is not None:
-                    return ack
-                now = time.monotonic()
-                if now >= deadline:
-                    break
-                if now >= next_retransmit and frame is not None:
-                    self._transmit(frame, first=False)
-                    next_retransmit = now + _RETRANSMIT_INTERVAL
-                self._recv_into_acks(min(_RECV_SLICE, deadline - now))
+            ack = self._await_ack(command.id, frame, timeout)
         finally:
             with self._lock:
                 self._pending.pop(command.id, None)
+        if ack is not None:
+            return ack
         raise errors.note_plane_unavailable(command.id, timeout)
 
     def ping(self, timeout: float = 0.5) -> bool:
         """One liveness round trip through the whole pipeline (socket thread ->
-        queue -> tick -> ack). False means: fall back to the file spool."""
+        queue -> tick -> ack). False means: fall back to the file spool.
+
+        The probe is ID-LESS on purpose: the bridge answers it statelessly
+        (ack id 0) and never claims a ledger slot, so heartbeats cannot evict
+        real command ids from the bridge's bounded ledger ring."""
+        payload = json.dumps({"proto": SCHEMA_VERSION, "op": "ping"}).encode("utf-8")
+        frame = MAGIC + self._token + b" " + payload
+        with self._lock:
+            self._acks.pop(0, None)  # a stale pong must not answer this probe
         try:
-            return self.await_response(self.send("ping"), timeout).ok
-        except (BridgeUnavailable, errors.ToolError):
+            self._transmit(frame, first=True)
+        except BridgeUnavailable:
             return False
+        ack = self._await_ack(0, frame, timeout)
+        return ack is not None and ack.ok
 
     # -- wire-format jobs -------------------------------------------------------
+
+    def _await_ack(self, ack_id: int, frame: bytes | None, timeout: float) -> SpoolResponse | None:
+        """The one receive loop: wait for the ack correlated to `ack_id`,
+        retransmitting `frame` on an interval; None on deadline."""
+        deadline = time.monotonic() + timeout
+        next_retransmit = time.monotonic() + _RETRANSMIT_INTERVAL
+        while True:
+            with self._lock:
+                ack = self._acks.pop(ack_id, None)
+            if ack is not None:
+                return ack
+            now = time.monotonic()
+            if now >= deadline:
+                return None
+            if now >= next_retransmit and frame is not None:
+                self._transmit(frame, first=False)
+                next_retransmit = now + _RETRANSMIT_INTERVAL
+            self._recv_into_acks(min(_RECV_SLICE, deadline - now))
 
     def _transmit(self, frame: bytes, *, first: bool) -> None:
         """Boundary: the first transmit of a command converts socket failure to
