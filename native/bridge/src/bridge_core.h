@@ -15,7 +15,10 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <deque>
+#include <mutex>
 #include <string>
+#include <utility>
 #include <vector>
 
 // The SDK types (TFruityPlugHost, TNotesParams, ...) are anonymous-struct
@@ -64,7 +67,7 @@ struct NotesParamsBuffer {
 // effect, per fp_plugclass.h TNotesParams.ChanNum).
 NotesParamsBuffer BuildNotesParams(const minijson::Value &command, int ppq_default);
 
-// Outcome of one PollOnce, for the caller to log / report.
+// Outcome of one executed command, for the caller to log / report.
 struct PollOutcome {
   bool had_command = false;   // a fresh, not-yet-consumed command was found and handled
   int id = 0;
@@ -74,14 +77,80 @@ struct PollOutcome {
   std::string error;
 };
 
-// Read the newest pending command across `roots`; if it is fresh (proto matches,
-// id not in the ledger), claim it in the ledger (before executing, so a command
-// that crashes FL is never replayed), apply it via
-// host->Dispatcher(host_tag, FHD_AddNotesToPR, ...), FHD_SetDirty, and write
-// result.json. Applies at most one command per call. Host may be null only in
-// tests that pass a mock; a real null host yields ok=false.
+// --- transport seam ----------------------------------------------------------
+// The Bridge serves two carriers (the file spool and localhost UDP) through ONE
+// executor and ONE ledger. A carrier's job is delivery and disposal (ack
+// datagram / pending-file tombstone); ExecuteCommand owns the semantics.
+
+// One command as delivered by a transport: the command JSON verbatim, plus an
+// opaque reply address the transport uses to ack (UDP: raw sockaddr bytes).
+struct InboundDatagram {
+  std::string payload;
+  std::string reply_to;
+};
+
+// Mutex-guarded bounded FIFO between the socket thread and the tick. The socket
+// thread only Pushes; the tick only Drains. On overflow the OLDEST entry is
+// dropped and counted: newest commands win, a dropped command simply never
+// acks (the client retransmits or falls back to the file spool), and the
+// ledger keeps a retry from double-applying.
+class CommandQueue {
+ public:
+  explicit CommandQueue(std::size_t capacity) : capacity_(capacity) {}
+  void Push(InboundDatagram datagram);
+  std::vector<InboundDatagram> Drain(std::size_t max_items);
+  std::uint64_t dropped() const;
+
+ private:
+  mutable std::mutex mu_;
+  std::deque<InboundDatagram> items_;
+  std::size_t capacity_;
+  std::uint64_t dropped_ = 0;
+};
+
+// Ring of the last N ack payloads keyed by command id, so a retransmitted
+// datagram whose first ack was lost is re-acked verbatim without re-execution.
+// Tick-thread only; no locking.
+class ResultCache {
+ public:
+  explicit ResultCache(std::size_t capacity = kMaxConsumedIds) : capacity_(capacity) {}
+  const std::string *Find(int id) const;
+  void Put(int id, std::string ack_json);
+
+ private:
+  std::size_t capacity_;
+  std::deque<std::pair<int, std::string>> entries_;
+};
+
+struct ExecResult {
+  PollOutcome outcome;
+  // The transport ack payload (the same result shape result.json carries).
+  // Always non-empty: even malformed input gets an explicit error ack.
+  std::string ack_json;
+  bool duplicate = false;  // id already in the ledger; nothing was executed
+};
+
+// THE executor - both carriers feed this. Parses `payload_json`; answers "ping"
+// without touching the ledger, the filesystem, or FL (liveness probes must not
+// evict real ids from the ledger ring); refuses proto mismatches; claims fresh
+// ids in the ledger BEFORE executing (a command that crashes FL is never
+// replayed); applies via host->Dispatcher(host_tag, FHD_AddNotesToPR, ...) +
+// FHD_SetDirty; writes result.json for every claimed command regardless of
+// carrier; re-acks duplicates from `cache` (nullable) or with a minimal
+// consumed ack. `carrier` is reported in the result's "spool" field.
+ExecResult ExecuteCommand(TFruityPlugHost *host, std::intptr_t host_tag,
+                          const std::vector<std::string> &roots, int ppq_default,
+                          const std::string &payload_json, const std::string &carrier,
+                          ResultCache *cache);
+
+// The file-spool carrier: read the newest pending command across `roots`, feed
+// it to ExecuteCommand, and dispose of the mailbox (tombstone pending.json in
+// every root that has it - commands are mirrored to all roots). Handles at
+// most one command per call. Host may be null only in tests that pass a mock;
+// a real null host yields ok=false.
 PollOutcome PollOnce(TFruityPlugHost *host, std::intptr_t host_tag,
-                     const std::vector<std::string> &roots, int ppq_default);
+                     const std::vector<std::string> &roots, int ppq_default,
+                     ResultCache *cache = nullptr);
 
 // --- ledger primitives, exposed for tests -----------------------------------
 std::vector<int> ReadConsumedIds(const std::vector<std::string> &roots);
