@@ -21,6 +21,8 @@
 #include <vector>
 
 #include "bridge_core.h"
+#include "bridge_discover.h"
+#include "fl_dispatch_ledger.h"
 #include "fl_host_abi.h"
 #include "fp_plugclass.h"
 #include "mock_host.h"
@@ -537,6 +539,110 @@ int main() {
     CHECK(host.set_dirty_calls == 1);
     CHECK(host.header_slot_calls() == 0);
     if (!host.chords.empty()) CHECK(host.chords[0].count == 0);
+  }
+
+  // --- 15. the static fatal-id ledger (bulkhead invariant #1) -----------------
+  // The ledger moved from the deleted probe to native/abi/fl_dispatch_ledger.h so
+  // the quarantine survives probe deletion. The live-confirmed fatals stay
+  // quarantined by construction; the documented range is skipped whole.
+  {
+    CHECK(fl_dispatch::IsUnsafe(94));   // crashes FL (EAccessViolation), live-confirmed
+    CHECK(fl_dispatch::IsUnsafe(99));   // hangs the tick thread, live-confirmed
+    CHECK(fl_dispatch::IsUnsafe(17));   // FHD_AddNotesToPR: null-deref on a bare call
+    CHECK(fl_dispatch::Lookup(94) != nullptr);
+    CHECK(fl_dispatch::Lookup(94)->hazard == fl_dispatch::Hazard::kCrashesHost);
+    CHECK(fl_dispatch::Lookup(99)->hazard == fl_dispatch::Hazard::kHangsHost);
+    CHECK(fl_dispatch::IsDocumented(0));
+    CHECK(fl_dispatch::IsDocumented(87));
+    CHECK(!fl_dispatch::IsDocumented(88));
+    // Until L2's generated header lands the FL 2026 constant stands in; when it
+    // lands the LedgerCoversGeneratedUnsafeIds static_assert guards agreement.
+    CHECK(fl_dispatch::kHandledMaxId == 109);
+    CHECK(fl_dispatch::IsBeyondDispatcher(110));
+    CHECK(!fl_dispatch::IsBeyondDispatcher(109));
+  }
+
+  // --- 16. wp_sweep rides the executor: claimed once, ledger-skipped ----------
+  // The probe's blind sweep, folded into the Bridge as a discovery op. It skips
+  // the documented range and every ledger fatal by construction, dispatches only
+  // undocumented ids, and rides the same claim-before-execute + response path as
+  // a note write.
+  {
+    WriteFile(CmdPath(preferred, 200),
+              "{\"proto\":2,\"id\":200,\"op\":\"wp_sweep\",\"args\":{\"start\":88,\"end\":109}}");
+    WriteQueue(preferred, {200});
+    MockHost host;
+    bridge_core::PollOutcome out =
+        bridge_core::PollOnce(host.as_host(), 0, roots, bridge_core::kDefaultPPQ);
+    CHECK(out.had_command);
+    CHECK(out.ok);
+    CHECK(bridge_core::AlreadyConsumed(roots, 200));  // claimed: a crash cannot replay it
+    // 88..109 is 22 ids; 94 and 99 are ledger-skipped, so 20 reach the host.
+    CHECK(host.calls.size() == 20);
+    std::string resp = ReadFile(RespPath(preferred, 200));
+    CHECK(Contains(resp, "\"result\":"));
+    CHECK(Contains(resp, "\"pass\": \"sweep\""));
+    CHECK(Contains(resp, "\"id\": 94, \"skipped\": \"crashes_host\""));
+    CHECK(Contains(resp, "\"id\": 99, \"skipped\": \"hangs_host\""));
+    CHECK(Contains(resp, "\"id\": 88, \"ret\": 0"));  // a dispatched undocumented id
+  }
+
+  // --- 17. wp_getters calls the curated safe getters via the FPC slot ---------
+  {
+    WriteFile(CmdPath(preferred, 201), "{\"proto\":2,\"id\":201,\"op\":\"wp_getters\"}");
+    WriteQueue(preferred, {201});
+    MockHost host;
+    bridge_core::PollOutcome out =
+        bridge_core::PollOnce(host.as_host(), 0, roots, bridge_core::kDefaultPPQ);
+    CHECK(out.ok);
+    CHECK(host.calls.size() == bridge_discover::Getters().size());  // every getter dispatched
+    CHECK(host.header_slot_calls() == 0);  // through VMT+200, never slot 0
+    std::string resp = ReadFile(RespPath(preferred, 201));
+    CHECK(Contains(resp, "\"pass\": \"getters\""));
+    CHECK(Contains(resp, "FHD_GetMixingTime[ticks]"));
+  }
+
+  // --- 18. wp_target plants one note per step with a unique key ---------------
+  {
+    WriteFile(CmdPath(preferred, 202),
+              "{\"proto\":2,\"id\":202,\"op\":\"wp_target\",\"args\":{\"ppq\":96,"
+              "\"steps\":[{\"pattern\":2,\"channel\":0},{\"pattern\":3,\"channel\":1}]}}");
+    WriteQueue(preferred, {202});
+    MockHost host;
+    bridge_core::PollOutcome out =
+        bridge_core::PollOnce(host.as_host(), 0, roots, bridge_core::kDefaultPPQ);
+    CHECK(out.ok);
+    CHECK(host.chords.size() == 2);
+    if (host.chords.size() == 2) {
+      CHECK(host.chords[0].pat_num == 2);
+      CHECK(host.chords[0].chan_num == 0);
+      CHECK(host.chords[0].notes.size() == 1);
+      CHECK(host.chords[0].notes[0].Note == bridge_discover::TargetStepKey(0));
+      CHECK(host.chords[1].pat_num == 3);
+      CHECK(host.chords[1].notes[0].Note == bridge_discover::TargetStepKey(1));
+    }
+    CHECK(Contains(ReadFile(RespPath(preferred, 202)), "\"pass\": \"target\""));
+  }
+
+  // --- 19. a crash a prior command left in flight is quarantined, not re-run --
+  // The probe's crash-safety, kept: a durable in-flight checkpoint an earlier
+  // command never cleared (FL died mid-call) is read by the next wp op, which
+  // quarantines that id and skips it - so a crash STRICTLY advances discovery.
+  {
+    WriteFile(preferred + "/wp_inflight.txt", "pass=sweep\nid=95\n");
+    WriteFile(CmdPath(preferred, 203),
+              "{\"proto\":2,\"id\":203,\"op\":\"wp_sweep\",\"args\":{\"start\":88,\"end\":109}}");
+    WriteQueue(preferred, {203});
+    MockHost host;
+    bridge_core::PollOutcome out =
+        bridge_core::PollOnce(host.as_host(), 0, roots, bridge_core::kDefaultPPQ);
+    CHECK(out.ok);
+    CHECK(Contains(ReadFile(preferred + "/wp_quarantine.txt"), "95"));
+    std::string resp = ReadFile(RespPath(preferred, 203));
+    CHECK(Contains(resp, "\"recovered_crasher\": 95"));
+    CHECK(Contains(resp, "\"id\": 95, \"skipped\": \"quarantined\""));
+    // 88..109 minus 94, 99 (ledger) and now 95 (quarantined) -> 19 host calls.
+    CHECK(host.calls.size() == 19);
   }
 
   if (g_failures == 0) {

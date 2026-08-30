@@ -1,3 +1,12 @@
+// When L2's generated profile is present, ITS struct-assert wall (pinned from
+// FL's own record RTTI by the scraper) replaces the hand-written wall below.
+// This TU materializes it: FLMCP_ASSERT_STRUCTS must be defined before the
+// first include of fl_profile_generated.h, which bridge_core.h performs right
+// after fp_plugclass.h.
+#if __has_include("fl_profile_generated.h")
+#define FLMCP_ASSERT_STRUCTS 1
+#endif
+
 #include "bridge_core.h"
 
 #include <sys/stat.h>
@@ -7,6 +16,7 @@
 #include <cstdlib>
 #include <cstring>
 
+#include "bridge_discover.h"
 #include "fl_host_abi.h"
 #include "fp_plugclass.h"
 
@@ -107,6 +117,31 @@ void Trace(const char *phase, int id, int notes) {
 
 void SetHostCallTrace(HostCallTrace trace) { g_host_call_trace = trace; }
 
+std::string FormatHeartbeat(const HeartbeatState &s) {
+  // Fixed key set and order: the first block is the historical heartbeat the
+  // existing tools read; proto/pat/chan are the docs/27 s6 additions L1's
+  // detect() parses. pat/chan are -1 when unknown.
+  std::string out;
+  out += "tick=" + std::to_string(s.tick) + "\n";
+  out += "applied=" + std::to_string(s.applied) + "\n";
+  out += "notes=" + std::to_string(s.notes) + "\n";
+  out += "pid=" + std::to_string(s.pid) + "\n";
+  out += "unix_time=" + std::to_string(s.unix_time) + "\n";
+  out += "backend=bridge\n";
+  out += "udp_port=" + std::to_string(s.udp_port) + "\n";
+  out += "udp_dropped=" + std::to_string(s.udp_dropped) + "\n";
+  out += "gui_pumps=" + std::to_string(s.gui_pumps) + "\n";
+  out += "gui_pending=" + std::to_string(s.gui_pending) + "\n";
+  out += "tick_on_gui=" + std::to_string(s.tick_on_gui) + "\n";
+  out += "instances=" + std::to_string(s.instances) + "\n";
+  out += "proto=" + std::to_string(s.proto) + "\n";
+  out += "pat=" + std::to_string(s.pattern) + "\n";
+  out += "chan=" + std::to_string(s.channel) + "\n";
+  out += "event_seq=" + std::to_string(s.event_seq) + "\n";
+  out += "event_dropped=" + std::to_string(s.event_dropped) + "\n";
+  return out;
+}
+
 std::vector<std::string> SpoolRoots(const char *home) {
   std::vector<std::string> roots;
   if (home == nullptr || home[0] == '\0') return roots;
@@ -194,6 +229,11 @@ NotesParamsBuffer::~NotesParamsBuffer() { free(params); }
 // The fetched C++ header agrees on every offset, so pin them here: if it ever
 // drifts, fail the build, not FL Studio. The single disagreement is the TYPE of
 // the field at offset 12 (Single, not int), which SetNoteVol/NoteVol own.
+//
+// FALLBACK ONLY: when L2's generated profile is present its scraped assert
+// wall (materialized at the top of this TU) is the single home for these
+// facts, and this hand-written block compiles out (docs/27 s6).
+#ifndef FLMCP_PROFILE_GENERATED
 static_assert(sizeof(TNoteParams) == 32, "FL 2026 TNoteParams is 32 bytes");
 static_assert(offsetof(TNoteParams, Position) == 0, "TNoteParams.Position @0");
 static_assert(offsetof(TNoteParams, Length) == 4, "TNoteParams.Length @4");
@@ -212,6 +252,7 @@ static_assert(offsetof(TNotesParams, ChanNum) == 12, "TNotesParams.ChanNum @12")
 static_assert(offsetof(TNotesParams, Count) == 16, "TNotesParams.Count @16");
 static_assert(offsetof(TNotesParams, NoteParams) == 20, "TNotesParams.NoteParams @20");
 static_assert(sizeof(TNotesParams) == 52, "FL 2026 TNotesParams is 52 bytes with one note");
+#endif  // !FLMCP_PROFILE_GENERATED
 
 void SetNoteVol(TNoteParams *note, float vol) { std::memcpy(&note->Vol, &vol, sizeof(float)); }
 
@@ -438,6 +479,7 @@ ExecResult ExecuteCommand(TFruityPlugHost *host, std::intptr_t host_tag,
   RecordConsumed(roots, id);
 
   std::string summary;
+  std::string discover_result;  // wp_* ops embed their pass output here
   const int proto = command.Int("proto", 0);
   if (proto != kProtoVersion) {
     outcome.error = "protocol mismatch: command is v" + std::to_string(proto) + ", bridge is v" +
@@ -445,6 +487,24 @@ ExecResult ExecuteCommand(TFruityPlugHost *host, std::intptr_t host_tag,
   } else if (op == "ping") {
     outcome.ok = true;
     summary = "pong";
+  } else if (bridge_discover::IsDiscoverOp(op)) {
+    // Discovery rides the ONE executor: claimed-once like any command (the
+    // RecordConsumed above already ran, so a discover call that crashes FL
+    // never replays), executed in one shot, result carried in the ack. The
+    // ops themselves consult the static ledger + guarded buffers + the dynamic
+    // quarantine, so they are safe over any range by construction.
+    if (host == nullptr) {
+      outcome.error = "no plugin host";
+    } else {
+      const minijson::Value *args = command.Get("args");
+      minijson::Value no_args;
+      no_args.type = minijson::Type::Object;
+      const minijson::Value &checked_args =
+          (args != nullptr && args->type == minijson::Type::Object) ? *args : no_args;
+      discover_result = bridge_discover::RunOp(host, host_tag, op, checked_args, roots);
+      outcome.ok = true;
+      summary = "discovery op " + op + " complete";
+    }
   } else if (op == "add_notes" || op == "clear_notes") {
     const minijson::Value *args = command.Get("args");
     minijson::Value no_args;
@@ -465,6 +525,9 @@ ExecResult ExecuteCommand(TFruityPlugHost *host, std::intptr_t host_tag,
         fl_abi::HostDispatch(host, host_tag, FHD_SetDirty, 0, 0);
         Trace("FHD_SetDirty:return", id, buf.count);
         outcome.notes_written = buf.count;
+        // A note write to PatNum >= 1 made that pattern current (SetCurrentPattern
+        // side effect); record it so the heartbeat can publish `pat=`.
+        outcome.pattern_after = buf.params->PatNum;
         outcome.ok = true;
         summary = "applied " + std::to_string(buf.count) + " note(s) via FHD_AddNotesToPR at ppq " +
                   std::to_string(buf.ppq);
@@ -489,6 +552,10 @@ ExecResult ExecuteCommand(TFruityPlugHost *host, std::intptr_t host_tag,
   if (outcome.ok) json += ", \"notes_written\": " + std::to_string(outcome.notes_written);
   if (!outcome.ok) json += ", \"err\": \"" + minijson::Escape(outcome.error) + "\"";
   json += ", \"backend\": \"bridge\"";
+  // The discovery result is a JSON object built by bridge_discover; embed it
+  // verbatim (not escaped) so fl_mcp.discover reads structured data, not a
+  // stringified blob. Only wp_* ops set it.
+  if (!discover_result.empty()) json += ", \"result\": " + discover_result;
   if (!summary.empty()) json += ", \"summary\": \"" + minijson::Escape(summary) + "\"";
   json += "}";
   result.ack_json = json;
