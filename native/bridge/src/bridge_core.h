@@ -55,6 +55,7 @@ struct NotesParamsBuffer {
   int count = 0;
   int ppq = 0;                    // the PPQ the beat->tick conversion used
   bool used_default_ppq = false;  // true when the command carried no ppq stamp
+  const char *error = nullptr;    // why params is null; a literal, never owned
 
   NotesParamsBuffer() = default;
   NotesParamsBuffer(NotesParamsBuffer &&other) noexcept;
@@ -64,17 +65,36 @@ struct NotesParamsBuffer {
   ~NotesParamsBuffer();
 };
 
+// TNoteParams.Vol is a SINGLE (0..1, FL's default note velocity is 100/128),
+// not the `int` the public C++ SDK header declares. That header field is a
+// transcription bug: FLEngine_x64.dylib carries its own FPC record RTTI for
+// TNoteParams, and it types the field at offset 12 as Single while every other
+// field matches the header exactly (BRIDGE_FINDINGS.md has the decode). Same
+// four bytes, different type - so the Vol slot is read and written only
+// through these two functions, never through the header's declaration.
+void SetNoteVol(TNoteParams *note, float vol);
+float NoteVol(const TNoteParams &note);
+
 // Build a TNotesParams from a v2 command's `args` object
 // ({target:{pattern,channel}, notes:[...], mode, ppq}). `ppq_default` is used
 // only when args carries no "ppq" stamp (flagged in the buffer). Conversion:
 //   start/length (beats) -> Position/Length (PPQ ticks)
-//   velocity 0..1        -> Vol (0..128, FL default 100/128)
+//   velocity 0..1        -> Vol (Single 0..1, FL default 100/128) - same scale,
+//                           so this one is a clamp, not a conversion
 //   pan 0..1 (0.5 centre)-> Pan (centred at 0)
 //   key                  -> Note; color -> Color; Target=1 (piano roll)
 // `empty_first` forces NPF_EmptyFirst (the clear_notes mapping); otherwise
-// `mode:"replace"` sets it. target.pattern/target.channel default to -1
-// (current pattern / selected channel - the latter is why the Bridge is an
-// effect, per fp_plugclass.h TNotesParams.ChanNum).
+// `mode:"replace"` sets it.
+//
+// THE TARGET MUST BE CONCRETE: `target.pattern` >= 1 and `target.channel` >= 0,
+// exactly the bounds schemas.Target already guarantees ("channel names and the
+// 'current' default are resolved AT THE TOOL BOUNDARY, never carried as a -1
+// sentinel into the core"). Anything else returns a null `params` with `error`
+// set, and the command is refused with that message. The SDK does define -1 as
+// "current pattern / selected channel", but nothing makes FL able to resolve
+// it - there may be no selected channel - and an unresolved -1 used as an array
+// index takes the whole DAW down with an access violation, which is strictly
+// worse than an error response. So the Bridge never sends one.
 NotesParamsBuffer BuildNotesParams(const minijson::Value &args, int ppq_default, bool empty_first);
 
 // Outcome of one executed command, for the caller to log / report.

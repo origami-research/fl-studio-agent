@@ -74,6 +74,21 @@ std::string ZeroPadded(int id) {
 
 std::string CmdPath(const std::string &root, int id) { return root + "/commands/" + ZeroPadded(id); }
 
+// Little-endian writers for the byte-exact TNotesParams expectation. FL 2026
+// runs on x86_64 and arm64, both little-endian, so the record RTTI's offsets
+// plus these are the whole wire form.
+void PutI32(unsigned char *at, int value) { memcpy(at, &value, sizeof(value)); }
+void PutI16(unsigned char *at, short value) { memcpy(at, &value, sizeof(value)); }
+void PutF32(unsigned char *at, float value) { memcpy(at, &value, sizeof(value)); }
+
+bool AllZero(const void *at, size_t bytes) {
+  const unsigned char *p = static_cast<const unsigned char *>(at);
+  for (size_t i = 0; i < bytes; ++i) {
+    if (p[i] != 0) return false;
+  }
+  return true;
+}
+
 // The HostCallTrace sink is a plain function pointer (it is installed once by
 // the plugin shell and never captures), so the recorder it feeds is file-scope.
 std::vector<std::string> g_trace;
@@ -131,19 +146,61 @@ int main() {
     CHECK(buf.params->Flags == NPF_EmptyFirst);  // mode=replace
     CHECK(buf.params->PatNum == 4);
     CHECK(buf.params->ChanNum == 2);
-    // note 0: start 0 beats -> 0 ticks; length 1 beat -> 192 ticks; vel 1.0 -> 128
+    // note 0: start 0 beats -> 0 ticks; length 1 beat -> 192 ticks; vel 1.0 -> Vol 1.0
     CHECK(buf.params->NoteParams[0].Note == 60);
     CHECK(buf.params->NoteParams[0].Position == 0);
     CHECK(buf.params->NoteParams[0].Length == 192);
-    CHECK(buf.params->NoteParams[0].Vol == 128);
+    CHECK(bridge_core::NoteVol(buf.params->NoteParams[0]) == 1.0f);
     CHECK(buf.params->NoteParams[0].Pan == 0);  // pan 0.5 -> centre 0
     CHECK(buf.params->NoteParams[0].Color == 3);
-    // note 1: start 2.5 beats -> 480 ticks; length 0.5 -> 96; vel 0.5 -> 64; pan 1.0 -> +64
+    // note 1: start 2.5 beats -> 480 ticks; length 0.5 -> 96; vel 0.5 -> Vol 0.5; pan 1.0 -> +64
     CHECK(buf.params->NoteParams[1].Note == 72);
     CHECK(buf.params->NoteParams[1].Position == 480);
     CHECK(buf.params->NoteParams[1].Length == 96);
-    CHECK(buf.params->NoteParams[1].Vol == 64);
+    CHECK(bridge_core::NoteVol(buf.params->NoteParams[1]) == 0.5f);
     CHECK(buf.params->NoteParams[1].Pan == 64);
+    // One spare zeroed note slot always sits past Count, so an inclusive
+    // `for i := 0 to Count` inside FL stays in memory we own.
+    CHECK(buf.bytes == 20 + 3 * sizeof(TNoteParams));
+    CHECK(AllZero(buf.params->NoteParams + buf.count, sizeof(TNoteParams)));
+  }
+
+  // --- 1b. The exact bytes FL 2026 receives ----------------------------------
+  // The layout contract is not "whatever the fetched C++ header happens to
+  // say": it is FLEngine_x64.dylib's own record RTTI (TNotesParams 52 bytes,
+  // note array at 20; TNoteParams 32 bytes, Position/Length/Pan @0/4/8, Vol a
+  // SINGLE @12, Note/Color smallints @16/18, Pitch @20, FCut/FRes @24/28).
+  // Assert the buffer byte for byte against that, so the wire form is
+  // verifiable with no FL Studio in the loop.
+  {
+    const char *json =
+        "{\"target\":{\"pattern\":7,\"channel\":2},\"ppq\":96,"
+        "\"notes\":[{\"key\":60,\"start\":1.0,\"length\":2.0,\"velocity\":0.78125,"
+        "\"pan\":0.75,\"color\":3}]}";
+    minijson::Value args;
+    CHECK(minijson::Parse(json, &args));
+    bridge_core::NotesParamsBuffer buf =
+        bridge_core::BuildNotesParams(args, bridge_core::kDefaultPPQ, /*empty_first=*/false);
+    CHECK(buf.params != nullptr);
+
+    unsigned char want[20 + 2 * 32] = {0};
+    PutI32(want + 0, 1);    // Target  = piano roll
+    PutI32(want + 4, 0);    // Flags   = merge
+    PutI32(want + 8, 7);    // PatNum
+    PutI32(want + 12, 2);   // ChanNum
+    PutI32(want + 16, 1);   // Count
+    PutI32(want + 20 + 0, 96);    // Position: 1 beat @ ppq 96
+    PutI32(want + 20 + 4, 192);   // Length:   2 beats
+    PutI32(want + 20 + 8, 32);    // Pan:      0.75 -> +32, centred at 0
+    PutF32(want + 20 + 12, 0.78125f);  // Vol: Single, FL's 100/128 default
+    PutI16(want + 20 + 16, 60);   // Note
+    PutI16(want + 20 + 18, 3);    // Color
+    PutI32(want + 20 + 20, 0);    // Pitch
+    PutF32(want + 20 + 24, 0.0f);  // FCut
+    PutF32(want + 20 + 28, 0.0f);  // FRes
+    // want[52..83] stays zero: the spare slot past Count.
+    CHECK(buf.bytes == sizeof(want));
+    CHECK(memcmp(buf.params, want, sizeof(want)) == 0);
   }
 
   // --- 2. BuildNotesParams: null/missing ppq falls back, flagged --------------
@@ -159,6 +216,27 @@ int main() {
     CHECK(buf.ppq == 96);
     CHECK(buf.params->Flags == 0);  // no mode -> merge
     CHECK(buf.params->NoteParams[0].Position == 96);
+  }
+
+  // --- 2b. A non-concrete target is refused, never sent to FL as -1 ------------
+  // schemas.Target already guarantees pattern >= 1 and channel >= 0; the Bridge
+  // holds the same line, because an unresolved -1 inside FL is an access
+  // violation and an error response is not.
+  {
+    const char *bad[] = {
+        "{\"ppq\":96,\"notes\":[{\"key\":60}]}",                                  // no target
+        "{\"target\":{\"pattern\":-1,\"channel\":0},\"notes\":[{\"key\":60}]}",   // current pattern
+        "{\"target\":{\"pattern\":1,\"channel\":-1},\"notes\":[{\"key\":60}]}",   // selected channel
+        "{\"target\":{\"pattern\":0,\"channel\":0},\"notes\":[{\"key\":60}]}",    // patterns are 1-based
+    };
+    for (const char *json : bad) {
+      minijson::Value args;
+      CHECK(minijson::Parse(json, &args));
+      bridge_core::NotesParamsBuffer buf =
+          bridge_core::BuildNotesParams(args, bridge_core::kDefaultPPQ, false);
+      CHECK(buf.params == nullptr);
+      CHECK(buf.error != nullptr);
+    }
   }
 
   // --- 3. PollOnce end-to-end: v2 command -> host call + ledger + response ----
@@ -388,6 +466,7 @@ int main() {
     g_trace.clear();
     WriteFile(CmdPath(preferred, 122),
               "{\"proto\":2,\"id\":122,\"op\":\"add_notes\",\"args\":{\"ppq\":96,"
+              "\"target\":{\"pattern\":1,\"channel\":0},"
               "\"notes\":[{\"key\":60,\"start\":0,\"length\":1}]}}");
     WriteQueue(preferred, {122});
     CHECK(bridge_core::PollOnce(&host, 0, roots, bridge_core::kDefaultPPQ).ok);

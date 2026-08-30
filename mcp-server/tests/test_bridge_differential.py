@@ -86,7 +86,9 @@ def test_real_spool_is_consumed_by_bridge_core(tmp_path):
     assert note["note"] == 60
     assert note["position"] == 192  # 1 beat at the stamped ppq
     assert note["length"] == 96  # 0.5 beats
-    assert note["vol"] == 128  # velocity 1.0
+    # Vol is a Single on the same 0..1 scale as the wire velocity, not an
+    # int 0..128: FLEngine's own record RTTI types TNoteParams @12 as Single.
+    assert note["vol"] == 1.0  # velocity 1.0
     assert note["pan"] == 64  # pan 1.0 -> +64 (centre 0)
 
     # No ppq stamp: the bridge's last-resort default (96) places the note.

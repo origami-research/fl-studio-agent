@@ -33,7 +33,7 @@ std::string ChordJson(const bridge_mock::CapturedChord &c) {
     json += "{\"note\": " + std::to_string(n.Note);
     json += ", \"position\": " + std::to_string(n.Position);
     json += ", \"length\": " + std::to_string(n.Length);
-    json += ", \"vol\": " + std::to_string(n.Vol);
+    json += ", \"vol\": " + std::to_string(bridge_core::NoteVol(n));
     json += ", \"pan\": " + std::to_string(n.Pan);
     json += ", \"color\": " + std::to_string(n.Color) + "}";
   }
