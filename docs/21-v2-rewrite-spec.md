@@ -851,3 +851,13 @@ Other findings fixed in this round:
 - FL's licensed welcome and the transport: `fl.play()`/`stop()`/`setCurrentTempo` defer under "unsafe at current time" and a timed-out op can LAND LATE, undoing a newer op (observed: a parked stop cancelled a later play). Transport-start reliability after reloads is the remaining open item.
 
 End state, front door, one MCP client: a four-part loop (chords, bass with matching A-F-C-G root motion, melody, template drums) composes in under 7 seconds with per-part `project-write` receipts, and `get_scene` reports exactly what FL shows.
+
+## Addendum 13: event 172 is ONE byte - a founding fact falls (2026-08-29)
+
+E1's confounded first run exposed that neither flpkit nor pyflp could parse fresh FL-2026 saves (walker overrun).
+Dissection: **event 172 is a 1-byte event**; the classic range rule (128-191 -> 4 bytes) desyncs every walker that meets it.
+Verified by full-stream consistency on 16 FL-2026-authored files (exact consumption; `ChannelID.New` counts equal the FLhd header) and on the two shipped templates containing 172.
+
+The correction rewrites history: **fact 2's "FL expresses default tempo by omission" was FALSE** - "Basic with limiter" always had a tempo event; the 172 desync ate it (and a whole channel).
+The append-tempo path survives as genuinely correct only for files that truly lack the event; on the templates it was compensating for our own reader bug (and worked live only because FL applies events sequentially, last-wins).
+pyflp shares the bug, so flpkit 0.1.1 now out-parses the oracle; the corpus test gains divergence class 3 (oracle desyncs at 172 -> only header-derived facts checkable).

@@ -110,6 +110,19 @@ def _has_nonconforming_notes_blob(path: Path) -> bool:
     )
 
 
+def _oracle_desyncs(path) -> bool:
+    """Divergence class 3 evidence: the file contains event 172, which pyflp
+    reads as 4 bytes (the classic range rule) while it is actually a 1-byte
+    event (flpkit._EVENT_SIZE_OVERRIDES, full-stream-consistency verified on
+    16 FL-2026 saves + both shipped templates that carry it). Past the first
+    172 the oracle's walker is desynced, so its tempo/name/note claims are
+    untrustworthy; the FLhd header channel count stays the independent check.
+    """
+    data = path.read_bytes()
+    header, stream = flp._chunks(data)
+    return any(eid == 172 for eid, _, _ in flp._events(stream))
+
+
 @requires_fl
 @pytest.mark.parametrize(
     "path", CORPUS, ids=[str(p.relative_to(p.parents[2])) for p in CORPUS]
@@ -127,6 +140,14 @@ def test_reader_matches_pyflp_or_divergence_is_evidenced(path):
     oracle = _oracle_parse(path)
     if oracle is None:
         return  # we out-parse the oracle; the Astes test below pins the known case
+
+    if _oracle_desyncs(path):
+        # Class 3: only header-derived facts are checkable; everything the
+        # oracle claims beyond the first event-172 may be garbage.
+        header = path.read_bytes()[8:14]
+        assert len(ours.channels) == int.from_bytes(header[2:4], "little")
+        assert ours.tempo is None or 10.0 <= ours.tempo <= 999.0
+        return
 
     # -- tempo (strict) -------------------------------------------------------
     tempo = oracle.tempo
