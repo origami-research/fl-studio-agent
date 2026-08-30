@@ -19,11 +19,13 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import math
 import os
 import subprocess
 import time
 from collections.abc import Callable
 from pathlib import Path
+from typing import Any
 
 from fl_mcp import errors
 from fl_mcp.flpaths import (
@@ -98,6 +100,17 @@ SETTLE_POLL_SECONDS = 1.0
 ENV_PROJECT = "FLMCP_AGENT_PROJECT"
 DEFAULT_PROJECT_NAME = "FLMCP Agent.flp"
 
+# The native Bridge note path (issue #10) is staged behind a double opt-in:
+# FL_MCP_BRIDGE=1 AND a fresh bridge heartbeat. OFF by default - project-write
+# stays the routing until the bridge has a live verdict (RUNBOOK_BRIDGE_V2.md).
+ENV_BRIDGE = "FL_MCP_BRIDGE"
+BRIDGE_HEARTBEAT_FILE = "bridge_heartbeat.txt"
+# The bridge rewrites its heartbeat every throttled tick (sub-second while FL
+# is responsive), so a stale heartbeat means FL quit or the plugin is gone.
+BRIDGE_HEARTBEAT_FRESH_SECONDS = 15.0
+# The bridge applies on its next tick; its spool poll answers well within this.
+BRIDGE_RESPONSE_TIMEOUT_SECONDS = 10.0
+
 # ActionEntry.id for writes that never went through the spool.
 NO_COMMAND_ID = 0
 
@@ -165,6 +178,23 @@ def _project_key(project: Path | None) -> str:
         return "default"
     digest = hashlib.sha1(str(project).encode()).hexdigest()[:8]
     return f"{project.stem}-{digest}"
+
+
+def _heartbeat_age(path: Path) -> float:
+    """Seconds since the Bridge plugin last ticked, per its heartbeat file
+    (the ``unix_time=<epoch>`` line bridge.cpp rewrites every poll). Missing or
+    unreadable is ``inf`` - the gate fails closed, never open."""
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError:
+        return math.inf
+    for line in text.splitlines():
+        if line.startswith("unix_time="):
+            try:
+                return max(0.0, time.time() - int(line.removeprefix("unix_time=")))
+            except ValueError:
+                return math.inf
+    return math.inf
 
 
 class FLSession:
@@ -297,8 +327,11 @@ class FLSession:
         was open, each replace destroying the previous part, while the receipts
         claimed their targets. The file is the one backend that can honor a
         target (and it keeps file, store, and get_scene coherent). Live
-        targeted notes arrive with the native Bridge plugin (issue #10)."""
+        targeted notes arrive with the native Bridge plugin (issue #10); until
+        its live verdict that path exists only behind _bridge_ready()."""
         if self.project is not None:
+            if self._bridge_ready():
+                return self._bridge_write(self.project, target, notes, mode)
             try:
                 written = flp.write_notes(
                     self.project, notes, pattern=target.pattern, channel=target.channel, mode=mode
@@ -324,8 +357,10 @@ class FLSession:
         )
 
     def clear_notes(self, target: Target) -> WriteReceipt:
-        """Project-file only, for the same target-blindness reason as write_notes."""
+        """Project-file (or, behind the flag, bridge) - same routing as write_notes."""
         if self.project is not None:
+            if self._bridge_ready():
+                return self._bridge_clear(self.project, target)
             try:
                 written = flp.write_notes(
                     self.project, [], pattern=target.pattern, channel=target.channel, mode="replace"
@@ -347,6 +382,89 @@ class FLSession:
         raise NotePlaneUnavailable(
             "No backend can clear notes: the control plane is not connected and no "
             "project file is configured."
+        )
+
+    # -- the flagged bridge note path (issue #10; live-unverified) ---------------
+    #
+    # Targeted LIVE notes via the native Bridge plugin, which consumes the same
+    # v2 spool as the pyscript but is not target-blind: as an effect it can set
+    # ChanNum/PatNum on FHD_AddNotesToPR (fp_plugclass.h). Staged behind a
+    # double opt-in until the live runbook (native/bridge/RUNBOOK_BRIDGE_V2.md)
+    # delivers a verdict; the runbook's ladder is the only intended caller.
+
+    def _bridge_ready(self) -> bool:
+        """FL_MCP_BRIDGE=1 AND a heartbeat fresh enough to prove the Bridge
+        plugin is ticking right now. Anything less routes to project-write."""
+        if os.environ.get(ENV_BRIDGE) != "1":
+            return False
+        return any(
+            _heartbeat_age(root / BRIDGE_HEARTBEAT_FILE) <= BRIDGE_HEARTBEAT_FRESH_SECONDS
+            for root in spool_roots()
+        )
+
+    def _spool_ppq(self, project: Path) -> int | None:
+        """The PPQ stamp for spooled note commands: the target universe's ppq
+        (the project file), else the live hello's. None lets the consumer fall
+        back (the bridge assumes 96 and flags it in its response summary)."""
+        try:
+            return flp.read(project).ppq
+        except flp.FlpError:
+            log.exception("could not read ppq from %s; trying the live hello", project)
+        hello = self._hello()
+        return hello.ppq if hello is not None else None
+
+    def _bridge_send(self, op: str, **args: Any) -> int:
+        """Spool one command and block for the bridge's response; returns the
+        command id. A refusal or timeout raises - never a maybe."""
+        cmd = self.spool.send(op, **args)
+        resp = self.spool.await_response(cmd, timeout=BRIDGE_RESPONSE_TIMEOUT_SECONDS)
+        if not resp.ok:
+            raise WriteRejected(
+                f"the bridge refused spool command {cmd.id} ({op}): {resp.err}",
+                fix="Read bridge_status.txt / bridge_heartbeat.txt under the spool "
+                "and retry; unset FL_MCP_BRIDGE to fall back to project-write.",
+            )
+        return cmd.id
+
+    def _bridge_confirmed(self, project: Path, target: Target, command_id: int) -> int:
+        """Readback-only count for a bridge receipt - never the bridge's echo
+        (FHD_AddNotesToPR returns nothing, so its notes_written is what it
+        SENT). The only read of record today is the project file, which lags
+        the live session until FL saves - so this count may exclude the very
+        write it confirms. That gap is deliberate until a live note readback
+        exists (the readback-probe lane); the runbook's scene evidence is the
+        live verdict."""
+        try:
+            return len(flp.notes_at(project, target.pattern, target.channel))
+        except flp.FlpError as exc:
+            raise WriteRejected(
+                f"the bridge applied command {command_id} but the file readback "
+                f"failed: {exc}; the write is UNCONFIRMED.",
+                fix="Inspect the project file and the bridge status files, then retry.",
+            ) from exc
+
+    def _bridge_write(
+        self, project: Path, target: Target, notes: list[Note], mode: NoteWriteMode
+    ) -> WriteReceipt:
+        command_id = self._bridge_send(
+            "add_notes", target=target, notes=notes, mode=mode, ppq=self._spool_ppq(project)
+        )
+        delta = self._record(target, notes, mode, "bridge", command_id)
+        return WriteReceipt(
+            backend="bridge",
+            target=target,
+            confirmed_notes=self._bridge_confirmed(project, target, command_id),
+            delta=delta,
+        )
+
+    def _bridge_clear(self, project: Path, target: Target) -> WriteReceipt:
+        command_id = self._bridge_send("clear_notes", target=target)
+        delta = self._record(target, [], "replace", "bridge", command_id)
+        return WriteReceipt(
+            backend="bridge",
+            target=target,
+            confirmed_notes=self._bridge_confirmed(project, target, command_id),
+            delta=delta,
         )
 
     def read_notes(self, target: Target) -> list[Note]:
