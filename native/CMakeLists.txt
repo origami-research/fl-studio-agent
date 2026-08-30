@@ -166,6 +166,18 @@ target_compile_options(probe_core_test PRIVATE
 target_link_options(probe_core_test PRIVATE -fsanitize=address,undefined)
 
 enable_testing()
+
+# The two Probe operator artifacts prove themselves offline, so they are gated
+# like the code is. make_fst.py regenerates plugin-database entries FL itself
+# wrote and byte-compares; stamp_probe_project.py renames a mixer-insert plugin
+# in FL's own shipped projects and asserts the rename is byte-reversible. Both
+# no-op (pass) where there is nothing to compare against, the same stance
+# check_vtable.sh takes off macOS.
+add_test(NAME probe_fst_selftest
+    COMMAND python3 "${CMAKE_CURRENT_SOURCE_DIR}/probe/make_fst.py" --selftest)
+add_test(NAME probe_stamp_selftest
+    COMMAND python3 "${CMAKE_CURRENT_SOURCE_DIR}/probe/stamp_probe_project.py" --selftest)
+
 add_test(NAME bridge_core_test COMMAND bridge_core_test)
 add_test(NAME bridge_gui_test COMMAND bridge_gui_test)
 add_test(NAME bridge_udp_test COMMAND bridge_udp_test)
