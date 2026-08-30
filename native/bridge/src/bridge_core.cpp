@@ -7,6 +7,7 @@
 #include <cstdlib>
 #include <cstring>
 
+#include "fl_host_abi.h"
 #include "fp_plugclass.h"
 
 namespace bridge_core {
@@ -458,9 +459,10 @@ ExecResult ExecuteCommand(TFruityPlugHost *host, std::intptr_t host_tag,
         outcome.error = buf.error;
       } else {
         Trace("FHD_AddNotesToPR:enter", id, buf.count);
-        host->Dispatcher(host_tag, FHD_AddNotesToPR, 0, reinterpret_cast<intptr_t>(buf.params));
+        fl_abi::HostDispatch(host, host_tag, FHD_AddNotesToPR, 0,
+                             reinterpret_cast<intptr_t>(buf.params));
         Trace("FHD_AddNotesToPR:return", id, buf.count);
-        host->Dispatcher(host_tag, FHD_SetDirty, 0, 0);
+        fl_abi::HostDispatch(host, host_tag, FHD_SetDirty, 0, 0);
         Trace("FHD_SetDirty:return", id, buf.count);
         outcome.notes_written = buf.count;
         outcome.ok = true;

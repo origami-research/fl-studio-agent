@@ -65,7 +65,7 @@ int main(int argc, char **argv) {
   bridge_mock::MockHost host;
   while (true) {
     const size_t chords_before = host.chords.size();
-    bridge_core::PollOutcome out = bridge_core::PollOnce(&host, 0, roots, ppq);
+    bridge_core::PollOutcome out = bridge_core::PollOnce(host.as_host(), 0, roots, ppq);
     if (!out.had_command) break;
 
     std::string json = "{\"id\": " + std::to_string(out.id);
