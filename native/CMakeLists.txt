@@ -84,5 +84,56 @@ target_compile_options(bridge_core_test PRIVATE
 )
 target_link_options(bridge_core_test PRIVATE -fsanitize=address,undefined)
 
+# --- FL MCP Probe: a throwaway diagnostic plugin (NOT production) -------------
+# Answers three live questions (note readback? project PPQ query? which FHD_*
+# getters cover the controller read surface?) then is deleted once its verdict
+# lands - the same lifecycle as the v1 Spike 1.5 probe. It reproduces the
+# Bridge's proven base-free 64-slot ABI shape (pinned by the same layout
+# static_asserts plus the vtable-slot check below) but forks none of the
+# Bridge's logic. All probe logic is in probe_core.* and unit-tested under
+# ASan/UBSan against a mock host (native/probe/tests/probe_core_test.cpp).
+add_library(probe SHARED
+    probe/src/probe.cpp
+    probe/src/probe_core.cpp
+    probe/src/probe_io.cpp
+)
+target_include_directories(probe PRIVATE "${FL_SDK_DIR}" probe/src)
+target_compile_options(probe PRIVATE
+    -Wno-ignored-attributes -Wno-macro-redefined -Wno-deprecated-declarations
+)
+set_target_properties(probe PROPERTIES
+    OUTPUT_NAME "FL MCP Probe_x64"
+    PREFIX ""
+    SUFFIX ".dylib"
+    CXX_VISIBILITY_PRESET hidden
+)
+
+# Probe core unit test: drives the getters/sweep/deepprobe/validate passes,
+# checkpoint/resume, static-ledger skip, and crash quarantine against a mock
+# host with a temp spool dir, no FL needed. ASan+UBSan.
+add_executable(probe_core_test
+    probe/tests/probe_core_test.cpp
+    probe/src/probe_core.cpp
+    probe/src/probe_io.cpp
+)
+target_include_directories(probe_core_test PRIVATE "${FL_SDK_DIR}" probe/src)
+target_compile_options(probe_core_test PRIVATE
+    -fsanitize=address,undefined -g
+    -Wno-ignored-attributes
+)
+target_link_options(probe_core_test PRIVATE -fsanitize=address,undefined)
+
 enable_testing()
 add_test(NAME bridge_core_test COMMAND bridge_core_test)
+add_test(NAME probe_core_test COMMAND probe_core_test)
+
+# ABI invariant check: the load-bearing property the data static_asserts do NOT
+# cover is the vtable slot count. Assert the built probe dylib has exactly 64
+# vtable slots (base-free, no virtual destructor), the same technique
+# BRIDGE_FINDINGS.md documents for the Bridge. macOS/Mach-O only; the script
+# no-ops (passes) elsewhere so ctest stays green cross-platform.
+if(APPLE)
+    add_test(NAME probe_abi_check
+        COMMAND "${CMAKE_CURRENT_SOURCE_DIR}/probe/check_vtable.sh"
+                "$<TARGET_FILE:probe>")
+endif()
