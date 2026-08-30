@@ -59,6 +59,7 @@ target_compile_options(fl_sdk PUBLIC
 add_library(bridge SHARED
     bridge/src/bridge.cpp
     bridge/src/bridge_core.cpp
+    bridge/src/bridge_udp.cpp
 )
 target_include_directories(bridge PRIVATE "${FL_SDK_DIR}" bridge/src)
 target_compile_options(bridge PRIVATE
@@ -83,6 +84,21 @@ target_compile_options(bridge_core_test PRIVATE
     -Wno-ignored-attributes
 )
 target_link_options(bridge_core_test PRIVATE -fsanitize=address,undefined)
+
+# UDP transport test: queue discipline, executor equivalence across carriers,
+# datagram auth/parse failures, real-socket round trip, bounded shutdown.
+# ASan+UBSan like bridge_core_test.
+add_executable(bridge_udp_test
+    bridge/tests/bridge_udp_test.cpp
+    bridge/src/bridge_core.cpp
+    bridge/src/bridge_udp.cpp
+)
+target_include_directories(bridge_udp_test PRIVATE "${FL_SDK_DIR}" bridge/src)
+target_compile_options(bridge_udp_test PRIVATE
+    -fsanitize=address,undefined -g
+    -Wno-ignored-attributes
+)
+target_link_options(bridge_udp_test PRIVATE -fsanitize=address,undefined)
 
 # --- FL MCP Probe: a throwaway diagnostic plugin (NOT production) -------------
 # Answers three live questions (note readback? project PPQ query? which FHD_*
@@ -125,6 +141,7 @@ target_link_options(probe_core_test PRIVATE -fsanitize=address,undefined)
 
 enable_testing()
 add_test(NAME bridge_core_test COMMAND bridge_core_test)
+add_test(NAME bridge_udp_test COMMAND bridge_udp_test)
 add_test(NAME probe_core_test COMMAND probe_core_test)
 
 # ABI invariant check: the load-bearing property the data static_asserts do NOT

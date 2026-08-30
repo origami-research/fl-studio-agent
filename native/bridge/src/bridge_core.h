@@ -7,16 +7,22 @@
 // level units), issuing FHD_AddNotesToPR, and writing the per-command
 // response. The plugin ABI shell (bridge.cpp) owns none of this so it can be
 // exercised under ASan/UBSan against a mock host with a temp spool dir, with
-// no FL Studio in the loop (bridge_core_test.cpp).
+// no FL Studio in the loop (bridge_core_test.cpp, bridge_udp_test.cpp).
 //
 // The spool protocol is docs/03 / mcp-server/src/fl_mcp/spool.py (proto 2),
 // shared with the piano roll .pyscript so either consumer applies a command
-// exactly once via the shared ledger.
+// exactly once via the shared ledger. The Bridge serves the same commands
+// over TWO carriers — this file spool and the localhost UDP transport
+// (bridge_udp.*, docs/22) — through ONE executor (ExecuteCommand) and that
+// one ledger; only delivery and disposal differ per carrier.
 #pragma once
 
 #include <cstddef>
 #include <cstdint>
+#include <deque>
+#include <mutex>
 #include <string>
+#include <utility>
 #include <vector>
 
 // The SDK types (TFruityPlugHost, TNotesParams, ...) are anonymous-struct
@@ -71,7 +77,7 @@ struct NotesParamsBuffer {
 // effect, per fp_plugclass.h TNotesParams.ChanNum).
 NotesParamsBuffer BuildNotesParams(const minijson::Value &args, int ppq_default, bool empty_first);
 
-// Outcome of one PollOnce, for the caller to log / report.
+// Outcome of one executed command, for the caller to log / report.
 struct PollOutcome {
   bool had_command = false;   // a fresh, not-yet-consumed command was found and handled
   int id = 0;
@@ -81,17 +87,85 @@ struct PollOutcome {
   std::string error;
 };
 
-// Consume the lowest-id fresh command listed in any root's commands/queue.json:
-// if it is fresh (id not in the ledger, file not a tombstone), claim it in the
-// ledger (BEFORE executing, so a command that crashes FL is never replayed),
-// check proto, apply it via host->Dispatcher(host_tag, FHD_AddNotesToPR, ...),
-// FHD_SetDirty, and write responses/<id>.json in the SpoolResponse shape the
-// server's FLSession.await_response reads. Applies at most one command per
-// call; the next tick picks up the next. The queue index itself is never
+// --- transport seam (docs/22) ------------------------------------------------
+// A carrier's job is delivery and disposal (UDP: ack datagram; file spool:
+// the per-id tombstone RecordConsumed writes); ExecuteCommand owns semantics.
+
+// One command as delivered by a transport: the command JSON verbatim, plus an
+// opaque reply address the transport uses to ack (UDP: raw sockaddr bytes).
+struct InboundDatagram {
+  std::string payload;
+  std::string reply_to;
+};
+
+// Mutex-guarded bounded FIFO between the socket thread and the tick. The socket
+// thread only Pushes; the tick only Drains. On overflow the OLDEST entry is
+// dropped and counted: newest commands win, a dropped command simply never
+// acks (the client retransmits or falls back to the file spool), and the
+// ledger keeps a retry from double-applying.
+class CommandQueue {
+ public:
+  explicit CommandQueue(std::size_t capacity) : capacity_(capacity) {}
+  void Push(InboundDatagram datagram);
+  std::vector<InboundDatagram> Drain(std::size_t max_items);
+  std::uint64_t dropped() const;
+
+ private:
+  mutable std::mutex mu_;
+  std::deque<InboundDatagram> items_;
+  std::size_t capacity_;
+  std::uint64_t dropped_ = 0;
+};
+
+// Ring of the last N response payloads keyed by command id, so a retransmitted
+// datagram whose first ack was lost is re-acked verbatim without re-execution.
+// Tick-thread only; no locking.
+class ResultCache {
+ public:
+  explicit ResultCache(std::size_t capacity = kMaxConsumedIds) : capacity_(capacity) {}
+  const std::string *Find(int id) const;
+  void Put(int id, std::string ack_json);
+
+ private:
+  std::size_t capacity_;
+  std::deque<std::pair<int, std::string>> entries_;
+};
+
+struct ExecResult {
+  PollOutcome outcome;
+  // The transport ack payload (the same v2 SpoolResponse-shaped JSON written
+  // to responses/<id>.json). Always non-empty: even malformed input gets an
+  // explicit error ack.
+  std::string ack_json;
+  bool duplicate = false;  // id already in the ledger; nothing was executed
+};
+
+// THE executor - both carriers feed this with the v2 command JSON verbatim.
+// Answers an ID-LESS "ping" statelessly, touching neither the ledger nor the
+// filesystem nor FL (heartbeat probes must not evict real ids from the ledger
+// ring; an id-carrying ping is claimed like any command, which is what prunes
+// it from the queue when the server dies first). For id-carrying commands:
+// claims the id in the ledger BEFORE anything else - same ordering as the
+// pyscript; this is the crash-safety invariant, do not reorder - then checks
+// proto, dispatches the op (add_notes/clear_notes via
+// host->Dispatcher(host_tag, FHD_AddNotesToPR, ...) + FHD_SetDirty), and
+// writes responses/<id>.json in the SpoolResponse shape regardless of
+// carrier. Duplicates re-ack from `cache` (nullable) or with a minimal
+// consumed ack, and never re-execute.
+ExecResult ExecuteCommand(TFruityPlugHost *host, std::intptr_t host_tag,
+                          const std::vector<std::string> &roots, int ppq_default,
+                          const std::string &payload_json, ResultCache *cache);
+
+// The file-spool carrier: consume the lowest-id fresh command listed in any
+// root's commands/queue.json (not in the ledger, file readable and not a
+// tombstone - a tombstoned or unreadable id is skipped, never blocking the
+// ids behind it) and feed it to ExecuteCommand. Applies at most one command
+// per call; the next tick picks up the next. The queue index itself is never
 // rewritten here - the server owns it (spool.py drops settled ids). Host may
 // be null only in tests that pass a mock; a real null host yields ok=false.
 PollOutcome PollOnce(TFruityPlugHost *host, std::intptr_t host_tag,
-                     const std::vector<std::string> &roots, int ppq_default);
+                     const std::vector<std::string> &roots, int ppq_default,
+                     ResultCache *cache = nullptr);
 
 // --- spool primitives, exposed for tests -------------------------------------
 std::vector<int> QueueIds(const std::vector<std::string> &roots);  // sorted, deduped

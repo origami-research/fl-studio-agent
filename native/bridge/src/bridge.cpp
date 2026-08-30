@@ -35,10 +35,12 @@
 #include <cstdlib>
 #include <cstring>
 #include <ctime>
+#include <memory>
 #include <string>
 #include <vector>
 
 #include "bridge_core.h"
+#include "bridge_udp.h"
 #include "fp_plugclass.h"
 
 namespace {
@@ -77,10 +79,12 @@ void WriteStatus(const char *status) {
   WriteSmall("bridge_status.txt", text);
 }
 
-void WriteHeartbeat(long long tick, int applied) {
-  char text[160];
-  snprintf(text, sizeof(text), "tick=%lld\napplied=%d\npid=%d\nunix_time=%lld\nbackend=bridge\n",
-           tick, applied, (int)getpid(), (long long)time(nullptr));
+void WriteHeartbeat(long long tick, int applied, int udp_port, long long udp_dropped) {
+  char text[224];
+  snprintf(text, sizeof(text),
+           "tick=%lld\napplied=%d\npid=%d\nunix_time=%lld\nbackend=bridge\n"
+           "udp_port=%d\nudp_dropped=%lld\n",
+           tick, applied, (int)getpid(), (long long)time(nullptr), udp_port, udp_dropped);
   WriteSmall("bridge_heartbeat.txt", text);
 }
 
@@ -130,6 +134,11 @@ void InitPlugInfo() {
 // The extended tick (FL 2026 slot 27) fires often; polling the filesystem on
 // every one is wasteful. Poll every Nth tick — still sub-second responsiveness.
 constexpr int kPollEveryNTicks = 3;
+
+// Bounded work per tick: a UDP burst must never turn one tick into a stall of
+// FL's GUI thread (docs/22 s2). The rest of the burst drains on later ticks.
+constexpr std::size_t kMaxUdpCommandsPerTick = 4;
+constexpr std::size_t kUdpQueueCapacity = 64;
 
 }  // namespace
 
@@ -228,6 +237,10 @@ class Bridge {
   int tick_counter_ = 0;
   long long heartbeat_tick_ = 0;
   int applied_total_ = 0;
+  // UDP transport + the shared ack cache (docs/22). Members sit after the
+  // ExtReserved tail like the counters above, outside the host-visible layout.
+  bridge_core::ResultCache result_cache_;
+  std::unique_ptr<bridge_udp::UdpTransport> udp_;
 };
 
 // Layout contract with the fetched SDK header: if it ever disagrees, fail the
@@ -257,7 +270,11 @@ Bridge::Bridge(TPluginTag tag, TFruityPlugHost *host) {
     // Deliberately no FHD_WantIdle: the base-free ABI gets its autonomous
     // callback from the extended tick (slot 27), and FHD_WantIdle was the
     // dispatcher call implicated in the earlier crash chain (run 5).
-    WriteHeartbeat(0, 0);
+    // A failed UDP start (no urandom, no writable root) leaves udp_ null and
+    // the plugin serves the file spool alone - the transport is an upgrade,
+    // never a requirement.
+    udp_ = bridge_udp::UdpTransport::Start(gSpoolRoots, kUdpQueueCapacity);
+    WriteHeartbeat(0, 0, udp_ != nullptr ? udp_->port() : 0, 0);
     WriteStatus("loaded");
   } catch (...) {
     WriteStatus("constructor_exception");
@@ -267,21 +284,35 @@ Bridge::Bridge(TPluginTag tag, TFruityPlugHost *host) {
 void Bridge::Tick() {
   if (++tick_counter_ < kPollEveryNTicks) return;
   tick_counter_ = 0;
-  int applied = 0;
   try {
-    bridge_core::PollOutcome out =
-        bridge_core::PollOnce(host_, HostTag, gSpoolRoots, bridge_core::kDefaultPPQ);
-    if (out.had_command && out.ok) applied = out.notes_written;
+    // UDP first (the latency path), then the file spool (the fallback). Both
+    // feed the one executor and one ledger; only the carrier differs.
+    if (udp_ != nullptr) {
+      for (bridge_core::InboundDatagram &datagram : udp_->queue().Drain(kMaxUdpCommandsPerTick)) {
+        bridge_core::ExecResult result =
+            bridge_core::ExecuteCommand(host_, HostTag, gSpoolRoots, bridge_core::kDefaultPPQ,
+                                        datagram.payload, &result_cache_);
+        udp_->SendAck(datagram.reply_to, result.ack_json);
+        if (result.outcome.had_command && result.outcome.ok) {
+          applied_total_ += result.outcome.notes_written;  // pings contribute 0
+        }
+      }
+    }
+    bridge_core::PollOutcome out = bridge_core::PollOnce(host_, HostTag, gSpoolRoots,
+                                                         bridge_core::kDefaultPPQ, &result_cache_);
     if (out.had_command) applied_total_ += out.ok ? out.notes_written : 0;
   } catch (...) {
     WriteStatus("tick_exception");
   }
-  WriteHeartbeat(++heartbeat_tick_, applied_total_);
-  (void)applied;
+  WriteHeartbeat(++heartbeat_tick_, applied_total_, udp_ != nullptr ? udp_->port() : 0,
+                 udp_ != nullptr ? (long long)udp_->queue().dropped() : 0);
 }
 
 void _stdcall Bridge::DestroyObject() {
   WriteStatus("destroyed");
+  // ~Bridge runs ~UdpTransport, whose Stop() waits at most kJoinTimeoutMs for
+  // the socket thread before detaching (docs/22 s2) - this (G)-thread call is
+  // bounded no matter how wedged the socket is.
   delete this;
 }
 

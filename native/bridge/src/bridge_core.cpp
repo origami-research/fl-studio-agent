@@ -60,7 +60,9 @@ bool ReadQueue(const std::string &root, std::vector<int> *out) {
 // First readable non-tombstone copy of the command across roots (the mirrored
 // copies are equivalent; a tombstone anywhere means settled only when no root
 // still holds the real command - same rule as the pyscript's _read_command).
-bool ReadCommand(const std::vector<std::string> &roots, int id, minijson::Value *out) {
+// Returns the raw text so the executor receives the command JSON verbatim,
+// exactly as the UDP carrier delivers it.
+bool ReadCommand(const std::vector<std::string> &roots, int id, std::string *out_text) {
   for (const std::string &root : roots) {
     std::string text;
     if (!ReadFile(Join(root, ("commands/" + CommandName(id)).c_str()), &text)) continue;
@@ -69,7 +71,7 @@ bool ReadCommand(const std::vector<std::string> &roots, int id, minijson::Value 
     if (parsed.type != minijson::Type::Object) continue;
     const minijson::Value *op = parsed.Get("op");
     if (op == nullptr || op->type != minijson::Type::String) continue;  // tombstone
-    *out = parsed;
+    *out_text = text;
     return true;
   }
   return false;
@@ -104,6 +106,44 @@ std::vector<std::string> SpoolRoots(const char *home) {
     roots.push_back(std::string(home) + "/Documents/Image-Line/FL Studio/Settings/" + sub);
   }
   return roots;
+}
+
+// --- transport seam ----------------------------------------------------------
+
+void CommandQueue::Push(InboundDatagram datagram) {
+  std::lock_guard<std::mutex> lock(mu_);
+  if (items_.size() >= capacity_) {
+    items_.pop_front();
+    ++dropped_;
+  }
+  items_.push_back(std::move(datagram));
+}
+
+std::vector<InboundDatagram> CommandQueue::Drain(std::size_t max_items) {
+  std::vector<InboundDatagram> out;
+  std::lock_guard<std::mutex> lock(mu_);
+  while (!items_.empty() && out.size() < max_items) {
+    out.push_back(std::move(items_.front()));
+    items_.pop_front();
+  }
+  return out;
+}
+
+std::uint64_t CommandQueue::dropped() const {
+  std::lock_guard<std::mutex> lock(mu_);
+  return dropped_;
+}
+
+const std::string *ResultCache::Find(int id) const {
+  for (const auto &entry : entries_) {
+    if (entry.first == id) return &entry.second;
+  }
+  return nullptr;
+}
+
+void ResultCache::Put(int id, std::string ack_json) {
+  if (entries_.size() >= capacity_) entries_.pop_front();
+  entries_.emplace_back(id, std::move(ack_json));
 }
 
 // --- NotesParamsBuffer -------------------------------------------------------
@@ -253,7 +293,9 @@ int RecordConsumed(const std::vector<std::string> &roots, int id) {
 
   // Same tombstone the server writes on timeout and the pyscript writes on
   // consume; the ledger, not the tombstone, is what correctness depends on
-  // (a root may be readable but not writable).
+  // (a root may be readable but not writable). Keyed by id, so a UDP-carried
+  // command tombstones only its own mirrored file (usually absent) and can
+  // never clobber a different command queued on disk.
   std::string tombstone = "{\"consumed\": true, \"id\": " + std::to_string(id) + "}";
 
   int accepted = 0;
@@ -266,40 +308,69 @@ int RecordConsumed(const std::vector<std::string> &roots, int id) {
   return accepted;
 }
 
-// --- one poll cycle ----------------------------------------------------------
+// --- the executor -------------------------------------------------------------
 
-PollOutcome PollOnce(TFruityPlugHost *host, std::intptr_t host_tag,
-                     const std::vector<std::string> &roots, int ppq_default) {
-  PollOutcome outcome;
-
-  // Lowest fresh id first: the server allocates ids in send order, and the
-  // pyscript applies in the same order, so both consumers agree on sequencing.
-  std::vector<int> pending = QueueIds(roots);
-  if (pending.empty()) return outcome;
-  std::vector<int> consumed = ReadConsumedIds(roots);
+ExecResult ExecuteCommand(TFruityPlugHost *host, std::intptr_t host_tag,
+                          const std::vector<std::string> &roots, int ppq_default,
+                          const std::string &payload_json, ResultCache *cache) {
+  ExecResult result;
+  PollOutcome &outcome = result.outcome;
 
   minijson::Value command;
-  int id = 0;
-  bool found = false;
-  for (int candidate : pending) {
-    if (Contains(consumed, candidate)) continue;
-    if (ReadCommand(roots, candidate, &command)) {
-      id = candidate;
-      found = true;
-      break;
-    }
-    // Tombstoned everywhere (server-cancelled) or unreadable: skip, never
-    // block the ids queued behind it.
+  if (!minijson::Parse(payload_json.c_str(), &command) || command.type != minijson::Type::Object) {
+    result.ack_json =
+        "{\"id\": 0, \"ok\": false, \"err\": \"unparseable command\", \"backend\": \"bridge\"}";
+    return result;
   }
-  if (!found) return outcome;
+
+  const minijson::Value *op_value = command.Get("op");
+  if (op_value == nullptr || op_value->type != minijson::Type::String) {
+    result.ack_json = "{\"id\": " + std::to_string(command.Int("id", 0)) +
+                      ", \"ok\": false, \"err\": \"command has no op\", \"backend\": \"bridge\"}";
+    return result;
+  }
+  const std::string op = op_value->text;
+
+  // Liveness probe: an ID-LESS ping is stateless - answered end to end
+  // (transport -> queue -> tick -> ack) without touching the ledger, the
+  // filesystem, or FL, so heartbeats can never evict real ids from the ledger
+  // ring. The ack carries our proto so a mismatched client learns it from the
+  // pong itself. A ping that CARRIES an id is a queued command like any other
+  // and takes the claim path below - the claim is what prunes it from the
+  // queue when the server dies before doing so.
+  if (op == "ping" && command.Get("id") == nullptr) {
+    outcome.had_command = true;
+    outcome.op = op;
+    outcome.ok = true;
+    result.ack_json = "{\"id\": 0, \"ok\": true, \"op\": \"ping\", \"proto\": " +
+                      std::to_string(kProtoVersion) + ", \"backend\": \"bridge\"}";
+    return result;
+  }
+
+  const int id = command.Int("id", 0);
+  if (AlreadyConsumed(roots, id)) {
+    // A retransmit (or the other carrier / the pyscript got there first).
+    // Re-ack the recorded response verbatim when we still have it; otherwise a
+    // minimal consumed ack. Never re-execute.
+    result.duplicate = true;
+    outcome.id = id;
+    outcome.op = op;
+    const std::string *cached = cache != nullptr ? cache->Find(id) : nullptr;
+    result.ack_json = cached != nullptr
+                          ? *cached
+                          : "{\"id\": " + std::to_string(id) +
+                                ", \"ok\": true, \"duplicate\": true, \"backend\": \"bridge\"}";
+    return result;
+  }
 
   outcome.had_command = true;
   outcome.id = id;
-  outcome.op = command.Str("op", "");
+  outcome.op = op;
 
   // Claim before executing: a command that crashes FL must not replay on
   // restart and crash it again. Same ordering as the pyscript (_consume_all
-  // runs before the proto check and the handler).
+  // runs before the proto check and the handler). THE crash-safety invariant -
+  // do not reorder.
   RecordConsumed(roots, id);
 
   std::string summary;
@@ -307,10 +378,10 @@ PollOutcome PollOnce(TFruityPlugHost *host, std::intptr_t host_tag,
   if (proto != kProtoVersion) {
     outcome.error = "protocol mismatch: command is v" + std::to_string(proto) + ", bridge is v" +
                     std::to_string(kProtoVersion);
-  } else if (outcome.op == "ping") {
+  } else if (op == "ping") {
     outcome.ok = true;
     summary = "pong";
-  } else if (outcome.op == "add_notes" || outcome.op == "clear_notes") {
+  } else if (op == "add_notes" || op == "clear_notes") {
     const minijson::Value *args = command.Get("args");
     minijson::Value no_args;
     no_args.type = minijson::Type::Object;
@@ -319,8 +390,7 @@ PollOutcome PollOnce(TFruityPlugHost *host, std::intptr_t host_tag,
     if (host == nullptr) {
       outcome.error = "no plugin host";
     } else {
-      NotesParamsBuffer buf =
-          BuildNotesParams(checked_args, ppq_default, outcome.op == "clear_notes");
+      NotesParamsBuffer buf = BuildNotesParams(checked_args, ppq_default, op == "clear_notes");
       if (buf.params == nullptr) {
         outcome.error = "out of memory building notes";
       } else {
@@ -330,14 +400,14 @@ PollOutcome PollOnce(TFruityPlugHost *host, std::intptr_t host_tag,
         outcome.ok = true;
         summary = "applied " + std::to_string(buf.count) + " note(s) via FHD_AddNotesToPR at ppq " +
                   std::to_string(buf.ppq);
-        if (buf.used_default_ppq && outcome.op == "add_notes") {
+        if (buf.used_default_ppq && op == "add_notes") {
           summary += " (WARNING: command carried no ppq stamp; assumed default " +
                      std::to_string(ppq_default) + " - horizontal placement unverified)";
         }
       }
     }
   } else {
-    outcome.error = "unknown op: " + outcome.op;
+    outcome.error = "unknown op: " + op;
   }
 
   // The v2 SpoolResponse shape ({id, ok, op, notes_written, err}) plus
@@ -347,14 +417,47 @@ PollOutcome PollOnce(TFruityPlugHost *host, std::intptr_t host_tag,
   // do not) trust it.
   std::string json = "{\"id\": " + std::to_string(id);
   json += outcome.ok ? ", \"ok\": true" : ", \"ok\": false";
-  if (IsKnownOp(outcome.op)) json += ", \"op\": \"" + outcome.op + "\"";
+  if (IsKnownOp(op)) json += ", \"op\": \"" + op + "\"";
   if (outcome.ok) json += ", \"notes_written\": " + std::to_string(outcome.notes_written);
   if (!outcome.ok) json += ", \"err\": \"" + minijson::Escape(outcome.error) + "\"";
   json += ", \"backend\": \"bridge\"";
   if (!summary.empty()) json += ", \"summary\": \"" + minijson::Escape(summary) + "\"";
   json += "}";
+  result.ack_json = json;
+  if (cache != nullptr) cache->Put(id, json);
+  // Written for every claimed command regardless of carrier: fl_doctor, the
+  // differential tests, and the server's await_response all read one place.
   WriteResponse(roots, id, json);
-  return outcome;
+  return result;
+}
+
+// --- the file-spool carrier ---------------------------------------------------
+
+PollOutcome PollOnce(TFruityPlugHost *host, std::intptr_t host_tag,
+                     const std::vector<std::string> &roots, int ppq_default,
+                     ResultCache *cache) {
+  // Lowest fresh id first: the server allocates ids in send order, and the
+  // pyscript applies in the same order, so both consumers agree on sequencing.
+  std::vector<int> pending = QueueIds(roots);
+  if (pending.empty()) return PollOutcome();
+  std::vector<int> consumed = ReadConsumedIds(roots);
+
+  std::string text;
+  bool found = false;
+  for (int candidate : pending) {
+    if (Contains(consumed, candidate)) continue;
+    if (ReadCommand(roots, candidate, &text)) {
+      found = true;
+      break;
+    }
+    // Tombstoned everywhere (server-cancelled) or unreadable: skip, never
+    // block the ids queued behind it.
+  }
+  if (!found) return PollOutcome();
+
+  // The one executor; disposal (the per-id tombstone) happens inside via
+  // RecordConsumed, and the response lands in responses/<id>.json.
+  return ExecuteCommand(host, host_tag, roots, ppq_default, text, cache).outcome;
 }
 
 }  // namespace bridge_core
