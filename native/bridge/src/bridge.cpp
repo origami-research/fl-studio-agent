@@ -24,12 +24,15 @@
 //     region on the extended path and may write host-side state past the
 //     classic fields; this zeroed tail keeps such access inside memory we own.
 //
-// THREADING: slot 27 is a mixer-side callback, so FL calls it inside the
-// plugin lock, where the SDK forbids calling back into the host - and doing it
-// anyway deadlocked FHD_AddNotesToPR live. The tick therefore does no host work
-// itself: it hands one pump at a time to the GUI thread (bridge_gui.h, which
-// carries the full post-mortem) and returns. The executor - and every host
-// Dispatcher call under it - runs only there.
+// THREADING: the tick is VMT byte 216 = the SDK's own `Idle_Public`, a (G)
+// callback that FL 2026 drives from the Cocoa main run loop - NOT a mixer-side
+// callback, and there was never a plugin lock involved (the earlier
+// deadlock-by-lock-re-entry story is refuted; bridge_gui.h carries the
+// corrected post-mortem). The tick still does no host work itself: it hands one
+// pump at a time to the GUI thread and returns. That keeps "host calls happen
+// on the GUI thread" true by construction rather than by luck about which
+// callback FL drives - `Eff_Render` (byte 256) genuinely IS (M) and is a real
+// entry point on this object.
 //
 // The note-writing and spool logic lives in bridge_core.* so it is unit-tested
 // under ASan/UBSan against a mock host (bridge/tests/bridge_core_test.cpp) with
@@ -94,11 +97,11 @@ void WriteStatus(const char *status) {
   WriteSmall("bridge_status.txt", text);
 }
 
-// Extended-slot discovery log, capped per slot. Turns FL 2026's undocumented
-// extended ABI into evidence instead of a crash, without growing without bound.
-// `gui=` is the load-bearing column: it is what identifies a slot as a
-// mixer-side (M) callback, and mixer-side is why the note write had to move off
-// the tick thread (bridge_gui.h).
+// Slot-call log, capped per slot. FL indexes this object as a Free Pascal class
+// (VMT byte 200 + 8*i, see native/abi/fl_host_abi.h), so this records WHICH
+// offsets a given FL build actually drives - the evidence that decoded the ABI
+// in the first place, and the discriminator if a future build shifts. `gui=`
+// records the calling thread, which is how an offset is classified (G) or (M).
 constexpr int kExtSlotCount = 64;
 constexpr int kExtLogCapPerSlot = 4;
 int gExtSlotHits[kExtSlotCount] = {0};
@@ -466,11 +469,12 @@ Bridge::Bridge(TPluginTag tag, TFruityPlugHost *host) {
   }
 }
 
-// Runs on whatever thread FL ticks us on - slot 27 is mixer-side, inside the
-// plugin lock. So this does NO host work: it asks for a GUI-thread pump and
-// writes the heartbeat. The heartbeat staying on this thread is deliberate -
-// liveness keeps reporting even if the GUI thread is the thing that stalls, and
-// `gui_pending` is then the number that says so.
+// Runs on whatever thread FL ticks us on - on FL 2026 that is the GUI thread,
+// because the tick is `Idle_Public` (G). It still does NO host work itself: it
+// asks for a GUI-thread pump and writes the heartbeat, so the property holds
+// even if a future build ticks us from somewhere else. The heartbeat staying on
+// this thread is deliberate - liveness keeps reporting even if the GUI thread is
+// the thing that stalls, and `gui_pending` is then the number that says so.
 void Bridge::Tick() {
   if (++tick_counter_ < kPollEveryNTicks) return;
   tick_counter_ = 0;
