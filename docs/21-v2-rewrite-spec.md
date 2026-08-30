@@ -861,3 +861,12 @@ Verified by full-stream consistency on 16 FL-2026-authored files (exact consumpt
 The correction rewrites history: **fact 2's "FL expresses default tempo by omission" was FALSE** - "Basic with limiter" always had a tempo event; the 172 desync ate it (and a whole channel).
 The append-tempo path survives as genuinely correct only for files that truly lack the event; on the templates it was compensating for our own reader bug (and worked live only because FL applies events sequentially, last-wins).
 pyflp shares the bug, so flpkit 0.1.1 now out-parses the oracle; the corpus test gains divergence class 3 (oracle desyncs at 172 -> only header-derived facts checkable).
+
+## Addendum 14: the playlist opens up - reading the arrangement (2026-08-29)
+
+flpkit 0.2.0 decodes event 233 (the playlist) into `FlpProject.playlist`: position and length in ticks, 1-based track, pattern or channel clip, group, arrangement index (event 99).
+The find that made it robust: FL has grown the item record four times - 32 bytes (classic), 60 (FL 21), **80 (undocumented anywhere; 17 of FL's own bundled demos use it)**, and **88 (FL 2026)** - and pyflp knows only 32 and 60, dispatching on a naive `len % 60`.
+Instead of hardcoding the era list, flpkit DETECTS the stride per blob: the smallest 4-aligned size >= 32 that divides the blob and puts the constant `pattern_base == 20480` signature (plus a sane track index) at every record head.
+All 52 corpus files with playlists resolve unambiguously under that rule (27,010 items, zero out-of-bounds), and on legacy strides 16,434 items compare field-identical to pyflp's `PlaylistEvent` construct STRUCT.
+`get_scene` now carries a `playlist` digest (clip list when small, count/tracks/span always) so a composing model can see the arrangement, not just the patterns.
+Writing clips is the open half of E3 and waits on a live-FL window: author a one-clip save in FL, byte-diff, splice, FL-verify.
