@@ -225,3 +225,73 @@ def test_corrupt_fetched_files_raise_flp_error():
     for path in corrupt:
         with pytest.raises(FlpError):
             flp.read(path)
+
+
+# --- playlist ----------------------------------------------------------------
+
+
+def _playlist_blobs(path: Path) -> list[bytes]:
+    data = path.read_bytes()
+    _, stream = flp._chunks(data)
+    return [
+        bytes(stream[off : off + size])
+        for eid, off, size in flp._events(stream)
+        if eid == flp.EVENT_PLAYLIST and size
+    ]
+
+
+@requires_fl
+@pytest.mark.parametrize(
+    "path", CORPUS, ids=[str(p.relative_to(p.parents[2])) for p in CORPUS]
+)
+def test_playlist_matches_pyflp_struct_or_is_sane(path):
+    """Playlist parity. Where the record stride is one pyflp knows (32/60),
+    every field of every item must match pyflp's PlaylistEvent STRUCT decoded
+    directly over the same blob - the full-parse oracle is unusable here (it
+    dies on other events in most demo files), but its construct STRUCT is the
+    authoritative field map. For newer strides (80, 88 - pyflp knows neither)
+    the evidence is the per-record pattern_base signature that stride
+    detection already enforced, plus sanity bounds on every item.
+    """
+    from pyflp.arrangement import PlaylistEvent
+
+    try:
+        ours = flp.read(path)
+    except FlpError:
+        return  # the read-parity test owns this case
+
+    for item in ours.playlist:
+        assert 0 <= item.position < 50_000_000, (path.name, item)
+        assert 0 < item.length < 50_000_000, (path.name, item)
+        assert 1 <= item.track <= flp.PLAYLIST_TRACK_SPACE, (path.name, item)
+        assert (item.pattern is None) != (item.channel is None), (path.name, item)
+
+    cursor = 0
+    for blob in _playlist_blobs(path):
+        stride = next(
+            (
+                s
+                for s in range(flp.PLAYLIST_STRIDE_MIN, flp.PLAYLIST_STRIDE_MAX + 1, 4)
+                if len(blob) % s == 0 and flp._playlist_stride_fits(blob, s)
+            ),
+            None,
+        )
+        if stride is None:
+            continue  # skipped with a warning by read(); items list is unaffected
+        count = len(blob) // stride
+        mine = ours.playlist[cursor : cursor + count]
+        cursor += count
+        if stride not in PlaylistEvent.SIZES:
+            continue  # 80/88-byte eras: pyflp has no struct to compare against
+        oracle = list(PlaylistEvent.STRUCT.parse(blob, new=(stride == 60)))
+        assert len(oracle) == count
+        for theirs, item in zip(oracle, mine):
+            assert item.position == theirs.position
+            assert item.length == theirs.length
+            assert item.track == flp.PLAYLIST_TRACK_SPACE - theirs.track_rvidx
+            if theirs.item_index >= flp.PATTERN_INDEX_BASE:
+                assert item.pattern == theirs.item_index - flp.PATTERN_INDEX_BASE
+            else:
+                assert item.channel == theirs.item_index
+            assert item.group == theirs.group
+    assert cursor == len(ours.playlist)

@@ -58,6 +58,35 @@ def _read_rows(project: Path) -> list[SceneRow]:
         for n in proj.notes
     ]
 
+@dataclass(frozen=True)
+class ClipRow:
+    """One playlist clip in analysis units (beats). Exactly one of
+    ``pattern``/``channel`` is set - a pattern clip or an audio/channel clip."""
+
+    track: int
+    start_beat: float
+    length_beats: float
+    pattern: int | None = None
+    channel: int | None = None
+    arrangement: int = 0
+
+
+def _read_clips(project: Path) -> list[ClipRow]:
+    """Load playlist clips via the flp reader (ticks -> beats). The test seam."""
+    proj = flp.read(Path(project))
+    return [
+        ClipRow(
+            track=item.track,
+            start_beat=item.position / proj.ppq,
+            length_beats=item.length / proj.ppq,
+            pattern=item.pattern,
+            channel=item.channel,
+            arrangement=item.arrangement,
+        )
+        for item in proj.playlist
+    ]
+
+
 NOTE_NAMES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"]
 
 # Scale degrees as semitone offsets from the tonic.
@@ -161,6 +190,43 @@ def _root_motion(rows: list) -> list[str]:
     return roots
 
 
+MAX_PLAYLIST_CLIPS_LISTED = 24
+
+
+def _playlist_digest(clips: list[ClipRow]) -> tuple[dict[str, Any], str]:
+    """The arrangement as (data, summary line): every clip when few, an honest
+    digest when many - a full song holds hundreds of clips, and enumerating
+    them is the note-dump problem all over again."""
+    if not clips:
+        return {"clip_count": 0}, "playlist: empty (no clips placed on the arrangement)"
+    tracks = {c.track for c in clips}
+    start = min(c.start_beat for c in clips)
+    end = max(c.start_beat + c.length_beats for c in clips)
+    digest: dict[str, Any] = {
+        "clip_count": len(clips),
+        "tracks_used": len(tracks),
+        "span_beats": [start, end],
+    }
+    if len(clips) <= MAX_PLAYLIST_CLIPS_LISTED:
+        digest["clips"] = [
+            {
+                ("pattern" if c.pattern is not None else "channel"): (
+                    c.pattern if c.pattern is not None else c.channel
+                ),
+                "track": c.track,
+                "at": c.start_beat,
+                "beats": c.length_beats,
+                **({"arrangement": c.arrangement} if c.arrangement else {}),
+            }
+            for c in sorted(clips, key=lambda c: (c.arrangement, c.start_beat, c.track))
+        ]
+    line = (
+        f"playlist: {len(clips)} clips on {len(tracks)} tracks, "
+        f"beats {start:g}-{end:g}"
+    )
+    return digest, line
+
+
 def summarize(
     project: Path,
     channel_names: dict[int, str] | None = None,
@@ -169,6 +235,7 @@ def summarize(
     """Analyse the project into something a model can reason about directly."""
     rows = _read_rows(project)
     names = channel_names or {}
+    playlist, playlist_line = _playlist_digest(_read_clips(project))
 
     if not rows:
         return {
@@ -176,6 +243,7 @@ def summarize(
             "key": None,
             "channels": [],
             "note_count": 0,
+            "playlist": playlist,
             "summary": f"tempo {tempo:g}, no notes yet" if tempo else "empty project",
         }
 
@@ -210,12 +278,14 @@ def summarize(
         lines.append(f"tempo {tempo:g}")
     lines.append(f"key {key} (confidence: {confidence})")
     lines += [s.describe() for s in summaries]
+    lines.append(playlist_line)
 
     return {
         "tempo": tempo,
         "key": key,
         "key_confidence": confidence,
         "note_count": len(rows),
+        "playlist": playlist,
         "channels": [
             {
                 "index": s.index,

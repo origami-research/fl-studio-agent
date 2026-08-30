@@ -96,10 +96,11 @@ def test_root_motion_is_capped_to_stay_compact():
 
 @pytest.fixture
 def fake_notes(monkeypatch):
-    """Patch the reader so these tests need no .flp on disk."""
+    """Patch the readers so these tests need no .flp on disk."""
 
-    def install(rows):
+    def install(rows, clips=()):
         monkeypatch.setattr(scene, "_read_rows", lambda _path: rows)
+        monkeypatch.setattr(scene, "_read_clips", lambda _path: list(clips))
 
     return install
 
@@ -164,3 +165,51 @@ def test_note_names_round_trip_the_octave_convention():
     assert scene.note_name(60) == "C4"
     assert scene.note_name(57) == "A3"
     assert scene.note_name(72) == "C5"
+
+
+# --- playlist ----------------------------------------------------------------
+
+
+def test_summary_lists_playlist_clips_when_few(fake_notes):
+    fake_notes(
+        [FakeRow(midi=60, channel=0)],
+        clips=[
+            scene.ClipRow(track=2, start_beat=16.0, length_beats=16.0, pattern=2),
+            scene.ClipRow(track=1, start_beat=0.0, length_beats=16.0, pattern=1),
+            scene.ClipRow(track=3, start_beat=0.0, length_beats=8.0, channel=5),
+        ],
+    )
+    out = scene.summarize("ignored.flp", {}, tempo=120)
+    assert out["playlist"]["clip_count"] == 3
+    assert out["playlist"]["tracks_used"] == 3
+    assert out["playlist"]["span_beats"] == [0.0, 32.0]
+    assert out["playlist"]["clips"] == [
+        {"pattern": 1, "track": 1, "at": 0.0, "beats": 16.0},
+        {"channel": 5, "track": 3, "at": 0.0, "beats": 8.0},
+        {"pattern": 2, "track": 2, "at": 16.0, "beats": 16.0},
+    ]
+    assert "playlist: 3 clips on 3 tracks, beats 0-32" in out["summary"]
+
+
+def test_summary_digests_playlist_when_many(fake_notes):
+    many = [
+        scene.ClipRow(track=1 + i % 7, start_beat=float(i * 4), length_beats=4.0, pattern=1)
+        for i in range(scene.MAX_PLAYLIST_CLIPS_LISTED + 1)
+    ]
+    fake_notes([FakeRow(midi=60, channel=0)], clips=many)
+    out = scene.summarize("ignored.flp", {})
+    assert out["playlist"]["clip_count"] == len(many)
+    assert "clips" not in out["playlist"]
+
+
+def test_summary_reports_empty_playlist_honestly(fake_notes):
+    fake_notes([FakeRow(midi=60, channel=0)], clips=[])
+    out = scene.summarize("ignored.flp", {})
+    assert out["playlist"] == {"clip_count": 0}
+    assert "playlist: empty" in out["summary"]
+
+
+def test_empty_project_still_carries_the_playlist(fake_notes):
+    fake_notes([], clips=[scene.ClipRow(track=1, start_beat=0.0, length_beats=4.0, pattern=1)])
+    out = scene.summarize("ignored.flp", {})
+    assert out["playlist"]["clip_count"] == 1
