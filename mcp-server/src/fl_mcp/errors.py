@@ -57,6 +57,31 @@ class ToolError(Exception):
         return payload
 
 
+# The default fix when no note backend exists. The pyscript name matches
+# install.SCRIPT_FILENAME (a frozen FL-side surface, duplicated like spool.py's
+# copy because errors must stay a leaf module).
+_SETUP_FIX = (
+    "Either launch FL Studio with the FLMCP controller script configured (edits then "
+    "apply via the 'MCP Write Notes' piano-roll script), or "
+    "configure a project file the agent may rewrite: run "
+    "`python -m fl_mcp.make_agent_project`, or set FLMCP_AGENT_PROJECT to a .flp path."
+)
+
+
+class NotePlaneUnavailable(ToolError):
+    """No backend can apply this change; the fix names exactly what to set up."""
+
+    def __init__(self, message: str, fix: str = _SETUP_FIX) -> None:
+        super().__init__("note_plane_unavailable", message, fix)
+
+
+class WriteRejected(ToolError):
+    """A backend took the call but did not CONFIRM the requested state."""
+
+    def __init__(self, message: str, fix: str, *, retryable: bool = True) -> None:
+        super().__init__("fl_api_error", message, fix, retryable=retryable)
+
+
 def note_plane_unavailable(command_id: int, timeout: float) -> ToolError:
     return ToolError(
         "note_plane_unavailable",

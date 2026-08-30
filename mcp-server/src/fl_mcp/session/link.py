@@ -1,0 +1,158 @@
+"""The control wire, owned: liveness probe, hot-plug self-heal, settle, and
+the one call-to-policy conversion every live op shares."""
+
+from __future__ import annotations
+
+import logging
+import time
+from collections.abc import Callable
+from typing import Any
+
+from fl_mcp import errors
+from fl_mcp.flpaths import fl_process_running
+from fl_mcp.schemas import ControlResponse, HelloEvent
+from fl_mcp.wire import ControlUnavailable, MidiControl
+
+log = logging.getLogger(__name__)
+
+# A fast "is the controller there right now" probe - not a startup wait.
+HELLO_PROBE_SECONDS = 0.2
+# Confirming a sticky hello is a millisecond round trip when FL is alive.
+PING_CONFIRM_SECONDS = 1.0
+
+# Hot-plug self-heal (live-measured 2026-08-29: FL binds appearing ports in
+# ~2s): how long to wait for hello after recycling, and how often a silent,
+# unconfigured FL is allowed to cost that wait.
+RECYCLE_HELLO_WAIT_SECONDS = 8.0
+RECYCLE_MIN_INTERVAL_SECONDS = 30.0
+
+# FL can stay "unsafe at current time" for a few seconds after a load; give the
+# controller's OnIdle deferral time to land a mutating call (v1-measured).
+LIVE_SET_TIMEOUT_SECONDS = 8.0
+LIVE_READ_TIMEOUT_SECONDS = 2.0
+
+# E7 (2026-08-29, 3/3 PASS): FL parks "unsafe at current time" ops for OnIdle
+# retry during boot, and a parked op can land LATE, undoing a newer one
+# (issue #47). Waiting until a composite read answers makes transport ops
+# reliable; measured settle was ~12s, so the bound leaves headroom.
+SETTLE_TIMEOUT_SECONDS = 45.0
+SETTLE_POLL_SECONDS = 1.0
+
+
+class ControlLink:
+    """Owns the control wire, its factory, and the recycle clock. Everything
+    else asks the link, never the raw wire."""
+
+    control: MidiControl | None
+
+    def __init__(
+        self,
+        control: MidiControl | None,
+        factory: Callable[[], MidiControl] | None = None,
+    ) -> None:
+        self.control = control
+        self._control_factory = factory if factory is not None else MidiControl
+        self._last_recycle = 0.0
+
+    def hello(self) -> HelloEvent | None:
+        """The ONE connectivity probe: the controller's hello, or None. Every
+        backend choice keys off this so "connected" cannot drift between
+        methods (one canonical function per rule).
+
+        Self-healing: FL 2026 reliably binds our virtual ports when they APPEAR
+        while it is running (hot-plug, ~2s live-measured) but can miss ports
+        that already existed at launch. So when FL is up and the wire is silent,
+        the ports are recycled to force a hot-plug bind - making the launch
+        order of server and FL irrelevant to the user. Rate-limited so an FL
+        that is genuinely unconfigured costs one wait per interval, not per call.
+        """
+        if self.control is None:
+            return None
+        try:
+            hello = self.control.await_hello(timeout=HELLO_PROBE_SECONDS)
+            # The stored hello is STICKY across an FL death (dogfood A12): a
+            # stale "connected" routes live ops into a void. A ping (answered
+            # from the SysEx callback, milliseconds when alive) confirms the
+            # wire is current before anything trusts it.
+            if self.control.send_request("ping", timeout=PING_CONFIRM_SECONDS).ok:
+                return hello
+        except errors.ToolError:
+            pass
+        return self._recycle()
+
+    def _recycle(self) -> HelloEvent | None:
+        """Recycle a silent wire for a hot-plug bind; ``self.control`` is
+        non-None (the caller's guard in :meth:`hello`)."""
+        if not fl_process_running():
+            return None  # nothing to bind to - FL is not even running
+        if time.monotonic() - self._last_recycle < RECYCLE_MIN_INTERVAL_SECONDS:
+            return None  # recycled too recently - one wait per interval, not per call
+        self._last_recycle = time.monotonic()
+        log.info("FL is running but the wire is silent; recycling ports for a hot-plug bind")
+        self.control.close()
+        try:
+            self.control = self._control_factory()
+        except ControlUnavailable:
+            log.exception("port recycle failed; control plane stays down")
+            self.control = None
+            return None
+        try:
+            return self.control.await_hello(timeout=RECYCLE_HELLO_WAIT_SECONDS)
+        except errors.ToolError:
+            return None
+
+    def reconnect(self) -> None:
+        """Fresh ports after an FL relaunch we caused: the old wire died with
+        the killed process (and its sticky hello would lie), while ports that
+        APPEAR after FL is up hit its reliable hot-plug bind (docs/21 A12)."""
+        if self.control is None:
+            return
+        self.control.close()
+        try:
+            self.control = self._control_factory()
+        except ControlUnavailable:
+            log.exception("wire re-open after reload failed; live ops degrade")
+            self.control = None
+        self._last_recycle = 0.0
+
+    def request(
+        self,
+        op: str,
+        args: list[Any] | None = None,
+        *,
+        timeout: float,
+    ) -> ControlResponse:
+        """Forward to the wire; no wire raises control_plane_unavailable."""
+        if self.control is None:
+            raise errors.control_plane_unavailable(op, 0.0)
+        return self.control.send_request(op, args=args, timeout=timeout)
+
+    def command(self, op: str) -> None:
+        """THE call-to-policy conversion (addendum A11), written once: no wire
+        -> control_plane_unavailable; FL's unsafe-at-current-time refusal ->
+        operation_unsafe (retryable - it means busy, not absent, addendum A6);
+        any other refusal -> fl_api_error with FL's own detail. A send_request
+        timeout raises control_plane_unavailable from the wire and propagates."""
+        resp = self.request(op, timeout=LIVE_SET_TIMEOUT_SECONDS)
+        if not resp.ok:
+            detail = resp.err or "no detail"
+            if errors.is_operation_unsafe(detail):
+                raise errors.operation_unsafe(op)
+            raise errors.fl_api_error(op, detail)
+
+    def settle(self) -> None:
+        """Block until FL answers a composite read, so no live op lands in the
+        boot window where FL parks it for a LATE OnIdle retry (issue #47,
+        settled by experiment E7). A timeout is logged, not raised: the reload
+        itself succeeded, and the next live op will surface its own error."""
+        if self.control is None:
+            return
+        deadline = time.monotonic() + SETTLE_TIMEOUT_SECONDS
+        while time.monotonic() < deadline:
+            try:
+                if self.control.send_request("state.snapshot", timeout=5.0).ok:
+                    return
+            except errors.ToolError:
+                pass
+            time.sleep(SETTLE_POLL_SECONDS)
+        log.warning("FL did not settle within %ss of relaunch", SETTLE_TIMEOUT_SECONDS)
