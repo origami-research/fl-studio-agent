@@ -1,0 +1,273 @@
+{
+  "profile_version": 1,
+  "meta": {
+    "fl_version": "26.1.5",
+    "fl_build": 5384,
+    "arch": "arm64",
+    "os": "macOS 26.5.1",
+    "generated": "2026-08-30T00:00:00Z",
+    "engine_dylib_sha256": "68f08f4b533ce2c9b74ba118e040f3c3ae7ec647fb3bb6835b89df9cd25377fb",
+    "sources": [
+      "rtti",
+      "vmt",
+      "live-probe"
+    ]
+  },
+  "ppq": {
+    "source": "flp_header_u16_at_4",
+    "default": 96
+  },
+  "dispatcher": {
+    "vmt_first_method_offset": 200,
+    "host_dispatcher_addr": "0x427bc0",
+    "jump_table_addr": "0x42da00",
+    "handled_max_id": 109,
+    "inert_in_range": [
+      39,
+      62,
+      63,
+      64,
+      102
+    ],
+    "unsafe": [
+      {
+        "id": 94,
+        "hazard": "crashes_host",
+        "evidence": "native/probe/evidence-2026-08-30/crash-id94.log"
+      },
+      {
+        "id": 99,
+        "hazard": "hangs_host",
+        "evidence": "native/probe/PROBE_VERDICT_2026-08-30.md"
+      }
+    ]
+  },
+  "getters": [
+    {
+      "id": 36,
+      "name": "FHD_GetMixingTime",
+      "convention": "guarded_buffer",
+      "median_ns": 0
+    },
+    {
+      "id": 37,
+      "name": "FHD_GetPlaybackTime",
+      "convention": "guarded_buffer",
+      "median_ns": 0
+    },
+    {
+      "id": 38,
+      "name": "FHD_GetSelTime",
+      "convention": "guarded_buffer",
+      "median_ns": 0
+    },
+    {
+      "id": 39,
+      "name": "FHD_GetTimeMul",
+      "convention": "index_only",
+      "median_ns": 0
+    },
+    {
+      "id": 61,
+      "name": "FHD_GetProjectInfo",
+      "convention": "returns_pointer",
+      "median_ns": 0
+    },
+    {
+      "id": 76,
+      "name": "FHD_GetContextInfo",
+      "convention": "index_only",
+      "median_ns": 0
+    },
+    {
+      "id": 84,
+      "name": "FHD_GetColorRGBValue",
+      "convention": "index_only",
+      "median_ns": 0
+    }
+  ],
+  "push_events": [
+    "FPD_ColorsHaveChanged",
+    "FPD_ContextInfoChanged",
+    "FPD_PluginLoaded",
+    "FPD_ProjLoaded",
+    "FPD_RoutingChanged",
+    "FPD_SetBlockSize",
+    "FPD_SetFocus",
+    "FPD_SetPlaying",
+    "FPD_SetSampleRate",
+    "FPD_SetTimeSig",
+    "FPD_SongPosChanged"
+  ],
+  "tick": {
+    "mean_ms": 8.7,
+    "max_ms": 30.5,
+    "frontmost_required": true
+  },
+  "structs": {
+    "TNoteParams": {
+      "size": 32,
+      "fields": [
+        {
+          "name": "Position",
+          "offset": 0,
+          "type": "LongInt"
+        },
+        {
+          "name": "Length",
+          "offset": 4,
+          "type": "LongInt"
+        },
+        {
+          "name": "Pan",
+          "offset": 8,
+          "type": "LongInt"
+        },
+        {
+          "name": "Vol",
+          "offset": 12,
+          "type": "Single"
+        },
+        {
+          "name": "Note",
+          "offset": 16,
+          "type": "SmallInt"
+        },
+        {
+          "name": "Color",
+          "offset": 18,
+          "type": "SmallInt"
+        },
+        {
+          "name": "Pitch",
+          "offset": 20,
+          "type": "LongInt"
+        },
+        {
+          "name": "FCut",
+          "offset": 24,
+          "type": "Single"
+        },
+        {
+          "name": "FRes",
+          "offset": 28,
+          "type": "Single"
+        }
+      ]
+    },
+    "TNotesParams": {
+      "size": 52,
+      "fields": [
+        {
+          "name": "Target",
+          "offset": 0,
+          "type": "LongInt"
+        },
+        {
+          "name": "Flags",
+          "offset": 4,
+          "type": "LongInt"
+        },
+        {
+          "name": "PatNum",
+          "offset": 8,
+          "type": "LongInt"
+        },
+        {
+          "name": "ChanNum",
+          "offset": 12,
+          "type": "LongInt"
+        },
+        {
+          "name": "Count",
+          "offset": 16,
+          "type": "LongInt"
+        },
+        {
+          "name": "NoteParams",
+          "offset": 20,
+          "type": "array"
+        }
+      ]
+    },
+    "TFruityPlugInfo": {
+      "size": 160,
+      "fields": [
+        {
+          "name": "SDKVersion",
+          "offset": 0,
+          "type": "LongInt"
+        },
+        {
+          "name": "LongName",
+          "offset": 4,
+          "type": "PChar"
+        },
+        {
+          "name": "ShortName",
+          "offset": 12,
+          "type": "PChar"
+        },
+        {
+          "name": "Flags",
+          "offset": 20,
+          "type": "LongInt"
+        },
+        {
+          "name": "NumParams",
+          "offset": 24,
+          "type": "LongInt"
+        },
+        {
+          "name": "DefPoly",
+          "offset": 28,
+          "type": "LongInt"
+        },
+        {
+          "name": "NumOutCtrls",
+          "offset": 32,
+          "type": "LongInt"
+        },
+        {
+          "name": "NumOutVoices",
+          "offset": 36,
+          "type": "LongInt"
+        },
+        {
+          "name": "Reserved",
+          "offset": 40,
+          "type": "array"
+        }
+      ]
+    }
+  },
+  "flp": {
+    "event_size_overrides": {
+      "172": 1
+    },
+    "playlist_stride": 88,
+    "note_flags_default": 16384
+  },
+  "fst": {
+    "version_string": "11.5.5",
+    "wrapper_bytes": 52,
+    "wrapper_kind": {
+      "offset": 8,
+      "value": 2
+    },
+    "wrapper_generator": {
+      "offset": 16,
+      "value": 16
+    }
+  },
+  "spool_roots": [
+    "Piano roll scripts/FLMCP",
+    "Piano roll scripts"
+  ],
+  "capabilities": {
+    "note_readback_live": false,
+    "pattern_targeting_live": true,
+    "channel_targeting_live": false,
+    "score_edit_push": false
+  }
+}
