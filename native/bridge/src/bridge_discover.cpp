@@ -414,9 +414,23 @@ std::string RunSweep(TFruityPlugHost *host, std::intptr_t host_tag, const minijs
   std::vector<int> quarantine = ReadQuarantine(spool_dir);
   std::string recovered = RecoverCrashedInflight(spool_dir, &quarantine);
 
+  // The id set to probe. An explicit `ids` array (map_align's genuinely-new
+  // unknowns) probes exactly those; absent it, the contiguous [start,end] range.
+  // Either way every id is gated by the same skip predicate below, so an
+  // explicit list can never smuggle a documented/unsafe id past the bulkhead.
+  std::vector<int> ids;
+  const minijson::Value *ids_v = args.Get("ids");
+  if (ids_v != nullptr && ids_v->type == minijson::Type::Array) {
+    for (const minijson::Value &v : ids_v->array) {
+      if (v.type == minijson::Type::Number) ids.push_back(static_cast<int>(v.number));
+    }
+  } else {
+    for (int id = start; id <= end; ++id) ids.push_back(id);
+  }
+
   std::string results = "[";
   bool first = true;
-  for (int id = start; id <= end; ++id) {
+  for (int id : ids) {
     // The blind sweep skips the whole documented range 0-87, every statically
     // unsafe id, and any dynamically quarantined crasher. It only ever
     // dispatches undocumented ids, so it is read-only and safe over any range.
