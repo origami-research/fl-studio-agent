@@ -18,6 +18,9 @@ mode drops by design (noted per docs/21 reporting duty):
 
 from __future__ import annotations
 
+import wave
+
+import numpy as np
 import pytest
 from sdk_fakes import DEFAULT_CHANNELS, FakeSession
 
@@ -223,6 +226,21 @@ def test_render_returns_the_confirmed_wav_path(fl, tmp_path):
 
     assert fl.render(output) == output
     assert output.is_file()
+
+
+def test_read_wav_loads_synthetic_pcm(fl, tmp_path):
+    path = tmp_path / "samples.wav"
+    frames = np.array([[-32768, 0], [0, 32767]], dtype="<i2")
+    with wave.open(str(path), "wb") as wav:
+        wav.setnchannels(2)
+        wav.setsampwidth(2)
+        wav.setframerate(44100)
+        wav.writeframes(frames.tobytes())
+
+    samples, sample_rate = fl.read_wav(path)
+
+    assert sample_rate == 44100
+    np.testing.assert_allclose(samples, [[-1.0, 0.0], [0.0, 32767 / 32768]])
 
 
 # -- transport -----------------------------------------------------------------

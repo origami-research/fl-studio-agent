@@ -12,6 +12,7 @@ build and the record of why we build it this way.
 
 | Doc | What it covers |
 |---|---|
+| [sdk-reference.md](sdk-reference.md) | **SDK reference.** The implemented `FL` and `Track` Python API, data shapes, and the write → render → analyze loop |
 | [00-overview.md](00-overview.md) | Vision, prior art, why this doesn't exist yet, scope and non-goals |
 | [01-fl-studio-surfaces.md](01-fl-studio-surfaces.md) | The four programmable surfaces of FL Studio, capability matrix, and the `FHD_AddNotesToPR` discovery |
 | [02-architecture.md](02-architecture.md) | System components, the three planes, data flow, state ownership, threading |

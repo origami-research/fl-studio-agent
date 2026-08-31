@@ -14,8 +14,10 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import numpy as np
+
 from fl_mcp import errors
-from fl_mcp.audio import AudioAnalysis, analyze_wav
+from fl_mcp.audio import AudioAnalysis, _read_wav, analyze_wav
 
 from .schemas import (
     AutomationPoint,
@@ -95,6 +97,10 @@ class FL:
     def analyze(self, wav: str | Path) -> AudioAnalysis:
         """Return deterministic audio measurements for a rendered WAV."""
         return analyze_wav(Path(wav))
+
+    def read_wav(self, path: str | Path) -> tuple[np.ndarray, int]:
+        """Load PCM WAV samples and sample rate for NumPy processing."""
+        return _read_wav(Path(path))
 
     def play(self) -> None:
         self._session.play()
