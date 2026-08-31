@@ -16,6 +16,12 @@ chosen per call from evidence (docs/27 §2; there is no flag):
 
 from fl_mcp.errors import NotePlaneUnavailable, WriteRejected
 
-from .facade import FLSession, create_session
+from .facade import DEFAULT_PROJECT_NAME, FLSession, create_session
 
-__all__ = ["FLSession", "NotePlaneUnavailable", "WriteRejected", "create_session"]
+__all__ = [
+    "DEFAULT_PROJECT_NAME",
+    "FLSession",
+    "NotePlaneUnavailable",
+    "WriteRejected",
+    "create_session",
+]
