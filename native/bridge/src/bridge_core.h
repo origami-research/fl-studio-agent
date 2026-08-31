@@ -59,8 +59,9 @@ constexpr int kMaxNotesPerCommand = 5000;  // schemas.AddNotesArgs max_length
 // mcp-server/src/fl_mcp/flpaths.py SPOOL_SUBDIRS: FL grants writes under
 // "Piano roll scripts" recursively but not elsewhere in Settings.
 // `home` is injectable so tests can point at a temp dir instead of the real
-// Image-Line tree.
-std::vector<std::string> SpoolRoots(const char *home);
+// Image-Line tree. A non-empty `spool_root` is a per-session override and
+// deliberately replaces the fallback roots: a session has one mailbox.
+std::vector<std::string> SpoolRoots(const char *home, const char *spool_root = nullptr);
 
 // Owns a malloc'd TNotesParams sized for `count` notes. Frees on destruction.
 // Exposed (rather than kept internal to the apply path) so the test can inspect

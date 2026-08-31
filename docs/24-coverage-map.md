@@ -44,6 +44,7 @@ North star: an agent that **produces** music in FL (not just arranges MIDI notes
 - CI is DEAD (org billing) - no automated gate; merges rely on local runs. OWNER lever.
 - Windows - parked on hardware (E8).
 - Bridge routes by capability detection (no flag): fresh heartbeat + proto match + ping = eligible, file lane otherwise. LIVE-UNVERIFIED post-integration; the RUNBOOK_BRIDGE_V3 window is the promotion gate.
+- Bridge session isolation: `FLMCP_SPOOL_ROOT` selects one shared server/Bridge mailbox; default roots remain the measured FL fallback. Unit-covered; two-live-FL confirmation remains an orchestrator run.
 - Robustness built offline, unverified live: bulkhead invariant set, circuit breaker, agent-vs-human guard (observer). See #54.
 - Licensing/template project deferred (pending license).
 

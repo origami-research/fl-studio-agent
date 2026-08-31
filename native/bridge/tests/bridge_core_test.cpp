@@ -125,6 +125,9 @@ int main() {
   std::vector<std::string> roots = bridge_core::SpoolRoots(home);
   CHECK(roots.size() == 2);
   CHECK(Contains(roots[0], "Piano roll scripts/FLMCP"));
+  std::vector<std::string> isolated = bridge_core::SpoolRoots(home, "/tmp/flmcp-session-a");
+  CHECK(isolated.size() == 1);
+  CHECK(isolated[0] == "/tmp/flmcp-session-a");
   const std::string preferred = roots[0];
   CHECK(MakeDirs(preferred + "/commands"));
   CHECK(MakeDirs(preferred + "/responses"));

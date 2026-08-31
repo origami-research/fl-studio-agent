@@ -218,6 +218,8 @@ def read_json(path: Path) -> dict[str, Any] | None:
 
 
 def spool_roots() -> list[Path]:
-    """The measured writable locations under FL's settings tree, best first
-    (Settings/Piano roll scripts/FLMCP, then Settings/Piano roll scripts)."""
+    """The session spool override, or measured writable FL settings roots."""
+    override = os.environ.get("FLMCP_SPOOL_ROOT")
+    if override:
+        return [Path(override)]
     return [settings / sub for settings in fl_settings_dirs() for sub in SPOOL_SUBDIRS]

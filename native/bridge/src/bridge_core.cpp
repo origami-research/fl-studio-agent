@@ -142,8 +142,12 @@ std::string FormatHeartbeat(const HeartbeatState &s) {
   return out;
 }
 
-std::vector<std::string> SpoolRoots(const char *home) {
+std::vector<std::string> SpoolRoots(const char *home, const char *spool_root) {
   std::vector<std::string> roots;
+  if (spool_root != nullptr && spool_root[0] != '\0') {
+    roots.emplace_back(spool_root);
+    return roots;
+  }
   if (home == nullptr || home[0] == '\0') return roots;
   const char *subdirs[] = {"Piano roll scripts/FLMCP", "Piano roll scripts"};
   for (const char *sub : subdirs) {

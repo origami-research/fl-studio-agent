@@ -76,10 +76,10 @@ std::vector<std::string> gSpoolRoots;
 
 void BuildSpoolState() {
   const char *home = getenv("HOME");
-  if (home == nullptr) return;
-  snprintf(gSpoolDir, sizeof(gSpoolDir),
-           "%s/Documents/Image-Line/FL Studio/Settings/Piano roll scripts/FLMCP", home);
-  gSpoolRoots = bridge_core::SpoolRoots(home);
+  const char *root = getenv("FLMCP_SPOOL_ROOT");
+  gSpoolRoots = bridge_core::SpoolRoots(home, root);
+  if (gSpoolRoots.empty()) return;
+  snprintf(gSpoolDir, sizeof(gSpoolDir), "%s", gSpoolRoots.front().c_str());
 }
 
 void WriteSmall(const char *name, const char *text) {

@@ -21,6 +21,7 @@ from fl_mcp.core.carriers.spool import (
     SpoolUnavailable,
     read_json,
     resume_next_id,
+    spool_roots,
     write_json_atomic,
 )
 from fl_mcp.errors import ToolError
@@ -59,6 +60,14 @@ def test_send_without_any_root_raises(tmp_path, monkeypatch):
     monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
     with pytest.raises(SpoolUnavailable, match="settings folder"):
         SpoolCarrier().send(CMD)
+
+
+def test_spool_root_environment_override_is_the_only_session_root(tmp_path, monkeypatch):
+    root = tmp_path / "session-a"
+    monkeypatch.setenv("FLMCP_SPOOL_ROOT", str(root))
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path / "no-fl-settings"))
+
+    assert spool_roots() == [root]
 
 
 def test_is_live_always_the_base_medium(tmp_path):
