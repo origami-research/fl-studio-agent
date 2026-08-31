@@ -36,7 +36,8 @@ North star: an agent that **produces** music in FL (not just arranges MIDI notes
 | Piano-roll transforms (quantize/arp/strum) | NONE | T3 | we write raw notes; FL's tools via piano-roll scripting API (documented) |
 | Markers / time & key sig / groove | NONE | T3 | file RE; some via controller API (documented) |
 | Stem export / MIDI export | NONE | T3 | render is full-mix only (-R); stems need per-track routing or CLI flags (unknown) |
-| Full-mix render | headless CLI | T3 | covered (E4: OsxFL -R) |
+| Full-mix render | live control lane | T3 | `fl.render(path)` issues `ui.exportWav(path)` and confirms the WAV exists; live menu-export E2E remains required per FL version. |
+| Render analysis (BPM/key/loudness/peak/spectrum) | local WAV | T2 | `fl.analyze(path)` is deterministic Python measurement, no model or FL session required. |
 | Scene analysis (key/digest) | file | T2 | covered (get_scene) |
 | Undo / redo control | undo via wire | T3 | redo + file-lane revert unbuilt (store content-addresses writes) |
 

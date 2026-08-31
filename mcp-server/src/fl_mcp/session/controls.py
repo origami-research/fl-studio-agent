@@ -6,6 +6,7 @@ landed - it never falls through to the file path (the v1 cascade bug).
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 from fl_mcp import errors, flp
@@ -25,6 +26,33 @@ PLUGIN_PARAM_TOLERANCE = 0.02
 # FL's plugins.* convention for "the channel's own generator, not a mixer
 # effect slot" (the slot argument every call here passes).
 GENERATOR_SLOT = -1
+
+
+def render_wav(session: FLSession, output: Path) -> Path:
+    """Ask the live controller to export WAV, then confirm its artifact exists.
+
+    Rendering is necessarily live-only: an FL project file cannot render itself,
+    and success means an actual WAV appeared at the requested location.
+    """
+    output = output.expanduser().resolve()
+    if session._ensure_hello() is None or session.control is None:
+        raise errors.control_plane_unavailable("ui.exportWav", 0.0)
+    response = session.control.send_request(
+        "ui.exportWav", args=[str(output)], timeout=LIVE_SET_TIMEOUT_SECONDS
+    )
+    if not response.ok:
+        detail = response.err or "no detail"
+        if errors.is_operation_unsafe(detail):
+            raise errors.operation_unsafe("ui.exportWav")
+        raise errors.fl_api_error("ui.exportWav", detail)
+    if not output.is_file() or output.stat().st_size == 0:
+        raise errors.ToolError(
+            "render_failed",
+            f"FL accepted the WAV export but did not create {output}.",
+            "Check FL's export settings and retry; a render is successful only when its WAV exists.",
+            retryable=True,
+        )
+    return output
 
 
 def set_tempo(session: FLSession, bpm: float) -> float:

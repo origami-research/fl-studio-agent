@@ -218,6 +218,13 @@ def test_tempo_unconfirmed_raises_instead_of_guessing(tmp_path):
     assert exc_info.value.category == "control_plane_unavailable"
 
 
+def test_render_returns_the_confirmed_wav_path(fl, tmp_path):
+    output = tmp_path / "mix.wav"
+
+    assert fl.render(output) == output
+    assert output.is_file()
+
+
 # -- transport -----------------------------------------------------------------
 
 

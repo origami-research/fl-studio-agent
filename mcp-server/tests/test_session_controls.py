@@ -6,6 +6,8 @@ refusal is retryable - never a fallthrough (addenda A6/A11).
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 from session_fakes import HELLO, FakeControl, make_session
 
@@ -39,6 +41,20 @@ def test_set_tempo_live_returns_the_readback_not_the_request():
 
     assert session.set_tempo(130.0) == 128.5
     assert ("mixer.setCurrentTempo", [130.0, 1]) in control.calls
+
+
+def test_render_wav_uses_control_lane_and_confirms_artifact(tmp_path):
+    output = tmp_path / "mix.wav"
+
+    def export(args):
+        Path(args[0]).write_bytes(b"RIFF....WAVE")
+        return None
+
+    control = FakeControl(hello=HELLO, handlers={"ui.exportWav": export})
+    session, _ = make_session(control=control)
+
+    assert session.render_wav(output) == output.resolve()
+    assert ("ui.exportWav", [str(output.resolve())]) in control.calls
 
 
 def test_set_tempo_live_unconfirmed_raises():

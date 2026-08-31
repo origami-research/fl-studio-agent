@@ -207,6 +207,9 @@ class FLSession:
     def set_tempo(self, bpm: float) -> float:
         return controls.set_tempo(self, bpm)
 
+    def render_wav(self, output: Path) -> Path:
+        return controls.render_wav(self, output)
+
     def set_channel_levels(
         self,
         channel: int,

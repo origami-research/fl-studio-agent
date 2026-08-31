@@ -7,6 +7,8 @@ the action log - is the shipped code, not a mock of it.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from fl_mcp.schemas import (
     AutomationPoint,
     AutomationReceipt,
@@ -81,6 +83,10 @@ class FakeSession(FLSession):
         # value, not the caller's echo.
         self.tempo = round(bpm * 1000) / 1000
         return self.tempo
+
+    def render_wav(self, output: Path) -> Path:
+        output.write_bytes(b"RIFF....WAVE")
+        return output
 
     def set_automation(self, channel: int, points: list[AutomationPoint]) -> AutomationReceipt:
         return AutomationReceipt(backend="project-write", channel=channel, points=points)

@@ -12,7 +12,10 @@ session/flp/store. A private function appearing here is a design smell.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from fl_mcp import errors
+from fl_mcp.audio import AudioAnalysis, analyze_wav
 
 from .schemas import (
     AutomationPoint,
@@ -84,6 +87,14 @@ class FL:
     def set_tempo(self, bpm: float) -> float:
         """Returns FL's own read-back, never the request echo."""
         return self._session.set_tempo(bpm)
+
+    def render(self, output: str | Path) -> Path:
+        """Export the current live project to ``output`` and return the confirmed WAV path."""
+        return self._session.render_wav(Path(output))
+
+    def analyze(self, wav: str | Path) -> AudioAnalysis:
+        """Return deterministic audio measurements for a rendered WAV."""
+        return analyze_wav(Path(wav))
 
     def play(self) -> None:
         self._session.play()
