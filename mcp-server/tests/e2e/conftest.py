@@ -26,7 +26,7 @@ from typing import NamedTuple
 import pytest
 
 from e2e.fl_host import FLHost
-from fl_mcp.flpaths import fl_app
+from fl_mcp.fl.paths import fl_app
 from fl_mcp.session import FLSession, create_session
 
 

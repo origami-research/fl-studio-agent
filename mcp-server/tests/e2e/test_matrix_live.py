@@ -21,27 +21,14 @@ with FL_E2E_MATRIX=<comma-separated ids> when the window is short.
 
 from __future__ import annotations
 
-import os
-
 import pytest
 
-from e2e.matrix import CYCLE_PAN, CYCLE_VOLUME, MATRIX, run_file_cycle
+from e2e.matrix import CYCLE_PAN, CYCLE_VOLUME, MATRIX, run_file_cycle, selected
 
 pytestmark = pytest.mark.e2e
 
 
-def _selected() -> list:
-    chosen = os.environ.get("FL_E2E_MATRIX", "")
-    if not chosen:
-        return MATRIX
-    ids = [s.strip() for s in chosen.split(",") if s.strip()]
-    known = {p.id for p in MATRIX}
-    unknown = [i for i in ids if i not in known]
-    assert not unknown, f"FL_E2E_MATRIX names unknown projects {unknown}; known: {sorted(known)}"
-    return [p for p in MATRIX if p.id in ids]
-
-
-@pytest.mark.parametrize("project", _selected(), ids=lambda p: p.id)
+@pytest.mark.parametrize("project", selected("FL_E2E_MATRIX"), ids=lambda p: p.id)
 def test_live_matrix_cycle(project, fl_host, tmp_path):
     tempo = 200.0 + MATRIX.index(project)  # unique marker per project
     outcome = run_file_cycle(project, tmp_path, tempo=tempo)
