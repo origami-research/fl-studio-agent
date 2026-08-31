@@ -35,28 +35,51 @@ class StubLane:
         return {"lane": self.name}
 
 
+@dataclass(frozen=True)
+class _ProfileCaps:
+    channel_targeting_live: bool = False
+
+
+@dataclass(frozen=True)
+class _Profile:
+    capabilities: _ProfileCaps = _ProfileCaps()
+
+
+@dataclass(frozen=True)
+class FakeCaps:
+    """The evidence, shaped exactly like Surface 3's Capabilities Protocol."""
+
+    bridge_live: bool = False
+    bridge_channel: int | None = None
+    bridge_heartbeat_at: float | None = None
+    profile: _Profile = _Profile()
+
+
 class ClosedBreaker:
-    closed = True
+    def admit(self, heartbeat_at) -> bool:
+        return True
+
+
+def _op(kind: str):
+    return router.Operation(kind=kind, target=router.Target(), requires=router.Capability(0))
 
 
 @pytest.mark.parametrize("kind", OP_KINDS)
 def test_first_serving_lane_wins_for_every_kind(kind):
-    op = router.Operation(kind=kind, target=None, requires=None)
     lanes = [StubLane("bridge", serves=False), StubLane("project-write", serves=True)]
-    chosen = router.route(op, caps=None, lanes=lanes, breaker=ClosedBreaker())
+    chosen = router.route(_op(kind), caps=FakeCaps(), lanes=lanes, breaker=ClosedBreaker())
     assert chosen is lanes[1]
 
     lanes = [StubLane("bridge", serves=True), StubLane("project-write", serves=True)]
-    chosen = router.route(op, caps=None, lanes=lanes, breaker=ClosedBreaker())
+    chosen = router.route(_op(kind), caps=FakeCaps(), lanes=lanes, breaker=ClosedBreaker())
     assert chosen is lanes[0], "priority order not respected: the best-capability lane lost"
 
 
 @pytest.mark.parametrize("kind", OP_KINDS)
 def test_no_serving_lane_raises_never_none(kind):
-    op = router.Operation(kind=kind, target=None, requires=None)
     lanes = [StubLane("bridge", serves=False), StubLane("project-write", serves=False)]
     with pytest.raises(Exception):  # the error type is the router's to choose
-        assert router.route(op, caps=None, lanes=lanes, breaker=ClosedBreaker()) is not None
+        assert router.route(_op(kind), caps=FakeCaps(), lanes=lanes, breaker=ClosedBreaker()) is not None
 
 
 def test_routing_is_kind_agnostic():
@@ -65,8 +88,8 @@ def test_routing_is_kind_agnostic():
     lanes = [StubLane("bridge", serves=True), StubLane("project-write", serves=True)]
     picks = {
         router.route(
-            router.Operation(kind=kind, target=None, requires=None),
-            caps=None,
+            _op(kind),
+            caps=FakeCaps(),
             lanes=lanes,
             breaker=ClosedBreaker(),
         ).name
