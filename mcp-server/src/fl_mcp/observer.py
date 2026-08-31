@@ -38,8 +38,8 @@ from pydantic import ValidationError
 
 from fl_mcp import errors, flp
 from fl_mcp.clock import now
+from fl_mcp.core.carriers.spool import spool_roots
 from fl_mcp.schemas import Note, NoteDelta, Target
-from fl_mcp.spool import spool_roots
 from fl_mcp.store import diff_notes
 
 log = logging.getLogger(__name__)

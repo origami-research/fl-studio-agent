@@ -548,10 +548,12 @@ int main() {
   {
     CHECK(fl_dispatch::IsUnsafe(94));   // crashes FL (EAccessViolation), live-confirmed
     CHECK(fl_dispatch::IsUnsafe(99));   // hangs the tick thread, live-confirmed
+    CHECK(fl_dispatch::IsUnsafe(106));  // wedges the tick, live-confirmed (issue #92)
     CHECK(fl_dispatch::IsUnsafe(17));   // FHD_AddNotesToPR: null-deref on a bare call
     CHECK(fl_dispatch::Lookup(94) != nullptr);
     CHECK(fl_dispatch::Lookup(94)->hazard == fl_dispatch::Hazard::kCrashesHost);
     CHECK(fl_dispatch::Lookup(99)->hazard == fl_dispatch::Hazard::kHangsHost);
+    CHECK(fl_dispatch::Lookup(106)->hazard == fl_dispatch::Hazard::kHangsHost);
     CHECK(fl_dispatch::IsDocumented(0));
     CHECK(fl_dispatch::IsDocumented(87));
     CHECK(!fl_dispatch::IsDocumented(88));
@@ -577,14 +579,36 @@ int main() {
     CHECK(out.had_command);
     CHECK(out.ok);
     CHECK(bridge_core::AlreadyConsumed(roots, 200));  // claimed: a crash cannot replay it
-    // 88..109 is 22 ids; 94 and 99 are ledger-skipped, so 20 reach the host.
-    CHECK(host.calls.size() == 20);
+    // 88..109 is 22 ids; 94, 99 and 106 are ledger-skipped, so 19 reach the host.
+    CHECK(host.calls.size() == 19);
     std::string resp = ReadFile(RespPath(preferred, 200));
     CHECK(Contains(resp, "\"result\":"));
     CHECK(Contains(resp, "\"pass\": \"sweep\""));
     CHECK(Contains(resp, "\"id\": 94, \"skipped\": \"crashes_host\""));
     CHECK(Contains(resp, "\"id\": 99, \"skipped\": \"hangs_host\""));
+    CHECK(Contains(resp, "\"id\": 106, \"skipped\": \"hangs_host\""));
     CHECK(Contains(resp, "\"id\": 88, \"ret\": 0"));  // a dispatched undocumented id
+  }
+
+  // --- 16b. wp_sweep with an explicit `ids` list probes exactly those ----------
+  // map_align emits the genuinely-new unknowns; the sweep consumes that list
+  // instead of a blind range. The same skip predicate still gates every id, so
+  // a documented or ledger-fatal id in the list is skipped by construction.
+  {
+    WriteFile(CmdPath(preferred, 204),
+              "{\"proto\":2,\"id\":204,\"op\":\"wp_sweep\",\"args\":{\"ids\":[88,90,106,17]}}");
+    WriteQueue(preferred, {204});
+    MockHost host;
+    bridge_core::PollOutcome out =
+        bridge_core::PollOnce(host.as_host(), 0, roots, bridge_core::kDefaultPPQ);
+    CHECK(out.ok);
+    // 88 and 90 dispatch; 106 is ledger-skipped; 17 is documented-skipped.
+    CHECK(host.calls.size() == 2);
+    std::string resp = ReadFile(RespPath(preferred, 204));
+    CHECK(Contains(resp, "\"id\": 88, \"ret\": 0"));
+    CHECK(Contains(resp, "\"id\": 90, \"ret\": 0"));
+    CHECK(Contains(resp, "\"id\": 106, \"skipped\": \"hangs_host\""));
+    CHECK(Contains(resp, "\"id\": 17, \"skipped\": \"null_deref\""));
   }
 
   // --- 17. wp_getters calls the curated safe getters via the FPC slot ---------
@@ -641,8 +665,8 @@ int main() {
     std::string resp = ReadFile(RespPath(preferred, 203));
     CHECK(Contains(resp, "\"recovered_crasher\": 95"));
     CHECK(Contains(resp, "\"id\": 95, \"skipped\": \"quarantined\""));
-    // 88..109 minus 94, 99 (ledger) and now 95 (quarantined) -> 19 host calls.
-    CHECK(host.calls.size() == 19);
+    // 88..109 minus 94, 99, 106 (ledger) and now 95 (quarantined) -> 18 host calls.
+    CHECK(host.calls.size() == 18);
   }
 
   if (g_failures == 0) {

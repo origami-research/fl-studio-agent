@@ -18,7 +18,7 @@ import re
 import shutil
 from pathlib import Path
 
-from .flpaths import fl_settings_dirs, piano_roll_scripts_dir
+from .paths import fl_settings_dirs, piano_roll_scripts_dir
 
 SCRIPT_FILENAME = "MCP Write Notes.pyscript"
 CONTROLLER_FILENAME = "device_FLMCP.py"
@@ -40,12 +40,12 @@ CONTROL_PORT = 1  # any matching int; input and output must agree
 
 
 def _source_script() -> Path:
-    # repo layout: mcp-server/src/fl_mcp/install.py -> <repo>/fl-scripts/piano-roll/
-    return Path(__file__).resolve().parents[3] / "fl-scripts" / "piano-roll" / SCRIPT_FILENAME
+    # repo layout: mcp-server/src/fl_mcp/fl/install.py -> <repo>/fl-scripts/piano-roll/
+    return Path(__file__).resolve().parents[4] / "fl-scripts" / "piano-roll" / SCRIPT_FILENAME
 
 
 def _source_controller() -> Path:
-    return Path(__file__).resolve().parents[3] / "fl-scripts" / "controller" / CONTROLLER_FILENAME
+    return Path(__file__).resolve().parents[4] / "fl-scripts" / "controller" / CONTROLLER_FILENAME
 
 
 def script_dir() -> Path | None:

@@ -13,7 +13,8 @@ import shutil
 import sys
 from pathlib import Path
 
-from . import flpaths
+from fl_mcp.fl import paths as flpaths
+
 from .session import DEFAULT_PROJECT_NAME  # THE definition; session resolves the same path
 
 

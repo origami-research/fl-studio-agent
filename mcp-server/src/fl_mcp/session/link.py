@@ -9,9 +9,9 @@ from collections.abc import Callable
 from typing import Any
 
 from fl_mcp import errors
-from fl_mcp.flpaths import fl_process_running
+from fl_mcp.core.carriers.wire import ControlUnavailable, MidiControl
+from fl_mcp.fl.process import fl_process_running
 from fl_mcp.schemas import ControlResponse, HelloEvent
-from fl_mcp.wire import ControlUnavailable, MidiControl
 
 log = logging.getLogger(__name__)
 

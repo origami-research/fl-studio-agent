@@ -1,9 +1,11 @@
-"""Capability detection + note-lane routing + the bridge circuit breaker.
+"""Capability detection + the bridge circuit breaker: the EVIDENCE half.
 
 This replaces the FL_MCP_BRIDGE flag (docs/27 §2, doctrine #54): the best lane
 is chosen per call from evidence, and the evidence is the probe verdict
 encoded as an eligibility predicate, not a hope. There is no env var, no
-global, nothing a human flips.
+global, nothing a human flips. The routing RULE itself is
+``fl_mcp.core.router.route`` - this module only produces what it consumes:
+``Capabilities`` (detect) and the ``BridgeBreaker``.
 """
 
 from __future__ import annotations
@@ -16,13 +18,14 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Literal, Protocol
 
 from fl_mcp import errors
+from fl_mcp.core.carriers.spool import spool_roots
 from fl_mcp.profile import load_profile as load_profile  # re-export: facade's one profile seam
-from fl_mcp.schemas import Note, NoteWriteMode, Target, WriteReceipt
-from fl_mcp.spool import Spool, spool_roots
 
 from .link import LIVE_READ_TIMEOUT_SECONDS
 
 if TYPE_CHECKING:
+    from fl_mcp.core.transport import Transport
+
     from .link import ControlLink
 
 BRIDGE_HEARTBEAT_FILE = "bridge_heartbeat.txt"
@@ -42,20 +45,6 @@ BRIDGE_PING_TIMEOUT_SECONDS = 2.0
 # most this often - one ping wait per interval, not per call (the recycle
 # rate-limit precedent, link.RECYCLE_MIN_INTERVAL_SECONDS).
 REOPEN_PROBE_MIN_INTERVAL_SECONDS = 30.0
-
-
-class NoteLane(Protocol):
-    """The lane contract (docs/27 §1). Receipts are readback, never echo.
-    A lane failure RAISES; it never silently falls through - the router
-    decides fallback BEFORE the call."""
-
-    name: Literal["project-write", "bridge"]
-
-    def write(self, target: Target, notes: list[Note], mode: NoteWriteMode) -> WriteReceipt: ...
-
-    def clear(self, target: Target) -> WriteReceipt: ...
-
-    def read(self, target: Target) -> list[Note]: ...
 
 
 class ProfileCapabilitiesLike(Protocol):
@@ -135,7 +124,7 @@ class Capabilities:
 
 def detect(
     link: ControlLink,
-    spool: Spool,
+    transport: Transport,
     project: Path | None,
     profile: CapabilityProfileLike,
 ) -> Capabilities:
@@ -268,30 +257,3 @@ class BridgeBreaker:
         return self.closed
 
 
-def pick_note_lane(
-    caps: Capabilities,
-    target: Target,
-    breaker: BridgeBreaker,
-    *,
-    bridge: NoteLane,
-    file: NoteLane,
-) -> NoteLane:
-    """The routing predicate (docs/27 §2): bridge iff the heartbeat proves it
-    live AND the write's channel constraint is verifiably satisfied AND the
-    breaker admits it (closed, or a ping round-trip just closed it).
-
-    Channel targeting is bridge-blind (PROBE_VERDICT Q2: ChanNum is ignored,
-    notes land in the selected channel), so the constraint is the wire-read
-    selected channel equalling the target - until a profile reports live
-    channel selection, which widens only this predicate. The file lane honors
-    both coordinates by construction and takes everything else."""
-    if (
-        caps.bridge_live
-        and (
-            caps.profile.capabilities.channel_targeting_live
-            or caps.bridge_channel == target.channel
-        )
-        and breaker.admit(caps.bridge_heartbeat_at)
-    ):
-        return bridge
-    return file

@@ -415,7 +415,7 @@ def merge_scrape(doc: dict, result: ScrapeResult, generated: str) -> dict:
 
 
 def _default_dylib() -> Path:
-    from .flpaths import fl_app
+    from .fl.paths import fl_app
 
     return fl_app() / "Contents" / "Libs" / "FLEngine_x64.dylib"
 

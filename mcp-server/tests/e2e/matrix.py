@@ -37,6 +37,7 @@ context manager), so a red run reads as "which file shape, which operation".
 from __future__ import annotations
 
 import math
+import os
 import shutil
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -47,7 +48,7 @@ import flpkit as flp
 import pytest
 
 from fl_mcp import scene
-from fl_mcp.flpaths import fl_app
+from fl_mcp.fl.paths import fl_app
 
 FL_DATA = fl_app() / "Contents/Resources/FL/Data"
 _TEMPLATES = FL_DATA / "Templates"
@@ -201,6 +202,20 @@ MATRIX_IDS = [p.id for p in MATRIX]
 requires_fl_data = pytest.mark.skipif(
     not FL_DATA.is_dir(), reason="FL Studio's bundled Data dir not found on this machine"
 )
+
+
+def selected(env_var: str, default: str = "") -> list[MatrixProject]:
+    """The matrix trimmed by a comma-separated id list from ``env_var``
+    (unset/empty -> ``default``; empty default -> the whole matrix). An
+    unknown id is an operator typo and fails loudly."""
+    chosen = os.environ.get(env_var, "") or default
+    if not chosen:
+        return MATRIX
+    ids = [s.strip() for s in chosen.split(",") if s.strip()]
+    known = {p.id for p in MATRIX}
+    unknown = [i for i in ids if i not in known]
+    assert not unknown, f"{env_var} names unknown projects {unknown}; known: {sorted(known)}"
+    return [p for p in MATRIX if p.id in ids]
 
 
 # -- the synthetic build ---------------------------------------------------------

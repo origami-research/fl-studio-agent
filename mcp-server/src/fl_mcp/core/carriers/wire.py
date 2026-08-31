@@ -1,6 +1,6 @@
-"""Server-hosted MIDI control transport: virtual ports + SysEx correlation.
+"""The MIDI carrier: server-hosted virtual ports + SysEx correlation, the
+control plane to the in-FL controller script.
 
-LANE W implements this module (docs/21), largely a port of v1 control_midi.py.
 The codec (framing/chunking/reassembly) is ``flmcp_codec`` - the frozen module
 the controller script embeds byte-for-byte; imported as a real installed
 package (repo-root pyproject), no path games.
@@ -11,6 +11,10 @@ traffic), and uniqueness is owned by the ONE caller that constructs it -
 ``session.create_session()`` in production, the e2e fixture in tests.
 
 Ordering rule (docs/14): the ports must exist BEFORE FL Studio launches.
+
+This plane has its own consumer and its own id space (the controller script
+correlates in memory; there is no on-disk ledger), so it satisfies the
+Carrier contract directly rather than joining the spool Transport.
 """
 
 from __future__ import annotations
@@ -35,8 +39,7 @@ from flmcp_codec import (
 from pydantic import ValidationError
 
 from fl_mcp.errors import ToolError, control_plane_unavailable
-
-from .schemas import ControlResponse, HelloEvent
+from fl_mcp.schemas import ControlRequest, ControlResponse, HelloEvent
 
 log = logging.getLogger(__name__)
 
@@ -51,9 +54,10 @@ class ControlUnavailable(RuntimeError):
 
 
 class MidiControl:
-    """Owns the virtual ports and request/response correlation. Thread-safe
-    for the single-writer FL model: calls are serialized so a response is
-    never mismatched to the wrong request."""
+    """Owns the virtual ports and request/response correlation, in the Carrier
+    shape (send / await_response / is_live). ``send_request`` composes the two
+    halves serialized - the single-writer FL model: a response is never
+    mismatched to the wrong request."""
 
     def __init__(self) -> None:
         # Resolved here, not at module top, so the substitution seam tests use
@@ -68,8 +72,9 @@ class MidiControl:
             ) from exc
 
         self._ids = itertools.count(1)
-        self._lock = threading.Lock()
-        self._pending: dict[int, dict[str, Any]] = {}
+        self._call_lock = threading.Lock()  # serializes send_request round trips
+        self._lock = threading.Lock()  # the pending/response maps + port writes
+        self._pending: dict[int, ControlRequest] = {}
         self._responses: dict[int, dict[str, Any]] = {}
         self._events: list[dict[str, Any]] = []
         self._event_listeners: list[Callable[[dict[str, Any]], None]] = []
@@ -95,6 +100,58 @@ class MidiControl:
             self.close()
             raise ControlUnavailable(f"could not open the virtual MIDI ports: {exc}") from exc
 
+    # -- the Carrier contract ---------------------------------------------------
+
+    def is_live(self) -> bool:
+        """A controller announced itself on these ports; without a hello the
+        wire is plugged in but nobody is listening."""
+        return self._hello is not None
+
+    def send(self, cmd: ControlRequest) -> None:
+        """Frame and transmit one request, without waiting."""
+        with self._lock:
+            self._pending[cmd.id] = cmd
+            for frame in encode_message(TYPE_REQUEST, cmd.model_dump(), msg_id=cmd.id):
+                self._out.send_message(list(frame))
+
+    def await_response(self, cmd_id: int, timeout: float) -> ControlResponse:
+        """Block for the correlated response.
+
+        NOTE(U4): FL parks engine calls that arrive "unsafe at current time"
+        for OnIdle retry, and OnIdle freezes under modal dialogs - callers see
+        that as a timeout, not an error (live-observed 2026-08-27).
+        """
+        op = self._pending[cmd_id].op
+        try:
+            deadline = time.monotonic() + timeout
+            while time.monotonic() < deadline:
+                if cmd_id in self._responses:
+                    return ControlResponse.model_validate(self._responses.pop(cmd_id))
+                time.sleep(RESPONSE_POLL_SECONDS)
+        finally:
+            # Pop both: on timeout the callback may have written a late
+            # response between the poll's last check and here; dropping it
+            # prevents an unbounded per-timeout leak (ids are never reused).
+            self._pending.pop(cmd_id, None)
+            self._responses.pop(cmd_id, None)
+        # Same category either way, but the language distinguishes the
+        # two live-measured failure modes (docs/21 A6): no hello means
+        # no controller is attached; hello + timeout usually means FL
+        # parked the call "unsafe at current time" - busy, not absent.
+        if self._hello is None:
+            raise control_plane_unavailable(op, timeout)
+        raise ToolError(
+            "control_plane_unavailable",
+            f"No response to {op!r} within {timeout:g}s, but the controller IS "
+            "attached (hello received) - FL is likely busy, not disconnected.",
+            "FL parks calls that arrive 'unsafe at current time' for OnIdle retry "
+            "(common right after a project load) and the controller gives up after "
+            "~4s. Retry, with a longer timeout if this was the first engine call.",
+            retryable=True,
+        )
+
+    # -- the serialized round trip ----------------------------------------------
+
     def send_request(
         self,
         op: str,
@@ -102,45 +159,11 @@ class MidiControl:
         kwargs: dict[str, Any] | None = None,
         timeout: float = 2.0,
     ) -> ControlResponse:
-        """One correlated round trip to the controller script.
-
-        NOTE(U4): FL parks engine calls that arrive "unsafe at current time"
-        for OnIdle retry, and OnIdle freezes under modal dialogs - callers see
-        that as a timeout, not an error (live-observed 2026-08-27).
-        """
-        with self._lock:
-            req_id = next(self._ids)
-            payload = {"id": req_id, "op": op, "args": args or [], "kwargs": kwargs or {}}
-            self._pending[req_id] = payload
-            try:
-                for frame in encode_message(TYPE_REQUEST, payload, msg_id=req_id):
-                    self._out.send_message(list(frame))
-                deadline = time.monotonic() + timeout
-                while time.monotonic() < deadline:
-                    if req_id in self._responses:
-                        return ControlResponse.model_validate(self._responses.pop(req_id))
-                    time.sleep(RESPONSE_POLL_SECONDS)
-                # Same category either way, but the language distinguishes the
-                # two live-measured failure modes (docs/21 A6): no hello means
-                # no controller is attached; hello + timeout usually means FL
-                # parked the call "unsafe at current time" - busy, not absent.
-                if self._hello is None:
-                    raise control_plane_unavailable(op, timeout)
-                raise ToolError(
-                    "control_plane_unavailable",
-                    f"No response to {op!r} within {timeout:g}s, but the controller IS "
-                    "attached (hello received) - FL is likely busy, not disconnected.",
-                    "FL parks calls that arrive 'unsafe at current time' for OnIdle retry "
-                    "(common right after a project load) and the controller gives up after "
-                    "~4s. Retry, with a longer timeout if this was the first engine call.",
-                    retryable=True,
-                )
-            finally:
-                # Pop both: on timeout the callback may have written a late
-                # response between the poll's last check and here; dropping it
-                # prevents an unbounded per-timeout leak (ids are never reused).
-                self._pending.pop(req_id, None)
-                self._responses.pop(req_id, None)
+        """One correlated round trip to the controller script."""
+        with self._call_lock:
+            cmd = ControlRequest(id=next(self._ids), op=op, args=args or [], kwargs=kwargs or {})
+            self.send(cmd)
+            return self.await_response(cmd.id, timeout)
 
     def await_hello(self, timeout: float = 5.0) -> HelloEvent:
         """Block until the controller announces itself; raises ToolError

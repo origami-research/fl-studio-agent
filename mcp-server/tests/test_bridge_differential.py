@@ -1,5 +1,5 @@
 """Differential test across the Python/C++ seam: a spool written by the REAL
-v2 Spool class must be byte-consumable by the REAL bridge_core (via the
+transport-over-file-carrier must be byte-consumable by the REAL bridge_core (via the
 bridge_spool_cli shim, which drives bridge_core::PollOnce against the same
 mock host as the C++ unit test and prints what FL would have received).
 
@@ -22,7 +22,8 @@ from pathlib import Path
 
 import pytest
 
-from fl_mcp.spool import Spool, read_json
+from fl_mcp.core.carriers.spool import SpoolCarrier, read_json
+from fl_mcp.core.transport import Transport
 
 NPF_EMPTY_FIRST = 1  # fp_plugclass.h
 
@@ -51,7 +52,7 @@ def drain(home: Path) -> list[dict]:
 
 def test_real_spool_is_consumed_by_bridge_core(tmp_path):
     root = tmp_path / "Documents/Image-Line/FL Studio/Settings/Piano roll scripts/FLMCP"
-    spool = Spool(root=root)
+    spool = Transport([SpoolCarrier(root)], roots=[root])
 
     # "C4" resolves server-side; the bridge must only ever see the int.
     add = spool.send(
@@ -120,7 +121,7 @@ def test_cancelled_command_is_never_applied(tmp_path):
     """A server-side timeout tombstones the command; the bridge must skip it
     without claiming it, exactly like the pyscript."""
     root = tmp_path / "Documents/Image-Line/FL Studio/Settings/Piano roll scripts/FLMCP"
-    spool = Spool(root=root)
+    spool = Transport([SpoolCarrier(root)], roots=[root])
     cmd = spool.send("ping")
     with pytest.raises(Exception, match="cancelled"):
         spool.await_response(cmd, timeout=0.01)

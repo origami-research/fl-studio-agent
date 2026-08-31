@@ -14,8 +14,8 @@ import threading
 from collections.abc import Iterator
 from pathlib import Path
 
-from fl_mcp import paths
 from fl_mcp.clock import now
+from fl_mcp.fl import paths
 
 from .schemas import (
     SCHEMA_VERSION,

@@ -8,7 +8,7 @@ including the reproduced cross-key overreach the audit flagged as CRITICAL.
 
 import pytest
 
-from fl_mcp import install
+from fl_mcp.fl import install
 
 
 @pytest.fixture

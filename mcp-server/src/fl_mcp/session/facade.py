@@ -14,10 +14,16 @@ import os
 from collections.abc import Callable
 from pathlib import Path
 
-from fl_mcp import bridge_wire, errors
-from fl_mcp.bridge_wire import BridgeWire
-from fl_mcp.flpaths import primary_settings_dir
+from fl_mcp import errors
+from fl_mcp.core.carriers import CarrierUnavailable
+from fl_mcp.core.carriers.spool import SpoolCarrier
+from fl_mcp.core.carriers.udp import UdpCarrier
+from fl_mcp.core.carriers.wire import ControlUnavailable, MidiControl
+from fl_mcp.core.transport import Transport
+from fl_mcp.errors import NotePlaneUnavailable
+from fl_mcp.fl.paths import primary_settings_dir
 from fl_mcp.observer import Observer
+from fl_mcp.ops import notes as ops_notes
 from fl_mcp.schemas import (
     Channel,
     ChannelLevels,
@@ -30,9 +36,7 @@ from fl_mcp.schemas import (
     Target,
     WriteReceipt,
 )
-from fl_mcp.spool import Spool, SpoolUnavailable
 from fl_mcp.store import Store
-from fl_mcp.wire import ControlUnavailable, MidiControl
 
 from . import controls, lifecycle, state
 from . import notes as note_ops
@@ -41,7 +45,9 @@ from .notes import BridgeLane, FileLane
 from .router import (
     BRIDGE_PING_TIMEOUT_SECONDS,
     BridgeBreaker,
+    Capabilities,
     CapabilityProfileLike,
+    detect,
     load_profile,
 )
 
@@ -73,13 +79,12 @@ def create_session() -> FLSession:
         )
         project = candidate if candidate is not None and candidate.is_file() else None
 
-    # Carrier by capability (docs/26 A4): the bridge's UDP endpoint when its
-    # advert is fresh and it answers a ping, the file spool otherwise. Both are
-    # Spool-shaped (send/await_response, shared id space, one consumed-ledger),
-    # so everything downstream is carrier-blind.
+    # Carrier by capability (docs/26 A4, now per CALL): one Transport over the
+    # UDP carrier and the file spool, best-capability first, sharing one id
+    # space and one consumed-ledger - everything downstream is carrier-blind.
     return FLSession(
         control=control,
-        spool=bridge_wire.connect() or Spool(),
+        transport=Transport([UdpCarrier(), SpoolCarrier()]),
         store=Store(project_key=_project_key(project)),
         project=project,
     )
@@ -101,7 +106,7 @@ def _project_key(project: Path | None) -> str:
 class FLSession:
     """Everything below the SDK talks to FL through this one object."""
 
-    spool: Spool
+    transport: Transport
     store: Store
     project: Path | None
     link: ControlLink
@@ -112,14 +117,14 @@ class FLSession:
         self,
         *,
         control: MidiControl | None,
-        spool: Spool | BridgeWire,
+        transport: Transport,
         store: Store,
         project: Path | None,
         control_factory: Callable[[], MidiControl] | None = None,
         profile: CapabilityProfileLike | None = None,
     ) -> None:
         self.link = ControlLink(control, factory=control_factory)
-        self.spool = spool
+        self.transport = transport
         self.store = store
         self.project = project
         self.profile = profile if profile is not None else load_profile()
@@ -141,13 +146,40 @@ class FLSession:
         else:
             self.link.control = value
 
+    # -- the Routable surface (docs/30 Surface 3) -----------------------------
+
+    @property
+    def caps(self) -> Capabilities:
+        """Fresh per-op evidence; route() consumes it once per operation."""
+        return detect(self.link, self.transport, self.project, self.profile)
+
+    @property
+    def lanes(self) -> tuple[BridgeLane, FileLane]:
+        """Best-capability first: the live bridge, then the file lane."""
+        return (self.bridge_lane, self.file_lane)
+
     # -- notes ----------------------------------------------------------------
 
     def write_notes(self, target: Target, notes: list[Note], mode: NoteWriteMode) -> WriteReceipt:
-        return note_ops.write_notes(self, target, notes, mode)
+        if self.project is None:
+            raise NotePlaneUnavailable(
+                "No backend can apply targeted notes: no project file is configured. "
+                "(The pyscript lane cannot target a channel - see write_notes.)"
+            )
+        # The concurrency rule (docs/27 §5): never clobber a mid-edit user
+        # note. Merge writes are purely additive, so they skip the guard.
+        if mode != "merge":
+            self.observer.guard_write(target)
+        return ops_notes.write_notes(self, target, notes, mode)
 
     def clear_notes(self, target: Target) -> WriteReceipt:
-        return note_ops.clear_notes(self, target)
+        if self.project is None:
+            raise NotePlaneUnavailable(
+                "No backend can clear notes: the control plane is not connected and no "
+                "project file is configured."
+            )
+        self.observer.guard_write(target)
+        return ops_notes.clear_notes(self, target)
 
     def read_notes(self, target: Target) -> list[Note]:
         return note_ops.read_notes(self, target)
@@ -221,7 +253,7 @@ class FLSession:
         """The breaker's gate: one stateless spool round trip proving the
         bridge's pumps run (a heartbeat alone cannot - R4 B2-7)."""
         try:
-            cmd = self.spool.send("ping")
-            return self.spool.await_response(cmd, timeout=BRIDGE_PING_TIMEOUT_SECONDS).ok
-        except (errors.ToolError, SpoolUnavailable):
+            cmd = self.transport.send("ping")
+            return self.transport.await_response(cmd, timeout=BRIDGE_PING_TIMEOUT_SECONDS).ok
+        except (errors.ToolError, CarrierUnavailable):
             return False

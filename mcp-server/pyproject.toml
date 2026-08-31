@@ -7,12 +7,12 @@ dependencies = [
     "mcp>=2.0.0",
     "python-rtmidi>=1.5.0",
     "watchdog>=6.0.0",
-    "flpkit @ git+https://github.com/clarkipeng/flpkit",
+    "flpkit @ git+https://github.com/clarkipeng/flpkit@v0.6.2",
 ]
 
 [project.scripts]
 fl-mcp = "fl_mcp.server:main"
-fl-mcp-install = "fl_mcp.install:main"
+fl-mcp-install = "fl_mcp.fl.install:main"
 
 [tool.hatch.metadata]
 # flpkit is our own extracted library, consumed straight from its repo

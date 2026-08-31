@@ -31,7 +31,7 @@ from dataclasses import dataclass, field
 from importlib import resources
 from pathlib import Path
 
-from . import flpaths
+from fl_mcp.fl import paths as flpaths
 
 log = logging.getLogger(__name__)
 
@@ -342,7 +342,7 @@ _FALLBACK_FACTS = {
     "flp.playlist_stride": ("88", "flpkit stride detector's FL 2026 answer"),
     "flp.note_flags_default": ("0x4000", "flpkit NOTE_FLAGS_DEFAULT"),
     "fst": ("11.5.5, 52-byte wrapper", "native/probe/make_fst.py"),
-    "spool_roots": ("Piano roll scripts[/FLMCP]", "fl_mcp/flpaths.py SPOOL_SUBDIRS"),
+    "spool_roots": ("Piano roll scripts[/FLMCP]", "fl_mcp/fl/paths.py SPOOL_SUBDIRS"),
     "capabilities+tick": ("probe verdicts of 2026-08-30", "native/probe/PROBE_VERDICT_2026-08-30.md"),
 }
 

@@ -23,8 +23,9 @@ from pathlib import Path
 import pytest
 from harness import flctl
 
-from fl_mcp import wire
-from fl_mcp.flpaths import fl_app
+from fl_mcp.core.carriers import wire
+from fl_mcp.fl.paths import fl_app
+from fl_mcp.fl.process import fl_executable_name
 
 
 def _osa(line: str) -> str:
@@ -48,13 +49,14 @@ class FLHost:
         frontmost = _osa(
             'tell application "System Events" to name of first process whose frontmost is true'
         )
-        if frontmost == "OsxFL":
+        if frontmost == fl_executable_name():
             _osa('tell application "System Events" to key code 53')
 
     def window_titles(self) -> str:
         """Every FL window title, one string (A14: sample all windows)."""
         return _osa(
-            'tell application "System Events" to tell process "OsxFL" to get name of every window'
+            'tell application "System Events" to tell process '
+            f'"{fl_executable_name()}" to get name of every window'
         )
 
     def launch(self, project: Path | None = None, timeout: float = 150.0) -> dict:

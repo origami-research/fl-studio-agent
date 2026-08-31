@@ -1,5 +1,5 @@
-"""UDP client for the native Bridge plugin - the low-latency carrier of the
-spool protocol (design: docs/22).
+"""The UDP carrier for the native Bridge plugin - the low-latency medium of
+the spool protocol (design: docs/22).
 
 Discovery: the plugin binds an ephemeral localhost port and publishes
 ``bridge_udp.json`` (port + 128-bit token) into the spool roots this server
@@ -12,17 +12,13 @@ Frame (both directions)::
     FLMCP1 <32-hex token> <payload JSON>
 
 The outbound payload is the ``SpoolCommand`` JSON verbatim - the same bytes
-``Spool`` would write to ``commands/NNNNNN.json``; the inbound payload is the
-result shape the bridge also writes to ``result.json``. One protocol, two
-carriers: this class mirrors ``Spool``'s interface (``send`` /
-``await_response``) and shares its id space (``spool.resume_next_id``),
-because the bridge's consumed-id ledger spans both.
+the file carrier would write to ``commands/NNNNNN.json``. One protocol, one
+id space, one consumer ledger - the carriers differ only in medium.
 
 Delivery is at-least-once (retransmit until acked); the bridge's ledger makes
 it exactly-once. A timeout here CANNOT cancel a datagram the bridge already
-queued (unlike the file spool's tombstone), so callers treat a timeout as
-retryable and the session's readback verification stays the authority on what
-landed - never this client's word.
+queued (unlike the file carrier's tombstone), so the session's readback
+verification stays the authority on what landed - never this carrier's word.
 """
 
 from __future__ import annotations
@@ -34,13 +30,14 @@ import threading
 import time
 from hmac import compare_digest
 from pathlib import Path
-from typing import Any, cast
 
 from pydantic import BaseModel, Field, ValidationError
 
 from fl_mcp import errors
-from fl_mcp.schemas import OP_ARGS, SCHEMA_VERSION, SpoolCommand, SpoolOp, SpoolResponse
-from fl_mcp.spool import read_json, resume_next_id, spool_roots
+from fl_mcp.schemas import SCHEMA_VERSION, SpoolCommand, SpoolResponse
+
+from . import CarrierUnavailable
+from .spool import read_json, spool_roots
 
 log = logging.getLogger(__name__)
 
@@ -48,15 +45,17 @@ PORT_FILE = "bridge_udp.json"
 MAGIC = b"FLMCP1 "
 TOKEN_HEX_LEN = 32
 # The transport's declared ceiling (bridge_udp.h kMaxDatagramBytes); larger
-# commands take the file spool - fragmenting datagrams would be reinventing TCP.
+# commands take the file carrier - fragmenting datagrams would be reinventing
+# TCP. Raised as CarrierUnavailable so Transport hops WITH THE SAME ID.
 MAX_DATAGRAM_BYTES = 60000
+PING_TIMEOUT_SECONDS = 0.5
 _RETRANSMIT_INTERVAL = 0.25
 _RECV_SLICE = 0.05
 _SOCKET_BUF_BYTES = 262144  # platform UDP defaults are below MAX_DATAGRAM_BYTES
 
 
-class BridgeUnavailable(RuntimeError):
-    """No usable Bridge UDP endpoint for this request; use the file spool."""
+class BridgeUnavailable(CarrierUnavailable):
+    """No usable Bridge UDP endpoint for this command; use the file carrier."""
 
 
 class BridgeEndpoint(BaseModel):
@@ -83,65 +82,56 @@ def discover(roots: list[Path] | None = None) -> BridgeEndpoint | None:
     return None
 
 
-def connect(roots: list[Path] | None = None, *, ping_timeout: float = 0.5) -> BridgeWire | None:
-    """THE carrier decision (R4 B3-1, adopted): a ready ``BridgeWire`` when
-    the bridge published an endpoint AND answers one id-less ping round
-    trip; None means use the file spool for this session. Capability
-    detection, never a flag - and freshness is proven by the round trip,
-    not a stamp (R4 B2-7): a port file left behind by a crashed FL cannot
-    pong, and a wedged GUI thread cannot ack, so both correctly fall back.
+class UdpCarrier:
+    """The Carrier contract over the bridge's UDP endpoint."""
 
-    The canonical wiring is one expression at session setup:
-    ``carrier = bridge_wire.connect() or spool``."""
-    endpoint = discover(roots)
-    if endpoint is None:
-        return None
-    wire = BridgeWire(endpoint, roots=roots)
-    if wire.ping(timeout=ping_timeout):
-        return wire
-    wire.close()
-    log.info(
-        "bridge UDP endpoint on port %d is published but not answering pings; "
-        "using the file spool",
-        endpoint.port,
-    )
-    return None
-
-
-class BridgeWire:
-    """``Spool``-shaped client (``send`` / ``await_response``) over UDP."""
-
-    def __init__(self, endpoint: BridgeEndpoint, *, roots: list[Path] | None = None) -> None:
-        """``roots`` is the id-resume seam (tmp_path in tests); defaults to the
-        real spool roots so ids never collide with ``Spool``'s."""
-        self._endpoint = endpoint
-        self._token = endpoint.token.encode("ascii")
-        self._lock = threading.Lock()  # id allocation + the pending/ack maps
+    def __init__(self, roots: list[Path] | None = None, *, ping_timeout: float = PING_TIMEOUT_SECONDS) -> None:
+        """``roots`` is the discovery seam (tmp_path in tests); defaults to the
+        real spool roots the plugin publishes into."""
+        self._roots = roots
+        self._ping_timeout = ping_timeout
+        self._lock = threading.Lock()  # the pending/ack maps
         self._recv_lock = threading.Lock()  # one reader on the socket at a time
-        self._next_id = resume_next_id(roots if roots is not None else spool_roots())
         self._pending: dict[int, bytes] = {}  # id -> frame, kept for retransmit
         self._acks: dict[int, SpoolResponse] = {}  # acks read while awaiting another id
-        self._sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        self._sock.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, _SOCKET_BUF_BYTES)
-        self._sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, _SOCKET_BUF_BYTES)
-        # connect() pins the peer: sends need no address and the kernel drops
-        # datagrams from anyone else before we even see them.
-        self._sock.connect(("127.0.0.1", endpoint.port))
+        self._sock: socket.socket | None = None
+        self._token = b""
+        self._port = 0
+
+    def is_live(self) -> bool:
+        """Live when the bridge published an endpoint AND answers one id-less
+        ping round trip. Freshness is the round trip, not a stamp (R4 B2-7):
+        a port file left behind by a crashed FL cannot pong, a wedged GUI
+        thread cannot ack - both correctly fall back. A verified socket is
+        then trusted until a send fails; freshness BETWEEN calls is the
+        session breaker's job (heartbeat + ping gate, docs/27 §3)."""
+        if self._sock is not None:
+            return True
+        endpoint = discover(self._roots)
+        if endpoint is None:
+            return False
+        self._connect(endpoint)
+        if self.ping(timeout=self._ping_timeout):
+            return True
+        self.close()
+        log.info(
+            "bridge UDP endpoint on port %d is published but not answering pings; "
+            "using the file carrier",
+            endpoint.port,
+        )
+        return False
 
     def close(self) -> None:
-        self._sock.close()
+        sock, self._sock = self._sock, None
+        if sock is not None:
+            sock.close()
 
-    def send(self, op: str, **args: Any) -> SpoolCommand:
-        """Schema-validated, sequence-numbered, transmitted once (retransmits
-        happen in ``await_response``). Raises ``BridgeUnavailable`` for a
-        command above the datagram ceiling - the caller sends THAT command via
-        the file spool instead."""
-        if op not in OP_ARGS:
-            raise ValueError(f"unknown spool op {op!r}; expected one of {sorted(OP_ARGS)}")
-        validated = OP_ARGS[op](**args).model_dump(mode="json")
-        with self._lock:
-            cmd = SpoolCommand(id=self._next_id, op=cast(SpoolOp, op), args=validated)
-            self._next_id += 1
+    def send(self, cmd: SpoolCommand) -> None:
+        """Framed and transmitted once (retransmits happen in await_response).
+        Raises BridgeUnavailable for a command above the datagram ceiling or a
+        dead socket - Transport sends THAT command via the file carrier."""
+        if self._sock is None:
+            raise BridgeUnavailable(f"no live bridge UDP endpoint for command {cmd.id}")
         payload = cmd.model_dump_json().encode("utf-8")
         if len(payload) > MAX_DATAGRAM_BYTES:
             raise BridgeUnavailable(
@@ -152,25 +142,24 @@ class BridgeWire:
         with self._lock:
             self._pending[cmd.id] = frame
         self._transmit(frame, first=True)
-        return cmd
 
-    def await_response(self, command: SpoolCommand, timeout: float) -> SpoolResponse:
+    def await_response(self, cmd_id: int, timeout: float) -> SpoolResponse:
         """Block for the bridge's ack; retransmits until acked (the ledger
         dedupes), raises the note plane's retryable ToolError on timeout."""
         with self._lock:
-            frame = self._pending.get(command.id)
+            frame = self._pending.get(cmd_id)
         try:
-            ack = self._await_ack(command.id, frame, timeout)
+            ack = self._await_ack(cmd_id, frame, timeout)
         finally:
             with self._lock:
-                self._pending.pop(command.id, None)
+                self._pending.pop(cmd_id, None)
         if ack is not None:
             return ack
-        raise errors.note_plane_unavailable(command.id, timeout)
+        raise errors.note_plane_unavailable(cmd_id, timeout)
 
-    def ping(self, timeout: float = 0.5) -> bool:
+    def ping(self, timeout: float = PING_TIMEOUT_SECONDS) -> bool:
         """One liveness round trip through the whole pipeline (socket thread ->
-        queue -> tick -> ack). False means: fall back to the file spool.
+        queue -> tick -> ack). False means: fall back to the file carrier.
 
         The probe is ID-LESS on purpose: the bridge answers it statelessly
         (ack id 0) and never claims a ledger slot, so heartbeats cannot evict
@@ -187,6 +176,16 @@ class BridgeWire:
         return ack is not None and ack.ok
 
     # -- wire-format jobs -------------------------------------------------------
+
+    def _connect(self, endpoint: BridgeEndpoint) -> None:
+        self._token = endpoint.token.encode("ascii")
+        self._port = endpoint.port
+        self._sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        self._sock.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, _SOCKET_BUF_BYTES)
+        self._sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, _SOCKET_BUF_BYTES)
+        # connect() pins the peer: sends need no address and the kernel drops
+        # datagrams from anyone else before we even see them.
+        self._sock.connect(("127.0.0.1", endpoint.port))
 
     def _await_ack(self, ack_id: int, frame: bytes | None, timeout: float) -> SpoolResponse | None:
         """The one receive loop: wait for the ack correlated to `ack_id`,
@@ -208,28 +207,36 @@ class BridgeWire:
 
     def _transmit(self, frame: bytes, *, first: bool) -> None:
         """Boundary: the first transmit of a command converts socket failure to
-        BridgeUnavailable; a failed RETRANSMIT is logged and left to the
-        timeout path (the command may already be queued bridge-side, so
-        'unavailable' would be a claim we cannot make)."""
+        BridgeUnavailable and closes the socket (the next is_live re-probes); a
+        failed RETRANSMIT is logged and left to the timeout path (the command
+        may already be queued bridge-side, so 'unavailable' would be a claim we
+        cannot make)."""
+        sock = self._sock
         try:
-            self._sock.send(frame)
+            if sock is not None:
+                sock.send(frame)
+                return
+            failure: OSError = OSError("carrier closed")
         except OSError as exc:
-            if first:
-                raise BridgeUnavailable(
-                    f"could not send to the bridge UDP port {self._endpoint.port}: {exc}"
-                ) from exc
-            log.warning("bridge UDP retransmit failed: %s", exc)
+            failure = exc
+        if first:
+            self.close()
+            raise BridgeUnavailable(
+                f"could not send to the bridge UDP port {self._port}: {failure}"
+            ) from failure
+        log.warning("bridge UDP retransmit failed: %s", failure)
 
     def _recv_into_acks(self, timeout: float) -> None:
         """Read whatever acks arrive within `timeout` into the shared map.
         Only one thread reads the socket at a time; others just wait a slice
         (their ack lands in the map either way)."""
-        if not self._recv_lock.acquire(blocking=False):
+        sock = self._sock
+        if sock is None or not self._recv_lock.acquire(blocking=False):
             time.sleep(timeout)
             return
         try:
-            self._sock.settimeout(timeout)
-            datagram = self._sock.recv(65536)
+            sock.settimeout(timeout)
+            datagram = sock.recv(65536)
         except TimeoutError:
             return
         except OSError:

@@ -161,6 +161,12 @@ inline constexpr UnsafeId kLedger[] = {
     {99, Hazard::kHangsHost, "(undocumented 99)",
      "blocks the tick thread forever when called blind - no crash, no return, "
      "so the pass never advances and the window stalls"},
+    {106, Hazard::kHangsHost, "(undocumented 106)",
+     "wedges the bridge tick when called blind (V3 live verification, 2026-08-30: "
+     "wp_sweep 88-109 skipped 94/99, FL survived, then stalled with wp_inflight "
+     "stuck at id=106, no crash and no advance; recovered by killing FL). Found "
+     "the expensive way once (issue #92); static is the only place it stays "
+     "learned. Evidence: /tmp/v3-evidence/wp_inflight."},
 };
 
 inline constexpr int kLedgerCount = sizeof(kLedger) / sizeof(kLedger[0]);

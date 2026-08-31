@@ -59,7 +59,7 @@ def test_project_key_is_a_single_safe_component():
 
 
 def test_project_dir_rejects_path_separators():
-    from fl_mcp import paths
+    from fl_mcp.fl import paths
 
     with pytest.raises(ValueError):
         paths.project_dir("/absolute/path.flp")
@@ -142,7 +142,7 @@ def test_reload_reconnects_the_wire_fresh(monkeypatch, tmp_path):
     monkeypatch.setattr(link_mod, "SETTLE_TIMEOUT_SECONDS", 0.0)  # no FL to settle on
     old = FakeControl(hello=HELLO)
     fresh = FakeControl(hello=HELLO)
-    session, _ = make_session(control=old, spool=FakeSpool(), project=tmp_path / "agent.flp")
+    session, _ = make_session(control=old, transport=FakeSpool(), project=tmp_path / "agent.flp")
     session.link._control_factory = lambda: fresh
     session.link._last_recycle = 12345.0
 
