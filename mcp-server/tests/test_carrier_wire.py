@@ -1,4 +1,4 @@
-"""wire.py unit tests: correlation honesty, dropped-frame accounting, hello
+"""The MIDI carrier: correlation honesty, dropped-frame accounting, hello
 tracking, and event dispatch - against a fake ``rtmidi`` module, no hardware,
 no FL. The codec itself is flmcp_codec's frozen surface, covered by
 fl-scripts/controller/tests/test_framing.py.
@@ -21,8 +21,9 @@ from flmcp_codec import (
     encode_message,
 )
 
-from fl_mcp import errors, wire
-from fl_mcp.schemas import ControlResponse
+from fl_mcp import errors
+from fl_mcp.core.carriers import wire
+from fl_mcp.schemas import ControlRequest, ControlResponse
 
 
 class _FakeMidiOut:
@@ -151,6 +152,22 @@ def test_port_open_failure_is_control_unavailable(monkeypatch):
     monkeypatch.setitem(sys.modules, "rtmidi", mod)
     with pytest.raises(wire.ControlUnavailable):
         wire.MidiControl()
+
+
+def test_is_live_tracks_the_hello(rig):
+    control, midi_in, _midi_out = rig
+    assert control.is_live() is False  # plugged in, nobody listening
+    _deliver_event(midi_in, op="hello", script_ver="0.1.0", fl_ver="2026.0", ppq=96)
+    assert control.is_live() is True
+
+
+def test_carrier_shape_send_then_await(rig):
+    """The staged halves send_request composes: dispatch, then correlate."""
+    control, midi_in, midi_out = rig
+    control.send(ControlRequest(id=1, op="state.snapshot"))
+    assert _last_sent_request(midi_out)["op"] == "state.snapshot"
+    _deliver_response(midi_in, 1, ret={"ppq": 96})
+    assert control.await_response(1, timeout=1.0).ret == {"ppq": 96}
 
 
 def test_send_request_round_trips_and_validates(rig):
