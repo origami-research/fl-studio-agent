@@ -36,7 +36,7 @@ line-length = 110
 # (vanilla raise messages) and PLC0415 (in-function imports) are baselined here
 # and retired in proposal phases 2-3 (they need package unification first).
 select = ["E", "F", "I", "BLE", "TRY", "SIM", "PTH", "TID", "RUF"]
-ignore = ["TRY003", "PLC0415", "E501", "E402"]  # E402: sys.path cross-tree imports, removed in docs/19 phase 2
+ignore = ["TRY003", "PLC0415", "E501"]  # E402 retired: fl/ quarantine fixed the cross-tree boundary (#80)
 
 [tool.ruff.lint.per-file-ignores]
 # Tests may catch broadly / suppress deliberately. RUF059: unpacking a fixture

@@ -82,12 +82,14 @@ def create_session() -> FLSession:
     # Carrier by capability (docs/26 A4, now per CALL): one Transport over the
     # UDP carrier and the file spool, best-capability first, sharing one id
     # space and one consumed-ledger - everything downstream is carrier-blind.
-    return FLSession(
+    session = FLSession(
         control=control,
         transport=Transport([UdpCarrier(), SpoolCarrier()]),
         store=Store(project_key=_project_key(project)),
         project=project,
     )
+    session.prewarm()  # a live bridge is used from the first write, not the second (#93)
+    return session
 
 
 def _project_key(project: Path | None) -> str:
@@ -152,6 +154,20 @@ class FLSession:
     def caps(self) -> Capabilities:
         """Fresh per-op evidence; route() consumes it once per operation."""
         return detect(self.link, self.transport, self.project, self.profile)
+
+    def prewarm(self) -> None:
+        """Close the breaker up front when the bridge is already live, so the
+        FIRST note write uses the bridge instead of safely-but-needlessly the
+        file lane (#93). Non-blocking by construction: detect() only touches
+        the wire when a fresh heartbeat says the bridge is up, so an offline
+        session never waits. Never raises - a failed pre-warm just leaves the
+        breaker to re-ping on the first real write."""
+        try:
+            caps = self.caps
+            if caps.bridge_live:
+                self.breaker.admit(caps.bridge_heartbeat_at)
+        except Exception:
+            log.debug("bridge pre-warm skipped", exc_info=True)
 
     @property
     def lanes(self) -> tuple[BridgeLane, FileLane]:
