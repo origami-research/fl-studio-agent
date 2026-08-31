@@ -24,17 +24,17 @@ The OS/FL-coupled edge lives quarantined in `fl_mcp/fl/` (`paths.py`, `process.p
 |---|---|---|
 | Notes read/write | `flpkit/formats/notes.py` + `fl_mcp/ops/notes.py` | Codec (+ Router for lane choice) |
 | Playlist / arrangement | `flpkit/formats/playlist.py` + `fl_mcp/ops/playlist.py` | Codec (+ Router) |
-| Automation read (write: planned) | `flpkit/formats/automation.py` + `fl_mcp/ops/automation.py` | Codec |
+| Automation read/write (byte-verified) | `flpkit/formats/automation.py` + `fl_mcp/ops/automation.py` | Codec |
 | Channel levels (vol/pan/pitch) | `flpkit/formats/levels.py` + `fl_mcp/ops/levels.py` | Codec |
-| Tempo / transport | `fl_mcp/ops/tempo.py` | Router -> Transport |
+| Tempo | `flpkit/formats/tempo.py` (file) + `fl_mcp/session/controls.py` (live wire) | Codec / control wire |
 | Plugin params | `fl_mcp/ops/params.py` | Router -> Transport |
-| Live bridge writes | `fl_mcp/session/router.py` binding + `native/bridge/` executor | Router -> Transport |
-| Discovery probes (`wp_*`) | one Pass spec per probe | Discovery |
+| Live bridge writes | `fl_mcp/session/notes.py` (BridgeLane) + `native/bridge/` executor | Router -> Transport |
+| Discovery probes (`wp_*`) | one Pass spec each in `fl_mcp/passes/` | Discovery |
 | Scene analysis | `fl_mcp/scene.py` | Codec (read side) |
 | Render (full mix) | `tests/e2e/test_matrix_render.py` (the `-R` contract) | fl/ (OS edge) |
 | Where FL lives / is it running / install | `fl_mcp/fl/paths.py` / `process.py` / `install.py` | fl/ (OS edge) |
 
-Until the generic-pipeline lanes (docs/29 §5) are fully merged, some feature files above are still folded into `flpkit/__init__.py` and `fl_mcp/session/`; the pipeline column is already the map to where each one lands.
+Every row above is live in the tree as written (flpkit >= 0.6, the docs/29 lanes merged and rewired). `flpkit/__init__.py` keeps thin named wrappers (`write_notes` etc.) over `codec.patch`; they are the public API, not a second path.
 
 ## The quality net over the pipelines (this is why the two files stay honest)
 
