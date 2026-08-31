@@ -36,18 +36,49 @@ North star: an agent that **produces** music in FL (not just arranges MIDI notes
 | Piano-roll transforms (quantize/arp/strum) | NONE | T3 | we write raw notes; FL's tools via piano-roll scripting API (documented) |
 | Markers / time & key sig / groove | NONE | T3 | file RE; some via controller API (documented) |
 | Stem export / MIDI export | NONE | T3 | render is full-mix only (-R); stems need per-track routing or CLI flags (unknown) |
-| Full-mix render | live control lane | T3 | `fl.render(path)` issues `ui.exportWav(path)` and confirms the WAV exists; live menu-export E2E remains required per FL version. |
+| Full-mix render | blocking live control lane | T3 | `fl.render(path)` issues `ui.exportWav(path)` and confirms the WAV exists. It freezes FL's UI for the render, so it is not usable in an ears loop. Use a saved-copy `OsxFL -R` job for non-blocking analysis, or make live exports an explicit, bounded-cadence action. |
 | Render analysis (BPM/key/loudness/peak/spectrum) | local WAV | T2 | `fl.analyze(path)` is deterministic Python measurement, no model or FL session required. |
 | Scene analysis (key/digest) | file | T2 | covered (get_scene) |
 | Undo / redo control | undo via wire | T3 | redo + file-lane revert unbuilt (store content-addresses writes) |
 
 ## Enablers (T4) - not features, but they gate scale/safety
+
 - CI is DEAD (org billing) - no automated gate; merges rely on local runs. OWNER lever.
 - Windows - parked on hardware (E8).
 - Bridge routes by capability detection (no flag): fresh heartbeat + proto match + ping = eligible, file lane otherwise. LIVE-UNVERIFIED post-integration; the RUNBOOK_BRIDGE_V3 window is the promotion gate.
 - Bridge session isolation: `FLMCP_SPOOL_ROOT` selects one shared server/Bridge mailbox; default roots remain the measured FL fallback. Unit-covered; two-live-FL confirmation remains an orchestrator run.
 - Robustness built offline, unverified live: bulkhead invariant set, circuit breaker, agent-vs-human guard (observer). See #54.
 - Licensing/template project deferred (pending license).
+
+## Non-blocking render verdict (2026-08-31)
+
+There is no verified in-process, non-blocking render call to wire as
+`render_slice` or `render_async`.
+
+The static FLEngine dispatcher decode for FL 2026.1.5 build 5384 gives a
+entry is `FHD_RenderProject` (id 60).  The SDK describes that entry as opening
+the rendering dialog, and the native fatal-id ledger classifies it `modal_ui`.
+It cannot be an unattended, asynchronous host render.  The controller's
+`ui.exportWav` is likewise a live menu export and blocks the GUI until it
+finishes; its artifact-existence readback does not change that fact.
+
+The remaining undocumented handled ids are not a runtime search space: ids 94
+and 99 are live-confirmed crash/hang hazards and 106 also wedges the bridge
+tick.  Calling another unknown id to look for a renderer would violate the
+ledger and can take down the user's FL session.  No host call was added.
+
+**Safe mitigation now.** Do not put `fl.render()` in the ears loop.  For a
+non-blocking analysis snapshot, save a project copy and render that copy in a
+separate `OsxFL -R` process; validate the resulting WAV before analysis.  When
+the current live project must be rendered, make it a user-visible, single-flight
+operation at a bounded cadence, never an automatic feedback tick.
+
+**Next evidence step.** On a matching FLEngine dylib, statically disassemble
+the jump-table targets for the undocumented, non-quarantined ids and identify a
+candidate's payload, completion signal, and thread behavior *before* any live
+call.  Only then may a disposable-project experiment prove that it returns
+without blocking and produces a valid WAV; that readback is the gate for a
+future async seam.
 
 ## The five surfaces FL exposes (enumeration method per surface)
 1. Plugin host calls (FHD_*) - SDK header + FL binary RTTI + probe sweep + observing Image-Line plugins.

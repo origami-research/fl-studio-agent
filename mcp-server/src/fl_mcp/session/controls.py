@@ -29,10 +29,12 @@ GENERATOR_SLOT = -1
 
 
 def render_wav(session: FLSession, output: Path) -> Path:
-    """Ask the live controller to export WAV, then confirm its artifact exists.
+    """Do the blocking live menu export, then confirm its artifact exists.
 
     Rendering is necessarily live-only: an FL project file cannot render itself,
-    and success means an actual WAV appeared at the requested location.
+    and success means an actual WAV appeared at the requested location.  This is
+    not an ears-loop primitive: ``ui.exportWav`` blocks FL's UI while it renders.
+    See docs/24 for the safe offline-copy alternative and the dispatcher verdict.
     """
     output = output.expanduser().resolve()
     if session._ensure_hello() is None or session.control is None:
