@@ -284,8 +284,8 @@ dev = [
 
 [[package]]
 name = "flpkit"
-version = "0.4.0"
-source = { git = "https://github.com/clarkipeng/flpkit#880fae7876bcc106f31b8027793283311c79c3e4" }
+version = "0.6.2"
+source = { git = "https://github.com/clarkipeng/flpkit#e2433576480f5eb11e2465227d31515d0d6059db" }
 
 [[package]]
 name = "h11"

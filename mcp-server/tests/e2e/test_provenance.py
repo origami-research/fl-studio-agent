@@ -21,7 +21,6 @@ from fl_mcp.profile import load_profile
 # capability tagged planned -> the flpkit writer name whose appearance must
 # force a tag promotion (DATA: extend when new planned capabilities register).
 PLANNED_WRITERS = {
-    "automation.write": "write_automation",
     "mixer.route": "write_mixer_routing",
 }
 
