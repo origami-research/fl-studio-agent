@@ -7,7 +7,8 @@ import time
 from pathlib import Path
 
 from fl_mcp import errors
-from fl_mcp.flpaths import fl_app, fl_process_running
+from fl_mcp.fl.paths import fl_app
+from fl_mcp.fl.process import fl_kill, fl_process_running
 
 from .link import ControlLink
 
@@ -30,7 +31,8 @@ def reload_fl(project: Path | None, link: ControlLink) -> None:
         # SIGKILL, because a polite quit prompts to save and would hang
         # unattended. Only used for the project-write backend, where the
         # file on disk - not the in-memory session - is the source of truth.
-        subprocess.run(["pkill", "-9", "-f", "FL Studio"], capture_output=True)
+        # fl_kill signals exact pids, never a pkill pattern (r4 B2-3).
+        fl_kill()
         deadline = time.monotonic() + FL_STOP_TIMEOUT_SECONDS
         while time.monotonic() < deadline and fl_process_running():
             time.sleep(0.2)

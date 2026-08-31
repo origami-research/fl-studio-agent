@@ -17,6 +17,8 @@ from typing import Any, cast
 
 from fl_mcp import errors
 from fl_mcp.clock import now
+from fl_mcp.core.carriers.wire import MidiControl
+from fl_mcp.core.transport import Transport
 from fl_mcp.schemas import (
     ControlResponse,
     HelloEvent,
@@ -30,9 +32,7 @@ from fl_mcp.schemas import (
 from fl_mcp.session import FLSession
 from fl_mcp.session import router as router_mod
 from fl_mcp.session.router import CapabilityProfileLike
-from fl_mcp.spool import Spool
 from fl_mcp.store import Store
-from fl_mcp.wire import MidiControl
 
 HELLO = HelloEvent(script_ver="test", fl_ver="2026", ppq=96)
 TARGET = Target(pattern=1, channel=0)
@@ -128,7 +128,7 @@ class FakeStore:
 def make_session(
     *,
     control: FakeControl | None = None,
-    spool: FakeSpool | Spool | None = None,
+    transport: FakeSpool | Transport | None = None,
     store: FakeStore | None = None,
     project: Path | None = None,
     profile: CapabilityProfileLike | None = None,
@@ -138,7 +138,7 @@ def make_session(
     # honest because every method the session calls exists on the doubles.
     session = FLSession(
         control=cast(MidiControl, control),
-        spool=cast(Spool, spool or FakeSpool()),
+        transport=cast(Transport, transport or FakeSpool()),
         store=cast(Store, store),
         project=project,
         # NEVER the real MidiControl in the fast suite (real ports + open FL

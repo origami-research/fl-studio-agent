@@ -12,7 +12,7 @@ dependencies = [
 
 [project.scripts]
 fl-mcp = "fl_mcp.server:main"
-fl-mcp-install = "fl_mcp.install:main"
+fl-mcp-install = "fl_mcp.fl.install:main"
 
 [tool.hatch.metadata]
 # flpkit is our own extracted library, consumed straight from its repo

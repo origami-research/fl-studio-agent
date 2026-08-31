@@ -140,7 +140,7 @@ def _build_transport():
 
 
 def _default_dylib() -> Path:
-    from .flpaths import fl_app
+    from .fl.paths import fl_app
 
     return fl_app() / "Contents" / "Libs" / "FLEngine_x64.dylib"
 

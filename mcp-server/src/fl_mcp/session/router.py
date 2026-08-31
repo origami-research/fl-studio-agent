@@ -16,13 +16,15 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Literal, Protocol
 
 from fl_mcp import errors
+from fl_mcp.core.carriers.spool import spool_roots
 from fl_mcp.profile import load_profile as load_profile  # re-export: facade's one profile seam
 from fl_mcp.schemas import Note, NoteWriteMode, Target, WriteReceipt
-from fl_mcp.spool import Spool, spool_roots
 
 from .link import LIVE_READ_TIMEOUT_SECONDS
 
 if TYPE_CHECKING:
+    from fl_mcp.core.transport import Transport
+
     from .link import ControlLink
 
 BRIDGE_HEARTBEAT_FILE = "bridge_heartbeat.txt"
@@ -135,7 +137,7 @@ class Capabilities:
 
 def detect(
     link: ControlLink,
-    spool: Spool,
+    transport: Transport,
     project: Path | None,
     profile: CapabilityProfileLike,
 ) -> Capabilities:

@@ -1,4 +1,4 @@
-"""Entry point: `python -m fl_mcp` runs the server, `python -m fl_mcp.install` installs."""
+"""Entry point: `python -m fl_mcp` runs the server, `python -m fl_mcp.fl.install` installs."""
 
 from .server import main
 

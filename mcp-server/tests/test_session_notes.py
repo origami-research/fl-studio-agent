@@ -44,7 +44,7 @@ def test_notes_go_project_write_even_when_control_is_connected(monkeypatch, tmp_
     project = tmp_path / "agent.flp"
     monkeypatch.setattr(flp, "write_notes", lambda path, notes, *, pattern, channel, mode: list(notes))
     spool = FakeSpool()
-    session, store = make_session(control=FakeControl(hello=HELLO), spool=spool, project=project)
+    session, store = make_session(control=FakeControl(hello=HELLO), transport=spool, project=project)
 
     receipt = session.write_notes(TARGET, NOTES, "merge")
 
@@ -127,7 +127,7 @@ def test_clear_notes_is_project_write_even_when_connected(monkeypatch, tmp_path,
     monkeypatch.setattr(flp, "write_notes", lambda path, notes, *, pattern, channel, mode: [])
     spool = FakeSpool()
     session, store = make_session(
-        control=FakeControl(hello=HELLO), spool=spool, project=tmp_path / "agent.flp"
+        control=FakeControl(hello=HELLO), transport=spool, project=tmp_path / "agent.flp"
     )
 
     receipt = session.clear_notes(TARGET)

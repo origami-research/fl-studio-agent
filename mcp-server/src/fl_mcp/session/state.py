@@ -5,9 +5,10 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from fl_mcp import errors, flp
-from fl_mcp.flpaths import fl_process_running, piano_roll_scripts_dir
+from fl_mcp.core.carriers.spool import spool_roots
+from fl_mcp.fl.paths import piano_roll_scripts_dir
+from fl_mcp.fl.process import fl_process_running
 from fl_mcp.schemas import Channel, DoctorReport, PlaneStatus, SessionState
-from fl_mcp.spool import spool_roots
 
 if TYPE_CHECKING:
     from .facade import FLSession
@@ -104,7 +105,7 @@ def doctor(session: FLSession) -> DoctorReport:
                 detail=f"ports are open and frames ARRIVE but {dropped} were dropped "
                 "as malformed - a codec mismatch, not a missing connection",
                 fix="Reinstall the controller script so its embedded codec matches "
-                "the server (`python -m fl_mcp.install`), then restart FL Studio.",
+                "the server (`python -m fl_mcp.fl.install`), then restart FL Studio.",
             )
         elif fl_process_running():
             control_plane = PlaneStatus(
@@ -112,7 +113,7 @@ def doctor(session: FLSession) -> DoctorReport:
                 detail="FL Studio is running but the controller script has not said hello",
                 fix="Close any dialog in FL (its welcome screen blocks the controller), and "
                 "confirm the FLMCP controller script is assigned in FL's MIDI settings "
-                "(`python -m fl_mcp.install`). Ports self-heal; launch order does not matter.",
+                "(`python -m fl_mcp.fl.install`). Ports self-heal; launch order does not matter.",
             )
         else:
             control_plane = PlaneStatus(
@@ -134,7 +135,7 @@ def doctor(session: FLSession) -> DoctorReport:
         note_plane = PlaneStatus(
             connected=False,
             detail=f"the '{PYSCRIPT_NAME}' piano-roll script is not installed",
-            fix="Run `python -m fl_mcp.install`, then restart FL Studio.",
+            fix="Run `python -m fl_mcp.fl.install`, then restart FL Studio.",
         )
     else:
         note_plane = PlaneStatus(

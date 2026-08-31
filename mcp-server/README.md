@@ -12,7 +12,7 @@ cd mcp-server
 uv venv && uv pip install -e .
 
 # Copy the piano roll script into FL Studio's settings folder
-uv run python -m fl_mcp.install
+uv run python -m fl_mcp.fl.install
 ```
 
 Restart FL Studio so it picks up the new script.
@@ -73,7 +73,7 @@ own behavior still needs the manual smoke test in
 
 **"nothing to apply"** — no command is queued. Ask Claude for notes first.
 
-**Script missing from the Tools > Scripting menu** — re-run `python -m fl_mcp.install`
+**Script missing from the Tools > Scripting menu** — re-run `python -m fl_mcp.fl.install`
 and restart FL Studio. `fl_status` shows the resolved install path.
 
 **Notes land an octave off** — see the `key` note above; pass MIDI numbers directly.

@@ -18,8 +18,8 @@ from pathlib import Path
 
 import pytest
 
-from fl_mcp import flpaths
 from fl_mcp import profile as profile_mod
+from fl_mcp.fl import paths as flpaths
 from fl_mcp.profile import (
     BUILTIN_FALLBACK,
     ProfileError,

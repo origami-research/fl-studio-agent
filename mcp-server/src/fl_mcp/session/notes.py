@@ -22,7 +22,7 @@ from typing import TYPE_CHECKING, Any, Literal
 
 from fl_mcp import errors, flp
 from fl_mcp.errors import NotePlaneUnavailable, WriteRejected
-from fl_mcp.flpaths import fl_process_running
+from fl_mcp.fl.process import fl_process_running
 from fl_mcp.schemas import Note, NoteDelta, NoteWriteMode, Target, WriteReceipt
 
 from .router import NoteLane, detect, pick_note_lane
@@ -82,7 +82,7 @@ def read_notes(session: FLSession, target: Target) -> list[Note]:
 
 
 def _route(session: FLSession, target: Target) -> NoteLane:
-    caps = detect(session.link, session.spool, session.project, session.profile)
+    caps = detect(session.link, session.transport, session.project, session.profile)
     return pick_note_lane(
         caps, target, session.breaker, bridge=session.bridge_lane, file=session.file_lane
     )
@@ -222,9 +222,9 @@ class BridgeLane:
         command id. A refusal or timeout raises - never a maybe - and the
         breaker learns the outcome either way (docs/27 §3)."""
         session = self._session
-        cmd = session.spool.send(op, **args)
+        cmd = session.transport.send(op, **args)
         try:
-            resp = session.spool.await_response(cmd, timeout=BRIDGE_RESPONSE_TIMEOUT_SECONDS)
+            resp = session.transport.await_response(cmd, timeout=BRIDGE_RESPONSE_TIMEOUT_SECONDS)
         except errors.ToolError:
             # An unacked command with FL gone is the hard-failure signature
             # (the command may have been the trigger); a live FL that missed

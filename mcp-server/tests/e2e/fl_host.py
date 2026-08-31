@@ -23,7 +23,7 @@ from pathlib import Path
 import pytest
 from harness import flctl
 
-from fl_mcp import wire
+from fl_mcp.core.carriers import wire
 from fl_mcp.fl.paths import fl_app
 from fl_mcp.fl.process import fl_executable_name
 

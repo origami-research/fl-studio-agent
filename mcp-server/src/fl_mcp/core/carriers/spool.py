@@ -35,7 +35,7 @@ from pathlib import Path
 from typing import Any
 
 from fl_mcp import errors
-from fl_mcp.flpaths import SPOOL_SUBDIRS, fl_settings_dirs
+from fl_mcp.fl.paths import SPOOL_SUBDIRS, fl_settings_dirs
 from fl_mcp.schemas import SCHEMA_VERSION, SpoolCommand, SpoolResponse
 
 from . import CarrierUnavailable
