@@ -1,4 +1,4 @@
-"""The note lanes and their routing.
+"""The note lanes (docs/30 Surface 3 concrete Lanes).
 
 - **FileLane ("project-write")**: raw surgery via flpkit + an FL reload. The
   only lane that honors a pattern/channel target by construction - the
@@ -6,26 +6,35 @@
   score is open), so routing notes through it stamped target-claiming
   receipts on writes that all landed in one roll (dogfood, docs/21 A12).
 - **BridgeLane ("bridge")**: live targeted notes via the native Bridge plugin
-  over the same spool. Eligible per call from evidence only (router.detect +
-  pick_note_lane); its receipts are file readback, never the bridge's echo.
+  over the transport. Eligible per call from evidence only - its ``can_serve``
+  is the one-liner over ``core.router.bridge_provides``; its receipts are
+  file readback, never the bridge's echo.
 
-A lane failure RAISES; it never silently falls through - a bridge timeout is
-ambiguous (the command may still apply on a later tick), so retrying the same
-notes on the file lane inside the same call could double-apply. The breaker
-records the failure and the NEXT call routes around the bridge.
+Routing itself is ``core.router.route`` via ``fl_mcp.ops.notes`` - no note
+branch lives here. A lane failure RAISES; it never silently falls through - a
+bridge timeout is ambiguous (the command may still apply on a later tick), so
+retrying the same notes on the file lane inside the same call could
+double-apply. The breaker records the failure and the NEXT call routes around
+the bridge.
 """
 
 from __future__ import annotations
 
 import logging
+from collections.abc import Sequence
 from typing import TYPE_CHECKING, Any, Literal
 
 from fl_mcp import errors, flp
+from fl_mcp.core.router import (
+    FILE_PROVIDES,
+    Capabilities,
+    Operation,
+    bridge_provides,
+    satisfied,
+)
 from fl_mcp.errors import NotePlaneUnavailable, WriteRejected
 from fl_mcp.fl.process import fl_process_running
 from fl_mcp.schemas import Note, NoteDelta, NoteWriteMode, Target, WriteReceipt
-
-from .router import NoteLane, detect, pick_note_lane
 
 if TYPE_CHECKING:
     from .facade import FLSession
@@ -38,34 +47,8 @@ NO_COMMAND_ID = 0
 # The bridge applies on its next tick; its spool poll answers well within this.
 BRIDGE_RESPONSE_TIMEOUT_SECONDS = 10.0
 
-
-def write_notes(
-    session: FLSession, target: Target, notes: list[Note], mode: NoteWriteMode
-) -> WriteReceipt:
-    """Apply via the lane the evidence picks, verify by readback, record the
-    delta. Raises (NotePlaneUnavailable / WriteRejected) on failure - never
-    returns a maybe."""
-    if session.project is None:
-        raise NotePlaneUnavailable(
-            "No backend can apply targeted notes: no project file is configured. "
-            "(The pyscript lane cannot target a channel - see write_notes.)"
-        )
-    # The concurrency rule (docs/27 §5): never clobber a mid-edit user note.
-    # Merge writes are purely additive, so they skip the guard.
-    if mode != "merge":
-        session.observer.guard_write(target)
-    return _route(session, target).write(target, notes, mode)
-
-
-def clear_notes(session: FLSession, target: Target) -> WriteReceipt:
-    """Same routing as write_notes."""
-    if session.project is None:
-        raise NotePlaneUnavailable(
-            "No backend can clear notes: the control plane is not connected and no "
-            "project file is configured."
-        )
-    session.observer.guard_write(target)
-    return _route(session, target).clear(target)
+# The op kinds these lanes execute (fl_mcp/ops/notes.py declares them).
+NOTE_KINDS = ("write_notes", "clear_notes")
 
 
 def read_notes(session: FLSession, target: Target) -> list[Note]:
@@ -78,13 +61,6 @@ def read_notes(session: FLSession, target: Target) -> list[Note]:
     raise NotePlaneUnavailable(
         f"Nothing recorded for pattern {target.pattern} channel {target.channel} and "
         "no project file is configured to read from."
-    )
-
-
-def _route(session: FLSession, target: Target) -> NoteLane:
-    caps = detect(session.link, session.transport, session.project, session.profile)
-    return pick_note_lane(
-        caps, target, session.breaker, bridge=session.bridge_lane, file=session.file_lane
     )
 
 
@@ -119,29 +95,19 @@ class FileLane:
     def __init__(self, session: FLSession) -> None:
         self._session = session
 
-    def write(self, target: Target, notes: list[Note], mode: NoteWriteMode) -> WriteReceipt:
-        return self._apply(
-            target,
-            notes,
-            mode,
-            what="note write",
-            fix="The project file was restored by the readback check failing; "
-            "inspect the .flp and retry.",
-        )
+    def can_serve(self, op: Operation, caps: Capabilities) -> bool:
+        return op.kind in NOTE_KINDS and satisfied(op.requires, FILE_PROVIDES)
 
-    def clear(self, target: Target) -> WriteReceipt:
-        return self._apply(target, [], "replace", what="clear", fix="Inspect the .flp and retry.")
-
-    def _apply(
-        self,
-        target: Target,
-        notes: list[Note],
-        mode: NoteWriteMode,
-        *,
-        what: str,
-        fix: str,
-    ) -> WriteReceipt:
+    def apply(self, op: Operation, data: Sequence[Note]) -> WriteReceipt:
+        # clear_notes IS a replace-with-empty write (ops/notes.py sends
+        # data=[] and mode="replace"); one path serves both kinds.
         session = self._session
+        target, notes, mode = op.target, list(data), op.mode
+        what = op.kind.replace("_", " ")
+        fix = (
+            "The project file was restored by the readback check failing; "
+            "inspect the .flp and retry."
+        )
         try:
             written = flp.write_notes(
                 session.project, notes, pattern=target.pattern, channel=target.channel, mode=mode
@@ -187,21 +153,20 @@ class BridgeLane:
     def __init__(self, session: FLSession) -> None:
         self._session = session
 
-    def write(self, target: Target, notes: list[Note], mode: NoteWriteMode) -> WriteReceipt:
-        command_id = self._send("add_notes", target=target, notes=notes, mode=mode, ppq=self._ppq())
-        delta = _record(self._session, target, notes, mode, self.name, command_id)
-        readback = self._file_lane_readback(target, command_id)
-        self._session.observer.record_agent_write(target, readback)
-        return WriteReceipt(
-            backend=self.name,
-            target=target,
-            confirmed_notes=len(readback),
-            delta=delta,
-        )
+    def can_serve(self, op: Operation, caps: Capabilities) -> bool:
+        return op.kind in NOTE_KINDS and satisfied(op.requires, bridge_provides(op, caps))
 
-    def clear(self, target: Target) -> WriteReceipt:
-        command_id = self._send("clear_notes", target=target)
-        delta = _record(self._session, target, [], "replace", self.name, command_id)
+    def apply(self, op: Operation, data: Sequence[Note]) -> WriteReceipt:
+        target, notes, mode = op.target, list(data), op.mode
+        if op.kind == "write_notes":
+            # add_notes is the bridge wire's write vocabulary; clear_notes is
+            # its own wire op (the consumer replaces with empty).
+            command_id = self._send(
+                "add_notes", target=target, notes=notes, mode=mode, ppq=self._ppq()
+            )
+        else:
+            command_id = self._send("clear_notes", target=target)
+        delta = _record(self._session, target, notes, mode, self.name, command_id)
         readback = self._file_lane_readback(target, command_id)
         self._session.observer.record_agent_write(target, readback)
         return WriteReceipt(

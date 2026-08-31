@@ -20,8 +20,10 @@ from fl_mcp.core.carriers.spool import SpoolCarrier
 from fl_mcp.core.carriers.udp import UdpCarrier
 from fl_mcp.core.carriers.wire import ControlUnavailable, MidiControl
 from fl_mcp.core.transport import Transport
+from fl_mcp.errors import NotePlaneUnavailable
 from fl_mcp.fl.paths import primary_settings_dir
 from fl_mcp.observer import Observer
+from fl_mcp.ops import notes as ops_notes
 from fl_mcp.schemas import (
     Channel,
     ChannelLevels,
@@ -43,7 +45,9 @@ from .notes import BridgeLane, FileLane
 from .router import (
     BRIDGE_PING_TIMEOUT_SECONDS,
     BridgeBreaker,
+    Capabilities,
     CapabilityProfileLike,
+    detect,
     load_profile,
 )
 
@@ -142,13 +146,40 @@ class FLSession:
         else:
             self.link.control = value
 
+    # -- the Routable surface (docs/30 Surface 3) -----------------------------
+
+    @property
+    def caps(self) -> Capabilities:
+        """Fresh per-op evidence; route() consumes it once per operation."""
+        return detect(self.link, self.transport, self.project, self.profile)
+
+    @property
+    def lanes(self) -> tuple[BridgeLane, FileLane]:
+        """Best-capability first: the live bridge, then the file lane."""
+        return (self.bridge_lane, self.file_lane)
+
     # -- notes ----------------------------------------------------------------
 
     def write_notes(self, target: Target, notes: list[Note], mode: NoteWriteMode) -> WriteReceipt:
-        return note_ops.write_notes(self, target, notes, mode)
+        if self.project is None:
+            raise NotePlaneUnavailable(
+                "No backend can apply targeted notes: no project file is configured. "
+                "(The pyscript lane cannot target a channel - see write_notes.)"
+            )
+        # The concurrency rule (docs/27 §5): never clobber a mid-edit user
+        # note. Merge writes are purely additive, so they skip the guard.
+        if mode != "merge":
+            self.observer.guard_write(target)
+        return ops_notes.write_notes(self, target, notes, mode)
 
     def clear_notes(self, target: Target) -> WriteReceipt:
-        return note_ops.clear_notes(self, target)
+        if self.project is None:
+            raise NotePlaneUnavailable(
+                "No backend can clear notes: the control plane is not connected and no "
+                "project file is configured."
+            )
+        self.observer.guard_write(target)
+        return ops_notes.clear_notes(self, target)
 
     def read_notes(self, target: Target) -> list[Note]:
         return note_ops.read_notes(self, target)

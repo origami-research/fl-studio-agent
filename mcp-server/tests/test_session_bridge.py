@@ -25,16 +25,18 @@ from session_fakes import (
 )
 
 from fl_mcp import errors, flp
+from fl_mcp.core.router import route
+from fl_mcp.ops import notes as ops_notes
 from fl_mcp.schemas import SpoolResponse, Target
 from fl_mcp.session import FLSession, WriteRejected
 from fl_mcp.session import notes as notes_mod
 from fl_mcp.session import router as router_mod
+from fl_mcp.session.notes import BridgeLane, FileLane
 from fl_mcp.session.router import (
     BRIDGE_HEARTBEAT_FILE,
     REOPEN_PROBE_MIN_INTERVAL_SECONDS,
     BridgeBreaker,
     Capabilities,
-    pick_note_lane,
     read_heartbeat,
 )
 
@@ -419,10 +421,8 @@ def test_breaker_open_needs_a_heartbeat_newer_than_the_failure():
     assert breaker.last_hard_fingerprint == "add_notes command 7 unacked; FL not running"
 
 
-# -- pick_note_lane is a pure predicate ---------------------------------------
+# -- routing notes through core.router.route with the REAL lanes' can_serve --
 
-FILE_LANE = object()
-BRIDGE_LANE = object()
 NO_TARGETING = SimpleNamespace(capabilities=SimpleNamespace(channel_targeting_live=False))
 
 
@@ -438,33 +438,31 @@ def caps(**overrides) -> Capabilities:
     return Capabilities(**base)
 
 
-def pick(capabilities: Capabilities, breaker: BridgeBreaker) -> object:
-    return pick_note_lane(
-        capabilities,
-        Target(pattern=1, channel=0),
-        breaker,
-        bridge=BRIDGE_LANE,  # type: ignore[arg-type]
-        file=FILE_LANE,  # type: ignore[arg-type]
-    )
+def pick(capabilities: Capabilities, breaker: BridgeBreaker) -> str:
+    """route() over the real lanes' pure can_serve predicates (no session:
+    can_serve never touches it); returns the chosen lane's name."""
+    op = ops_notes.WRITE.at(Target(pattern=1, channel=0))
+    lanes = [BridgeLane(None), FileLane(None)]  # type: ignore[arg-type]
+    return route(op, capabilities, lanes, breaker).name
 
 
 def test_pick_routes_bridge_only_on_full_evidence():
     breaker = BridgeBreaker(ScriptedPing(True, True))
-    assert pick(caps(), breaker) is BRIDGE_LANE
+    assert pick(caps(), breaker) == "bridge"
 
-    assert pick(caps(bridge_live=False), breaker) is FILE_LANE
-    assert pick(caps(bridge_channel=3), breaker) is FILE_LANE
-    assert pick(caps(bridge_channel=None), breaker) is FILE_LANE
+    assert pick(caps(bridge_live=False), breaker) == "project-write"
+    assert pick(caps(bridge_channel=3), breaker) == "project-write"
+    assert pick(caps(bridge_channel=None), breaker) == "project-write"
 
 
 def test_pick_never_pings_when_cheaper_evidence_already_fails():
     ping = ScriptedPing()  # any call would raise IndexError
     breaker = BridgeBreaker(ping)
-    assert pick(caps(bridge_live=False), breaker) is FILE_LANE
-    assert pick(caps(bridge_channel=1), breaker) is FILE_LANE
+    assert pick(caps(bridge_live=False), breaker) == "project-write"
+    assert pick(caps(bridge_channel=1), breaker) == "project-write"
     assert ping.calls == 0
 
 
 def test_pick_honors_profile_channel_targeting():
     breaker = BridgeBreaker(ScriptedPing(True))
-    assert pick(caps(bridge_channel=None, profile=LIVE_PROFILE), breaker) is BRIDGE_LANE
+    assert pick(caps(bridge_channel=None, profile=LIVE_PROFILE), breaker) == "bridge"
