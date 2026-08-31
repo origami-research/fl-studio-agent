@@ -14,6 +14,7 @@ from dataclasses import replace
 import flpkit as flp
 import pytest
 
+import fl_mcp.ops  # noqa: F401 - op bindings register their tags at import
 from fl_mcp.core import provenance
 from fl_mcp.profile import load_profile
 

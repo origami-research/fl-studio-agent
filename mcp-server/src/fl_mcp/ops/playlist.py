@@ -23,9 +23,9 @@ WRITE = Operation.spec(
     requires=Capability.FILE,
     tag=CapabilityTag(
         "playlist.write",
-        status="byte",
+        status="live",
         verified_fl="26.1.5",
-        evidence="docs/24 map (flpkit 0.4, FL-verified)",
+        evidence="e2e matrix tier 2 (FL readback); flpkit write_playlist FL-2026 live-verified",
     ),
 )
 

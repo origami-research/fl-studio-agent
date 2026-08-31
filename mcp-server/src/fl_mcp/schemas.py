@@ -151,12 +151,49 @@ class PingArgs(BaseModel):
     pass
 
 
-SpoolOp = Literal["add_notes", "clear_notes", "ping"]
+# -- discovery passes (native bridge_discover.cpp dispatches wp_* by op) ------
+
+
+class WpGettersArgs(BaseModel):
+    pass
+
+
+class WpTimingArgs(BaseModel):
+    iters: int = 200
+
+
+class WpTargetStep(BaseModel):
+    pattern: int
+    channel: int
+
+
+class WpTargetArgs(BaseModel):
+    ppq: int = 96
+    steps: list[WpTargetStep]
+
+
+class WpSweepArgs(BaseModel):
+    ids: list[int]
+
+
+SpoolOp = Literal[
+    "add_notes",
+    "clear_notes",
+    "ping",
+    "wp_getters",
+    "wp_timing",
+    "wp_target",
+    "wp_sweep",
+]
 
 OP_ARGS: dict[str, type[BaseModel]] = {
     "add_notes": AddNotesArgs,
     "clear_notes": ClearNotesArgs,
     "ping": PingArgs,
+    "wp_getters": WpGettersArgs,
+    "wp_timing": WpTimingArgs,
+    "wp_target": WpTargetArgs,
+    "wp_sweep": WpSweepArgs,
 }
 
 
@@ -174,6 +211,9 @@ class SpoolResponse(BaseModel):
     op: SpoolOp | None = None
     notes_written: int | None = None
     err: str | None = None
+    # The wp_* ops ack a JSON evidence object; Pass.fold reads it (docs/30
+    # Surface 4). None for ops that ack without evidence (add_notes, ping).
+    result: dict[str, Any] | None = None
 
 
 # -- control wire (server <-> controller script over SysEx) ------------------

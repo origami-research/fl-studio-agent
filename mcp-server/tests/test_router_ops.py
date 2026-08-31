@@ -199,7 +199,9 @@ def test_every_spec_carries_provenance():
         assert spec.tag.capability, spec.kind
         assert spec.tag.status in {"live", "byte", "oracle", "planned"}, spec.kind
         assert spec.tag.evidence, spec.kind
-        assert spec.tag.stale("99.9.9") is True
+        # G5 stale() semantics: verified-once means stale against another FL;
+        # never-verified (planned) is not stale - it is simply unverified.
+        assert spec.tag.stale("99.9.9") is (spec.tag.verified_fl is not None)
         if spec.tag.verified_fl is not None:
             assert spec.tag.stale(spec.tag.verified_fl) is False
 

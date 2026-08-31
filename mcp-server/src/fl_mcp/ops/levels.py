@@ -21,10 +21,10 @@ SET = Operation.spec(
     kind="set_levels",
     requires=Capability.TARGETED,
     tag=CapabilityTag(
-        "levels.set",
-        status="byte",
+        "levels.write",
+        status="live",
         verified_fl="26.1.5",
-        evidence="docs/24 map (flpkit set_channel_levels; live wire path in session/controls)",
+        evidence="e2e matrix tier 2 volume/pan readback (wire); flpkit set_channel_levels (byte)",
     ),
 )
 

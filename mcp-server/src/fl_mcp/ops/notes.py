@@ -25,7 +25,7 @@ WRITE = Operation.spec(
         "notes.write.pattern",
         status="live",
         verified_fl="26.1.5",
-        evidence="docs/24 map; PROBE_VERDICT Q2; #65 FL-save-confirmed",
+        evidence="PROBE_VERDICT_2026-08-30: PatNum honored; #65 FL-save-confirmed",
     ),
 )
 

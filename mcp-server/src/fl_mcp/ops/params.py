@@ -24,7 +24,7 @@ SET = Operation.spec(
         "params.set",
         status="live",
         verified_fl="26.1.5",
-        evidence="#50; E2-verified 2026-08-29 (schemas.PluginParam)",
+        evidence="#50 wire read/set; E2-verified 2026-08-29 (schemas.PluginParam)",
     ),
 )
 

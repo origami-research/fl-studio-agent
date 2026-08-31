@@ -23,6 +23,8 @@ from typing import Any, Literal, Protocol
 
 from fl_mcp import errors
 
+from .provenance import CapabilityTag, register
+
 # -- the capability algebra ---------------------------------------------------
 
 
@@ -70,22 +72,6 @@ class Target:
 
 
 @dataclass(frozen=True)
-class CapabilityTag:
-    """Provenance on a capability (docs/30 Surface 5): how and when it was
-    verified. Declared next to each OpSpec in fl_mcp/ops/. Its final home is
-    core/provenance.py (G5); the definition here is surface-identical and the
-    import repoints at integration."""
-
-    capability: str  # "notes.write.pattern"
-    status: Literal["live", "byte", "oracle", "planned"]
-    verified_fl: str | None  # FL version last confirmed; None = never
-    evidence: str  # runbook / verdict / test ref
-
-    def stale(self, current_fl: str) -> bool:
-        return self.verified_fl != current_fl
-
-
-@dataclass(frozen=True)
 class Operation:
     """One routable intent: what to do, where, and what serving it requires.
     ``mode`` rides along because both codec.patch (G1) and the bridge wire
@@ -99,8 +85,10 @@ class Operation:
     @staticmethod
     def spec(kind: str, requires: Capability, tag: CapabilityTag) -> OpSpec:
         """Declare a capability (fl_mcp/ops/*): the kind + requirement +
-        provenance, instantiated per call via .at()."""
-        return OpSpec(kind=kind, requires=requires, tag=tag)
+        provenance, instantiated per call via .at(). The tag registers in
+        core.provenance at import - the op binding IS the claim's one
+        source, and a conflicting second claim raises there."""
+        return OpSpec(kind=kind, requires=requires, tag=register(tag))
 
 
 @dataclass(frozen=True)

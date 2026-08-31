@@ -57,21 +57,17 @@ def tags() -> tuple[CapabilityTag, ...]:
     return tuple(_REGISTRY[name] for name in sorted(_REGISTRY))
 
 
-# What we can prove TODAY, seeded from the coverage map (docs/24) and the
-# probe verdict. Each entry is data; an op binding may re-register the same
-# tag (idempotent) and MUST update it here when its evidence changes.
+# What we can prove TODAY for capabilities WITHOUT an op binding, seeded from
+# the coverage map (docs/24) and the probe verdict. A capability with a
+# binding in fl_mcp/ops/ registers its tag THERE (Operation.spec does it at
+# import) - never here too, or register() raises on the conflicting claim.
 for _tag in (
     CapabilityTag("notes.read", "byte", "26.1.5", "docs/24; flpkit corpus suite (no live getter: PROBE_VERDICT_2026-08-30)"),
     CapabilityTag("notes.write.selected", "live", "26.1.5", "#65 FL-save-confirmed 2026-08-29"),
-    CapabilityTag("notes.write.pattern", "live", "26.1.5", "PROBE_VERDICT_2026-08-30: PatNum honored"),
     CapabilityTag("notes.write.channel", "byte", "26.1.5", "PROBE_VERDICT_2026-08-30: ChanNum ignored; file lane + e2e matrix"),
     CapabilityTag("playlist.read", "byte", "26.1.5", "docs/24; e2e matrix (80/32-byte strides)"),
-    CapabilityTag("playlist.write", "live", "26.1.5", "e2e matrix tier 2 (FL readback via tempo/window controls)"),
     CapabilityTag("automation.read", "byte", "26.1.5", "docs/24; flpkit 0.3"),
-    CapabilityTag("automation.write", "planned", None, "docs/26 D1: opaque trailer, RE via minimal-pair"),
-    CapabilityTag("levels.write", "live", "26.1.5", "e2e matrix tier 2 channel volume/pan readback"),
     CapabilityTag("tempo.set", "live", "26.1.5", "control-plane e2e round-trip"),
-    CapabilityTag("params.set", "live", "26.1.5", "#50 wire read/set"),
     CapabilityTag("mixer.route", "planned", None, "docs/24: opaque; RE file + host-call probe"),
     CapabilityTag("render.full_mix", "live", "26.1.5", "experiment E4 (OsxFL -R) + e2e render regression"),
     CapabilityTag("scene.read", "byte", "26.1.5", "get_scene over the corpus"),

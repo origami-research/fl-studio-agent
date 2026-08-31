@@ -22,9 +22,12 @@ WRITE = Operation.spec(
     requires=Capability.FILE,
     tag=CapabilityTag(
         "automation.write",
-        status="byte",
-        verified_fl="26.1.5",
-        evidence="docs/26 D1",
+        # planned until the flpkit pin ships write_automation (0.5); the
+        # provenance net (tests/e2e/test_provenance.py) forces the promotion
+        # to "byte" + a fuzz row the moment the writer lands.
+        status="planned",
+        verified_fl=None,
+        evidence="docs/26 D1: opaque trailer, RE via minimal-pair; flpkit 0.5 writer pending pin",
     ),
 )
 
