@@ -22,7 +22,7 @@ import pytest
 from sdk_fakes import DEFAULT_CHANNELS, FakeSession
 
 from fl_mcp import errors, sdk, theory
-from fl_mcp.schemas import Note, Target
+from fl_mcp.schemas import AutomationPoint, Note, Target
 from fl_mcp.sdk import ChannelNotFound, connect
 
 
@@ -149,6 +149,15 @@ def test_clear_applies_immediately(fl):
     receipt = fl.track("Bass").clear()
     assert receipt.confirmed_notes == 0
     assert fl.track("Bass").notes() == []
+
+
+def test_track_automation_returns_the_confirmed_points(fl):
+    points = [AutomationPoint(position=0, value=0.2), AutomationPoint(position=4, value=0.8)]
+
+    receipt = fl.track("Bass").set_automation(points)
+
+    assert receipt.channel == 1
+    assert receipt.points == points
 
 
 def test_track_pattern_targets_are_independent(fl):

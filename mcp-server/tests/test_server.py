@@ -110,6 +110,12 @@ def test_run_assignment_only_yields_none_result():
     assert result == {"stdout": "", "result": None}
 
 
+def test_run_exposes_automation_point():
+    result = server.run("AutomationPoint(position=1, value=0.5)", _ctx())
+
+    assert result["result"] == "AutomationPoint(position=1.0, value=0.5, tension=0.0)"
+
+
 # -- get_notes ----------------------------------------------------------------
 
 

@@ -14,7 +14,17 @@ from __future__ import annotations
 
 from fl_mcp import errors
 
-from .schemas import Channel, Note, NoteWriteMode, PluginParam, SessionState, Target, WriteReceipt
+from .schemas import (
+    AutomationPoint,
+    AutomationReceipt,
+    Channel,
+    Note,
+    NoteWriteMode,
+    PluginParam,
+    SessionState,
+    Target,
+    WriteReceipt,
+)
 from .session import FLSession, create_session
 
 
@@ -109,6 +119,10 @@ class Track:
     def notes(self) -> list[Note]:
         target = Target(pattern=self.pattern, channel=self.channel)
         return self._fl._session.read_notes(target)
+
+    def set_automation(self, points: list[AutomationPoint]) -> AutomationReceipt:
+        """Replace this channel's existing clip and return the saved-file readback."""
+        return self._fl._session.set_automation(self.channel, points)
 
     def params(self, query: str | None = None, limit: int = 40) -> list[PluginParam]:
         """The channel generator's live parameters (E2: Sytrus exposes 597).

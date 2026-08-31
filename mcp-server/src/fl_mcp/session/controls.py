@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING
 
 from fl_mcp import errors, flp
 from fl_mcp.errors import NotePlaneUnavailable, WriteRejected
-from fl_mcp.schemas import ChannelLevels, PluginParam
+from fl_mcp.schemas import AutomationPoint, AutomationReceipt, ChannelLevels, PluginParam
 
 from .link import LIVE_READ_TIMEOUT_SECONDS, LIVE_SET_TIMEOUT_SECONDS
 
@@ -133,6 +133,46 @@ def set_channel_levels(
     raise NotePlaneUnavailable(
         "No backend can set channel levels: the control plane is not connected and "
         "no project file is configured."
+    )
+
+
+def set_automation(
+    session: FLSession, channel: int, points: list[AutomationPoint]
+) -> AutomationReceipt:
+    """Replace an existing automation clip and return its saved-file readback.
+
+    There is no verified live automation writer.  ``flpkit`` carries the
+    channel's opaque header/trailer and verifies its own splice; this second,
+    independent project parse is the session boundary's confirmed result.
+    """
+    if session.project is None:
+        raise NotePlaneUnavailable(
+            "No backend can write automation: no project file is configured. "
+            "Automation clips currently require an existing FL-authored clip."
+        )
+    try:
+        saved = flp.write_automation(session.project, channel, points)
+        project = flp.read(session.project)
+        confirmed = next(item.automation for item in project.channels if item.index == channel)
+    except (flp.FlpError, IndexError, StopIteration) as exc:
+        raise WriteRejected(
+            f"project-file automation write did not verify: {exc}",
+            fix="Use an existing automation channel and inspect the project file before retrying.",
+        ) from exc
+    if confirmed != saved:
+        raise WriteRejected(
+            "project-file automation write read back differently on the session parse; "
+            "the result is UNCONFIRMED.",
+            fix="Inspect the project file before retrying.",
+        )
+    session._reload_fl()
+    return AutomationReceipt(
+        backend="project-write",
+        channel=channel,
+        points=[
+            AutomationPoint(position=p.position, value=p.value, tension=p.tension)
+            for p in confirmed
+        ],
     )
 
 

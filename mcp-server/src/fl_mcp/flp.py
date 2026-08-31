@@ -16,6 +16,7 @@ differential, the live-FL gates, and the tests of this seam.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from pathlib import Path
 
 import flpkit
@@ -35,7 +36,7 @@ from flpkit import (
     write_notes,
 )
 
-from .schemas import ChannelLevels
+from .schemas import AutomationPoint, ChannelLevels
 
 __all__ = [
     "LEVEL_MAX",
@@ -52,6 +53,7 @@ __all__ = [
     "read",
     "set_channel_levels",
     "set_tempo",
+    "write_automation",
     "write_notes",
 ]
 
@@ -74,3 +76,23 @@ def set_channel_levels(
         pan=levels.pan,
         pitch_semitones=levels.pitch_semitones,
     )
+
+
+def write_automation(
+    path: Path, channel: int, points: Sequence[AutomationPoint]
+) -> tuple[FlpAutomationPoint, ...]:
+    """Patch through flpkit, then return flpkit's saved-file readback.
+
+    ``flpkit.write_automation`` is the canonical codec and performs the
+    splice's own encode/save/reparse equality check.  This seam exposes the
+    resulting parsed points so the session can independently reparse and
+    compare its boundary readback before it reloads FL.
+    """
+    flpkit.write_automation(path, channel, points)
+    project = read(path)
+    for item in project.channels:
+        if item.index == channel:
+            if item.automation is None:
+                raise FlpError(f"channel {channel} has no automation readback after save")
+            return item.automation
+    raise FlpError(f"channel {channel} is absent from the saved-file automation readback")

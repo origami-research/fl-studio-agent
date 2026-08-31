@@ -25,6 +25,8 @@ from fl_mcp.fl.paths import primary_settings_dir
 from fl_mcp.observer import Observer
 from fl_mcp.ops import notes as ops_notes
 from fl_mcp.schemas import (
+    AutomationPoint,
+    AutomationReceipt,
     Channel,
     ChannelLevels,
     DoctorReport,
@@ -216,6 +218,11 @@ class FLSession:
         return controls.set_channel_levels(
             self, channel, volume=volume, pan=pan, pitch_semitones=pitch_semitones
         )
+
+    def set_automation(
+        self, channel: int, points: list[AutomationPoint]
+    ) -> AutomationReceipt:
+        return controls.set_automation(self, channel, points)
 
     def plugin_params(
         self,

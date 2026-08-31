@@ -115,6 +115,22 @@ class ChannelLevels(BaseModel):
     pitch_semitones: int = Field(ge=-48, le=48)
 
 
+class AutomationPoint(BaseModel):
+    """One automation point, in beats and FL's normalized value scale."""
+
+    position: float = Field(ge=0)
+    value: float = Field(ge=-0.001, le=1.001)
+    tension: float = Field(default=0.0, ge=-1, le=1)
+
+
+class AutomationReceipt(BaseModel):
+    """Automation points confirmed by reparsing the saved project file."""
+
+    backend: Literal["project-write"]
+    channel: int = Field(ge=0)
+    points: list[AutomationPoint]
+
+
 class PlaneStatus(BaseModel):
     connected: bool
     detail: str | None = None

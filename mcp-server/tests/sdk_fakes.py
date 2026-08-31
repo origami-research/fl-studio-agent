@@ -8,6 +8,8 @@ the action log - is the shipped code, not a mock of it.
 from __future__ import annotations
 
 from fl_mcp.schemas import (
+    AutomationPoint,
+    AutomationReceipt,
     Channel,
     ControlResponse,
     Note,
@@ -79,6 +81,9 @@ class FakeSession(FLSession):
         # value, not the caller's echo.
         self.tempo = round(bpm * 1000) / 1000
         return self.tempo
+
+    def set_automation(self, channel: int, points: list[AutomationPoint]) -> AutomationReceipt:
+        return AutomationReceipt(backend="project-write", channel=channel, points=points)
 
     def snapshot(self) -> SessionState:
         return SessionState(tempo_bpm=self.tempo, channels=list(self._channels))
