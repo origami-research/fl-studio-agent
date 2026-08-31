@@ -125,18 +125,23 @@ def run(
 
 
 def _build_transport():
-    """Bind a live G2 Transport (integration seam). Lazy: the static half needs
-    no transport, and this lane builds/tests without G2 merged. When the live
-    path is asked for and G2 is absent, fail with the honest reason."""
-    try:
-        from .core.carriers.spool import SpoolCarrier  # type: ignore[attr-defined]
-        from .core.transport import Transport
-    except ImportError as exc:  # pragma: no cover - exercised only post-integration
-        raise SystemExit(
-            f"live discovery needs the G2 transport ({exc}); run without --live for the "
-            "static scrape + alignment report, or wait for core.transport to land"
-        ) from exc
-    return Transport([SpoolCarrier()])  # pragma: no cover - real carriers need FL
+    """Bind the live G2 Transport. A Pass emits op+args Commands and never
+    allocates ids - that is Transport's job (the #58 exactly-once id space) -
+    so each discovery Command runs through transport.command() (validation +
+    sequence id) before request()."""
+    from .core.carriers.spool import SpoolCarrier
+    from .core.transport import Transport
+
+    class _PassTransport:
+        """The core.discovery.Transport Protocol over the concrete G2 one."""
+
+        def __init__(self, transport: Transport) -> None:
+            self._transport = transport
+
+        def request(self, cmd, timeout):  # pragma: no cover - real carrier needs FL
+            return self._transport.request(self._transport.command(cmd.op, **cmd.args), timeout)
+
+    return _PassTransport(Transport([SpoolCarrier()]))
 
 
 def _default_dylib() -> Path:
