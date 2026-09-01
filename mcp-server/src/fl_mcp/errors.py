@@ -11,6 +11,7 @@ act on it instead of retrying blindly:
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Literal
 
 ErrorCategory = Literal[
@@ -99,6 +100,16 @@ def control_plane_unavailable(op: str, timeout: float) -> ToolError:
         f"No response to '{op}' from the controller script within {timeout:g}s.",
         "In FL Studio: open MIDI settings and confirm 'FLMCP Req'/'FLMCP Res' are "
         "assigned to the FLMCP controller script. Run fl_doctor after.",
+        retryable=True,
+    )
+
+
+def concurrency_guard_unavailable(project: Path, detail: str) -> ToolError:
+    return ToolError(
+        "operation_unsafe",
+        f"Cannot verify whether the user has unsaved score edits in {project.name}: {detail}.",
+        "Retry after FL finishes saving, or run fl_doctor and restore access to the project file. "
+        "The write is refused because clobbering a user's concurrent edit would be unsafe.",
         retryable=True,
     )
 

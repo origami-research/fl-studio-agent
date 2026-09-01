@@ -74,7 +74,15 @@ def snapshot(session: FLSession) -> SessionState:
             ],
         )
 
-    return SessionState()
+    raise errors.ToolError(
+        "control_plane_unavailable",
+        "No backend can read session state: the control plane is not connected and "
+        "no project file is configured.",
+        "Launch FL Studio with the FLMCP controller script assigned, or run "
+        "`python -m fl_mcp.make_agent_project` / set FLMCP_AGENT_PROJECT to a .flp "
+        "the agent may read.",
+        retryable=True,
+    )
 
 
 def doctor(session: FLSession) -> DoctorReport:

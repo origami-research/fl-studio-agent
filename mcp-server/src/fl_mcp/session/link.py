@@ -76,8 +76,8 @@ class ControlLink:
             # wire is current before anything trusts it.
             if self.control.send_request("ping", timeout=PING_CONFIRM_SECONDS).ok:
                 return hello
-        except errors.ToolError:
-            pass
+        except errors.ToolError as exc:
+            log.debug("control hello probe failed: %s", exc.message)
         return self._recycle()
 
     def _recycle(self) -> HelloEvent | None:
@@ -153,7 +153,7 @@ class ControlLink:
             try:
                 if self.control.send_request("state.snapshot", timeout=5.0).ok:
                     return
-            except errors.ToolError:
-                pass
+            except errors.ToolError as exc:
+                log.debug("settle snapshot probe failed: %s", exc.message)
             time.sleep(SETTLE_POLL_SECONDS)
         log.warning("FL did not settle within %ss of relaunch", SETTLE_TIMEOUT_SECONDS)

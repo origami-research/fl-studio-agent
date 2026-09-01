@@ -124,10 +124,17 @@ def test_no_backend_raises_named_fix():
 
 
 def test_clear_notes_is_project_write_even_when_connected(monkeypatch, tmp_path, no_reload):
+    project = tmp_path / "agent.flp"
+    project.write_bytes(b"FLhd")
+    monkeypatch.setattr(
+        flp,
+        "read",
+        lambda path: flp.FlpProject(ppq=96, tempo=120.0, channels=(), notes=()),
+    )
     monkeypatch.setattr(flp, "write_notes", lambda path, notes, *, pattern, channel, mode: [])
     spool = FakeSpool()
     session, store = make_session(
-        control=FakeControl(hello=HELLO), transport=spool, project=tmp_path / "agent.flp"
+        control=FakeControl(hello=HELLO), transport=spool, project=project
     )
 
     receipt = session.clear_notes(TARGET)

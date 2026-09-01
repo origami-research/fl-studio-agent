@@ -83,14 +83,16 @@ def selected_channel_control(channel: int = 0) -> FakeControl:
 def project_flp(monkeypatch, tmp_path, *, ppq=192, file_notes=2):
     """The flp seams the bridge path touches: ppq for the stamp, notes_at for
     the readback. write_notes raises - the bridge path must never file-write."""
-    monkeypatch.setattr(flp, "read", lambda path: SimpleNamespace(ppq=ppq))
+    monkeypatch.setattr(flp, "read", lambda path: SimpleNamespace(ppq=ppq, notes=[]))
     monkeypatch.setattr(flp, "notes_at", lambda path, pattern, channel: [object()] * file_notes)
 
     def never(*a, **k):
         raise AssertionError("the bridge path must not write the project file")
 
     monkeypatch.setattr(flp, "write_notes", never)
-    return tmp_path / "agent.flp"
+    project = tmp_path / "agent.flp"
+    project.write_bytes(b"FLhd")
+    return project
 
 
 # -- eligibility: evidence in, lane out ---------------------------------------

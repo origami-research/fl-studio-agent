@@ -82,6 +82,17 @@ def test_snapshot_live_malformed_payload_is_a_typed_error():
     assert "malformed" in excinfo.value.message
 
 
+def test_snapshot_without_live_or_project_is_an_explicit_setup_error():
+    session, _ = make_session()
+
+    with pytest.raises(errors.ToolError) as excinfo:
+        session.snapshot()
+
+    assert excinfo.value.category == "control_plane_unavailable"
+    assert "No backend can read session state" in excinfo.value.message
+    assert "make_agent_project" in excinfo.value.fix
+
+
 # --- doctor ------------------------------------------------------------------
 
 

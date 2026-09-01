@@ -24,7 +24,6 @@ never presented (or guarded) as user activity.
 
 from __future__ import annotations
 
-import contextlib
 import json
 import logging
 import threading
@@ -166,8 +165,10 @@ class Observer:
         self._offsets: dict[Path, int] = {}
         for root in self._roots:
             path = root / BRIDGE_EVENTS_FILE
-            with contextlib.suppress(OSError):
+            try:
                 self._offsets[path] = path.stat().st_size
+            except OSError as exc:
+                log.debug("observer could not stat %s at attach: %s", path, exc)
         self._seen_lines: set[bytes] = set()
         self._seen_ring: deque[bytes] = deque(maxlen=_SEEN_LINE_CAPACITY)
         self._drop_counts: dict[Path, int] = {}
@@ -300,22 +301,31 @@ class Observer:
 
     # -- score edits (lazy poll-and-diff at checkpoints) -------------------------
 
-    def poll(self) -> list[UserAction]:
+    def poll(self, *, require_project_read: bool = False) -> list[UserAction]:
         """The checkpoint read: ``score_edit`` events for every target whose
         saved notes changed since the last look. Costs one stat while the
         project file is unchanged; one parse when it is not (VERDICT Q4's
         cheap-poll verdict, made lazy). The FIRST poll seeds the baseline
-        and emits nothing - pre-existing notes are not user actions."""
+        and emits nothing - pre-existing notes are not user actions.
+
+        ``require_project_read`` is for the write guard: passive observation may
+        skip a torn save and try again later, but a guarded write must fail
+        closed when the project cannot be checked for concurrent user edits.
+        """
         if self._project is None:
             return []
         with self._lock:
             try:
                 mtime_ns = self._project.stat().st_mtime_ns
-            except OSError:
+            except OSError as exc:
+                message = f"could not stat project file: {exc}"
+                if require_project_read:
+                    raise errors.concurrency_guard_unavailable(self._project, message) from exc
+                log.warning("%s; skipping checkpoint diff", message)
                 return []
             if self._baseline is not None and mtime_ns == self._baseline_mtime_ns:
                 return []
-            score = self._read_score()
+            score = self._read_score(require_project_read=require_project_read)
             if score is None:
                 return []
             if self._baseline is None:
@@ -340,7 +350,9 @@ class Observer:
             self._recent_edits.extend(actions)
             return actions
 
-    def _read_score(self) -> dict[tuple[int, int], list[Note]] | None:
+    def _read_score(
+        self, *, require_project_read: bool
+    ) -> dict[tuple[int, int], list[Note]] | None:
         """Every addressable target's notes from the project file, in tool
         units, or None for a file we refuse to diff (unparseable mid-save
         states resolve on the next checkpoint; a wrong diff would not)."""
@@ -361,8 +373,11 @@ class Observer:
                         pan=n.pan / 128,
                     )
                 )
-        except (flp.FlpError, OSError, ValidationError):
-            log.warning("could not read %s for a checkpoint diff; skipping it", self._project)
+        except (flp.FlpError, OSError, ValidationError) as exc:
+            message = f"could not read project file for a checkpoint diff: {exc}"
+            if require_project_read:
+                raise errors.concurrency_guard_unavailable(self._project, message) from exc
+            log.warning("%s; skipping it", message)
             return None
         return score
 
@@ -373,7 +388,7 @@ class Observer:
         poll, then raises ``UserEditing`` (a retryable ToolError) if a user
         ``score_edit`` touched ``target`` within ``window`` seconds. Returns
         None when the write may proceed."""
-        self.poll()
+        self.poll(require_project_read=True)
         with self._lock:
             horizon = self._clock() - timedelta(seconds=window)
             for action in reversed(self._recent_edits):  # newest first

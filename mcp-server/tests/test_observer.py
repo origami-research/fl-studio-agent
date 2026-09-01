@@ -304,6 +304,43 @@ def test_unparseable_save_is_skipped_not_diffed(score_env, monkeypatch: pytest.M
     assert observer.poll() == []  # refused, resolved at the next good checkpoint
 
 
+def test_guard_refuses_when_checkpoint_parse_fails(
+    score_env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from fl_mcp import flp
+
+    observer, save, _state, _clock = score_env
+    save([flp_note(60)])
+    observer.poll()
+
+    def explode(path: Path) -> FlpProject:
+        raise flp.FlpError("torn write")
+
+    monkeypatch.setattr("fl_mcp.flp.read", explode)
+    save([])
+
+    with pytest.raises(errors.ToolError) as excinfo:
+        observer.guard_write(TARGET)
+
+    assert excinfo.value.category == "operation_unsafe"
+    assert excinfo.value.retryable
+    assert "Cannot verify whether the user has unsaved score edits" in excinfo.value.message
+    assert "clobbering" in excinfo.value.fix
+
+
+def test_guard_refuses_when_project_file_disappears(score_env) -> None:
+    observer, _save, _state, _clock = score_env
+    assert observer._project is not None
+    observer._project.unlink()
+
+    with pytest.raises(errors.ToolError) as excinfo:
+        observer.guard_write(TARGET)
+
+    assert excinfo.value.category == "operation_unsafe"
+    assert excinfo.value.retryable
+    assert "could not stat project file" in excinfo.value.message
+
+
 # --- the concurrency guard ----------------------------------------------------
 
 

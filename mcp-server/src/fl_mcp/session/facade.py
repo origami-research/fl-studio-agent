@@ -162,14 +162,10 @@ class FLSession:
         FIRST note write uses the bridge instead of safely-but-needlessly the
         file lane (#93). Non-blocking by construction: detect() only touches
         the wire when a fresh heartbeat says the bridge is up, so an offline
-        session never waits. Never raises - a failed pre-warm just leaves the
-        breaker to re-ping on the first real write."""
-        try:
-            caps = self.caps
-            if caps.bridge_live:
-                self.breaker.admit(caps.bridge_heartbeat_at)
-        except Exception:
-            log.debug("bridge pre-warm skipped", exc_info=True)
+        session never waits."""
+        caps = self.caps
+        if caps.bridge_live:
+            self.breaker.admit(caps.bridge_heartbeat_at)
 
     @property
     def lanes(self) -> tuple[BridgeLane, FileLane]:
@@ -181,7 +177,8 @@ class FLSession:
     def write_notes(self, target: Target, notes: list[Note], mode: NoteWriteMode) -> WriteReceipt:
         if self.project is None:
             raise NotePlaneUnavailable(
-                "No backend can apply targeted notes: no project file is configured. "
+                "No backend can apply targeted notes: no project file is configured, "
+                "and bridge writes require the project file for readback. "
                 "(The pyscript lane cannot target a channel - see write_notes.)"
             )
         # The concurrency rule (docs/27 §5): never clobber a mid-edit user
@@ -193,8 +190,8 @@ class FLSession:
     def clear_notes(self, target: Target) -> WriteReceipt:
         if self.project is None:
             raise NotePlaneUnavailable(
-                "No backend can clear notes: the control plane is not connected and no "
-                "project file is configured."
+                "No backend can clear targeted notes: no project file is configured, "
+                "and bridge clears require the project file for readback."
             )
         self.observer.guard_write(target)
         return ops_notes.clear_notes(self, target)
