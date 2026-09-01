@@ -272,7 +272,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "flpkit", git = "https://github.com/clarkipeng/flpkit?rev=v0.6.2" },
+    { name = "flpkit", git = "https://github.com/clarkipeng/flpkit?rev=v0.7.1" },
     { name = "mcp", specifier = ">=2.0.0" },
     { name = "numpy", specifier = ">=2.0.0" },
     { name = "python-rtmidi", specifier = ">=1.5.0" },
@@ -288,8 +288,8 @@ dev = [
 
 [[package]]
 name = "flpkit"
-version = "0.6.2"
-source = { git = "https://github.com/clarkipeng/flpkit?rev=v0.6.2#e2433576480f5eb11e2465227d31515d0d6059db" }
+version = "0.7.1"
+source = { git = "https://github.com/clarkipeng/flpkit?rev=v0.7.1#acc3dc2551dbe4302f669cf37692f9846a8647ea" }
 
 [[package]]
 name = "h11"

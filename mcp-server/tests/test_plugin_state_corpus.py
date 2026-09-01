@@ -10,6 +10,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+from flpkit import add_plugin, effects_at
 from flpkit.codec import Stream, chunks
 
 from fl_mcp.fl.paths import fl_app
@@ -81,3 +82,17 @@ def test_fl_authored_channel_state_preset_carries_the_same_opaque_instance_tuple
     assert int.from_bytes(header[:2], "little", signed=True) == 0x20
     assert _instances(events) == [(False, b"3x Osc\0", 84)]
     assert any(event_id == 192 and payload == b"Bell\0" for event_id, _size, payload in events)
+
+
+def test_checked_in_effect_pair_replays_through_the_plugin_agnostic_writer(tmp_path: Path) -> None:
+    """The native reference is copied exactly; VST defaults remain absent."""
+    evidence = Path(__file__).parent / "evidence/plugin-effect"
+    candidate = tmp_path / "candidate.flp"
+    candidate.write_bytes((evidence / "baseline.flp").read_bytes())
+
+    saved = add_plugin(candidate, 0, "Fruity Parametric EQ 2", "native")
+
+    assert saved == effects_at(candidate, 0)
+    assert any(effect.name == "Fruity Parametric EQ 2" and len(effect.chunk) == 519 for effect in saved)
+    with pytest.raises(ValueError, match="no FL-authored vst default-state reference"):
+        add_plugin(candidate, 0, "Fruity Parametric EQ 2", "vst")
