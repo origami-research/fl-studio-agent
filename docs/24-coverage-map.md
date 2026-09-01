@@ -38,15 +38,14 @@ Capability acquisition is governed by the [capability acquisition model](33-capa
 | Piano-roll transforms (quantize/arp/strum) | NONE | T3 | we write raw notes; FL's tools via piano-roll scripting API (documented) |
 | Markers / time & key sig / groove | NONE | T3 | file RE; some via controller API (documented) |
 | Stem export / MIDI export | NONE | T3 | render is full-mix only (-R); stems need per-track routing or CLI flags (unknown) |
-| Full-mix render | blocking live control lane | T3 | `fl.render(path)` issues `ui.exportWav(path)` and confirms the WAV exists. It freezes FL's UI for the render, so it is not usable in an ears loop. Use a saved-copy `OsxFL -R` job for non-blocking analysis, or make live exports an explicit, bounded-cadence action. |
+| Full-mix render | verified offline (`OsxFL -R`); live control unverified | T3 | `fl.render(path)` calls `ui.exportWav(path)` and checks the WAV exists, but lacks a live-FL verdict; it blocks FL's UI. `OsxFL -R` on a saved copy is verified for non-blocking analysis. |
 | Render analysis (BPM/key/loudness/peak/spectrum) | local WAV | T2 | `fl.analyze(path)` is deterministic Python measurement, no model or FL session required. |
 | Scene analysis (key/digest) | file | T2 | covered (get_scene) |
 | Undo / redo control | undo via wire | T3 | redo + file-lane revert unbuilt (store content-addresses writes) |
 
 ## Enablers (T4) - not features, but they gate scale/safety
 
-- CI is DEAD (org billing) - no automated gate; merges rely on local runs. OWNER lever.
-- Windows - parked on hardware (E8).
+- CI runs, but fails at `uv --system` on an externally managed interpreter; merges rely on local runs. OWNER lever.
 - Bridge routes by capability detection (no flag): fresh heartbeat + proto match + ping = eligible, file lane otherwise. LIVE-UNVERIFIED post-integration; the RUNBOOK_BRIDGE_V3 window is the promotion gate.
 - Bridge session isolation: `FLMCP_SPOOL_ROOT` selects one shared server/Bridge mailbox; default roots remain the measured FL fallback. Unit-covered; two-live-FL confirmation remains an orchestrator run.
 - Robustness built offline, unverified live: bulkhead invariant set, circuit breaker, agent-vs-human guard (observer). See #54.
