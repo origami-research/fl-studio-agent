@@ -9,7 +9,11 @@
 
 #include "bridge_core.h"
 
+#if defined(_WIN32)
+#include <direct.h>
+#else
 #include <sys/stat.h>
+#endif
 
 #include <algorithm>
 #include <cstdio>
@@ -92,7 +96,11 @@ void WriteResponse(const std::vector<std::string> &roots, int id, const std::str
   for (const std::string &root : roots) {
     // The server mkdirs responses/ at Spool construction; recreate it here so a
     // half-provisioned root still gets its mirror copy (native code, no sandbox).
+#if defined(_WIN32)
+    _mkdir(Join(root, "responses").c_str());
+#else
     mkdir(Join(root, "responses").c_str(), 0755);
+#endif
     WriteFile(Join(root, ("responses/" + CommandName(id)).c_str()), json);
   }
 }

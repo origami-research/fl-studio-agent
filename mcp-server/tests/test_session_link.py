@@ -137,8 +137,7 @@ def test_reload_reconnects_the_wire_fresh(monkeypatch, tmp_path):
     relaunch hits FL's reliable hot-plug bind and must replace the dead one."""
     monkeypatch.setattr(flp, "write_notes", lambda path, notes, *, pattern, channel, mode: list(notes))
     monkeypatch.setattr(lifecycle_mod, "fl_process_running", lambda: False)  # skip the pkill branch
-    monkeypatch.setattr(lifecycle_mod.subprocess, "run",
-                        lambda *a, **k: type("R", (), {"returncode": 0, "stderr": ""})())
+    monkeypatch.setattr(lifecycle_mod, "launch_fl", lambda project: None)
     monkeypatch.setattr(link_mod, "SETTLE_TIMEOUT_SECONDS", 0.0)  # no FL to settle on
     old = FakeControl(hello=HELLO)
     fresh = FakeControl(hello=HELLO)

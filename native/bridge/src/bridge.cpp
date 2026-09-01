@@ -38,10 +38,16 @@
 // under ASan/UBSan against a mock host (bridge/tests/bridge_core_test.cpp) with
 // no FL in the loop. This file is only the ABI shell + the extended-slot map.
 
+#if defined(_WIN32)
+#include <windows.h>
+#include <sys/stat.h>
+#else
 #include <sys/stat.h>
 #include <unistd.h>
+#endif
 
 #include <atomic>
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
@@ -76,6 +82,9 @@ std::vector<std::string> gSpoolRoots;
 
 void BuildSpoolState() {
   const char *home = getenv("HOME");
+#if defined(_WIN32)
+  if (home == nullptr || home[0] == '\0') home = getenv("USERPROFILE");
+#endif
   const char *root = getenv("FLMCP_SPOOL_ROOT");
   gSpoolRoots = bridge_core::SpoolRoots(home, root);
   if (gSpoolRoots.empty()) return;
@@ -168,15 +177,23 @@ std::string ExecutablePath() {
 // ring stamps each push with both so the observer has a monotonic order and a
 // wall-clock time without the tick having to guess either at drain time.
 long long MonotonicNanos() {
-  struct timespec ts;
-  clock_gettime(CLOCK_MONOTONIC, &ts);
-  return static_cast<long long>(ts.tv_sec) * 1000000000LL + ts.tv_nsec;
+  return std::chrono::duration_cast<std::chrono::nanoseconds>(
+             std::chrono::steady_clock::now().time_since_epoch())
+      .count();
 }
 
 long long UnixMillis() {
-  struct timespec ts;
-  clock_gettime(CLOCK_REALTIME, &ts);
-  return static_cast<long long>(ts.tv_sec) * 1000LL + ts.tv_nsec / 1000000LL;
+  return std::chrono::duration_cast<std::chrono::milliseconds>(
+             std::chrono::system_clock::now().time_since_epoch())
+      .count();
+}
+
+int ProcessId() {
+#if defined(_WIN32)
+  return static_cast<int>(GetCurrentProcessId());
+#else
+  return static_cast<int>(getpid());
+#endif
 }
 
 std::string JoinIds(const std::vector<int> &ids) {
@@ -243,7 +260,7 @@ void WriteHeartbeat(const TickState &state, long long tick) {
   hb.tick = tick;
   hb.applied = state.commands_applied.load();
   hb.notes = state.notes_written.load();
-  hb.pid = (int)getpid();
+  hb.pid = ProcessId();
   hb.unix_time = (long long)time(nullptr);
   hb.udp_port = state.udp != nullptr ? state.udp->port() : 0;
   hb.udp_dropped = state.udp != nullptr ? (long long)state.udp->queue().dropped() : 0;
@@ -284,7 +301,7 @@ bool DebugEnabled() {
 // outside, so why is nothing consumed?" without a debugger.
 void WriteDebugDump(const TickState &state) {
   const char *home = getenv("HOME");
-  std::string text = "pid=" + std::to_string((int)getpid());
+  std::string text = "pid=" + std::to_string(ProcessId());
   text += "\nexe=" + ExecutablePath();
   text += std::string("\nHOME=") + (home != nullptr ? home : "(null)");
   text += "\ninstances=" + std::to_string(gLiveInstances.load());
@@ -663,7 +680,13 @@ void _stdcall Bridge::OutputVoice_Kill(TVoiceHandle handle) { (void)handle; }
 
 // intptr_t tag (not int — an int param truncates FL's real tag on this build).
 // Returns void*: FL treats the result as an opaque object pointer + vtable.
-extern "C" __attribute__((visibility("default"))) void *_stdcall
+#if defined(_WIN32)
+#define FLMCP_EXPORT __declspec(dllexport)
+#else
+#define FLMCP_EXPORT __attribute__((visibility("default")))
+#endif
+
+extern "C" FLMCP_EXPORT void *_stdcall
 CreatePlugInstance(TFruityPlugHost *host, TPluginTag tag) {
   return new Bridge(tag, host);
 }
@@ -672,6 +695,6 @@ CreatePlugInstance(TFruityPlugHost *host, TPluginTag tag) {
 // post-mortem this export is the gate FL 2026 uses to take the extended-slot
 // path — which the Bridge WANTS, since slot 27 (the tick) is its autonomous
 // entry point.
-extern "C" __attribute__((visibility("default"))) void _stdcall SetExternalAppHandle(intptr_t handle) {
+extern "C" FLMCP_EXPORT void _stdcall SetExternalAppHandle(intptr_t handle) {
   (void)handle;
 }

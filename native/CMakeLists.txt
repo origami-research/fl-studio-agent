@@ -33,6 +33,23 @@ if(APPLE)
     set(CMAKE_OSX_ARCHITECTURES "arm64;x86_64" CACHE STRING "" FORCE)
 endif()
 
+# The bridge executor is portable; discovery and UDP each have a deliberately
+# small OS edge. Windows starts with the proven spool carrier and rejects the
+# macOS-only exploratory dispatcher passes rather than guessing at their ABI.
+set(BRIDGE_PLATFORM_SOURCES)
+if(WIN32)
+    list(APPEND BRIDGE_PLATFORM_SOURCES
+        bridge/src/bridge_discover_windows.cpp
+        bridge/src/bridge_udp_windows.cpp
+    )
+else()
+    list(APPEND BRIDGE_PLATFORM_SOURCES
+        bridge/src/bridge_discover.cpp
+        bridge/src/bridge_udp.cpp
+        abi/fl_pascal.cpp
+    )
+endif()
+
 add_library(fl_sdk STATIC
     "${FL_SDK_DIR}/fp_plugclass.cpp"
     "${FL_SDK_DIR}/fp_cplug.cpp"
@@ -70,22 +87,26 @@ target_compile_options(fl_sdk PUBLIC
 add_library(bridge SHARED
     bridge/src/bridge.cpp
     bridge/src/bridge_core.cpp
-    bridge/src/bridge_discover.cpp
     bridge/src/bridge_events.cpp
     bridge/src/bridge_gui.cpp
-    bridge/src/bridge_udp.cpp
-    abi/fl_pascal.cpp
+    ${BRIDGE_PLATFORM_SOURCES}
 )
 target_include_directories(bridge PRIVATE "${FL_SDK_DIR}" "${FL_ABI_DIR}" "${FL_GENERATED_DIR}" bridge/src)
 target_compile_options(bridge PRIVATE
-    -Wno-ignored-attributes -Wno-macro-redefined -Wno-deprecated-declarations
+    $<$<NOT:$<CXX_COMPILER_ID:MSVC>>:-Wno-ignored-attributes>
+    $<$<NOT:$<CXX_COMPILER_ID:MSVC>>:-Wno-macro-redefined>
+    $<$<NOT:$<CXX_COMPILER_ID:MSVC>>:-Wno-deprecated-declarations>
 )
 set_target_properties(bridge PROPERTIES
     OUTPUT_NAME "FL MCP Bridge_x64"
     PREFIX ""
-    SUFFIX ".dylib"
     CXX_VISIBILITY_PRESET hidden
 )
+if(APPLE)
+    set_target_properties(bridge PROPERTIES SUFFIX ".dylib")
+elseif(WIN32)
+    set_target_properties(bridge PROPERTIES SUFFIX ".dll")
+endif()
 
 # Bridge core unit test: drives PollOnce/BuildNotesParams and the wp_* discovery
 # ops against a mock host with a temp spool dir, no FL needed. ASan+UBSan.

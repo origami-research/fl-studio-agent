@@ -40,6 +40,12 @@ def fl_app() -> Path:
     override = os.environ.get("FL_APP")
     if override:
         return Path(override)
+    if sys.platform == "win32":
+        program_files = os.environ.get("PROGRAMFILES", r"C:\\Program Files")
+        installed = sorted(
+            Path(program_files).glob("Image-Line/FL Studio*/FL64.exe"), reverse=True
+        )
+        return installed[0] if installed else Path(program_files) / "Image-Line" / "FL Studio" / "FL64.exe"
     installed = sorted(Path("/Applications").glob("FL Studio*.app"), reverse=True)
     return installed[0] if installed else Path("/Applications/FL Studio.app")
 
@@ -65,7 +71,8 @@ def fl_settings_dirs() -> list[Path]:
     home = Path.home()
     roots = [home / "Documents" / "Image-Line"]
     if sys.platform == "win32":
-        roots.append(home / "OneDrive" / "Documents" / "Image-Line")
+        one_drive = os.environ.get("ONEDRIVE")
+        roots.append((Path(one_drive) if one_drive else home / "OneDrive") / "Documents" / "Image-Line")
     else:
         roots.append(home / "Image-Line")
     return [r / "FL Studio" / "Settings" for r in roots if (r / "FL Studio" / "Settings").is_dir()]

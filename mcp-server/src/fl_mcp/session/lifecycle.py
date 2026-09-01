@@ -2,13 +2,11 @@
 
 from __future__ import annotations
 
-import subprocess
 import time
 from pathlib import Path
 
 from fl_mcp import errors
-from fl_mcp.fl.paths import fl_app
-from fl_mcp.fl.process import fl_kill, fl_process_running
+from fl_mcp.fl.process import fl_kill, fl_process_running, launch_fl
 
 from .link import ControlLink
 
@@ -40,16 +38,14 @@ def reload_fl(project: Path | None, link: ControlLink) -> None:
 
     last = ""
     for attempt in range(FL_OPEN_ATTEMPTS):
-        result = subprocess.run(
-            ["open", "-a", str(fl_app()), str(project)],
-            capture_output=True,
-            text=True,
-        )
-        if result.returncode == 0:
+        try:
+            launch_fl(project)
+        except OSError as exc:
+            last = str(exc)
+        else:
             link.reconnect()
             link.settle()
             return
-        last = (result.stderr or "").strip()
         time.sleep(1.0 + attempt)
     # The edit already landed in the file and was recorded; only the
     # relaunch failed - say exactly that, never "the write failed".
