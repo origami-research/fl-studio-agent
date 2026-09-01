@@ -6,12 +6,25 @@ from __future__ import annotations
 import logging
 import time
 from collections.abc import Callable
-from typing import Any
+from typing import Any, Protocol
 
 from fl_mcp import errors
 from fl_mcp.core.carriers.wire import ControlUnavailable, MidiControl
 from fl_mcp.fl.process import fl_process_running
 from fl_mcp.schemas import ControlResponse, HelloEvent
+
+
+class ControlCarrier(Protocol):
+    """The surface the link needs; satisfied by MidiControl (wire) and
+    CtlSpoolControl (pid-addressed file lane, #150)."""
+
+    def is_live(self) -> bool: ...
+    def await_hello(self, timeout: float = ...) -> HelloEvent: ...
+    def send_request(self, op: str, args: list[Any] | None = ..., kwargs: dict[str, Any] | None = ..., timeout: float = ...) -> ControlResponse: ...
+    def drain_events(self) -> list[dict[str, Any]]: ...
+    def add_event_listener(self, fn: Any) -> None: ...
+    def dropped_frames(self) -> int: ...
+    def close(self) -> None: ...
 
 log = logging.getLogger(__name__)
 
@@ -43,12 +56,12 @@ class ControlLink:
     """Owns the control wire, its factory, and the recycle clock. Everything
     else asks the link, never the raw wire."""
 
-    control: MidiControl | None
+    control: ControlCarrier | None
 
     def __init__(
         self,
-        control: MidiControl | None,
-        factory: Callable[[], MidiControl] | None = None,
+        control: ControlCarrier | None,
+        factory: Callable[[], ControlCarrier] | None = None,
     ) -> None:
         self.control = control
         self._control_factory = factory if factory is not None else MidiControl

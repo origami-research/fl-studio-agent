@@ -21,7 +21,7 @@ Capability acquisition is governed by the [capability acquisition model](33-capa
 | Notes - write, ANY CHANNEL | file+reload | T1 | **PROBE VERDICT: ChanNum ignored, no channel object** - channel targeting stays file-lane |
 | Observe user actions - transport/selection/routing | **push-capable** | T1 | **PROBE VERDICT: FL pushes SetPlaying/SongPosChanged/SetFocus/ContextInfoChanged/RoutingChanged** live |
 | Observe user actions - score edits | poll-and-diff | T1 | no edit push; poll cost ~0ms vs 8.7ms tick (affordable) |
-| Tempo / transport | live (wire) | T2 | covered |
+| Tempo / transport | live (wire; ctl lane per session) | T2 | covered; multi-session control rides the pid-addressed ctl lane ([docs/34](34-per-session-control.md)) |
 | Plugin params (existing plugin) | live (wire) | T2 | normalized read/set is live-verified (#50). The documented API exposes only name/value; formatted display, kind, ranges and option labels require a captured per-plugin model. Sytrus full-model capture is pending the exact live run in `docs/research/plugin-param-model-sytrus.md`. |
 | Channel levels (vol/pan/pitch) | file | T2 | covered (flpkit) |
 | Playlist / arrangement - read | file | T2 | covered (flpkit 0.2) |

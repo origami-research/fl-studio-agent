@@ -18,6 +18,7 @@ from pathlib import Path
 
 from fl_mcp import errors
 from fl_mcp.core.carriers import CarrierUnavailable
+from fl_mcp.core.carriers.ctlspool import CtlSpoolControl
 from fl_mcp.core.carriers.spool import SpoolCarrier
 from fl_mcp.core.carriers.udp import UdpCarrier
 from fl_mcp.core.carriers.wire import ControlUnavailable, MidiControl
@@ -53,7 +54,7 @@ from .detect import (
     detect,
     load_profile,
 )
-from .link import ControlLink
+from .link import ControlCarrier, ControlLink
 from .notes import BridgeLane, FileLane
 
 log = logging.getLogger(__name__)
@@ -68,11 +69,23 @@ def create_session() -> FLSession:
     ``sdk.connect()``). Builds the wire (or None when python-rtmidi is missing
     or ports can't open - tools then degrade honestly), the spool, the store,
     and resolves the project file. No lazy construction hidden in getters."""
-    try:
-        control: MidiControl | None = MidiControl()
-    except ControlUnavailable:
-        log.exception("control wire unavailable; tools degrade to file/spool backends")
-        control = None
+    # Session mode (FLMCP_SPOOL_ROOT set, e.g. an arena contestant): control
+    # rides the pid-addressed ctl file lane (#150). The MIDI wire is never
+    # opened - its port names are fixed constants, so two sessions' wires
+    # cross-connect nondeterministically, which is worse than no wire.
+    spool_override = os.environ.get("FLMCP_SPOOL_ROOT")
+    control: ControlCarrier | None
+    control_factory: Callable[[], ControlCarrier] | None = None
+    if spool_override:
+        session_root = Path(spool_override)
+        control = CtlSpoolControl(session_root)
+        control_factory = lambda: CtlSpoolControl(session_root)  # noqa: E731 - recycle = fresh carrier, same session
+    else:
+        try:
+            control = MidiControl()
+        except ControlUnavailable:
+            log.exception("control wire unavailable; tools degrade to file/spool backends")
+            control = None
 
     override = os.environ.get(ENV_PROJECT)
     if override:
@@ -89,6 +102,7 @@ def create_session() -> FLSession:
     # space and one consumed-ledger - everything downstream is carrier-blind.
     session = FLSession(
         control=control,
+        control_factory=control_factory,
         transport=Transport([UdpCarrier(), SpoolCarrier()]),
         store=Store(project_key=_project_key(project)),
         project=project,
@@ -124,11 +138,11 @@ class FLSession:
     def __init__(
         self,
         *,
-        control: MidiControl | None,
+        control: ControlCarrier | None,
         transport: Transport,
         store: Store,
         project: Path | None,
-        control_factory: Callable[[], MidiControl] | None = None,
+        control_factory: Callable[[], ControlCarrier] | None = None,
         profile: CapabilityProfileLike | None = None,
         plugin_param_models: tuple[PluginParamModel, ...] = (),
     ) -> None:
@@ -145,11 +159,11 @@ class FLSession:
         self._write_lock = threading.Lock()
 
     @property
-    def control(self) -> MidiControl | None:
+    def control(self) -> ControlCarrier | None:
         return self.link.control
 
     @control.setter
-    def control(self, value: MidiControl | None) -> None:
+    def control(self, value: ControlCarrier | None) -> None:
         # sdk_fakes.FakeSession assigns ``self.control`` without calling this
         # __init__; the first assignment bootstraps its link.
         if getattr(self, "link", None) is None:
