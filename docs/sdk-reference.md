@@ -4,6 +4,19 @@
 on return and either yield confirmed state or raise; there is no queue or
 `flush()` step.
 
+The stable public surface is deliberately small:
+
+- `fl.track(...).write(...)`, `clear()`, and `notes()` for channel/pattern notes.
+- `fl.set_tempo(...)` for confirmed tempo changes.
+- `fl.render(...)`, `fl.read_wav(...)`, and `fl.analyze(...)` for render/audio workflows.
+- `fl.track(...).set_automation(...)` for existing FL-authored automation clips.
+- `fl.track(...).params(...)` and `set_param(...)` for live generator plugin parameters.
+
+Failures from FL/session boundaries raise `fl_mcp.errors.ToolError`, whose
+`category`, `message`, `fix`, and `retryable` fields are intended to be read by
+callers. Channel lookup failures raise `ChannelNotFound`, a `ValueError`, with
+the current channel list in the message.
+
 ```python
 from fl_mcp.sdk import connect
 from fl_mcp.schemas import Note
@@ -182,6 +195,9 @@ fl.track("Bass").set_automation([
 
 **Availability:** live-only. Reads the generator plugin's parameters. `query`
 filters names by case-insensitive substring; `limit` caps the number returned.
+If the live control plane is unavailable, this raises a retryable `ToolError`
+instead of falling back to project-file state, because plugin state has no
+honest file representation.
 
 ```python
 cutoffs = fl.track("Lead").params(query="cutoff", limit=8)
@@ -201,6 +217,8 @@ normalized number from 0 to 1, or - when this exact plugin has a captured
 parameter model - its displayed numeric value with unit or an option name (an
 option not in `PluginParam.options` is rejected before the write). Returns FL's
 confirmed readback, which may be quantized to the plugin's control grid.
+Unknown or ambiguous names raise a `ToolError` whose message includes the
+matching names FL reported.
 
 ```python
 lead = fl.track("Lead")
