@@ -12,9 +12,12 @@ session/flp/store. A private function appearing here is a design smell.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from pathlib import Path
+from typing import Annotated
 
 import numpy as np
+from pydantic import BaseModel, Field, TypeAdapter, ValidationError
 
 from fl_mcp import errors
 from fl_mcp.audio import AudioAnalysis, _read_wav, analyze_wav
@@ -31,6 +34,39 @@ from .schemas import (
     WriteReceipt,
 )
 from .session import FLSession, create_session
+
+SdkChannel = Annotated[int, Field(strict=True, ge=0)]
+SdkPattern = Annotated[int, Field(strict=True, ge=1)]
+SdkLimit = Annotated[int, Field(strict=True, ge=0)]
+NormalizedValue = Annotated[float, Field(strict=True, ge=0, le=1)]
+
+NoteInput = Note | dict[str, object]
+AutomationPointInput = AutomationPoint | dict[str, object]
+
+
+class _TrackArgs(BaseModel):
+    name_or_index: str | SdkChannel
+    pattern: SdkPattern = 1
+
+
+class _TargetArgs(BaseModel):
+    channel: SdkChannel
+    pattern: SdkPattern = 1
+
+
+class _ParamsArgs(BaseModel):
+    query: str | None = None
+    limit: SdkLimit = 40
+
+
+class _ParamSetArgs(BaseModel):
+    param: str | SdkChannel
+    value: NormalizedValue
+
+
+_NOTES = TypeAdapter(list[Note])
+_AUTOMATION_POINTS = TypeAdapter(list[AutomationPoint])
+_WRITE_MODE = TypeAdapter(NoteWriteMode)
 
 
 class ChannelNotFound(ValueError):
@@ -70,21 +106,25 @@ class FL:
         file coordinates (that is what write_notes patches), and the file
         answers instantly while FL may be mid-boot right after a reload
         (dogfood A12: the live read raced every post-write reload)."""
+        try:
+            args = _TrackArgs(name_or_index=name_or_index, pattern=pattern)
+        except ValidationError as exc:
+            raise errors.invalid_argument("fl.track", str(exc)) from exc
         channels = self._session.channel_names()
         listing = ", ".join(f"{c.index}: {c.name}" for c in channels) or "(none)"
-        if isinstance(name_or_index, int):
-            if any(c.index == name_or_index for c in channels):
-                return Track(self, name_or_index, pattern)
-            raise ChannelNotFound(f"No channel at index {name_or_index}. Channels: {listing}")
-        exact = [c for c in channels if c.name == name_or_index]
+        if isinstance(args.name_or_index, int):
+            if any(c.index == args.name_or_index for c in channels):
+                return Track(self, args.name_or_index, args.pattern)
+            raise ChannelNotFound(f"No channel at index {args.name_or_index}. Channels: {listing}")
+        exact = [c for c in channels if c.name == args.name_or_index]
         if len(exact) == 1:
-            return Track(self, exact[0].index, pattern)
-        partial = [c for c in channels if name_or_index.lower() in c.name.lower()]
+            return Track(self, exact[0].index, args.pattern)
+        partial = [c for c in channels if args.name_or_index.lower() in c.name.lower()]
         if len(partial) == 1:
-            return Track(self, partial[0].index, pattern)
+            return Track(self, partial[0].index, args.pattern)
         if len(exact) > 1 or len(partial) > 1:
-            raise ChannelNotFound(f"{name_or_index!r} is ambiguous. Channels: {listing}")
-        raise ChannelNotFound(f"No channel matching {name_or_index!r}. Channels: {listing}")
+            raise ChannelNotFound(f"{args.name_or_index!r} is ambiguous. Channels: {listing}")
+        raise ChannelNotFound(f"No channel matching {args.name_or_index!r}. Channels: {listing}")
 
     def set_tempo(self, bpm: float) -> float:
         """Returns FL's own read-back, never the request echo."""
@@ -119,15 +159,24 @@ class Track:
     """One channel's piano roll."""
 
     def __init__(self, fl: FL, channel: int, pattern: int = 1) -> None:
-        self.channel = channel
-        self.pattern = pattern
+        try:
+            args = _TargetArgs(channel=channel, pattern=pattern)
+        except ValidationError as exc:
+            raise errors.invalid_argument("Track", str(exc)) from exc
+        self.channel = args.channel
+        self.pattern = args.pattern
         self._fl = fl
 
-    def write(self, notes: list[Note], mode: NoteWriteMode = "merge") -> WriteReceipt:
+    def write(self, notes: Sequence[NoteInput], mode: NoteWriteMode = "merge") -> WriteReceipt:
         """Applies NOW. Raises on failure; the receipt carries the confirmed
         note count (readback) and which backend applied."""
+        try:
+            normalized_notes = _NOTES.validate_python(notes)
+            normalized_mode = _WRITE_MODE.validate_python(mode)
+        except ValidationError as exc:
+            raise errors.invalid_argument("Track.write", str(exc)) from exc
         target = Target(pattern=self.pattern, channel=self.channel)
-        return self._fl._session.write_notes(target, notes, mode)
+        return self._fl._session.write_notes(target, normalized_notes, normalized_mode)
 
     def clear(self) -> WriteReceipt:
         target = Target(pattern=self.pattern, channel=self.channel)
@@ -137,17 +186,29 @@ class Track:
         target = Target(pattern=self.pattern, channel=self.channel)
         return self._fl._session.read_notes(target)
 
-    def set_automation(self, points: list[AutomationPoint]) -> AutomationReceipt:
+    def set_automation(self, points: Sequence[AutomationPointInput]) -> AutomationReceipt:
         """Replace this channel's existing clip and return the saved-file readback."""
-        return self._fl._session.set_automation(self.channel, points)
+        try:
+            normalized_points = _AUTOMATION_POINTS.validate_python(points)
+        except ValidationError as exc:
+            raise errors.invalid_argument("Track.set_automation", str(exc)) from exc
+        return self._fl._session.set_automation(self.channel, normalized_points)
 
     def params(self, query: str | None = None, limit: int = 40) -> list[PluginParam]:
         """The channel generator's live parameters (E2: Sytrus exposes 597).
         ``query`` filters by substring; live-only - raises when FL is not
         connected, because plugin state has no honest file representation."""
-        return self._fl._session.plugin_params(self.channel, query=query, limit=limit)
+        try:
+            args = _ParamsArgs(query=query, limit=limit)
+        except ValidationError as exc:
+            raise errors.invalid_argument("Track.params", str(exc)) from exc
+        return self._fl._session.plugin_params(self.channel, query=args.query, limit=args.limit)
 
     def set_param(self, param: int | str, value: float) -> PluginParam:
         """Set one parameter (index, or unique name/substring), 0..1 normalized.
         Returns the READBACK - FL may quantize to the control's own grid."""
-        return self._fl._session.set_plugin_param(self.channel, param, value)
+        try:
+            args = _ParamSetArgs(param=param, value=value)
+        except ValidationError as exc:
+            raise errors.invalid_argument("Track.set_param", str(exc)) from exc
+        return self._fl._session.set_plugin_param(self.channel, args.param, args.value)

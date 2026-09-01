@@ -124,6 +124,34 @@ def test_write_mode_defaults_to_merge(fl):
     assert receipt.confirmed_notes == 2
 
 
+def test_write_normalizes_raw_note_inputs_at_the_sdk_boundary(fl):
+    receipt = fl.track("Bass").write([{"key": "C4", "start": 0, "length": 1}], mode="replace")
+
+    assert receipt.confirmed_notes == 1
+    assert fl.track("Bass").notes()[0] == Note(key=60, start=0, length=1)
+
+
+def test_invalid_note_range_raises_typed_sdk_error_before_write(fl, fake_session):
+    with pytest.raises(errors.ToolError) as exc_info:
+        fl.track("Bass").write([{"key": 128, "start": 0, "length": 1}])
+
+    assert exc_info.value.category == "invalid_argument"
+    assert "Track.write" in exc_info.value.message
+    assert "key" in exc_info.value.message
+    assert "Fix the argument" in exc_info.value.fix
+    assert fake_session.store.last_action() is None
+
+
+def test_invalid_write_mode_raises_typed_sdk_error_before_write(fl, fake_session):
+    with pytest.raises(errors.ToolError) as exc_info:
+        fl.track("Bass").write(make_notes("C4"), mode="append")
+
+    assert exc_info.value.category == "invalid_argument"
+    assert "Track.write" in exc_info.value.message
+    assert "merge" in exc_info.value.message
+    assert fake_session.store.last_action() is None
+
+
 def test_rejected_write_raises_and_applies_nothing(fl, fake_session):
     fake_session.fail_next_write = errors.note_plane_unavailable(1, 2.0)
 
@@ -161,6 +189,26 @@ def test_track_automation_returns_the_confirmed_points(fl):
 
     assert receipt.channel == 1
     assert receipt.points == points
+
+
+def test_automation_points_normalize_and_validate_at_the_sdk_boundary(fl):
+    receipt = fl.track("Bass").set_automation([{"position": 0, "value": 0.2}])
+    assert receipt.points == [AutomationPoint(position=0, value=0.2)]
+
+    with pytest.raises(errors.ToolError) as exc_info:
+        fl.track("Bass").set_automation([{"position": 0, "value": 2.0}])
+    assert exc_info.value.category == "invalid_argument"
+    assert "Track.set_automation" in exc_info.value.message
+    assert "value" in exc_info.value.message
+
+
+def test_track_pattern_is_validated_at_the_sdk_boundary(fl):
+    with pytest.raises(errors.ToolError) as exc_info:
+        fl.track("Bass", pattern=0)
+
+    assert exc_info.value.category == "invalid_argument"
+    assert "fl.track" in exc_info.value.message
+    assert "pattern" in exc_info.value.message
 
 
 def test_track_pattern_targets_are_independent(fl):
@@ -241,6 +289,34 @@ def test_read_wav_loads_synthetic_pcm(fl, tmp_path):
 
     assert sample_rate == 44100
     np.testing.assert_allclose(samples, [[-1.0, 0.0], [0.0, 32767 / 32768]])
+
+
+# -- plugin params -------------------------------------------------------------
+
+
+def test_params_limit_and_set_param_validate_at_the_sdk_boundary(fl):
+    assert [param.name for param in fl.track("Bass").params(limit=1)] == ["Cutoff"]
+
+    with pytest.raises(errors.ToolError) as exc_info:
+        fl.track("Bass").params(limit=-1)
+    assert exc_info.value.category == "invalid_argument"
+    assert "Track.params" in exc_info.value.message
+    assert "limit" in exc_info.value.message
+
+    with pytest.raises(errors.ToolError) as exc_info:
+        fl.track("Bass").set_param(0, 2.0)
+    assert exc_info.value.category == "invalid_argument"
+    assert "Track.set_param" in exc_info.value.message
+    assert "value" in exc_info.value.message
+
+
+def test_set_param_accepts_index_or_name_and_returns_readback(fl):
+    assert fl.track("Bass").set_param(0, 0.75) == sdk.PluginParam(
+        index=0, name="Cutoff", value=0.75
+    )
+    assert fl.track("Bass").set_param("Cutoff", 0.25) == sdk.PluginParam(
+        index=0, name="Cutoff", value=0.25
+    )
 
 
 # -- transport -----------------------------------------------------------------

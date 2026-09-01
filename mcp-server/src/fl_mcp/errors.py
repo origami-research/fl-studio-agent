@@ -16,6 +16,7 @@ from typing import Literal
 ErrorCategory = Literal[
     "control_plane_unavailable",
     "note_plane_unavailable",
+    "invalid_argument",
     "unknown_target",
     "fl_api_error",
     "unsupported_in_live_session",
@@ -120,6 +121,14 @@ def fl_api_error(op: str, detail: str) -> ToolError:
         f"'{op}' failed inside FL Studio: {detail}",
         "This is FL's own error, verbatim from the controller script. Check the "
         "arguments (target name/index) and retry.",
+    )
+
+
+def invalid_argument(call: str, detail: str) -> ToolError:
+    return ToolError(
+        "invalid_argument",
+        f"{call} received invalid arguments: {detail}",
+        "Fix the argument type or range before retrying.",
     )
 
 
