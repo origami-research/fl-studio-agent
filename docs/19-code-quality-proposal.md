@@ -295,6 +295,10 @@ Fix them first, each with a real-FL assertion that would have caught it.
     the TRY003 ignore), narrow the `list_channels` catch, add rate-limited
     telemetry to the silent-drop paths (`read_json`, `_on_message`) so corruption
     is diagnosable instead of presenting as a generic timeout.
+14. **Library logging and test cleanup**: importable modules use
+    `logging.getLogger(__name__)`; `print()` stays in CLI entry points. Tests
+    assert behavior through shipped paths; mocks are exceptional, and fixtures
+    return values instead of stapling hidden attributes onto objects.
 
 **Enforcement additions (ruff can't see these):**
 
@@ -304,3 +308,5 @@ Fix them first, each with a real-FL assertion that would have caught it.
   confirmed value, not the requested one.
 - The real-FL e2e run is the gate for Track A - the fake is insufficient by
   construction.
+- Search all callers before changing an interface, then run the relevant suite
+  before claiming the change is done.

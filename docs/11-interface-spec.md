@@ -66,6 +66,23 @@ A group of notes gets an ID, which is a fingerprint (hash) of its contents.
 If the model asks "what was that bassline from earlier?", the ID is how we
 find it.
 
+## Representation invariant
+
+Pydantic models are the single source of truth for FL state, edits, and
+commands. JSON appears only at boundaries: MCP input/output, command transport,
+and durable files. Every other shape is a projection of those typed models.
+
+That gives the system four rules:
+
+- Resting FL values are model defaults, so compact model-facing views can use
+  `exclude_defaults=True` without a custom compression format.
+- Durable commands and logs are dumped in full. An explicit zero must not be
+  confused with an omitted field.
+- Note and note-set identities are content hashes of canonical typed values,
+  salted with the schema version so stale caches invalidate on schema changes.
+- User edits and model edits are both represented as structured deltas. A delta
+  records what changed, not a replay of the action that probably caused it.
+
 ## How the model remembers its work (the "shadow score")
 
 FL Studio offers no way to ask "what notes are in the piano roll right now?".
