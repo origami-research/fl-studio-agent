@@ -30,8 +30,8 @@ from fl_mcp.schemas import (
     Target,
 )
 from fl_mcp.session import FLSession
-from fl_mcp.session import router as router_mod
-from fl_mcp.session.router import CapabilityProfileLike
+from fl_mcp.session import detect as detect_mod
+from fl_mcp.session.detect import CapabilityProfileLike
 from fl_mcp.store import Store
 
 HELLO = HelloEvent(script_ver="test", fl_ver="2026", ppq=96)
@@ -153,4 +153,4 @@ def isolate_spool(monkeypatch) -> None:
     """detect() reads bridge heartbeats under the real spool roots; the fast
     suite must never see this machine's. Call from an autouse fixture; bridge
     tests re-point spool_roots at tmp_path instead."""
-    monkeypatch.setattr(router_mod, "spool_roots", lambda: [])
+    monkeypatch.setattr(detect_mod, "spool_roots", lambda: [])

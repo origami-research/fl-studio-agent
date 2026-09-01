@@ -30,9 +30,9 @@ from fl_mcp.ops import notes as ops_notes
 from fl_mcp.schemas import SpoolResponse, Target
 from fl_mcp.session import FLSession, WriteRejected
 from fl_mcp.session import notes as notes_mod
-from fl_mcp.session import router as router_mod
+from fl_mcp.session import detect as detect_mod
 from fl_mcp.session.notes import BridgeLane, FileLane
-from fl_mcp.session.router import (
+from fl_mcp.session.detect import (
     BRIDGE_HEARTBEAT_FILE,
     REOPEN_PROBE_MIN_INTERVAL_SECONDS,
     BridgeBreaker,
@@ -69,7 +69,7 @@ def no_reload(monkeypatch):
 def bridge_env(tmp_path, monkeypatch):
     """Spool rooted at tmp_path, heartbeat fresh + proto-matched; tests
     degrade it."""
-    monkeypatch.setattr(router_mod, "spool_roots", lambda: [tmp_path])
+    monkeypatch.setattr(detect_mod, "spool_roots", lambda: [tmp_path])
     heartbeat = tmp_path / BRIDGE_HEARTBEAT_FILE
     write_heartbeat(heartbeat)
     return heartbeat

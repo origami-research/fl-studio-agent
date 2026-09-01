@@ -42,9 +42,7 @@ from fl_mcp.store import Store
 
 from . import controls, lifecycle, state
 from . import notes as note_ops
-from .link import ControlLink
-from .notes import BridgeLane, FileLane
-from .router import (
+from .detect import (
     BRIDGE_PING_TIMEOUT_SECONDS,
     BridgeBreaker,
     Capabilities,
@@ -52,6 +50,8 @@ from .router import (
     detect,
     load_profile,
 )
+from .link import ControlLink
+from .notes import BridgeLane, FileLane
 
 log = logging.getLogger(__name__)
 

@@ -1,6 +1,6 @@
 """Generic operation routing: an Operation + the evidence -> the Lane that applies it.
 
-This is docs/30 Surface 3, the note-only predicate of session/router.py
+This is docs/30 Surface 3, the note-only predicate of session/detect.py
 generalized to ANY capability. Notes, playlist, automation, levels, params and
 mixer all flow through the ONE rule in route(); adding a capability adds an
 OpSpec (data) in fl_mcp/ops/ plus, when a lane learns to execute it, an entry
@@ -8,7 +8,7 @@ in that lane's served-kinds table - never a routing branch.
 
 The evidence model is unchanged (docs/27 §2, doctrine #54): no env var, no
 flag. The best lane is chosen per call from Capabilities (heartbeat + wire
-reads, produced by session/router.detect) under the BridgeBreaker's admission.
+reads, produced by session/detect.detect) under the BridgeBreaker's admission.
 Both are consumed structurally - the Protocols below - so this module never
 imports session, and lanes built on flpkit's codec (G1) or the Transport (G2)
 plug in the same way.
@@ -119,7 +119,7 @@ class CapabilityProfileLike(Protocol):
 
 class Capabilities(Protocol):
     """What the evidence says right now (docs/27 §2), computed per operation
-    by session/router.detect. Structural: only the fields routing reads."""
+    by session/detect.detect. Structural: only the fields routing reads."""
 
     bridge_live: bool
     bridge_channel: int | None
@@ -128,7 +128,7 @@ class Capabilities(Protocol):
 
 
 class BreakerLike(Protocol):
-    """session/router.BridgeBreaker's admission gate (docs/27 §3)."""
+    """session/detect.BridgeBreaker's admission gate (docs/27 §3)."""
 
     def admit(self, heartbeat_at: float | None) -> bool: ...
 

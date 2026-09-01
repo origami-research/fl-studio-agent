@@ -41,7 +41,7 @@ mcp-server/src/fl_mcp/session/
 ├── link.py       (~210) class ControlLink: owns control wire + factory + recycle clock.
 │                        hello(), reconnect(), settle(), command(op), request(op, args, timeout).
 ├── lifecycle.py  (~90)  reload_fl(project, link): SIGKILL + open retries + settle.
-├── router.py     (~110) Capabilities, detect(), the lane table, pick(). See section 2/3.
+├── detect.py     (~110) Capabilities, detect(), and the breaker evidence. See section 2/3.
 ├── notes.py      (~280) write_notes/clear_notes/read_notes; FileLane + BridgeLane
 │                        (_bridge_send/_bridge_write/_bridge_clear/_bridge_confirmed,
 │                        _spool_ppq, _heartbeat_age); _record() write-through.
@@ -139,7 +139,7 @@ This is the same shape as the probe verdict window and is runnable locally (sect
 ### The abstraction
 
 ```python
-# session/router.py
+# session/detect.py
 class OpClass(Enum):
     NOTE_WRITE = auto()      # eligibility predicate decides bridge vs file per call
     NOTE_READ = auto()

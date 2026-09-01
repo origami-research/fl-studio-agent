@@ -11,7 +11,7 @@ The code is organized BY FEATURE, so the same shape is hand-rolled per feature:
 - **Writers duplicate a shape.** flpkit `write_notes`, `write_playlist`, `write_automation`, `set_channel_levels` are four functions that all do: locate splice site -> build blob -> splice + fix chunk lengths -> verify by readback. Adding "mixer write" would be a fifth copy. (R4 B4-5 already flagged the 110-line duplication.)
 - **Readers duplicate a shape.** flpkit `read` decoders + `scene.py`'s row/clip/automation extraction are two decode paths over the same events.
 - **Transports are three parallel IO paths.** `spool.py`, `wire.py`, `bridge_wire.py` (UDP) each frame/send/await separately; the observer adds a fourth reader. (R4 B3-1: a whole dead carrier.)
-- **Routing is note-specific.** `session/router.py` routes NOTES; automation/mixer writes would each need their own routing branch.
+- **Routing is note-specific.** `core/router.py` routes NOTES from capability evidence; automation/mixer writes would each need their own routing branch.
 - **Discovery passes are hand-coded per pass.** getters/timing/target/sweep are separate C++ blocks; a mixer-probe is a fifth.
 - **Version-specific constants still live in code** in several places (the profile migration, R4 B1, is partly done).
 

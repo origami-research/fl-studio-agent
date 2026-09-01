@@ -207,9 +207,9 @@ def test_every_spec_carries_provenance():
 
 
 def test_route_fits_the_real_session_evidence_and_breaker():
-    """The Protocols are structural claims about session/router's concrete
+    """The Protocols are structural claims about session/detect's concrete
     types; this proves the manager's rewiring is purely mechanical."""
-    from fl_mcp.session.router import BridgeBreaker, Capabilities
+    from fl_mcp.session.detect import BridgeBreaker, Capabilities
 
     evidence = Capabilities(
         bridge_live=True,
