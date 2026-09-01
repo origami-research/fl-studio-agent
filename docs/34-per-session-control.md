@@ -28,3 +28,32 @@ Everything downstream is carrier-blind behind `ControlCarrier` (link.py).
 - The ctl lane has no push: hello is a round trip (`ctl.hello`), and dirty/refresh observation degrades in session mode until the bridge event stream carries it.
 - Latency is OnIdle cadence each way - the same clock wire engine-calls already park on.
 - **[ASSUMED until the next live match]** `OnIdle` fires in background (non-frontmost) FL windows; the bridge's tick does (spike-proven), the pyscript's is unverified. The first live verification match settles it; if background OnIdle stalls, control needs the bridge dispatcher instead.
+
+
+## REFUTED by live probe (2026-09-01)
+
+The single-FL probe before the first verification match killed this design:
+
+- OnIdle fires normally in the Hardware device script (0 -> 83 calls in 4s).
+- But the Hardware/MIDI **device-script sandbox cannot write files at all** -
+  every `open()` path returns `SystemError: FileIO returned NULL` (confirmed
+  via `ctl.selftest` over the wire: `write_ok: false`). The ctl lane needs the
+  controller to write `ctl_resp_*.json`; it cannot.
+
+Why offline tests missed it: the carrier tests faked the controller with a
+normal file-writing responder, and the note lane that DOES write files is the
+piano-roll pyscript (a different, writable sandbox), not the device script.
+Only the device script has a persistent OnIdle loop; only it answers the wire.
+
+**Fix direction (next workstream):** per-session control needs a transport the
+device script CAN use, or a writable persistent script. Ranked:
+1. Per-session **named MIDI wire** - if the device script can read a
+   session discriminator (e.g. FLMCP_SPOOL_ROOT from os.environ) and derive a
+   unique port-name suffix the server matches. Keeps push + low latency. Cheap
+   to test: does the device script see the FL process env?
+2. Bridge-dispatcher control - the native bridge writes files freely and is
+   already per-session, but reaches the plugin-host ABI, not the midi-scripting
+   API, so tempo/transport/params become host-call discovery work.
+
+`CtlSpoolControl` stays in the tree (inert: session mode falls back to the
+file lane exactly as before E1, no regression) until the replacement lands.
