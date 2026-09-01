@@ -22,7 +22,7 @@ from session_fakes import (
     make_session,
 )
 
-from fl_mcp import flp
+from fl_mcp import errors, flp
 from fl_mcp.schemas import Note
 from fl_mcp.session import FLSession, NotePlaneUnavailable, WriteRejected
 
@@ -121,6 +121,18 @@ def test_no_backend_raises_named_fix():
         session.write_notes(TARGET, NOTES, "merge")
     assert "make_agent_project" in excinfo.value.fix
     assert "FLMCP_AGENT_PROJECT" in excinfo.value.fix
+
+
+def test_concurrent_session_write_raises_retryable_error(tmp_path):
+    session, _ = make_session(project=tmp_path / "agent.flp")
+    session._write_lock.acquire()
+    try:
+        with pytest.raises(errors.ConcurrentWrite) as excinfo:
+            session.write_notes(TARGET, NOTES, "merge")
+    finally:
+        session._write_lock.release()
+    assert excinfo.value.category == "concurrent_write"
+    assert excinfo.value.retryable is True
 
 
 def test_clear_notes_is_project_write_even_when_connected(monkeypatch, tmp_path, no_reload):

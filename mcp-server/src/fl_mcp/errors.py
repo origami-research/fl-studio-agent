@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Literal
 
 ErrorCategory = Literal[
+    "concurrent_write",
     "control_plane_unavailable",
     "note_plane_unavailable",
     "invalid_argument",
@@ -84,6 +85,13 @@ class WriteRejected(ToolError):
         super().__init__("fl_api_error", message, fix, retryable=retryable)
 
 
+class ConcurrentWrite(ToolError):
+    """A write would race another write already in progress."""
+
+    def __init__(self, message: str, fix: str, *, retryable: bool = True) -> None:
+        super().__init__("concurrent_write", message, fix, retryable=retryable)
+
+
 def note_plane_unavailable(command_id: int, timeout: float) -> ToolError:
     return ToolError(
         "note_plane_unavailable",
@@ -111,6 +119,13 @@ def concurrency_guard_unavailable(project: Path, detail: str) -> ToolError:
         "Retry after FL finishes saving, or run fl_doctor and restore access to the project file. "
         "The write is refused because clobbering a user's concurrent edit would be unsafe.",
         retryable=True,
+    )
+
+
+def concurrent_write(action: str) -> ToolError:
+    return ConcurrentWrite(
+        f"{action} refused because another FL MCP write is already in progress.",
+        "Wait for the in-flight write and FL reload/readback to finish, then retry.",
     )
 
 

@@ -11,7 +11,9 @@ from __future__ import annotations
 import hashlib
 import logging
 import os
-from collections.abc import Callable
+import threading
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from pathlib import Path
 
 from fl_mcp import errors
@@ -140,6 +142,7 @@ class FLSession:
         self.file_lane = FileLane(self)
         self.bridge_lane = BridgeLane(self)
         self.observer = Observer(project=project)
+        self._write_lock = threading.Lock()
 
     @property
     def control(self) -> MidiControl | None:
@@ -179,26 +182,28 @@ class FLSession:
     # -- notes ----------------------------------------------------------------
 
     def write_notes(self, target: Target, notes: list[Note], mode: NoteWriteMode) -> WriteReceipt:
-        if self.project is None:
-            raise NotePlaneUnavailable(
-                "No backend can apply targeted notes: no project file is configured, "
-                "and bridge writes require the project file for readback. "
-                "(The pyscript lane cannot target a channel - see write_notes.)"
-            )
-        # The concurrency rule (docs/27 §5): never clobber a mid-edit user
-        # note. Merge writes are purely additive, so they skip the guard.
-        if mode != "merge":
-            self.observer.guard_write(target)
-        return ops_notes.write_notes(self, target, notes, mode)
+        with self._write_guard("write_notes"):
+            if self.project is None:
+                raise NotePlaneUnavailable(
+                    "No backend can apply targeted notes: no project file is configured, "
+                    "and bridge writes require the project file for readback. "
+                    "(The pyscript lane cannot target a channel - see write_notes.)"
+                )
+            # The concurrency rule (docs/27 §5): never clobber a mid-edit user
+            # note. Merge writes are purely additive, so they skip the guard.
+            if mode != "merge":
+                self.observer.guard_write(target)
+            return ops_notes.write_notes(self, target, notes, mode)
 
     def clear_notes(self, target: Target) -> WriteReceipt:
-        if self.project is None:
-            raise NotePlaneUnavailable(
-                "No backend can clear targeted notes: no project file is configured, "
-                "and bridge clears require the project file for readback."
-            )
-        self.observer.guard_write(target)
-        return ops_notes.clear_notes(self, target)
+        with self._write_guard("clear_notes"):
+            if self.project is None:
+                raise NotePlaneUnavailable(
+                    "No backend can clear targeted notes: no project file is configured, "
+                    "and bridge clears require the project file for readback."
+                )
+            self.observer.guard_write(target)
+            return ops_notes.clear_notes(self, target)
 
     def read_notes(self, target: Target) -> list[Note]:
         return note_ops.read_notes(self, target)
@@ -206,10 +211,12 @@ class FLSession:
     # -- controls -------------------------------------------------------------
 
     def set_tempo(self, bpm: float) -> float:
-        return controls.set_tempo(self, bpm)
+        with self._write_guard("set_tempo"):
+            return controls.set_tempo(self, bpm)
 
     def render_wav(self, output: Path) -> Path:
-        return controls.render_wav(self, output)
+        with self._write_guard("render_wav"):
+            return controls.render_wav(self, output)
 
     def set_channel_levels(
         self,
@@ -219,14 +226,16 @@ class FLSession:
         pan: float | None = None,
         pitch_semitones: int | None = None,
     ) -> ChannelLevels:
-        return controls.set_channel_levels(
-            self, channel, volume=volume, pan=pan, pitch_semitones=pitch_semitones
-        )
+        with self._write_guard("set_channel_levels"):
+            return controls.set_channel_levels(
+                self, channel, volume=volume, pan=pan, pitch_semitones=pitch_semitones
+            )
 
     def set_automation(
         self, channel: int, points: list[AutomationPoint]
     ) -> AutomationReceipt:
-        return controls.set_automation(self, channel, points)
+        with self._write_guard("set_automation"):
+            return controls.set_automation(self, channel, points)
 
     def plugin_params(
         self,
@@ -238,7 +247,8 @@ class FLSession:
         return controls.plugin_params(self, channel, query=query, limit=limit)
 
     def set_plugin_param(self, channel: int, param: int | str, value: float | str) -> PluginParam:
-        return controls.set_plugin_param(self, channel, param, value)
+        with self._write_guard("set_plugin_param"):
+            return controls.set_plugin_param(self, channel, param, value)
 
     # -- transport (manager sign-off, addendum A11) ---------------------------
     #
@@ -284,3 +294,12 @@ class FLSession:
             return self.transport.await_response(cmd, timeout=BRIDGE_PING_TIMEOUT_SECONDS).ok
         except (errors.ToolError, CarrierUnavailable):
             return False
+
+    @contextmanager
+    def _write_guard(self, action: str) -> Iterator[None]:
+        if not self._write_lock.acquire(blocking=False):
+            raise errors.concurrent_write(action)
+        try:
+            yield
+        finally:
+            self._write_lock.release()

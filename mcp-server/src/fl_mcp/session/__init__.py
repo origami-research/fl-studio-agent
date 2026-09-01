@@ -14,12 +14,13 @@ chosen per call from evidence (docs/27 §2; there is no flag):
 - state.py     - snapshot, channel_names, doctor
 """
 
-from fl_mcp.errors import NotePlaneUnavailable, WriteRejected
+from fl_mcp.errors import ConcurrentWrite, NotePlaneUnavailable, WriteRejected
 
 from .facade import DEFAULT_PROJECT_NAME, FLSession, create_session
 
 __all__ = [
     "DEFAULT_PROJECT_NAME",
+    "ConcurrentWrite",
     "FLSession",
     "NotePlaneUnavailable",
     "WriteRejected",
