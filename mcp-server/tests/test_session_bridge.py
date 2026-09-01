@@ -29,9 +29,8 @@ from fl_mcp.core.router import route
 from fl_mcp.ops import notes as ops_notes
 from fl_mcp.schemas import SpoolResponse, Target
 from fl_mcp.session import FLSession, WriteRejected
-from fl_mcp.session import notes as notes_mod
 from fl_mcp.session import detect as detect_mod
-from fl_mcp.session.notes import BridgeLane, FileLane
+from fl_mcp.session import notes as notes_mod
 from fl_mcp.session.detect import (
     BRIDGE_HEARTBEAT_FILE,
     REOPEN_PROBE_MIN_INTERVAL_SECONDS,
@@ -39,6 +38,7 @@ from fl_mcp.session.detect import (
     Capabilities,
     read_heartbeat,
 )
+from fl_mcp.session.notes import BridgeLane, FileLane
 
 PING_OK = SpoolResponse(id=0, ok=True, op="ping")
 BRIDGE_OK = SpoolResponse(id=0, ok=True, op="add_notes", notes_written=999)  # 999: a lying echo

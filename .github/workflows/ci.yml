@@ -13,7 +13,9 @@ jobs:
       # that provides `harness` + `flmcp_codec` (replaces sys.path surgery).
       - run: uv pip install --system -e . -e .. ruff pytest
       # Lint gate: the code-taste rules in AGENTS.md / docs/19 are enforced here,
-      # so a regression fails the PR instead of accumulating.
-      - run: ruff check src
+      # so a regression fails the PR instead of accumulating. Lint the whole tree
+      # (src + tests) - test files are code too, and gating only src let lint rot
+      # accumulate there unseen.
+      - run: ruff check
       # The fake-FL suite runs anywhere; live e2e (FL_E2E) is local/nightly only.
       - run: python -m pytest tests -q
