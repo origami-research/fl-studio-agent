@@ -118,6 +118,19 @@ def test_recycle_is_rate_limited(monkeypatch):
     assert factory_calls == [True]
 
 
+def test_recycle_hello_failure_is_logged(monkeypatch, caplog):
+    """A hot-plug rebind that never receives hello degrades, but is never silent."""
+    silent = FakeControl(hello=None)
+    session, _ = make_session(control=silent)
+    session.link._control_factory = lambda: FakeControl(hello=None)
+    monkeypatch.setattr(link_mod, "fl_process_running", lambda: True)
+
+    with caplog.at_level("ERROR"):
+        assert session._ensure_hello() is None
+
+    assert any("FL did not answer hello" in record.message for record in caplog.records)
+
+
 def test_sticky_hello_is_not_trusted_without_a_live_ping(monkeypatch):
     """After FL dies, the wire still holds its last hello - trusting it routed
     live ops into a void (dogfood A12). A dead ping must read as disconnected."""

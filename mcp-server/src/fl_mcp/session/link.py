@@ -99,6 +99,7 @@ class ControlLink:
         try:
             return self.control.await_hello(timeout=RECYCLE_HELLO_WAIT_SECONDS)
         except errors.ToolError:
+            log.exception("port recycle completed but FL did not answer hello")
             return None
 
     def reconnect(self) -> None:
