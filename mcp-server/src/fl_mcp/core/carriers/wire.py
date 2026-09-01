@@ -163,11 +163,27 @@ class MidiControl:
         """One correlated round trip to the controller script.
 
         ``pid`` addresses one FL among many on the shared broadcast wire; None
-        reaches every attached controller (fine when only one is)."""
-        with self._call_lock:
+        reaches every attached controller (fine when only one is).
+
+        The call lock is acquired with a bound, not held open: the wire is a
+        single serialization point shared by every session through the broker,
+        so an op that FL parks (waiting its full timeout) must not let another
+        session's calls queue behind it without limit. A caller that cannot get
+        the wire within its own timeout fails fast and retryably instead of
+        stacking into the multi-minute hang seen in the first live match."""
+        if not self._call_lock.acquire(timeout=timeout):
+            raise ToolError(
+                "control_plane_unavailable",
+                f"The control wire was busy for {timeout:g}s and did not free for {op!r}.",
+                "Another session's control op held the shared wire; retry.",
+                retryable=True,
+            )
+        try:
             cmd = ControlRequest(id=next(self._ids), op=op, args=args or [], kwargs=kwargs or {}, pid=pid)
             self.send(cmd)
             return self.await_response(cmd.id, timeout)
+        finally:
+            self._call_lock.release()
 
     def await_hello(self, timeout: float = 5.0) -> HelloEvent:
         """Block until the controller announces itself; raises ToolError

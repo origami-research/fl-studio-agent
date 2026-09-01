@@ -356,3 +356,18 @@ def test_close_is_idempotent(rig):
     control, _midi_in, _midi_out = rig
     control.close()
     control.close()
+
+
+def test_send_request_fails_fast_when_the_shared_wire_stays_busy(rig):
+    control, _midi_in, _midi_out = rig
+    # Hold the call lock as another session's slow op would; a second request
+    # must fail retryably within its own timeout, not queue without bound.
+    control._call_lock.acquire()
+    try:
+        with pytest.raises(errors.ToolError) as exc_info:
+            control.send_request("mixer.getCurrentTempo", timeout=0.2)
+    finally:
+        control._call_lock.release()
+    assert exc_info.value.category == "control_plane_unavailable"
+    assert exc_info.value.retryable is True
+    assert "busy" in exc_info.value.message
