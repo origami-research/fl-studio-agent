@@ -20,7 +20,17 @@ from fl_mcp.core.discovery import (
     NullLedger,
     discover,
 )
-from fl_mcp.passes import Getters, MapAlign, Sweep, Target, Timing, classify, unknown_ids
+from fl_mcp.passes import (
+    Getters,
+    MapAlign,
+    Plugins,
+    Sweep,
+    Target,
+    Timing,
+    classify,
+    classify_plugins,
+    unknown_ids,
+)
 from fl_mcp.passes.map_align import DOCUMENTED_MAX_ID
 from fl_mcp.profile import BUILTIN_FALLBACK, GetterFact, UnsafeFact
 
@@ -94,6 +104,33 @@ def test_unknown_ids_empty_when_all_new_ids_are_accounted_for() -> None:
     # handled, so there is nothing to sweep - a converged build.
     profile = _profile_with_dispatcher(handled_max_id=DOCUMENTED_MAX_ID, inert_in_range=())
     assert unknown_ids(profile) == []
+
+
+# --- plugins: static candidate map, never an executable probe ----------------
+
+
+def test_plugin_candidates_classify_only_nonfatal_undocumented_handlers() -> None:
+    profile = _profile_with_dispatcher(
+        handled_max_id=109,
+        inert_in_range=(102,),
+        unsafe={94: UnsafeFact("crashes_host", "x"), 99: UnsafeFact("hangs_host", "x")},
+    )
+    candidates = classify_plugins(profile)
+
+    for finding in (candidates.add_instrument, candidates.add_effect, candidates.load_preset):
+        assert finding.matched == () and finding.moved == ()
+        assert finding.new == (88, 89, 90, 91, 92, 93, 95, 96, 97, 98, 100, 101, 103, 104, 105, 107, 108, 109)
+        assert not set(finding.new) & {94, 99, 106}
+
+
+def test_plugin_pass_is_static_and_never_emits_unproven_dispatcher_ids() -> None:
+    profile = _profile_with_dispatcher(handled_max_id=109, inert_in_range=())
+    transport = FakeTransport()
+
+    out = discover([Plugins()], transport, profile)
+
+    assert transport.sent == []
+    assert out == profile
 
 
 # --- sweep consumes only the unknowns ----------------------------------------
@@ -226,6 +263,14 @@ def test_alignment_report_states_matched_moved_new_and_the_sweep_input() -> None
     report = alignment_report(_profile_with_dispatcher(handled_max_id=91, inert_in_range=(39,)))
     assert "matched" in report and "moved" in report and "new" in report
     assert "FHD_GetTimeMul" in report  # the moved id is named from the SDK map
+
+
+def test_plugin_report_names_all_operations_and_the_non_executable_boundary() -> None:
+    from fl_mcp.discover import plugin_report
+
+    report = plugin_report(_profile_with_dispatcher(handled_max_id=91, inert_in_range=()))
+    assert "add instrument" in report and "add effect" in report and "load preset" in report
+    assert "unproven; static decode only" in report
 
 
 def test_run_without_dylib_or_live_needs_no_transport() -> None:

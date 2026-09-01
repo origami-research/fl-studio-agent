@@ -4,7 +4,7 @@
 Surface 4, r4 A3) into one resumable command:
 
 ```
-static scrape  ->  passes (map_align, getters, timing, target, sweep)  ->  emit profile + diff
+static scrape  ->  passes (map_align, plugins, getters, timing, target, sweep)  ->  emit profile + diff
 ```
 
 The passes are DATA (`fl_mcp/passes/`), run by ONE generic driver
@@ -24,7 +24,11 @@ loop is a sightmesh job around this command - the steps below.
    `N matched, M moved, K new`, names every MOVED (documented id gone inert - a
    handler disappeared, the smoke alarm), and prints the sweep input (the
    genuinely-new ids).
-3. **Emit**: with `--out`, writes the merged profile and prints the diff vs the
+3. **plugins**: emits separate candidate maps for add-instrument, add-effect,
+   and load-preset. The current SDK has no documented programmatic command for
+   any of them, so their `matched`/`moved` sets are empty. Its non-fatal `new`
+   ids are an offline-disassembly queue only; this pass issues no host calls.
+4. **Emit**: with `--out`, writes the merged profile and prints the diff vs the
    loaded baseline - "what changed on this build" is the deliverable a human reads.
 
 This half is the answer to "did the ABI move?" and needs no live FL. Run it on
@@ -44,7 +48,7 @@ FL + Bridge are already up; the orchestrator owns FL's lifecycle:
    frontmost requirement (`profile.tick.frontmost_required`) is satisfied by the
    job, not a human.
 3. **Run**: `python -m fl_mcp.discover --live --out <profile.json> --resume`.
-   - getters -> timing -> target -> sweep, folded into the profile in order.
+   - plugins -> getters -> timing -> target -> sweep, folded into the profile in order.
    - `target` PLANTS notes but does not judge; the verdict
      (`capabilities.pattern_targeting_live` / `channel_targeting_live`) comes
      from **Cmd+S + flpkit readback**, the non-negotiable live-acceptance gate
@@ -81,5 +85,8 @@ and SIGKILL-then-open avoids the save prompt; any other modal is a fail-fast wit
 - `wp_sweep` accepts an explicit `ids` list (map_align's unknowns) or a
   contiguous range; either way the same skip predicate gates every id, so a
   documented or ledger-fatal id can never be smuggled through.
+- The plugin candidate report is not sweep input. Before any disposable-project
+  experiment, an operator must statically decode a candidate's payload and
+  completion signal. IDs 94, 99, and 106 are fatal and never candidates.
 - Claim-before-execute means a command that crashes FL never replays; the durable
   in-flight checkpoint quarantines the id a prior run died on.

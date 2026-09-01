@@ -34,7 +34,7 @@ from pathlib import Path
 
 from . import scrape_rtti
 from .core.discovery import FileLedger, discover
-from .passes import DEFAULT_PASSES, classify
+from .passes import DEFAULT_PASSES, classify, classify_plugins
 from .profile import CapabilityProfile, load_profile, parse_profile, profile_to_dict
 
 log = logging.getLogger(__name__)
@@ -73,6 +73,27 @@ def alignment_report(profile: CapabilityProfile) -> str:
         moved = ", ".join(f"{i} ({align.name(i)})" for i in align.moved)
         lines.append(f"  MOVED (documented id now inert - a handler disappeared): {moved}")
     lines.append(f"  sweep input (genuinely-new, not yet explained): {unknowns or 'none'}")
+    return "\n".join(lines)
+
+
+def plugin_report(profile: CapabilityProfile) -> str:
+    """Print the non-executable plugin host-call candidate map.
+
+    No SDK-aligned id names one of these operations today. ``new`` is retained
+    as an offline-disassembly queue, never as permission to call a handler.
+    """
+    candidates = classify_plugins(profile)
+    lines = ["plugin host-call candidates (static only; no dispatcher calls):"]
+    for operation, finding in (
+        ("add instrument", candidates.add_instrument),
+        ("add effect", candidates.add_effect),
+        ("load preset", candidates.load_preset),
+    ):
+        lines.append(
+            f"  {operation}: {list(finding.matched) or 'none'} matched, "
+            f"{list(finding.moved) or 'none'} moved, "
+            f"{list(finding.new) or 'none'} new (unproven; static decode only)"
+        )
     return "\n".join(lines)
 
 
@@ -117,6 +138,7 @@ def run(
     if dylib is not None:
         profile = scrape_into(profile, dylib)
     print(alignment_report(profile), file=sys.stderr)
+    print(plugin_report(profile), file=sys.stderr)
     if not live:
         return profile
     transport = _build_transport()
