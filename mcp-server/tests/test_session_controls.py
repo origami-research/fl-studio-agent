@@ -12,7 +12,7 @@ import pytest
 from session_fakes import HELLO, FakeControl, make_session
 
 from fl_mcp import errors, flp
-from fl_mcp.schemas import AutomationPoint, ControlResponse
+from fl_mcp.schemas import AutomationPoint, ControlResponse, PluginParamModel, PluginParamSpec
 from fl_mcp.session import FLSession, NotePlaneUnavailable, WriteRejected
 
 
@@ -290,6 +290,7 @@ def _param_control(values: dict[int, float] | None = None) -> FakeControl:
         hello=HELLO,
         handlers={
             "plugins.getParamCount": lambda args: len(state),
+            "plugins.getPluginName": lambda args: "Test Synth",
             "plugins.getParamName": lambda args: names[args[0]],
             "plugins.getParamValue": lambda args: state[args[0]],
             "plugins.setParamValue": set_value,
@@ -329,6 +330,67 @@ def test_set_plugin_param_resolves_unique_name_and_rejects_ambiguity():
         session.set_plugin_param(0, "Master", 0.5)
     with pytest.raises(errors.ToolError, match="unknown"):
         session.set_plugin_param(0, "cutoff", 0.5)
+
+
+def test_plugin_param_model_enriches_all_kinds_and_sets_display_values():
+    model = PluginParamModel(
+        plugin="Test Synth",
+        parameters=(
+            PluginParamSpec(
+                index=0,
+                name="Main - Master level",
+                kind="continuous",
+                minimum=-60,
+                maximum=0,
+                step=0.1,
+                unit="dB",
+            ),
+            PluginParamSpec(
+                index=1,
+                name="Main - Master LFO level",
+                kind="stepped",
+                options=("Off", "Slow", "Fast"),
+            ),
+            PluginParamSpec(
+                index=2,
+                name="Main - Master pitch",
+                kind="enum",
+                options=("Sine", "Saw", "Square", "Noise"),
+            ),
+        ),
+    )
+    session, _ = make_session(control=_param_control(), plugin_param_models=(model,))
+
+    params = session.plugin_params(0)
+    assert [(param.kind, param.display) for param in params] == [
+        ("continuous", "-12 dB"),
+        ("stepped", "Fast"),
+        ("enum", "Square"),
+    ]
+    confirmed = session.set_plugin_param(0, "Main - Master pitch", "Noise")
+    assert (confirmed.value, confirmed.display) == (1.0, "Noise")
+    with pytest.raises(ValueError, match="invalid option"):
+        session.set_plugin_param(0, 2, "Triangle")
+
+
+def test_bool_param_accepts_option_and_round_trips():
+    model = PluginParamModel(
+        plugin="Test Synth",
+        parameters=(
+            PluginParamSpec(
+                index=0,
+                name="Main - Master level",
+                kind="bool",
+                options=("Off", "On"),
+            ),
+        ),
+    )
+    session, _ = make_session(
+        control=_param_control({0: 0.0}), plugin_param_models=(model,)
+    )
+
+    confirmed = session.set_plugin_param(0, 0, "On")
+    assert (confirmed.kind, confirmed.value, confirmed.display) == ("bool", 1.0, "On")
 
 
 def test_plugin_params_without_a_wire_is_an_honest_error():

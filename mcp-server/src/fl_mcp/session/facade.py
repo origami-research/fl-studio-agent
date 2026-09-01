@@ -34,6 +34,7 @@ from fl_mcp.schemas import (
     Note,
     NoteWriteMode,
     PluginParam,
+    PluginParamModel,
     SessionState,
     Target,
     WriteReceipt,
@@ -116,6 +117,7 @@ class FLSession:
     link: ControlLink
     breaker: BridgeBreaker
     profile: CapabilityProfileLike
+    plugin_param_models: tuple[PluginParamModel, ...]
 
     def __init__(
         self,
@@ -126,8 +128,10 @@ class FLSession:
         project: Path | None,
         control_factory: Callable[[], MidiControl] | None = None,
         profile: CapabilityProfileLike | None = None,
+        plugin_param_models: tuple[PluginParamModel, ...] = (),
     ) -> None:
         self.link = ControlLink(control, factory=control_factory)
+        self.plugin_param_models = plugin_param_models
         self.transport = transport
         self.store = store
         self.project = project
@@ -233,7 +237,7 @@ class FLSession:
     ) -> list[PluginParam]:
         return controls.plugin_params(self, channel, query=query, limit=limit)
 
-    def set_plugin_param(self, channel: int, param: int | str, value: float) -> PluginParam:
+    def set_plugin_param(self, channel: int, param: int | str, value: float | str) -> PluginParam:
         return controls.set_plugin_param(self, channel, param, value)
 
     # -- transport (manager sign-off, addendum A11) ---------------------------

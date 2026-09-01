@@ -6,12 +6,20 @@ landed - it never falls through to the file path (the v1 cascade bug).
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 from fl_mcp import errors, flp
 from fl_mcp.errors import NotePlaneUnavailable, WriteRejected
-from fl_mcp.schemas import AutomationPoint, AutomationReceipt, ChannelLevels, PluginParam
+from fl_mcp.schemas import (
+    AutomationPoint,
+    AutomationReceipt,
+    ChannelLevels,
+    PluginParam,
+    PluginParamModel,
+    PluginParamSpec,
+)
 
 from .link import LIVE_READ_TIMEOUT_SECONDS, LIVE_SET_TIMEOUT_SECONDS
 
@@ -26,6 +34,7 @@ PLUGIN_PARAM_TOLERANCE = 0.02
 # FL's plugins.* convention for "the channel's own generator, not a mixer
 # effect slot" (the slot argument every call here passes).
 GENERATOR_SLOT = -1
+_NUMBER = re.compile(r"^\\s*([+-]?(?:\\d+(?:\\.\\d*)?|\\.\\d+))\\s*$")
 
 
 def render_wav(session: FLSession, output: Path) -> Path:
@@ -225,6 +234,89 @@ def _plugin_read(session: FLSession, op: str, args: list) -> object:
     return resp.ret
 
 
+def _plugin_model(session: FLSession, channel: int) -> PluginParamModel | None:
+    """Select static semantics only when the session was explicitly given them."""
+    if not session.plugin_param_models:
+        return None
+    plugin = str(_plugin_read(session, "plugins.getPluginName", [channel, GENERATOR_SLOT]))
+    return next((model for model in session.plugin_param_models if model.plugin == plugin), None)
+
+
+def _spec(model: PluginParamModel | None, index: int, name: str) -> PluginParamSpec | None:
+    if model is None:
+        return None
+    return next((item for item in model.parameters if item.index == index and item.name == name), None)
+
+
+def _option_index(spec: PluginParamSpec, value: float) -> int:
+    assert spec.options is not None
+    if len(spec.options) == 1:
+        return 0
+    return round(value * (len(spec.options) - 1))
+
+
+def _display(value: float, spec: PluginParamSpec | None) -> str:
+    if spec is None:
+        return f"{value:g}"
+    if spec.options is not None:
+        return spec.options[_option_index(spec, value)]
+    if spec.minimum is not None and spec.maximum is not None:
+        shown = spec.minimum + value * (spec.maximum - spec.minimum)
+        if spec.step is not None:
+            shown = round((shown - spec.minimum) / spec.step) * spec.step + spec.minimum
+        suffix = f" {spec.unit}" if spec.unit else ""
+        return f"{shown:g}{suffix}"
+    return f"{value:g}"
+
+
+def _param(index: int, name: str, value: float, spec: PluginParamSpec | None) -> PluginParam:
+    return PluginParam(
+        index=index,
+        name=name,
+        value=min(max(value, 0.0), 1.0),
+        display=_display(value, spec),
+        kind=spec.kind if spec is not None else "continuous",
+        options=list(spec.options) if spec is not None and spec.options is not None else None,
+        minimum=spec.minimum if spec is not None else None,
+        maximum=spec.maximum if spec is not None else None,
+        step=spec.step if spec is not None else None,
+        unit=spec.unit if spec is not None else None,
+    )
+
+
+def _resolve_value(value: float | str, spec: PluginParamSpec | None) -> float:
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        if not 0.0 <= value <= 1.0:
+            raise ValueError(f"plugin param values are normalized 0..1, got {value}")
+        return value
+    if spec is None:
+        raise ValueError(
+            "display or option values require a captured per-plugin parameter model; "
+            "pass a normalized float instead"
+        )
+    if spec.options is not None:
+        option = next(
+            (index for index, label in enumerate(spec.options) if label.casefold() == value.casefold()),
+            None,
+        )
+        if option is None:
+            choices = ", ".join(spec.options)
+            raise ValueError(f"invalid option {value!r} for {spec.name!r}; choose one of: {choices}")
+        return option / max(len(spec.options) - 1, 1)
+    if spec.minimum is None or spec.maximum is None:
+        raise ValueError(f"{spec.name!r} has no captured display range; pass a normalized float instead")
+    suffix = f" {spec.unit}" if spec.unit else ""
+    text = value.removesuffix(suffix).strip() if suffix else value.strip()
+    match = _NUMBER.fullmatch(text)
+    if match is None:
+        expected = f"number{suffix}" if suffix else "number"
+        raise ValueError(f"invalid display value {value!r} for {spec.name!r}; expected {expected}")
+    shown = float(match.group(1))
+    if not spec.minimum <= shown <= spec.maximum:
+        raise ValueError(f"display value {value!r} is outside {spec.minimum:g}..{spec.maximum:g}")
+    return (shown - spec.minimum) / (spec.maximum - spec.minimum)
+
+
 def plugin_params(
     session: FLSession,
     channel: int,
@@ -238,6 +330,7 @@ def plugin_params(
     result because big synths are BIG (Sytrus: 597 params) and every name
     is a wire round trip."""
     count = int(_plugin_read(session, "plugins.getParamCount", [channel, GENERATOR_SLOT]) or 0)
+    model = _plugin_model(session, channel)
     out: list[PluginParam] = []
     for index in range(count):
         if len(out) >= limit:
@@ -248,19 +341,18 @@ def plugin_params(
         value = float(
             _plugin_read(session, "plugins.getParamValue", [index, channel, GENERATOR_SLOT])
         )
-        out.append(PluginParam(index=index, name=name, value=min(max(value, 0.0), 1.0)))
+        out.append(_param(index, name, value, _spec(model, index, name)))
     return out
 
 
 def set_plugin_param(
-    session: FLSession, channel: int, param: int | str, value: float
+    session: FLSession, channel: int, param: int | str, value: float | str
 ) -> PluginParam:
     """Set one parameter (by index, or by unique name/substring) and return
     the READBACK. FL quantizes to the plugin's own step grid, so the
     confirmed value may differ slightly from the request - beyond
     PLUGIN_PARAM_TOLERANCE it raises instead of pretending."""
-    if not 0.0 <= value <= 1.0:
-        raise ValueError(f"plugin param values are normalized 0..1, got {value}")
+    model = _plugin_model(session, channel)
     if isinstance(param, str):
         matches = plugin_params(session, channel, query=param, limit=8)
         exact = [p for p in matches if p.name.lower() == param.lower()]
@@ -276,24 +368,26 @@ def set_plugin_param(
     else:
         index = param
 
+    name = str(_plugin_read(session, "plugins.getParamName", [index, channel, GENERATOR_SLOT]))
+    requested = _resolve_value(value, _spec(model, index, name))
+
     if session.control is None:
         raise errors.control_plane_unavailable("plugins.setParamValue", 0.0)
     resp = session.control.send_request(
         "plugins.setParamValue",
-        args=[value, index, channel, GENERATOR_SLOT],
+        args=[requested, index, channel, GENERATOR_SLOT],
         timeout=LIVE_SET_TIMEOUT_SECONDS,
     )
     if not resp.ok:
         raise errors.fl_api_error("plugins.setParamValue", resp.err or "no detail")
 
-    name = str(_plugin_read(session, "plugins.getParamName", [index, channel, GENERATOR_SLOT]))
     confirmed = float(
         _plugin_read(session, "plugins.getParamValue", [index, channel, GENERATOR_SLOT])
     )
-    if abs(confirmed - value) > PLUGIN_PARAM_TOLERANCE:
+    if abs(confirmed - requested) > PLUGIN_PARAM_TOLERANCE:
         raise WriteRejected(
-            f"param {name!r} readback {confirmed} is not the requested {value}",
+            f"param {name!r} readback {confirmed} is not the requested {requested}",
             fix="The plugin may quantize this control coarsely; read plugin_params "
             "and pick a supported value.",
         )
-    return PluginParam(index=index, name=name, value=confirmed)
+    return _param(index, name, confirmed, _spec(model, index, name))

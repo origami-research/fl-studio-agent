@@ -94,7 +94,7 @@ class WriteReceipt(BaseModel):
 
 
 class PluginParam(BaseModel):
-    """One plugin parameter, value normalized 0..1 (FL's own scale; live-read).
+    """One plugin parameter, with its normalized live value and known semantics.
 
     E2-verified 2026-08-29: a generator exposes its full parameter surface
     over the wire (597 named params on Sytrus), set + readback exact up to
@@ -104,6 +104,38 @@ class PluginParam(BaseModel):
     index: int = Field(ge=0)
     name: str
     value: float = Field(ge=0, le=1)
+    display: str
+    kind: Literal["continuous", "stepped", "enum", "bool"]
+    options: list[str] | None = None
+    minimum: float | None = None
+    maximum: float | None = None
+    step: float | None = Field(default=None, gt=0)
+    unit: str | None = None
+
+
+class PluginParamSpec(BaseModel):
+    """Static semantics for one parameter of one identified plugin.
+
+    FL's documented ``plugins`` API deliberately exposes normalized values only;
+    formatted text, ranges and option labels belong to a plugin-specific model
+    captured from that plugin.  This type is the boundary for that evidence.
+    """
+
+    index: int = Field(ge=0)
+    name: str
+    kind: Literal["continuous", "stepped", "enum", "bool"]
+    options: tuple[str, ...] | None = None
+    minimum: float | None = None
+    maximum: float | None = None
+    step: float | None = Field(default=None, gt=0)
+    unit: str | None = None
+
+
+class PluginParamModel(BaseModel):
+    """An immutable per-plugin parameter model, selected by FL plugin name."""
+
+    plugin: str
+    parameters: tuple[PluginParamSpec, ...]
 
 
 class ChannelLevels(BaseModel):

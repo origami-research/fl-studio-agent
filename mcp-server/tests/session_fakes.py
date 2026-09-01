@@ -25,6 +25,7 @@ from fl_mcp.schemas import (
     Note,
     NoteDelta,
     NoteSetRef,
+    PluginParamModel,
     SpoolCommand,
     SpoolResponse,
     Target,
@@ -132,6 +133,7 @@ def make_session(
     store: FakeStore | None = None,
     project: Path | None = None,
     profile: CapabilityProfileLike | None = None,
+    plugin_param_models: tuple[PluginParamModel, ...] = (),
 ) -> tuple[FLSession, FakeStore]:
     store = store or FakeStore()
     # The fakes implement exactly the surface FLSession consumes; the casts are
@@ -145,6 +147,7 @@ def make_session(
         # segfault rtmidi); a recycle in a test yields another silent fake.
         control_factory=cast(Any, lambda: FakeControl(hello=None)),
         profile=profile,
+        plugin_param_models=plugin_param_models,
     )
     return session, store
 

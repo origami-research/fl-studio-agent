@@ -187,14 +187,17 @@ filters names by case-insensitive substring; `limit` caps the number returned.
 cutoffs = fl.track("Lead").params(query="cutoff", limit=8)
 ```
 
-### `track.set_param(param: int | str, value: float) -> PluginParam`
+### `track.set_param(param: int | str, value: float | str) -> PluginParam`
 
 **Availability:** live-only. `param` is an index or a unique exact/substr name;
-`value` is normalized from 0 to 1. Returns FL's confirmed readback, which may
-be quantized to the plugin's control grid.
+`value` may be normalized from 0 to 1, or (when this exact plugin has a
+captured parameter model) its displayed numeric value with unit or an option
+name. Returns FL's confirmed readback, which may be quantized to the plugin's
+control grid. An option not present in `PluginParam.options` is rejected before
+the write.
 
 ```python
-confirmed = fl.track("Lead").set_param("cutoff", 0.55)
+confirmed = fl.track("Lead").set_param("filter mode", "Bandpass")
 ```
 
 ## Data shapes
@@ -208,4 +211,4 @@ with `Model.model_validate(...)`.
 | `NoteWriteMode` | Literal `"merge"` or `"replace"` |
 | `AutomationPoint` | `position: float` (beats, >=0), `value: float` (normalized, -0.001–1.001), `tension: float` (-1–1, default 0) |
 | `AudioAnalysis` | `bpm: float | None`, `key: str | None`, `integrated_lufs: float`, `true_peak_dbfs: float`, `spectral_balance: SpectralBalance` (`low_dbfs`, `mid_dbfs`, `high_dbfs`) |
-| `PluginParam` | `index: int`, `name: str`, `value: float` (normalized 0–1) |
+| `PluginParam` | `index: int`, `name: str`, `value: float` (normalized 0–1), `display: str`, `kind: "continuous" | "stepped" | "enum" | "bool"`, `options: list[str] | None`, `minimum`, `maximum`, `step`, `unit` |

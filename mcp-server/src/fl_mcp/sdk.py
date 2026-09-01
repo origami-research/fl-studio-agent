@@ -61,7 +61,9 @@ class _ParamsArgs(BaseModel):
 
 class _ParamSetArgs(BaseModel):
     param: str | SdkChannel
-    value: NormalizedValue
+    # A normalized float is validated here; a str (display/option value) is
+    # passed through and validated against the captured plugin model downstream.
+    value: NormalizedValue | Annotated[str, Field(strict=True)]
 
 
 _NOTES = TypeAdapter(list[Note])
@@ -204,9 +206,12 @@ class Track:
             raise errors.invalid_argument("Track.params", str(exc)) from exc
         return self._fl._session.plugin_params(self.channel, query=args.query, limit=args.limit)
 
-    def set_param(self, param: int | str, value: float) -> PluginParam:
-        """Set one parameter (index, or unique name/substring), 0..1 normalized.
-        Returns the READBACK - FL may quantize to the control's own grid."""
+    def set_param(self, param: int | str, value: float | str) -> PluginParam:
+        """Set by normalized value, or a model-backed display/option value.
+
+        ``str`` values require captured metadata for this exact plugin. Returns
+        FL's READBACK; FL may quantize to the control's own grid.
+        """
         try:
             args = _ParamSetArgs(param=param, value=value)
         except ValidationError as exc:
