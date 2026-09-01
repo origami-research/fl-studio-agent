@@ -4,6 +4,8 @@ This is a LIVING document, maintained every time coverage changes. It is the ans
 
 North star: an agent that **produces** music in FL (not just arranges MIDI notes) with the human in the loop. Priority = distance from that north star. Efficiency = prefer unlocks that open many capabilities at once.
 
+Capability acquisition is governed by the [capability acquisition model](33-capability-acquisition-model.md): classify each gap as `.flp` data or a live host call before choosing work.
+
 ## Legend
 - Coverage: `live` (no reload) / `file` (flpkit, may need reload) / `read-only` / `NONE`
 - Care: T1 (core, now) .. T5 (meta/enabler)

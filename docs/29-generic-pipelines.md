@@ -2,6 +2,8 @@
 
 Goal (owner directive): implement the remaining work MINIMALLY - no duplicate code, everything through shared GENERIC pipelines, zero hardcoding or manual reconfiguration, super generic, super readable. A new capability should be DATA dropped onto an existing pipeline, never a new hand-rolled code path.
 
+The [capability acquisition model](33-capability-acquisition-model.md) is the prior routing rule: first classify every capability as `.flp` data or a live host call, then use the corresponding reusable engine.
+
 ## 1. The problem with the current shape (why refactor)
 
 The code is organized BY FEATURE, so the same shape is hand-rolled per feature:
