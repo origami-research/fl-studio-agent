@@ -73,7 +73,10 @@ class Transport:
         return cmd
 
     def await_response(self, command: SpoolCommand, timeout: float) -> SpoolResponse:
-        return self._sent.pop(command.id).await_response(command.id, timeout)
+        carrier = self._sent.pop(command.id, None)
+        if carrier is None:
+            raise CarrierUnavailable(f"command {command.id} was not sent by this transport")
+        return carrier.await_response(command.id, timeout)
 
     def _dispatch(self, cmd: SpoolCommand) -> Carrier:
         """The ONE carrier decision (R4 B3-1, generic): the first live carrier

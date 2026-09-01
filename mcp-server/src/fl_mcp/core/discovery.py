@@ -134,17 +134,29 @@ class FileLedger:
 
     def __init__(self, path: Path) -> None:
         self._path = path
-        self._entries: dict[str, dict[str, Any]] = {}
+        self._entries: dict[str, Any] = {}
         if path.is_file():
             try:
-                self._entries = json.loads(path.read_text())
+                payload = json.loads(path.read_text())
             except (OSError, json.JSONDecodeError) as exc:
                 log.warning("discovery ledger %s unreadable (%s); starting fresh", path, exc)
-                self._entries = {}
+                return
+            if not isinstance(payload, dict):
+                log.warning("discovery ledger %s has invalid shape; starting fresh", path)
+                return
+            self._entries = {str(key): value for key, value in payload.items()}
 
     def get(self, key: str) -> Response | None:
         entry = self._entries.get(key)
         if entry is None:
+            return None
+        if not isinstance(entry, dict):
+            log.warning("discovery ledger entry %s has invalid shape; ignoring it", key)
+            return None
+        ok = entry.get("ok")
+        result = entry.get("result")
+        if not isinstance(ok, bool) or not isinstance(result, dict):
+            log.warning("discovery ledger entry %s has invalid shape; ignoring it", key)
             return None
         return _Recorded(ok=bool(entry["ok"]), result=dict(entry["result"]))
 

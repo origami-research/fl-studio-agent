@@ -207,6 +207,20 @@ def test_automation_file_seam_rejects_a_missing_readback(monkeypatch, tmp_path):
         flp.write_automation(tmp_path / "agent.flp", 2, [AutomationPoint(position=1, value=0.25)])
 
 
+def test_automation_file_seam_rejects_an_absent_readback_channel(monkeypatch, tmp_path):
+    monkeypatch.setattr(flp.flpkit, "write_automation", lambda *args: 1)
+    monkeypatch.setattr(
+        flp,
+        "read",
+        lambda _path: type(
+            "Project", (), {"channels": [type("Channel", (), {"index": 1, "automation": ()})()]}
+        )(),
+    )
+
+    with pytest.raises(flp.FlpError, match="absent from the saved-file automation readback"):
+        flp.write_automation(tmp_path / "agent.flp", 2, [AutomationPoint(position=1, value=0.25)])
+
+
 def test_automation_requires_a_project_file():
     session, _ = make_session()
     with pytest.raises(NotePlaneUnavailable, match="No backend can write automation"):

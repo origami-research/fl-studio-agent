@@ -39,9 +39,17 @@ def analyze_wav(path: Path) -> AudioAnalysis:
 
 
 def _read_wav(path: Path) -> tuple[np.ndarray, int]:
-    with wave.open(str(path), "rb") as wav:
+    with path.open("rb") as file, wave.open(file, "rb") as wav:
         channels, width, sample_rate = wav.getnchannels(), wav.getsampwidth(), wav.getframerate()
         raw = wav.readframes(wav.getnframes())
+    if channels <= 0:
+        raise ValueError(f"WAV has invalid channel count: {channels}")
+    if sample_rate <= 0:
+        raise ValueError(f"WAV has invalid sample rate: {sample_rate}")
+    if width not in {1, 2, 3, 4}:
+        raise ValueError(f"unsupported WAV sample width: {width} bytes")
+    if len(raw) % (width * channels):
+        raise ValueError("WAV has incomplete audio frames")
     if width == 1:
         values = (np.frombuffer(raw, dtype=np.uint8).astype(np.float64) - 128) / 128
     elif width == 2:
@@ -52,8 +60,6 @@ def _read_wav(path: Path) -> tuple[np.ndarray, int]:
         values = ((values ^ (1 << 23)) - (1 << 23)).astype(np.float64) / (1 << 23)
     elif width == 4:
         values = np.frombuffer(raw, dtype="<i4").astype(np.float64) / (1 << 31)
-    else:
-        raise ValueError(f"unsupported WAV sample width: {width} bytes")
     if values.size == 0 or values.size % channels:
         raise ValueError("WAV has no complete audio frames")
     return values.reshape(-1, channels), sample_rate
@@ -93,7 +99,7 @@ def _k_weight(samples: np.ndarray, sample_rate: int) -> np.ndarray:
     if sample_rate != 48000:
         # The filter is intentionally calibrated at 48k; resampling here is
         # cheaper and less error-prone than carrying a second coefficient table.
-        length = round(len(samples) * scale)
+        length = max(1, round(len(samples) * scale))
         source = np.linspace(0, len(samples) - 1, len(samples))
         target = np.linspace(0, len(samples) - 1, length)
         samples = np.interp(target, source, samples)
@@ -128,14 +134,21 @@ def _estimate_key(samples: np.ndarray, sample_rate: int) -> str | None:
     spectrum = np.abs(np.fft.rfft(samples * np.hanning(len(samples))))
     frequencies = np.fft.rfftfreq(len(samples), 1 / sample_rate)
     valid = (frequencies >= 20) & (frequencies <= 5000)
+    if not np.any(valid):
+        return None
     frequency = frequencies[valid][np.argmax(spectrum[valid])]
+    if frequency <= 0:
+        return None
     midi = round(69 + 12 * np.log2(frequency / 440))
     return ("C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B")[midi % 12]
 
 
 def _estimate_bpm(samples: np.ndarray, sample_rate: int) -> float | None:
     hop = max(1, sample_rate // 200)
-    envelope = np.sqrt(np.mean(samples[: len(samples) // hop * hop].reshape(-1, hop) ** 2, axis=1))
+    usable = len(samples) // hop * hop
+    if usable == 0:
+        return None
+    envelope = np.sqrt(np.mean(samples[:usable].reshape(-1, hop) ** 2, axis=1))
     onset = np.maximum(0, np.diff(envelope, prepend=envelope[0]))
     if onset.max() < envelope.mean() * 0.1:
         return None

@@ -159,6 +159,26 @@ def test_read_json_corruption_is_logged_never_empty(tmp_path, caplog):
     assert any("refusing" in r.getMessage() for r in caplog.records)
 
 
+def test_read_json_wrong_shape_is_logged_never_empty(tmp_path, caplog):
+    wrong = tmp_path / "queue.json"
+    wrong.write_text("[]", encoding="utf-8")
+    with caplog.at_level(logging.ERROR):
+        assert read_json(wrong) is None
+    assert any("invalid shape" in r.getMessage() for r in caplog.records)
+
+
+def test_send_recovers_from_malformed_queue_shape(tmp_path, caplog):
+    carrier, root = make_carrier(tmp_path)
+    write_json_atomic(root / "commands" / "queue.json", {"ids": [99]})
+    (root / "commands" / "queue.json").write_text("[]", encoding="utf-8")
+
+    with caplog.at_level(logging.ERROR):
+        carrier.send(CMD)
+
+    assert queue_ids(root) == [1]
+    assert any("invalid shape" in r.getMessage() for r in caplog.records)
+
+
 def test_write_json_atomic_leaves_no_temp_files(tmp_path):
     target = tmp_path / "deep" / "cmd.json"
     write_json_atomic(target, {"id": 1})

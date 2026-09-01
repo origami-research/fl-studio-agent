@@ -153,6 +153,14 @@ def test_no_live_carrier_raises_carrier_unavailable(tmp_path):
         t.request(t.command("ping"), timeout=1.0)
 
 
+def test_await_response_for_unsent_command_raises_carrier_unavailable(tmp_path):
+    t, _root = spool_transport(tmp_path)
+    cmd = t.command("ping")
+
+    with pytest.raises(CarrierUnavailable, match="was not sent"):
+        t.await_response(cmd, timeout=1.0)
+
+
 # -- the #58 invariant: exactly-once across carriers ----------------------------
 
 

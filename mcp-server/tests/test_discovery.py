@@ -10,6 +10,7 @@ the unknowns the aligner emits.
 from __future__ import annotations
 
 import dataclasses
+import logging
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -258,6 +259,37 @@ def test_file_ledger_replays_finished_commands_on_resume(tmp_path: Path) -> None
     out = discover([Getters()], second, BUILTIN_FALLBACK, ledger=FileLedger(ledger_path))
     assert second.sent == []  # nothing re-sent
     assert {g.id for g in out.getters} == {36}  # yet the recorded result still folds
+
+
+def test_file_ledger_ignores_malformed_file_without_replaying(tmp_path: Path, caplog) -> None:
+    ledger_path = tmp_path / "led.json"
+    ledger_path.write_text("[]", encoding="utf-8")
+
+    with caplog.at_level(logging.WARNING):
+        ledger = FileLedger(ledger_path)
+
+    assert ledger.get("getters/0") is None
+    assert any("invalid shape" in record.getMessage() for record in caplog.records)
+
+
+def test_file_ledger_ignores_malformed_entry_without_raw_key_error(tmp_path: Path, caplog) -> None:
+    ledger_path = tmp_path / "led.json"
+    ledger_path.write_text('{"getters/0": {"ok": true}}', encoding="utf-8")
+
+    with caplog.at_level(logging.WARNING):
+        assert FileLedger(ledger_path).get("getters/0") is None
+
+    assert any("invalid shape" in record.getMessage() for record in caplog.records)
+
+
+def test_file_ledger_ignores_wrong_entry_shape_without_silence(tmp_path: Path, caplog) -> None:
+    ledger_path = tmp_path / "led.json"
+    ledger_path.write_text('{"getters/0": []}', encoding="utf-8")
+
+    with caplog.at_level(logging.WARNING):
+        assert FileLedger(ledger_path).get("getters/0") is None
+
+    assert any("invalid shape" in record.getMessage() for record in caplog.records)
 
 
 def test_null_ledger_never_skips() -> None:

@@ -209,12 +209,16 @@ def read_json(path: Path) -> dict[str, Any] | None:
     'empty' - a torn ledger read as empty replays applied commands."""
     try:
         with path.open(encoding="utf-8") as f:
-            return json.load(f)
+            payload = json.load(f)
     except (FileNotFoundError, NotADirectoryError):
         return None
     except (OSError, json.JSONDecodeError, UnicodeDecodeError):
         log.exception("unreadable spool file %s; refusing to treat it as empty", path)
         return None
+    if not isinstance(payload, dict):
+        log.error("spool file %s has invalid shape; refusing to treat it as empty", path)
+        return None
+    return payload
 
 
 def spool_roots() -> list[Path]:
