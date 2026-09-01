@@ -55,18 +55,40 @@ async def lifespan(server: Any) -> Any:
 
 
 def run(code: str, ctx: Context) -> dict[str, Any]:
-    """MCP tool. Execute Python in a namespace holding ``fl`` (the SDK),
-    ``theory``, ``Note``, and ``AutomationPoint``. Returns {"stdout": ..., "result":
-    repr-of-last-expression} or {"traceback": ...} - errors read like Python, no
-    status-string zoo.
+    """Execute Python against the live FL Studio session. The namespace holds
+    ``fl`` (the SDK), ``theory``, ``Note``, and ``AutomationPoint``. A trailing
+    expression is repr'd like a REPL. Returns {"stdout", "result"} or, on any
+    error, {"stdout", "traceback"} - read the traceback and fix the call.
 
-    ``Note`` and ``AutomationPoint`` are in the namespace because without
-    them the product's writes are inexpressible: ``Track.write`` takes
-    ``list[Note]`` and ``Track.set_automation`` takes
-    ``list[AutomationPoint]``. ``theory.chord``/``scale`` return bare MIDI ints,
-    and ``theory.drums`` returns a *v1* ``schemas.Note`` that v2 rejects. Verified by G4 (manager
-    addendum A12) - every route to writing a note was closed.
+    The full working surface (no introspection needed):
+    - fl.set_tempo(140.0) -> confirmed BPM; fl.tempo reads it back.
+    - fl.channels -> [Channel(index, name), ...].
+    - fl.track("Bass") / fl.track(2, pattern=1) -> Track (exact name, index, or
+      unique substring; pattern defaults to 1).
+    - Track.write([Note(...), ...], mode="merge"|"replace") -> receipt with
+      confirmed_notes; Track.notes() -> confirmed state; Track.clear().
+    - Note(key=60 or "C4"/"F#3", start=0.0, length=1.0, velocity=0.8, pan=0.5)
+      with start/length in beats from pattern start.
+    - Track.set_automation([AutomationPoint(position=0.0, value=0.5,
+      tension=0.0)]) - position in beats, value normalized 0..1.
+    - Track.params(query="cutoff") / Track.set_param("cutoff", 0.55) - live
+      generator plugin parameters, values normalized 0..1.
+    - fl.render("out.wav") -> Path; fl.analyze(wav) -> bpm/key/LUFS/spectral
+      balance; fl.read_wav(path) -> (samples, sample_rate).
+    - fl.snapshot() -> tempo + channels.
+    - theory.chord("C", "minor") / theory.scale("E", "minor") -> MIDI ints;
+      theory.drums("x...x...x...x...", key="C1", step_beats=0.25) -> a
+      ready-to-write [Note] step grid ('x' = hit, '.' = rest).
+
+    Every write returns FL's confirmed readback - trust it over your intent.
     """
+    # Engineering notes (not part of the model-facing description above):
+    # ``Note``/``AutomationPoint`` are in the namespace because ``Track.write``
+    # takes ``list[Note]`` and ``Track.set_automation`` takes
+    # ``list[AutomationPoint]`` - without them writes are inexpressible.
+    # ``theory.drums`` returns v2 ``schemas.Note`` and composes directly with
+    # ``Track.write`` (an earlier claim here that v2 rejects it was refuted by
+    # direct construction+write on 2026-09-01).
     fl = ctx.request_context.lifespan_context["fl"]
     namespace: dict[str, Any] = {
         "fl": fl,

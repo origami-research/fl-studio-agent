@@ -369,11 +369,9 @@ def test_other_control_failures_surface_as_fl_api_error(fl, control):
 
 
 def test_drums_pattern_writes_through_track(fl):
-    # theory.py constructs v1 schemas.Note (field-identical to v2's); until the
-    # cutover flips fl_mcp.schemas to v2 the class identity differs, so the
-    # composition converts explicitly here. Flagged to the manager (docs/21).
-    notes = [Note.model_validate(n.model_dump()) for n in theory.drums("x---x---x---x---")]
-    receipt = fl.track("Kick").write(notes, mode="replace")
+    # theory.drums returns v2 schemas.Note since the cutover, so its output
+    # composes with Track.write directly - no conversion step exists anymore.
+    receipt = fl.track("Kick").write(theory.drums("x---x---x---x---"), mode="replace")
     assert receipt.confirmed_notes == 4
 
 
