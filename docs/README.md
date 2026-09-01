@@ -1,61 +1,70 @@
-# FL Studio MCP — Design Documentation
+# FL Studio MCP documentation
 
-An MCP server that gives an AI model full, **realtime** control of a live FL Studio
-session — transport, mixer, plugin parameters, and (the part no public project has
-shipped without GUI hacks) **writing notes into the piano roll of any channel, visibly,
-while the user watches**.
+This index maps the current documentation set. Read the smallest applicable
+group; [24-coverage-map.md](24-coverage-map.md) and
+[33-capability-acquisition-model.md](33-capability-acquisition-model.md) are
+the authority for what is real and how new capability work is promoted.
 
-This documentation is written before any implementation. It is the contract for what we
-build and the record of why we build it this way.
+## Start here
 
-## Reading order
+| Need | Read |
+| --- | --- |
+| Understand the product and current shape | [11-interface-spec.md](11-interface-spec.md), then [12-fl2026-native-surface.md](12-fl2026-native-surface.md) |
+| Check what works, what is blocked, or what to build next | [24-coverage-map.md](24-coverage-map.md), [25-final-plan.md](25-final-plan.md) |
+| Add or verify an FL capability | [33-capability-acquisition-model.md](33-capability-acquisition-model.md), [23-flp-reverse-engineering-playbook.md](23-flp-reverse-engineering-playbook.md), [25-fl-capability-catalog.md](25-fl-capability-catalog.md) |
+| Work on the rewrite or shared lane contracts | [26-master-plan.md](26-master-plan.md), [27-shared-surfaces.md](27-shared-surfaces.md), [21-v2-rewrite-spec.md](21-v2-rewrite-spec.md) |
+| Use the Python SDK | [sdk-reference.md](sdk-reference.md) |
+| Understand code-quality doctrine | `AGENTS.md`, [19-code-quality-proposal.md](19-code-quality-proposal.md) |
 
-| Doc | What it covers |
-|---|---|
-| [sdk-reference.md](sdk-reference.md) | **SDK reference.** The implemented `FL` and `Track` Python API, data shapes, and the write → render → analyze loop |
-| [00-overview.md](00-overview.md) | Vision, prior art, why this doesn't exist yet, scope and non-goals |
-| [01-fl-studio-surfaces.md](01-fl-studio-surfaces.md) | The four programmable surfaces of FL Studio, capability matrix, and the `FHD_AddNotesToPR` discovery |
-| [02-architecture.md](02-architecture.md) | System components, the three planes, data flow, state ownership, threading |
-| [03-protocols.md](03-protocols.md) | Wire protocols: SysEx control protocol + file-spool note protocol |
-| [04-native-plugin.md](04-native-plugin.md) | The C++ "MCP Bridge" effect plugin — the load-bearing component |
-| [05-controller-script.md](05-controller-script.md) | The Python MIDI controller script (control plane) |
-| [06-mcp-server.md](06-mcp-server.md) | The MCP server: tool catalog, shadow score, error model |
-| [07-template-project.md](07-template-project.md) | The template project strategy that covers the two API holes |
-| [08-roadmap.md](08-roadmap.md) | Spikes (riskiest first), milestones, open-questions checklist |
-| [09-references.md](09-references.md) | All sources |
-| [10-v0-vertical-slice.md](10-v0-vertical-slice.md) | v0 vertical slice |
-| [11-interface-spec.md](11-interface-spec.md) | Interface & representation spec: dialect ladder, pydantic types, reference system, action log, readback ladder, kernel |
-| [12-fl2026-native-surface.md](12-fl2026-native-surface.md) | **Current authority.** FL 2026's native `ilmcp`/MCPTools surface (verified), the backend swap that retires the C++ plugin, capability matrix, gating probe, readiness |
-| [14-spool-first-verdict.md](14-spool-first-verdict.md) | Spool-first control plane verdict (failed: sandbox blocks writes) + the corrected server-hosted MIDI transport, implemented and live-verified |
-| [15-plain-guide-and-fix-plan.md](15-plain-guide-and-fix-plan.md) | **Start here.** Plain-language guide to the whole system: how every piece works, motivations, rejected alternatives, and the prioritized fix plan |
-| [24-coverage-map.md](24-coverage-map.md) | Living coverage map: what we cover, what we don't, ranked by care and unlock-per-effort |
-| [25-fl-capability-catalog.md](25-fl-capability-catalog.md) | **The evidence map.** Every confirmed FL capability across the five surfaces (host calls, plugin callbacks, MIDI scripting, piano-roll scripting, `.flp`), each with how it was verified, plus a separated unverified/presumed list per surface |
+## Current canon
 
-> **2026-08-26 amendment:** FL Studio 2026 ships native tooling (`ilmcp` + `MCPTools.pyc`) that loads plugins, creates channels, and runs piano-roll scripts programmatically.
-> [Doc 12](12-fl2026-native-surface.md) supersedes the note-plane design in doc 04 and the plugin-provisioning half of doc 07.
-> Where any older doc conflicts with doc 12, doc 12 wins.
+Durable references and active implementation contracts:
 
-## Epistemic status legend
+- [11-interface-spec.md](11-interface-spec.md) — interface, representations, references, readback, and freshness.
+- [12-fl2026-native-surface.md](12-fl2026-native-surface.md) — live FL 2026 native-surface facts and backend readiness.
+- [19-code-quality-proposal.md](19-code-quality-proposal.md) — typed boundaries, verification, and enforcement plan.
+- [21-v2-rewrite-spec.md](21-v2-rewrite-spec.md) — lane specification and recorded gate results.
+- [22-bridge-udp-design.md](22-bridge-udp-design.md) — bridge transport, threading, failure containment, and idempotency.
+- [23-flp-reverse-engineering-playbook.md](23-flp-reverse-engineering-playbook.md) — repeatable `.flp` discovery and acceptance loop.
+- [24-coverage-map.md](24-coverage-map.md) — living capability/coverage map and maintenance rule.
+- [25-final-plan.md](25-final-plan.md) — compatibility pointer to the current plan and evidence canon.
+- [25-fl-capability-catalog.md](25-fl-capability-catalog.md) — evidence map across FL surfaces.
+- [26-master-plan.md](26-master-plan.md) — dependency-ordered implementation plan.
+- [27-shared-surfaces.md](27-shared-surfaces.md) — frozen contracts for parallel lanes.
+- [29-generic-pipelines.md](29-generic-pipelines.md) — codec, transport, router, and discovery pipeline contracts.
+- [30-surfaces-and-readability.md](30-surfaces-and-readability.md) — two-file readability contract.
+- [33-capability-acquisition-model.md](33-capability-acquisition-model.md) — capability evidence ladder and acquisition model.
+- [sdk-reference.md](sdk-reference.md) — implemented SDK and write/render/analyze workflow.
+- [READING_GUIDE.md](READING_GUIDE.md) — capability-to-feature/pipeline navigation and verification net.
 
-Claims in these docs are tagged where it matters:
+## Background and historical context
 
-- **[VERIFIED]** — read directly from SDK headers (`fp_plugclass.h`), official Image-Line
-  manual, or the FL Studio API Stubs documentation.
-- **[REPORTED]** — claimed by a credible third party (e.g. the BeatSage engineering
-  writeup) but not yet reproduced by us.
-- **[ASSUMED]** — our design inference; must be validated by a spike before we depend
-  on it. Every ASSUMED item appears in the open-questions checklist in
-  [08-roadmap.md](08-roadmap.md).
+These remain useful for their specific surface, but are not authoritative when
+they conflict with the canon above.
 
-## One-paragraph summary of the whole design
+| Files | Read when |
+| --- | --- |
+| [00-overview.md](00-overview.md), [01-fl-studio-surfaces.md](01-fl-studio-surfaces.md), [02-architecture.md](02-architecture.md) | onboarding or comparing the original system model |
+| [03-protocols.md](03-protocols.md), [04-native-plugin.md](04-native-plugin.md), [05-controller-script.md](05-controller-script.md), [06-mcp-server.md](06-mcp-server.md) | tracing the original control/note-plane implementation |
+| [08-roadmap.md](08-roadmap.md), [09-references.md](09-references.md), [10-v0-vertical-slice.md](10-v0-vertical-slice.md) | historical spikes, sources, or v0 provenance |
+| [14-spool-first-verdict.md](14-spool-first-verdict.md), [15-plain-guide-and-fix-plan.md](15-plain-guide-and-fix-plan.md), [17-unified-architecture.md](17-unified-architecture.md), [18-capability-coverage.md](18-capability-coverage.md) | tracing superseded architecture decisions or older coverage snapshots |
 
-FL Studio's only external interface is MIDI, and its embedded Python API cannot write
-notes. We get around both limits with two in-process components: a **Python MIDI
-controller script** that executes control commands (transport, mixer, plugin
-parameters) received as SysEx over a virtual MIDI loopback, and a **native C++ effect
-plugin** that polls a command spool directory on its idle callback and writes notes
-into the live piano roll via the SDK host-dispatcher call `FHD_AddNotesToPR` — which
-can target arbitrary channels *because the plugin registers as an effect, not a
-generator*. An external **MCP server** exposes both paths as tools. The two remaining
-API walls (can't load new plugins, can't create patterns) are covered by shipping a
-**template project** with instruments and empty patterns pre-provisioned.
+## Research and evidence
+
+These are current gate evidence or active detail plans. Do not delete a gate
+artifact merely because its conclusion is negative; its evidence is part of
+the acceptance contract.
+
+- [research/current-summary.md](research/current-summary.md) — classification of every research artifact and durable synthesis.
+- [research/automation-create-flp-re-2026-08-31.md](research/automation-create-flp-re-2026-08-31.md) — automation creation gate evidence.
+- [research/mixer-routing-flp-re-2026-08-31.md](research/mixer-routing-flp-re-2026-08-31.md) — mixer routing gate evidence.
+- [research/plugin-channel-state-flp-re-2026-08-31.md](research/plugin-channel-state-flp-re-2026-08-31.md) — plugin/channel placement gate evidence.
+- [research/plugin-ui-action-trace-harness.md](research/plugin-ui-action-trace-harness.md) — inert UI-action discovery handoff.
+- [research/r1-architecture.md](research/r1-architecture.md), [research/r2-ship-live.md](research/r2-ship-live.md), [research/r3-tier2-production.md](research/r3-tier2-production.md), [research/r4-streamline-and-audit.md](research/r4-streamline-and-audit.md) — detailed implementation and discovery plans referenced by the master plan.
+
+## Supersession rule
+
+When documents disagree, prefer live-verified evidence, then the current canon.
+When a new capability changes coverage, update
+[24-coverage-map.md](24-coverage-map.md) in the same change. Spent synthesis
+notes belong in `research/current-summary.md`, not as parallel plans.
