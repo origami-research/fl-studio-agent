@@ -10,6 +10,7 @@ from __future__ import annotations
 import logging
 import sys
 from datetime import datetime, timezone
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
@@ -274,3 +275,60 @@ def test_tools_register_with_ctx_injected_and_absent_from_the_schema():
     assert "code" in tools["run"].parameters["properties"]
     assert {"pattern", "channel"} <= set(tools["get_notes"].parameters["properties"])
     assert tools["fl_doctor"].parameters.get("properties", {}) == {}
+
+
+# -- render / analyze -----------------------------------------------------------
+
+
+class _RenderFl:
+    """SDK stub: render writes a tiny WAV; analyze measures a given path."""
+
+    def __init__(self) -> None:
+        self.analyzed: list[Path] = []
+
+    def render(self, output: Path) -> Path:
+        import wave
+
+        import numpy as np
+
+        with wave.open(str(output), "wb") as wav:
+            wav.setnchannels(1)
+            wav.setsampwidth(2)
+            wav.setframerate(44100)
+            wav.writeframes((np.zeros(441)).astype("<i2").tobytes())
+        return output
+
+    def analyze(self, wav: Path) -> Any:
+        self.analyzed.append(Path(wav))
+
+        class _Report:
+            @staticmethod
+            def model_dump() -> dict[str, Any]:
+                return {"bpm": 140.0, "integrated_lufs": -12.0}
+
+        return _Report()
+
+
+def test_render_returns_path_and_wav_base64():
+    import base64
+
+    ctx = _ctx(fl=_RenderFl())
+    result = server.render(ctx)
+    assert Path(result["path"]).exists()
+    assert base64.b64decode(result["wavBase64"])[:4] == b"RIFF"
+
+
+def test_analyze_defaults_to_the_most_recent_render():
+    fl = _RenderFl()
+    ctx = _ctx(fl=fl)
+    rendered = server.render(ctx)
+    metrics = server.analyze(ctx)
+    assert metrics == {"bpm": 140.0, "integrated_lufs": -12.0}
+    assert fl.analyzed == [Path(rendered["path"])]
+
+
+def test_analyze_renders_fresh_when_nothing_was_rendered_yet():
+    fl = _RenderFl()
+    metrics = server.analyze(_ctx(fl=fl))
+    assert metrics["bpm"] == 140.0
+    assert len(fl.analyzed) == 1

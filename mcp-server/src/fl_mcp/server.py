@@ -10,12 +10,15 @@ logging to STDERR - stdout is the JSON-RPC wire, one stray line corrupts it.
 from __future__ import annotations
 
 import ast
+import base64
 import contextlib
 import io
 import logging
 import os
 import sys
+import tempfile
 import traceback
+from pathlib import Path
 from typing import Any
 
 from mcp.server.mcpserver import Context, MCPServer
@@ -172,6 +175,51 @@ def fl_doctor(ctx: Context) -> dict[str, Any]:
     return session.doctor().model_dump()
 
 
+# A render is only listenable if the caller can retrieve it; wavBase64 is
+# capped so a long project cannot balloon one tool reply past what a model
+# request can carry. 12 MiB of WAV is ~90 s of stereo 44.1 kHz.
+RENDER_WAV_BASE64_MAX_BYTES = 12 * 1024 * 1024
+_LAST_RENDER_KEY = "last_render"
+
+
+def render(ctx: Context) -> dict[str, Any]:
+    """Render the live session to a WAV for listening. Returns {"path",
+    "wavBase64"} (base64 of the WAV, omitted with a note when the file
+    exceeds the size cap). Requires the live FL link; render takes seconds.
+    Call analyze afterwards for measurements."""
+    fl = ctx.request_context.lifespan_context["fl"]
+    output = Path(tempfile.mkdtemp(prefix="flmcp-render-")) / "render.wav"
+    try:
+        path = fl.render(output)
+    except ToolError as exc:
+        return exc.to_dict()
+    ctx.request_context.lifespan_context[_LAST_RENDER_KEY] = path
+    result: dict[str, Any] = {"path": str(path)}
+    data = path.read_bytes()
+    if len(data) <= RENDER_WAV_BASE64_MAX_BYTES:
+        result["wavBase64"] = base64.b64encode(data).decode("ascii")
+    else:
+        result["note"] = f"WAV is {len(data)} bytes (> {RENDER_WAV_BASE64_MAX_BYTES}); read it from path instead."
+    return result
+
+
+def analyze(ctx: Context, wav: str | None = None) -> dict[str, Any]:
+    """Measure a rendered WAV: bpm, key, integrated LUFS, true peak, and
+    spectral balance. ``wav`` defaults to the most recent render (rendering
+    fresh if none exists yet)."""
+    fl = ctx.request_context.lifespan_context["fl"]
+    try:
+        path = Path(wav) if wav else ctx.request_context.lifespan_context.get(_LAST_RENDER_KEY)
+        if path is None:
+            path = fl.render(Path(tempfile.mkdtemp(prefix="flmcp-render-")) / "render.wav")
+            ctx.request_context.lifespan_context[_LAST_RENDER_KEY] = path
+        return fl.analyze(path).model_dump()
+    except ToolError as exc:
+        return exc.to_dict()
+    except OSError as exc:
+        return {"error": str(exc), "fix": "Pass the path returned by render, or call render first."}
+
+
 def get_scene(ctx: Context, detail: str = "summary", channel: int | None = None) -> dict[str, Any]:
     """Read what is currently in the project - key, tempo, and what each channel has.
 
@@ -217,6 +265,6 @@ def main() -> None:
         force=True,  # stdout is the JSON-RPC wire; no prior handler may hold it
     )
     server = MCPServer(SERVER_NAME, lifespan=lifespan)
-    for tool in (run, get_notes, get_scene, fl_doctor):
+    for tool in (run, get_notes, get_scene, render, analyze, fl_doctor):
         server.add_tool(tool)
     server.run()
