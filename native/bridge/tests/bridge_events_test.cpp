@@ -115,6 +115,21 @@ int main() {
     for (std::size_t i = 0; i < out.size(); ++i) CHECK(out[i].seq == static_cast<std::uint32_t>(i + 1));
     // The last-drained event carries the cumulative drop count for L3.
     if (!out.empty()) CHECK(out.back().dropped == 6);
+
+    // Overflow must not consume a claim: after the full ring drains, later
+    // events publish and drain normally instead of sitting behind a hole.
+    ring.Push(12, 10, 10, 1, 10, 10);
+    ring.Push(12, 11, 11, 1, 11, 11);
+    out = ring.Drain(64);
+    CHECK(out.size() == 2);
+    if (out.size() == 2) {
+      CHECK(out[0].seq == 5);
+      CHECK(out[0].index == 10);
+      CHECK(out[1].seq == 6);
+      CHECK(out[1].index == 11);
+      CHECK(out[1].dropped == 6);
+    }
+    CHECK(ring.dropped() == 6);
   }
 
   // --- 4. JSONL line is the pinned schema -------------------------------------
@@ -187,9 +202,10 @@ int main() {
     constexpr int kPerProducer = 5000;
     EventRing ring(1024);
     std::atomic<bool> go{false};
+    std::atomic<int> remaining{kProducers};
     std::vector<std::thread> producers;
     for (int p = 0; p < kProducers; ++p) {
-      producers.emplace_back([&ring, &go, p] {
+      producers.emplace_back([&ring, &go, &remaining, p] {
         while (!go.load()) {
         }
         for (int i = 0; i < kPerProducer; ++i) {
@@ -198,15 +214,17 @@ int main() {
           ring.Push(12, p, i, 1, i, i);
           ring.Push(99, p, i, 1, i, i);  // not subscribed -> must never enqueue
         }
+        remaining.fetch_sub(1, std::memory_order_release);
       });
     }
     go.store(true);
     std::vector<BridgeEvent> drained;
     std::uint32_t last = 0;
     bool monotonic = true;
-    bool joined = false;
-    // Drain concurrently until every producer has finished and the ring is dry.
-    while (true) {
+    // Drain while producers run. This exercises the atomic consumer cursor:
+    // every producer observes either available space or a full ring, never a
+    // non-atomic concurrent read.
+    while (remaining.load(std::memory_order_acquire) != 0) {
       std::vector<BridgeEvent> batch = ring.Drain(256);
       for (const BridgeEvent &e : batch) {
         if (e.seq <= last) monotonic = false;  // strictly increasing, unique
@@ -214,11 +232,16 @@ int main() {
         CHECK(e.id == 12);  // the unsubscribed id never made it in
         drained.push_back(e);
       }
-      if (!joined) {
-        for (std::thread &t : producers) t.join();
-        joined = true;
-      } else if (batch.empty()) {
-        break;
+    }
+    for (std::thread &t : producers) t.join();
+    while (true) {
+      std::vector<BridgeEvent> batch = ring.Drain(256);
+      if (batch.empty()) break;
+      for (const BridgeEvent &e : batch) {
+        if (e.seq <= last) monotonic = false;
+        last = e.seq;
+        CHECK(e.id == 12);
+        drained.push_back(e);
       }
     }
     CHECK(monotonic);

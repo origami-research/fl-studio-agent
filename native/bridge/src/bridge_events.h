@@ -64,12 +64,13 @@ struct BridgeEvent {
 };
 
 // Lock-free MPSC ring between the Dispatcher callback (producers, any thread)
-// and the tick (single consumer). Producers claim a slot with fetch_add, fill
-// it, then publish with a release store of the claim+1 into the slot's
+// and the tick (single consumer). Producers reserve a slot with a bounded CAS,
+// fill it, then publish with a release store of the claim+1 into the slot's
 // sequence; the consumer reads a slot only once its sequence matches. A
 // half-written slot is never drained and no producer ever blocks. On overflow
 // the NEWEST event (the one that would overwrite an undrained slot) is dropped
-// and counted, so the drain reports a count instead of tearing a record.
+// and counted without advancing the producer sequence, so a later event cannot
+// be stranded behind an unpublished slot.
 class EventRing {
  public:
   explicit EventRing(unsigned capacity = 4096);
@@ -104,7 +105,7 @@ class EventRing {
   std::vector<Slot> ring_;
   std::vector<std::atomic<std::uint32_t>> seq_;  // 0 = empty; claim+1 = published
   std::atomic<std::uint32_t> claimed_{0};        // next claim number (producers)
-  std::uint32_t drained_ = 0;                    // consumer claim cursor
+  std::atomic<std::uint32_t> drained_{0};        // consumer cursor, read by producers
   std::uint32_t emitted_ = 0;                    // consumer-assigned user seq (gap-free)
   std::atomic<std::uint32_t> emitted_seq_{0};    // emitted_ snapshot for last_seq()
   std::atomic<std::uint64_t> dropped_{0};

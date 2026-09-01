@@ -35,14 +35,22 @@ EventRing::EventRing(unsigned capacity)
 
 void EventRing::Push(int id, int index, int value, int gui, long long ts_ns, long long unix_ms) {
   if (!IsSubscribed(id)) return;
-  std::uint32_t claim = claimed_.fetch_add(1, std::memory_order_relaxed);
-  // If publishing this claim would overwrite a slot the consumer has not
-  // drained yet, drop the NEWEST event (this one) and count it. `drained_` is
-  // written only by the single consumer; a producer reading it stale can only
-  // under-estimate the free space, which fails safe toward dropping.
-  if (claim - drained_ >= capacity_) {
-    dropped_.fetch_add(1, std::memory_order_relaxed);
-    return;
+  std::uint32_t claim;
+  while (true) {
+    // The consumer publishes a completed read before a producer may reuse its
+    // slot. Loading it first also prevents a stale claim from being compared
+    // with a newer consumer cursor.
+    const std::uint32_t drained = drained_.load(std::memory_order_acquire);
+    claim = claimed_.load(std::memory_order_relaxed);
+    if (claim - drained >= capacity_) {
+      dropped_.fetch_add(1, std::memory_order_relaxed);
+      return;
+    }
+    if (claimed_.compare_exchange_weak(claim, claim + 1,
+                                       std::memory_order_relaxed,
+                                       std::memory_order_relaxed)) {
+      break;
+    }
   }
   std::uint32_t slot = claim % capacity_;
   ring_[slot].ts_ns = ts_ns;
@@ -58,8 +66,9 @@ void EventRing::Push(int id, int index, int value, int gui, long long ts_ns, lon
 std::vector<BridgeEvent> EventRing::Drain(std::size_t max_items) {
   std::vector<BridgeEvent> out;
   while (out.size() < max_items) {
-    std::uint32_t slot = drained_ % capacity_;
-    if (seq_[slot].load(std::memory_order_acquire) != drained_ + 1) break;
+    const std::uint32_t drained = drained_.load(std::memory_order_relaxed);
+    std::uint32_t slot = drained % capacity_;
+    if (seq_[slot].load(std::memory_order_acquire) != drained + 1) break;
     const Slot &s = ring_[slot];
     BridgeEvent e;
     // The user-facing seq is assigned HERE, on the single consumer, so it is
@@ -76,7 +85,7 @@ std::vector<BridgeEvent> EventRing::Drain(std::size_t max_items) {
     e.gui = s.gui;
     e.dropped = dropped_.load(std::memory_order_relaxed);
     out.push_back(e);
-    ++drained_;
+    drained_.store(drained + 1, std::memory_order_release);
   }
   emitted_seq_.store(emitted_, std::memory_order_relaxed);
   return out;
