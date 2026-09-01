@@ -56,4 +56,7 @@ only when that pair is checked in, decoded, and pinned as reproducible
 evidence; an XPASS means the codec and live-FL acceptance test must replace
 this placeholder in the same change. The provenance suite also rejects a
 public `MixerFormat` or `write_mixer_routing` seam while `mixer.route` remains
-planned, so a codec cannot silently imply coverage.
+planned, so a codec cannot silently imply coverage. The artifact gate uses
+flpkit's event walker to require exactly one changed 225 record, id 192, with
+the first eight identity bytes preserved and only its mapped i32 value changed;
+it rejects any other byte difference in the pair.
