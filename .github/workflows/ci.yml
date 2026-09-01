@@ -11,11 +11,12 @@ jobs:
       - uses: astral-sh/setup-uv@v5
       # Two editable installs: the server package, and the repo-root package
       # that provides `harness` + `flmcp_codec` (replaces sys.path surgery).
-      - run: uv pip install --system -e . -e .. ruff pytest
+      - run: uv sync --locked
+      - run: uv pip install --python .venv/bin/python -e .. ruff
       # Lint gate: the code-taste rules in AGENTS.md / docs/19 are enforced here,
       # so a regression fails the PR instead of accumulating. Lint the whole tree
       # (src + tests) - test files are code too, and gating only src let lint rot
       # accumulate there unseen.
-      - run: ruff check
+      - run: .venv/bin/ruff check
       # The fake-FL suite runs anywhere; live e2e (FL_E2E) is local/nightly only.
-      - run: python -m pytest tests -q
+      - run: .venv/bin/python -m pytest tests -q --ignore=tests/e2e
