@@ -57,3 +57,36 @@ device script CAN use, or a writable persistent script. Ranked:
 
 `CtlSpoolControl` stays in the tree (inert: session mode falls back to the
 file lane exactly as before E1, no regression) until the replacement lands.
+
+
+## Resolution: the single control broker (2026-09-01)
+
+The live probe both refuted the file lane and revealed the working transport,
+measured directly with two FL instances:
+
+- The shared MIDI wire **broadcasts** - one message reaches every FL. Each
+  controller runs only the request whose `pid` matches its own `os.getpid()`.
+  Measured: pid-addressed round trips **10/10** to the right FL, **0** crosstalk,
+  bogus-pid correctly ignored. The FL script can read its process env and pid.
+- Two servers each opening the fixed-name wire **collide**: measured **0/10**.
+  True per-session named ports are not viable either - FL binds the script to a
+  port by fixed name via one global reg.xml, so instances cannot be given
+  distinct wires.
+
+So the machine has **exactly one wire**, owned by a **control broker** process:
+
+- `core/carriers/control_broker.py` owns one `MidiControl` and serves a
+  newline-JSON unix socket (`{pid, op, args, kwargs, timeout}` -> ControlResponse).
+  Ownership is decided by the socket bind (first wins, second exits), so
+  auto-start is race-free.
+- `core/carriers/broker_client.py` (`BrokerControl`) is a session's carrier: it
+  reads its FL pid from the session's bridge port file, auto-starts the broker
+  if absent, and sends pid-addressed requests. Same `ControlCarrier` surface as
+  the wire, so nothing upstream changes.
+- The controller filters by pid in `_dispatch` (one line): a request for another
+  FL returns None (no execution, no response).
+
+Scales to N sessions on one machine with no configuration. No public surface
+change; `ControlRequest` gains an optional `pid` (None = broadcast).
+Single-session dev keeps the direct wire. `CtlSpoolControl` (the refuted file
+lane) is removed.

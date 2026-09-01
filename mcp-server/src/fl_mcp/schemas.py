@@ -272,6 +272,10 @@ class ControlRequest(BaseModel):
     op: str  # dotted FL API name, e.g. "mixer.getCurrentTempo"
     args: list[Any] = Field(default_factory=list)
     kwargs: dict[str, Any] = Field(default_factory=dict)
+    # Target FL process id: the shared MIDI wire broadcasts to every FL, and
+    # each controller executes only the request whose pid matches its own
+    # os.getpid(). None = broadcast to all (single-session dev).
+    pid: int | None = None
 
 
 class ControlResponse(BaseModel):

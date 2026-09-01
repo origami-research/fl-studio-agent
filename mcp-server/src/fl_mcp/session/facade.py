@@ -18,7 +18,7 @@ from pathlib import Path
 
 from fl_mcp import errors
 from fl_mcp.core.carriers import CarrierUnavailable
-from fl_mcp.core.carriers.ctlspool import CtlSpoolControl
+from fl_mcp.core.carriers.broker_client import BrokerControl
 from fl_mcp.core.carriers.spool import SpoolCarrier
 from fl_mcp.core.carriers.udp import UdpCarrier
 from fl_mcp.core.carriers.wire import ControlUnavailable, MidiControl
@@ -78,8 +78,8 @@ def create_session() -> FLSession:
     control_factory: Callable[[], ControlCarrier] | None = None
     if spool_override:
         session_root = Path(spool_override)
-        control = CtlSpoolControl(session_root)
-        control_factory = lambda: CtlSpoolControl(session_root)  # noqa: E731 - recycle = fresh carrier, same session
+        control = BrokerControl(session_root)
+        control_factory = lambda: BrokerControl(session_root)  # noqa: E731 - recycle = fresh carrier, same session
     else:
         try:
             control = MidiControl()

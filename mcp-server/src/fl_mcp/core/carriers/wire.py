@@ -158,10 +158,14 @@ class MidiControl:
         args: list[Any] | None = None,
         kwargs: dict[str, Any] | None = None,
         timeout: float = 2.0,
+        pid: int | None = None,
     ) -> ControlResponse:
-        """One correlated round trip to the controller script."""
+        """One correlated round trip to the controller script.
+
+        ``pid`` addresses one FL among many on the shared broadcast wire; None
+        reaches every attached controller (fine when only one is)."""
         with self._call_lock:
-            cmd = ControlRequest(id=next(self._ids), op=op, args=args or [], kwargs=kwargs or {})
+            cmd = ControlRequest(id=next(self._ids), op=op, args=args or [], kwargs=kwargs or {}, pid=pid)
             self.send(cmd)
             return self.await_response(cmd.id, timeout)
 

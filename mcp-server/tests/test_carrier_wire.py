@@ -179,6 +179,7 @@ def test_plugin_parameter_request_preserves_fl_generic_argument_order(rig):
         "op": "plugins.setParamValue",
         "args": [0.5, 41, 3, -1],
         "kwargs": {},
+        "pid": None,  # untagged = broadcast; a session-scoped carrier sets this
     }
 
 
