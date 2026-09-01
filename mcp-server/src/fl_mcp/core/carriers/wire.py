@@ -38,7 +38,7 @@ from flmcp_codec import (
 )
 from pydantic import ValidationError
 
-from fl_mcp.errors import ToolError, control_plane_unavailable
+from fl_mcp.errors import ToolError, control_plane_busy, control_plane_unavailable
 from fl_mcp.schemas import ControlRequest, ControlResponse, HelloEvent
 
 log = logging.getLogger(__name__)
@@ -172,12 +172,7 @@ class MidiControl:
         the wire within its own timeout fails fast and retryably instead of
         stacking into the multi-minute hang seen in the first live match."""
         if not self._call_lock.acquire(timeout=timeout):
-            raise ToolError(
-                "control_plane_unavailable",
-                f"The control wire was busy for {timeout:g}s and did not free for {op!r}.",
-                "Another session's control op held the shared wire; retry.",
-                retryable=True,
-            )
+            raise control_plane_busy(op, timeout)
         try:
             cmd = ControlRequest(id=next(self._ids), op=op, args=args or [], kwargs=kwargs or {}, pid=pid)
             self.send(cmd)

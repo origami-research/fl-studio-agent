@@ -31,6 +31,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from fl_mcp.core.carriers.wire import ControlUnavailable, MidiControl
+from fl_mcp.errors import ToolError
 from fl_mcp.fl.paths import app_data_root
 
 log = logging.getLogger(__name__)
@@ -90,6 +91,11 @@ class ControlBroker:
                 conn.sendall((json.dumps(self._handle(line)) + "\n").encode())
 
     def _handle(self, line: str) -> dict[str, Any]:
+        """Relay one round trip, preserving the wire's raise-vs-return contract:
+        a returned ControlResponse (FL answered, maybe ok=false) is wrapped
+        ``kind=response``; a raised ToolError (transport: no wire, busy, timeout)
+        is wrapped ``kind=error`` WITH its category, so the client re-raises the
+        same typed failure - a busy wire must not look like a dead one."""
         try:
             req = json.loads(line)
             response = self._wire.send_request(
@@ -99,9 +105,11 @@ class ControlBroker:
                 timeout=float(req.get("timeout", 2.0)),
                 pid=req.get("pid"),
             )
-            return response.model_dump()
+            return {"kind": "response", "response": response.model_dump()}
+        except ToolError as exc:
+            return {"kind": "error", "category": exc.category, "message": exc.message, "fix": exc.fix, "retryable": exc.retryable}
         except Exception as exc:  # noqa: BLE001 - the broker boundary: a bad request must not drop the wire for other sessions
-            return {"id": -1, "ok": False, "err": f"{type(exc).__name__}: {exc}"}
+            return {"kind": "error", "category": "fl_api_error", "message": f"{type(exc).__name__}: {exc}", "fix": "Check the broker log.", "retryable": True}
 
 
 def _socket_answers(path: Path) -> bool:

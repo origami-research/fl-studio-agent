@@ -90,6 +90,11 @@ class ControlLink:
             if self.control.send_request("ping", timeout=PING_CONFIRM_SECONDS).ok:
                 return hello
         except errors.ToolError as exc:
+            # A contended shared wire is LIVE, not dead: another session's op
+            # held it. Recycling here (reopening ports) would be wrong and would
+            # make every control op flap under load. Trust the hello we have.
+            if exc.category == "control_plane_busy":
+                return hello
             log.debug("control hello probe failed: %s", exc.message)
         return self._recycle()
 

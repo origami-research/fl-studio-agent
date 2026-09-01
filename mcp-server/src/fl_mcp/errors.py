@@ -17,6 +17,7 @@ from typing import Literal
 ErrorCategory = Literal[
     "concurrent_write",
     "control_plane_unavailable",
+    "control_plane_busy",
     "note_plane_unavailable",
     "invalid_argument",
     "unknown_target",
@@ -108,6 +109,19 @@ def control_plane_unavailable(op: str, timeout: float) -> ToolError:
         f"No response to '{op}' from the controller script within {timeout:g}s.",
         "In FL Studio: open MIDI settings and confirm 'FLMCP Req'/'FLMCP Res' are "
         "assigned to the FLMCP controller script. Run fl_doctor after.",
+        retryable=True,
+    )
+
+
+def control_plane_busy(op: str, timeout: float) -> ToolError:
+    """The shared wire was held by another session's op - contended, NOT dead.
+
+    Distinct from control_plane_unavailable so liveness checks treat a busy
+    wire as live (the op just needs a retry), rather than declaring FL gone."""
+    return ToolError(
+        "control_plane_busy",
+        f"The control wire was busy for {timeout:g}s and did not free for '{op}'.",
+        "Another session's control op held the shared wire; retry.",
         retryable=True,
     )
 

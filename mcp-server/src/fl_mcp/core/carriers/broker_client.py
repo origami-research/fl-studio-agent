@@ -92,7 +92,13 @@ class BrokerControl:
             conn.close()
         if not payload:
             raise control_plane_unavailable(op, timeout)
-        return ControlResponse.model_validate(json.loads(payload))
+        envelope = json.loads(payload)
+        # Mirror the wire's contract: a transport failure the broker relays is
+        # re-raised as the SAME typed error (so a busy wire stays 'busy', not
+        # mistaken for a dead one); an FL-level answer is returned.
+        if envelope.get("kind") == "error":
+            raise ToolError(envelope["category"], envelope["message"], envelope.get("fix", ""), retryable=envelope.get("retryable", True))
+        return ControlResponse.model_validate(envelope["response"])
 
     def _connect(self, deadline: float) -> socket.socket:
         """Connect to the broker, auto-starting it once if absent."""

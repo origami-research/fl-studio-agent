@@ -34,6 +34,9 @@ class FakeWire:
         self._id += 1
         if op == "boom":
             raise RuntimeError("wire exploded")
+        if op == "busy":
+            from fl_mcp.errors import control_plane_busy
+            raise control_plane_busy(op, timeout)
         ret = {"script_ver": "13", "fl_ver": "26.1.5", "ppq": 96} if op == "ctl.hello" else {"pid": pid, "op": op}
         return ControlResponse(id=self._id, ok=True, ret=ret)
 
@@ -91,12 +94,15 @@ def test_two_sessions_share_one_broker_without_crosstalk(broker, tmp_path):
     assert by_pid == {100: "transport.start", 200: "transport.stop"}
 
 
-def test_wire_error_returns_a_failed_response_not_a_dropped_connection(broker, tmp_path):
+def test_wire_transport_error_re_raises_as_a_typed_error_not_a_dropped_connection(broker, tmp_path):
+    # A raised wire/transport error is relayed as a typed ToolError (mirroring
+    # MidiControl), so the client sees the same failure it would on the raw wire
+    # - and the broker connection is not dropped for other sessions.
     sock, _ = broker
     control = BrokerControl(session_with_pid(tmp_path, 9), socket_path=sock)
-    resp = control.send_request("boom", timeout=3.0)
-    assert resp.ok is False
-    assert "wire exploded" in (resp.err or "")
+    with pytest.raises(ToolError) as exc:
+        control.send_request("boom", timeout=3.0)
+    assert "wire exploded" in exc.value.message
 
 
 def test_missing_bridge_port_file_is_an_actionable_error(broker, tmp_path):
@@ -113,3 +119,13 @@ def test_second_broker_bind_yields_to_the_first(broker, tmp_path):
     sock, _ = broker
     second = ControlBroker(sock, wire_factory=FakeWire)
     assert second.bind() is False, "a live broker already owns the socket"
+
+
+def test_busy_wire_relays_as_busy_not_dead(broker, tmp_path):
+    # The category must survive the broker hop so liveness checks treat a
+    # contended wire as live (a retry), not a dead FL (a recycle).
+    sock, _ = broker
+    control = BrokerControl(session_with_pid(tmp_path, 5), socket_path=sock)
+    with pytest.raises(ToolError) as exc:
+        control.send_request("busy", timeout=1.0)
+    assert exc.value.category == "control_plane_busy"
