@@ -189,15 +189,25 @@ cutoffs = fl.track("Lead").params(query="cutoff", limit=8)
 
 ### `track.set_param(param: int | str, value: float | str) -> PluginParam`
 
-**Availability:** live-only. `param` is an index or a unique exact/substr name;
-`value` may be normalized from 0 to 1, or (when this exact plugin has a
-captured parameter model) its displayed numeric value with unit or an option
-name. Returns FL's confirmed readback, which may be quantized to the plugin's
-control grid. An option not present in `PluginParam.options` is rejected before
-the write.
+**Availability:** live-only. The portable generic path for a generator plugin
+is to enumerate its live parameter surface, then pass one returned `index` to
+`set_param`. That index is valid only for the generator currently loaded on
+that track; enumerate again after replacing the plugin. This works wherever FL
+exposes parameters, without reading or writing the plugin's opaque state blob.
+
+`param` may also be a unique exact/substr name for convenience. Invalid, stale,
+or out-of-range indexes fail before FL is asked to write. `value` is a finite
+normalized number from 0 to 1, or - when this exact plugin has a captured
+parameter model - its displayed numeric value with unit or an option name (an
+option not in `PluginParam.options` is rejected before the write). Returns FL's
+confirmed readback, which may be quantized to the plugin's control grid.
 
 ```python
-confirmed = fl.track("Lead").set_param("filter mode", "Bandpass")
+lead = fl.track("Lead")
+cutoff = lead.params(query="cutoff", limit=8)[0]
+confirmed = lead.set_param(cutoff.index, 0.55)
+# or, with a captured model for this exact plugin:
+confirmed = lead.set_param("filter mode", "Bandpass")
 ```
 
 ## Data shapes

@@ -170,6 +170,18 @@ def test_carrier_shape_send_then_await(rig):
     assert control.await_response(1, timeout=1.0).ret == {"ppq": 96}
 
 
+def test_plugin_parameter_request_preserves_fl_generic_argument_order(rig):
+    control, _midi_in, midi_out = rig
+    control.send(ControlRequest(id=7, op="plugins.setParamValue", args=[0.5, 41, 3, -1]))
+
+    assert _last_sent_request(midi_out) == {
+        "id": 7,
+        "op": "plugins.setParamValue",
+        "args": [0.5, 41, 3, -1],
+        "kwargs": {},
+    }
+
+
 def test_send_request_round_trips_and_validates(rig):
     control, midi_in, midi_out = rig
     t, box = _in_thread(lambda: control.send_request("state.snapshot", timeout=2.0))

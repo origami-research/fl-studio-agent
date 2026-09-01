@@ -38,6 +38,31 @@ def test_first_channel_has_a_name(live_fl):
     assert isinstance(name, str) and name
 
 
+def test_plugin_parameter_index_round_trips(live_fl):
+    """The generic index path is closed-loop against FL, never a state-blob edit."""
+    channel_count = _ok(live_fl.session.control.send_request("channels.channelCount", timeout=3.0))
+    channel = None
+    for candidate in range(channel_count):
+        response = live_fl.session.control.send_request(
+            "plugins.getParamCount", args=[candidate, -1], timeout=3.0
+        )
+        if response.ok and (response.ret or 0) > 0:
+            channel = candidate
+            break
+    if channel is None:
+        pytest.skip("the live project has no generator with exposed plugin parameters")
+
+    params = live_fl.session.plugin_params(channel, limit=1)
+
+    param = params[0]
+    confirmed = live_fl.session.set_plugin_param(channel, param.index, param.value)
+    assert (confirmed.index, confirmed.name, confirmed.value) == (
+        param.index,
+        param.name,
+        pytest.approx(param.value),
+    )
+
+
 def test_undo_round_trips(live_fl):
     _ok(live_fl.session.control.send_request("general.undo", timeout=3.0))
 

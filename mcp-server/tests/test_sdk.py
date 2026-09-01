@@ -312,10 +312,10 @@ def test_params_limit_and_set_param_validate_at_the_sdk_boundary(fl):
 
 def test_set_param_accepts_index_or_name_and_returns_readback(fl):
     assert fl.track("Bass").set_param(0, 0.75) == sdk.PluginParam(
-        index=0, name="Cutoff", value=0.75
+        index=0, name="Cutoff", value=0.75, display="0.75", kind="continuous"
     )
     assert fl.track("Bass").set_param("Cutoff", 0.25) == sdk.PluginParam(
-        index=0, name="Cutoff", value=0.25
+        index=0, name="Cutoff", value=0.25, display="0.25", kind="continuous"
     )
 
 

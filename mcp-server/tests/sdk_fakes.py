@@ -96,8 +96,8 @@ class FakeSession(FLSession):
         self, channel: int, *, query: str | None = None, limit: int = 40
     ) -> list[PluginParam]:
         params = [
-            PluginParam(index=0, name="Cutoff", value=0.25),
-            PluginParam(index=1, name="Resonance", value=0.5),
+            PluginParam(index=0, name="Cutoff", value=0.25, display="0.25", kind="continuous"),
+            PluginParam(index=1, name="Resonance", value=0.5, display="0.5", kind="continuous"),
         ]
         if query is not None:
             params = [param for param in params if query.lower() in param.name.lower()]
@@ -105,7 +105,13 @@ class FakeSession(FLSession):
 
     def set_plugin_param(self, channel: int, param: int | str, value: float) -> PluginParam:
         name = "Cutoff" if param == 0 else str(param)
-        return PluginParam(index=0 if isinstance(param, str) else param, name=name, value=value)
+        return PluginParam(
+            index=0 if isinstance(param, str) else param,
+            name=name,
+            value=value,
+            display=f"{value:g}",
+            kind="continuous",
+        )
 
     def snapshot(self) -> SessionState:
         return SessionState(tempo_bpm=self.tempo, channels=list(self._channels))

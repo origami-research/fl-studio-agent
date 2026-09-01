@@ -320,6 +320,45 @@ def test_set_plugin_param_returns_quantized_readback():
     assert confirmed.value == pytest.approx(0.421875)  # the grid, not the echo
 
 
+def test_set_plugin_param_uses_the_index_advertised_by_params_on_the_generic_wire():
+    control = _param_control()
+    session, _ = make_session(control=control)
+
+    param = session.plugin_params(0, query="pitch")[0]
+    confirmed = session.set_plugin_param(0, param.index, 0.5)
+
+    assert confirmed.index == param.index == 2
+    assert ("plugins.setParamValue", [0.5, 2, 0, -1]) in control.calls
+
+
+@pytest.mark.parametrize("index", [-1, 3, True, 1.5])
+def test_set_plugin_param_rejects_indexes_not_advertised_by_params(index):
+    control = _param_control()
+    session, _ = make_session(control=control)
+
+    with pytest.raises((TypeError, ValueError), match="index"):
+        session.set_plugin_param(0, index, 0.5)
+
+    assert not [call for call in control.calls if call[0] == "plugins.setParamValue"]
+
+
+@pytest.mark.parametrize("value", [True, float("nan"), float("inf")])
+def test_set_plugin_param_rejects_non_finite_or_non_numeric_values(value):
+    session, _ = make_session(control=_param_control())
+
+    with pytest.raises((TypeError, ValueError), match="finite normalized number"):
+        session.set_plugin_param(0, 0, value)
+
+
+def test_set_plugin_param_rejects_string_value_without_a_captured_model():
+    # A str is a display/option value; without a captured model there is no
+    # honest way to interpret it, so it is rejected before FL is asked to write.
+    session, _ = make_session(control=_param_control())
+
+    with pytest.raises(ValueError, match="captured per-plugin parameter model"):
+        session.set_plugin_param(0, 0, "0.5")
+
+
 def test_set_plugin_param_resolves_unique_name_and_rejects_ambiguity():
     session, _ = make_session(control=_param_control())
 

@@ -7,6 +7,8 @@ landed - it never falls through to the file path (the v1 cascade bug).
 from __future__ import annotations
 
 import re
+from math import isfinite
+from numbers import Real
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -234,6 +236,10 @@ def _plugin_read(session: FLSession, op: str, args: list) -> object:
     return resp.ret
 
 
+def _plugin_param_count(session: FLSession, channel: int) -> int:
+    return int(_plugin_read(session, "plugins.getParamCount", [channel, GENERATOR_SLOT]) or 0)
+
+
 def _plugin_model(session: FLSession, channel: int) -> PluginParamModel | None:
     """Select static semantics only when the session was explicitly given them."""
     if not session.plugin_param_models:
@@ -285,10 +291,15 @@ def _param(index: int, name: str, value: float, spec: PluginParamSpec | None) ->
 
 
 def _resolve_value(value: float | str, spec: PluginParamSpec | None) -> float:
-    if isinstance(value, (int, float)) and not isinstance(value, bool):
-        if not 0.0 <= value <= 1.0:
+    if not isinstance(value, str):
+        if isinstance(value, bool) or not isinstance(value, Real):
+            raise TypeError(f"plugin param value must be a finite normalized number, got {value!r}")
+        normalized = float(value)
+        if not isfinite(normalized):
+            raise ValueError(f"plugin param value must be a finite normalized number, got {value!r}")
+        if not 0.0 <= normalized <= 1.0:
             raise ValueError(f"plugin param values are normalized 0..1, got {value}")
-        return value
+        return normalized
     if spec is None:
         raise ValueError(
             "display or option values require a captured per-plugin parameter model; "
@@ -329,7 +340,7 @@ def plugin_params(
     ``query`` filters by case-insensitive substring; ``limit`` bounds the
     result because big synths are BIG (Sytrus: 597 params) and every name
     is a wire round trip."""
-    count = int(_plugin_read(session, "plugins.getParamCount", [channel, GENERATOR_SLOT]) or 0)
+    count = _plugin_param_count(session, channel)
     model = _plugin_model(session, channel)
     out: list[PluginParam] = []
     for index in range(count):
@@ -366,7 +377,18 @@ def set_plugin_param(
             )
         index = chosen[0].index
     else:
+        if isinstance(param, bool) or not isinstance(param, int):
+            raise TypeError(
+                "plugin param index must be a non-negative integer returned by track.params(), "
+                f"got {param!r}"
+            )
         index = param
+        count = _plugin_param_count(session, channel)
+        if not 0 <= index < count:
+            raise ValueError(
+                f"plugin param index {index} is outside this generator's 0..{count - 1} range; "
+                "get a fresh index from track.params()"
+            )
 
     name = str(_plugin_read(session, "plugins.getParamName", [index, channel, GENERATOR_SLOT]))
     requested = _resolve_value(value, _spec(model, index, name))
@@ -375,6 +397,8 @@ def set_plugin_param(
         raise errors.control_plane_unavailable("plugins.setParamValue", 0.0)
     resp = session.control.send_request(
         "plugins.setParamValue",
+        # FL's generic plugin API is positional: value first, then the index
+        # advertised by getParamCount/getParamName/getParamValue.
         args=[requested, index, channel, GENERATOR_SLOT],
         timeout=LIVE_SET_TIMEOUT_SECONDS,
     )
