@@ -34,7 +34,7 @@ from pathlib import Path
 
 from . import scrape_rtti
 from .core.discovery import FileLedger, discover
-from .passes import DEFAULT_PASSES, classify, classify_plugins
+from .passes import DEFAULT_PASSES, action_trace, classify, classify_plugins
 from .profile import CapabilityProfile, load_profile, parse_profile, profile_to_dict
 
 log = logging.getLogger(__name__)
@@ -97,6 +97,20 @@ def plugin_report(profile: CapabilityProfile) -> str:
     return "\n".join(lines)
 
 
+def plugin_trace_report(profile: CapabilityProfile) -> str:
+    """Render the inert handoff for the future supervised UI observation run."""
+    trace = action_trace(profile)
+    lines = [
+        "plugin UI trace harness (orchestrator-only; observation, never dispatch):",
+        f"  dispatcher commands: {list(trace.dispatch_commands)}",
+        f"  forbidden ids: {list(trace.forbidden_ids)}",
+    ]
+    for expectation in trace.expectations:
+        lines.append(f"  {expectation.operation}: {expectation.human_gesture}")
+        lines.append(f"    readback: {', '.join(expectation.readback)}")
+    return "\n".join(lines)
+
+
 def diff_report(baseline: CapabilityProfile, current: CapabilityProfile) -> str:
     """The deliverable a human reads: what changed between two profiles.
 
@@ -139,6 +153,7 @@ def run(
         profile = scrape_into(profile, dylib)
     print(alignment_report(profile), file=sys.stderr)
     print(plugin_report(profile), file=sys.stderr)
+    print(plugin_trace_report(profile), file=sys.stderr)
     if not live:
         return profile
     transport = _build_transport()

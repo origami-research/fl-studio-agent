@@ -27,6 +27,7 @@ from fl_mcp.passes import (
     Sweep,
     Target,
     Timing,
+    action_trace,
     classify,
     classify_plugins,
     unknown_ids,
@@ -131,6 +132,27 @@ def test_plugin_pass_is_static_and_never_emits_unproven_dispatcher_ids() -> None
 
     assert transport.sent == []
     assert out == profile
+
+
+def test_plugin_action_trace_is_an_observation_only_orchestrator_handoff() -> None:
+    profile = _profile_with_dispatcher(
+        handled_max_id=109,
+        inert_in_range=(102,),
+        unsafe={95: UnsafeFact("crashes_host", "observed")},
+    )
+
+    trace = action_trace(profile)
+
+    assert trace.executor == "orchestrator-only"
+    assert trace.dispatch_commands == ()
+    assert {94, 95, 99, 106} <= set(trace.forbidden_ids)
+    assert [expectation.operation for expectation in trace.expectations] == [
+        "add_instrument",
+        "add_effect",
+        "load_preset",
+    ]
+    assert all("hook enter/return trace" in expectation.readback for expectation in trace.expectations)
+    assert all("saved-project diff" in expectation.readback for expectation in trace.expectations)
 
 
 # --- sweep consumes only the unknowns ----------------------------------------
@@ -271,6 +293,14 @@ def test_plugin_report_names_all_operations_and_the_non_executable_boundary() ->
     report = plugin_report(_profile_with_dispatcher(handled_max_id=91, inert_in_range=()))
     assert "add instrument" in report and "add effect" in report and "load preset" in report
     assert "unproven; static decode only" in report
+
+
+def test_plugin_trace_report_names_observation_and_forbidden_ids() -> None:
+    from fl_mcp.discover import plugin_trace_report
+
+    report = plugin_trace_report(_profile_with_dispatcher(handled_max_id=91, inert_in_range=()))
+    assert "orchestrator-only; observation, never dispatch" in report
+    assert "forbidden ids: [94, 99, 106]" in report
 
 
 def test_run_without_dylib_or_live_needs_no_transport() -> None:

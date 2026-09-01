@@ -12,7 +12,14 @@ from __future__ import annotations
 
 from .getters import Getters
 from .map_align import Alignment, MapAlign, classify, unknown_ids
-from .plugins import PluginCandidates, Plugins, classify_plugins
+from .plugins import (
+    PluginActionTrace,
+    PluginCandidates,
+    Plugins,
+    TraceExpectation,
+    action_trace,
+    classify_plugins,
+)
 from .sweep import Sweep
 from .target import Target
 from .timing import Timing
@@ -24,11 +31,14 @@ __all__ = [
     "Alignment",
     "Getters",
     "MapAlign",
+    "PluginActionTrace",
     "PluginCandidates",
     "Plugins",
     "Sweep",
     "Target",
     "Timing",
+    "TraceExpectation",
+    "action_trace",
     "classify",
     "classify_plugins",
     "unknown_ids",
