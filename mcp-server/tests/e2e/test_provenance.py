@@ -18,10 +18,10 @@ import fl_mcp.ops  # noqa: F401 - op bindings register their tags at import
 from fl_mcp.core import provenance
 from fl_mcp.profile import load_profile
 
-# capability tagged planned -> the flpkit writer name whose appearance must
-# force a tag promotion (DATA: extend when new planned capabilities register).
-PLANNED_WRITERS = {
-    "mixer.route": "write_mixer_routing",
+# capability tagged planned -> every public flpkit writer seam whose appearance
+# must force a tag promotion (DATA: extend when new planned capabilities register).
+PLANNED_WRITER_SEAMS = {
+    "mixer.route": ("MixerFormat", "write_mixer_routing"),
 }
 
 
@@ -44,12 +44,13 @@ def test_no_tag_is_stale_against_the_current_profile():
 
 
 def test_planned_capabilities_ship_no_writer():
-    for capability, writer in PLANNED_WRITERS.items():
+    for capability, seams in PLANNED_WRITER_SEAMS.items():
         tag = provenance.lookup(capability)
         assert tag is not None and tag.status == "planned", f"{capability}: expected a planned tag"
-        assert not hasattr(flp, writer), (
-            f"flpkit.{writer} landed: promote {capability}'s CapabilityTag "
-            "(status + verified_fl + evidence) and add its fuzz row"
+        shipped = [seam for seam in seams if hasattr(flp, seam)]
+        assert not shipped, (
+            f"flpkit mixer writer seam(s) landed: {shipped}; promote {capability}'s "
+            "CapabilityTag (status + verified_fl + checked-in FL minimal pair) and add its fuzz row"
         )
 
 

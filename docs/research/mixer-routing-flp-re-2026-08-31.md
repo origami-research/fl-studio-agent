@@ -50,6 +50,10 @@ One narrow writer may proceed after its own pair and live acceptance ladder pass
 `experiments/e9_mixer_minimal_pair.py` is intentionally an annotated, non-writer live-test scaffold. It writes two copies only after each control API call has read back successfully, restores the original control value in a `finally`, and exits nonzero when a pair cannot be captured. Its output files are the evidence to attach before implementing a codec format.
 
 `mcp-server/tests/e2e/test_mixer_minimal_pair.py` is the deliberately xfailed
-promotion gate. Remove the xfail only when the volume pair is checked in or
-otherwise pinned as reproducible evidence; an XPASS means the codec and
-live-FL acceptance test must replace this placeholder in the same change.
+promotion gate. It owns the required `evidence/mixer-volume/baseline.flp` and
+`changed.flp` artifacts, and refuses byte-identical saves. Remove the xfail
+only when that pair is checked in, decoded, and pinned as reproducible
+evidence; an XPASS means the codec and live-FL acceptance test must replace
+this placeholder in the same change. The provenance suite also rejects a
+public `MixerFormat` or `write_mixer_routing` seam while `mixer.route` remains
+planned, so a codec cannot silently imply coverage.
