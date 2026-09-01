@@ -25,7 +25,7 @@ North star: an agent that **produces** music in FL (not just arranges MIDI notes
 | Playlist / arrangement - read | file | T2 | covered (flpkit 0.2) |
 | Playlist clips - write | file, FL-verified | T2 | covered (flpkit 0.4); live version needs host call (unknown) |
 | Automation clips - read | file | T2 | covered (flpkit 0.3) |
-| **Automation - WRITE (existing clip)** | file+reload, save/reparse equality-verified | T2 | covered (flpkit 0.6): carries the FL-authored header/trailer and patches points; flpkit verifies its save/reparse and `Track.set_automation()` independently reparses for equality before reload. Creating a new target/link remains RE. |
+| **Automation - WRITE (existing clip)** | file+reload, save/reparse equality-verified | T2 | covered (flpkit 0.6): carries the FL-authored header/trailer and patches points; flpkit verifies its save/reparse and `Track.set_automation()` independently reparses for equality before reload. **New clip + target link: NONE** — a 2026-08-31 launch-only attempt produced byte-identical files, so it is not evidence; the strict E2E gate requires an FL-authored one-action pair before a creator exists (docs/research/automation-create-flp-re-2026-08-31.md). |
 | **Mixer routing (sends/inserts)** | NONE | T2 | Corpus map: routing bitmap=235; mixer params=225 candidate ids 192/193/64..191. No FL-authored minimal pair or writer yet; E9 plus the xfailed E2E promotion gate name the required volume evidence (docs/research/mixer-routing-flp-re-2026-08-31.md). |
 | **Effect chains (add EQ/reverb/comp)** | NONE | T2 | needs plugin-instantiation host call (probe) or file RE |
 | **Add/remove instruments** | NONE | T2 | plugin instantiation - no known API; probe + Image-Line plugin observation |
