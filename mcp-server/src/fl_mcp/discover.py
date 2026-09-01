@@ -216,7 +216,8 @@ def main(argv: list[str] | None = None) -> int:
     print(diff_report(baseline, merged), file=sys.stderr)
     if args.out is not None:
         args.out.write_text(json.dumps(profile_to_dict(merged), indent=2) + "\n")
-        print(f"wrote {args.out}", file=sys.stderr)
+        persisted = parse_profile(json.loads(args.out.read_text()))
+        print(f"persisted {args.out}: {diff_report(baseline, persisted)}", file=sys.stderr)
     return 0
 
 

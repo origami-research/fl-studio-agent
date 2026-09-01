@@ -10,6 +10,7 @@ the unknowns the aligner emits.
 from __future__ import annotations
 
 import dataclasses
+import json
 import logging
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -34,7 +35,7 @@ from fl_mcp.passes import (
     unknown_ids,
 )
 from fl_mcp.passes.map_align import DOCUMENTED_MAX_ID
-from fl_mcp.profile import BUILTIN_FALLBACK, GetterFact, UnsafeFact
+from fl_mcp.profile import BUILTIN_FALLBACK, GetterFact, UnsafeFact, parse_profile, profile_to_dict
 
 # --- fakes -------------------------------------------------------------------
 
@@ -342,3 +343,40 @@ def test_run_without_dylib_or_live_needs_no_transport() -> None:
     # touched - the static alignment report is still printed as a side effect.
     out = run(BUILTIN_FALLBACK, None, live=False, ledger_dir=None)
     assert out == BUILTIN_FALLBACK
+
+
+def test_main_reports_the_profile_persisted_to_out(monkeypatch, tmp_path: Path, capsys) -> None:
+    from fl_mcp import discover as discover_cli
+
+    merged = _profile_with_dispatcher(handled_max_id=110)
+    out = tmp_path / "profile.json"
+    monkeypatch.setattr(discover_cli, "load_profile", lambda: BUILTIN_FALLBACK)
+    monkeypatch.setattr(discover_cli, "run", lambda *args, **kwargs: merged)
+
+    assert discover_cli.main(["--no-scrape", "--out", str(out)]) == 0
+    assert parse_profile(json.loads(out.read_text())) == merged
+    assert f"persisted {out}: diff vs baseline:\n  dispatcher.handled_max_id: 109 -> 110" in capsys.readouterr().err
+
+
+def test_main_reports_out_readback_not_the_profile_it_requested(monkeypatch, tmp_path: Path, capsys) -> None:
+    from fl_mcp import discover as discover_cli
+
+    requested = _profile_with_dispatcher(handled_max_id=110)
+    persisted = _profile_with_dispatcher(handled_max_id=111)
+    out = tmp_path / "profile.json"
+    original_write_text = Path.write_text
+
+    def transform_write(self: Path, data: str, *args, **kwargs) -> int:
+        if self == out:
+            data = json.dumps(profile_to_dict(persisted), indent=2) + "\n"
+        return original_write_text(self, data, *args, **kwargs)
+
+    monkeypatch.setattr(discover_cli, "load_profile", lambda: BUILTIN_FALLBACK)
+    monkeypatch.setattr(discover_cli, "run", lambda *args, **kwargs: requested)
+    monkeypatch.setattr(Path, "write_text", transform_write)
+
+    assert discover_cli.main(["--no-scrape", "--out", str(out)]) == 0
+    assert parse_profile(json.loads(out.read_text())) == persisted
+    err = capsys.readouterr().err
+    assert f"persisted {out}: diff vs baseline:\n  dispatcher.handled_max_id: 109 -> 111" in err
+    assert f"persisted {out}: diff vs baseline:\n  dispatcher.handled_max_id: 109 -> 110" not in err
