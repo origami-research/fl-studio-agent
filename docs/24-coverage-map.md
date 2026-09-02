@@ -38,7 +38,7 @@ Capability acquisition is governed by the [capability acquisition model](33-capa
 | Piano-roll transforms (quantize/arp/strum) | NONE | T3 | we write raw notes; FL's tools via piano-roll scripting API (documented) |
 | Markers / time & key sig / groove | NONE | T3 | file RE; some via controller API (documented) |
 | Stem export / MIDI export | NONE | T3 | render is full-mix only (-R); stems need per-track routing or CLI flags (unknown) |
-| Full-mix render | verified offline (`OsxFL -R`); live control unverified | T3 | `fl.render(path)` calls `ui.exportWav(path)` and checks the WAV exists, but lacks a live-FL verdict; it blocks FL's UI. `OsxFL -R` on a saved copy is verified for non-blocking analysis. |
+| Full-mix render | save then CLI render (`-R`) [ASSUMED-live-verify] | T3 | `fl.render(path)` saves the live project, invokes FL's CLI on that `.flp`, and accepts only a non-empty WAV. The macOS flag spelling and adjacent output path still need the operator's live verification. |
 | Render analysis (BPM/key/loudness/peak/spectrum) | local WAV | T2 | `fl.analyze(path)` is deterministic Python measurement, no model or FL session required. |
 | Scene analysis (key/digest) | file | T2 | covered (get_scene) |
 | Undo / redo control | undo via wire | T3 | redo + file-lane revert unbuilt (store content-addresses writes) |
@@ -59,20 +59,18 @@ There is no verified in-process, non-blocking render call to wire as
 The static FLEngine dispatcher decode for FL 2026.1.5 build 5384 gives a
 entry is `FHD_RenderProject` (id 60).  The SDK describes that entry as opening
 the rendering dialog, and the native fatal-id ledger classifies it `modal_ui`.
-It cannot be an unattended, asynchronous host render.  The controller's
-`ui.exportWav` is likewise a live menu export and blocks the GUI until it
-finishes; its artifact-existence readback does not change that fact.
+It cannot be an unattended, asynchronous host render. `ui.exportWav` is not a
+controller API at all, so it cannot be a renderer or an artifact receipt.
 
 The remaining undocumented handled ids are not a runtime search space: ids 94
 and 99 are live-confirmed crash/hang hazards and 106 also wedges the bridge
 tick.  Calling another unknown id to look for a renderer would violate the
 ledger and can take down the user's FL session.  No host call was added.
 
-**Safe mitigation now.** Do not put `fl.render()` in the ears loop.  For a
-non-blocking analysis snapshot, save a project copy and render that copy in a
-separate `OsxFL -R` process; validate the resulting WAV before analysis.  When
-the current live project must be rendered, make it a user-visible, single-flight
-operation at a bounded cadence, never an automatic feedback tick.
+**Safe mitigation now.** Do not put `fl.render()` in the ears loop. It saves
+the live project then invokes the separate FL CLI renderer, validates the WAV,
+and remains a user-visible, single-flight operation at a bounded cadence.
+The macOS `-R` command and adjacent WAV output are **ASSUMED-live-verify**.
 
 **Next evidence step.** On a matching FLEngine dylib, statically disassemble
 the jump-table targets for the undocumented, non-quarantined ids and identify a

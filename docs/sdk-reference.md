@@ -88,9 +88,11 @@ confirmed_bpm = fl.set_tempo(128.0)
 
 ### `fl.render(output: str | Path) -> Path`
 
-**Availability:** live-only. Exports the current live project to `output` and
-returns the confirmed WAV path; raises if FL cannot export or no artifact
-appears.
+**Availability:** live session with a configured project file. Saves the live
+project, then blocks while FL's CLI renders that saved `.flp`; returns the
+confirmed WAV path. The macOS `-R <project.flp>` invocation and its adjacent
+`<project>.wav` output are **ASSUMED-live-verify**. It raises if saving fails,
+FL cannot render, or no non-empty WAV appears.
 
 ```python
 wav = fl.render("/tmp/mix.wav")
@@ -102,9 +104,9 @@ wav = fl.render("/tmp/mix.wav")
 `samples` is a float64 NumPy array shaped `(frames, channels)`, normalized to
 roughly `[-1, 1]`; `sample_rate` is Hz.
 
-`render(path) -> Path` is the honest primary primitive: it maps to FL's
-`ui.exportWav` and preserves the rendered artifact. Use `read_wav` only when
-raw NumPy samples are wanted, and `analyze` when derived metrics are enough.
+`render(path) -> Path` saves then invokes FL's CLI renderer and preserves the
+confirmed artifact. Use `read_wav` only when raw NumPy samples are wanted, and
+`analyze` when derived metrics are enough.
 
 ```python
 samples, sample_rate = fl.read_wav(wav)

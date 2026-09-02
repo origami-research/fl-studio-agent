@@ -10,7 +10,7 @@ Observed live in the first arena matches: the wire stayed silent, every control 
 ## Design: addressing, not a new transport
 
 The controller script already has a second control lane - `ctl_cmd_<id>.json` / `ctl_resp_<id>.json` files polled by `OnIdle` in the shared spool (`.../Piano roll scripts/FLMCP`).
-Its execution surface is the full midi-scripting API (`transport`, `mixer`, `plugins`, `ui.exportWav`, composite `state.*` ops) - everything the wire could do.
+Its execution surface is the full MIDI-scripting API (`transport`, `mixer`, `plugins`, composite `state.*` ops) - everything the wire could do. Audio render is deliberately outside this lane: it saves the project, then uses FL's CLI renderer.
 Its only flaw for multi-session was that every FL instance polls the SAME folder.
 
 So the fix is one field: each command carries the target FL's **pid**, and a controller executes only its own, leaving foreign commands untouched (no seen-marking, no tombstone).

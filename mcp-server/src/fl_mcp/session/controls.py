@@ -7,6 +7,8 @@ landed - it never falls through to the file path (the v1 cascade bug).
 from __future__ import annotations
 
 import re
+import shutil
+import subprocess
 from math import isfinite
 from numbers import Real
 from pathlib import Path
@@ -14,6 +16,8 @@ from typing import TYPE_CHECKING
 
 from fl_mcp import errors, flp
 from fl_mcp.errors import NotePlaneUnavailable, WriteRejected
+from fl_mcp.fl.paths import fl_app
+from fl_mcp.fl.process import fl_executable_name
 from fl_mcp.schemas import (
     AutomationPoint,
     AutomationReceipt,
@@ -57,32 +61,52 @@ def save_project(session: FLSession) -> None:
         raise errors.fl_api_error("ctl.save", detail)
 
 
-def render_wav(session: FLSession, output: Path) -> Path:
-    """Do the blocking live menu export, then confirm its artifact exists.
+def _render_saved_project(project: Path) -> Path:
+    """Run FL's blocking macOS project renderer.
 
-    Rendering is necessarily live-only: an FL project file cannot render itself,
-    and success means an actual WAV appeared at the requested location.  This is
-    not an ears-loop primitive: ``ui.exportWav`` blocks FL's UI while it renders.
-    See docs/24 for the safe offline-copy alternative and the dispatcher verdict.
+    ASSUMED-live-verify: FL's bundle executable accepts ``-R <project.flp>``
+    and writes ``<project>.wav`` beside it. Keep this process boundary small so
+    its command spelling is straightforward to verify and adjust live.
     """
-    output = output.expanduser().resolve()
-    if session._ensure_hello() is None or session.control is None:
-        raise errors.control_plane_unavailable("ui.exportWav", 0.0)
-    response = session.control.send_request(
-        "ui.exportWav", args=[str(output)], timeout=LIVE_SET_TIMEOUT_SECONDS
-    )
-    if not response.ok:
-        detail = response.err or "no detail"
-        if errors.is_operation_unsafe(detail):
-            raise errors.operation_unsafe("ui.exportWav")
-        raise errors.fl_api_error("ui.exportWav", detail)
-    if not output.is_file() or output.stat().st_size == 0:
+    executable = fl_app() / "Contents" / "MacOS" / fl_executable_name()
+    try:
+        subprocess.run([str(executable), "-R", str(project)], check=True)
+    except (OSError, subprocess.CalledProcessError) as exc:
         raise errors.ToolError(
             "render_failed",
-            f"FL accepted the WAV export but did not create {output}.",
-            "Check FL's export settings and retry; a render is successful only when its WAV exists.",
+            f"FL CLI could not render {project}: {exc}",
+            "Check the FL CLI render invocation and retry.",
+            retryable=True,
+        ) from exc
+    return project.with_suffix(".wav")
+
+
+def render_wav(session: FLSession, output: Path) -> Path:
+    """Save live state, render that .flp with FL's CLI, and confirm the WAV.
+
+    This intentionally blocks at the subprocess boundary and is not an
+    ears-loop primitive.
+    """
+    if session.project is None:
+        raise errors.ToolError(
+            "render_failed",
+            "Cannot render without a configured saved FL project.",
+            "Configure an existing .flp project, then retry.",
+        )
+    output = output.expanduser().resolve()
+    project = session.project.expanduser().resolve()
+    save_project(session)
+    rendered = _render_saved_project(project)
+    if not rendered.is_file() or rendered.stat().st_size == 0:
+        raise errors.ToolError(
+            "render_failed",
+            f"FL CLI did not create a non-empty WAV at {rendered}.",
+            "Check FL's CLI render settings and retry; a render is successful only when its WAV exists.",
             retryable=True,
         )
+    output.parent.mkdir(parents=True, exist_ok=True)
+    if rendered != output:
+        shutil.copyfile(rendered, output)
     return output
 
 

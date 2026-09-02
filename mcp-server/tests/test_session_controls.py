@@ -6,8 +6,6 @@ refusal is retryable - never a fallthrough (addenda A6/A11).
 
 from __future__ import annotations
 
-from pathlib import Path
-
 import pytest
 from session_fakes import HELLO, FakeControl, make_session
 
@@ -43,18 +41,48 @@ def test_set_tempo_live_returns_the_readback_not_the_request():
     assert ("mixer.setCurrentTempo", [130.0, 1]) in control.calls
 
 
-def test_render_wav_uses_control_lane_and_confirms_artifact(tmp_path):
+def test_render_wav_saves_then_subprocesses_the_resolved_fl_path(monkeypatch, tmp_path):
+    project = tmp_path / "live.flp"
     output = tmp_path / "mix.wav"
+    project.write_bytes(b"FLhd")
+    app = tmp_path / "FL Studio.app"
+    commands: list[list[str]] = []
+    events: list[str] = []
 
-    def export(args):
-        Path(args[0]).write_bytes(b"RIFF....WAVE")
-        return None
+    def render(command, check):
+        events.append("render")
+        commands.append(command)
+        project.with_suffix(".wav").write_bytes(b"RIFF....WAVE")
 
-    control = FakeControl(hello=HELLO, handlers={"ui.exportWav": export})
-    session, _ = make_session(control=control)
+    monkeypatch.setattr("fl_mcp.session.controls.fl_app", lambda: app)
+    monkeypatch.setattr("fl_mcp.session.controls.fl_executable_name", lambda: "OsxFL")
+    monkeypatch.setattr("fl_mcp.session.controls.subprocess.run", render)
+    control = FakeControl(hello=HELLO, handlers={"ctl.save": lambda args: events.append("save")})
+    session, _ = make_session(control=control, project=project)
 
     assert session.render_wav(output) == output.resolve()
-    assert ("ui.exportWav", [str(output.resolve())]) in control.calls
+    assert events == ["save", "render"]
+    assert control.calls[-1] == ("ctl.save", [])
+    assert commands == [[str(app / "Contents/MacOS/OsxFL"), "-R", str(project.resolve())]]
+    assert output.read_bytes() == b"RIFF....WAVE"
+
+
+@pytest.mark.parametrize("wav", [None, b""])
+def test_render_wav_raises_when_cli_wav_is_missing_or_empty(monkeypatch, tmp_path, wav):
+    project = tmp_path / "live.flp"
+    project.write_bytes(b"FLhd")
+
+    def render(command, check):
+        if wav is not None:
+            project.with_suffix(".wav").write_bytes(wav)
+
+    monkeypatch.setattr("fl_mcp.session.controls.subprocess.run", render)
+    control = FakeControl(hello=HELLO, handlers={"ctl.save": lambda args: None})
+    session, _ = make_session(control=control, project=project)
+
+    with pytest.raises(errors.ToolError) as excinfo:
+        session.render_wav(tmp_path / "mix.wav")
+    assert excinfo.value.category == "render_failed"
 
 
 def test_save_project_uses_the_control_lane():
