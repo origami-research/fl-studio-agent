@@ -157,6 +157,10 @@ class FLSession:
         self.bridge_lane = BridgeLane(self)
         self.observer = Observer(project=project)
         self._write_lock = threading.Lock()
+        # File-edit batching: inside file_edit(), file-lane ops write the .flp
+        # but defer the FL reload so N edits cost ONE reboot, not N.
+        self._reload_batch_depth = 0
+        self._reload_pending = False
 
     @property
     def control(self) -> ControlCarrier | None:
@@ -298,7 +302,31 @@ class FLSession:
         return self.link.hello()
 
     def _reload_fl(self) -> None:
+        # Inside a file-edit batch, coalesce: each edit already wrote the .flp;
+        # the single reload on batch exit syncs FL once. A reload is a SIGKILL
+        # + relaunch, so doing it per edit would reboot the DAW N times.
+        if self._reload_batch_depth > 0:
+            self._reload_pending = True
+            return
         lifecycle.reload_fl(self.project, self.link)
+
+    @contextmanager
+    def file_edit(self) -> Iterator[None]:
+        """Batch file-lane edits into ONE reload.
+
+        File-lane ops (automation, channel levels, added plugins, and the file
+        fallback for notes/tempo) each rewrite the .flp and normally reload FL -
+        a full SIGKILL+relaunch. Inside this block the edits still apply to the
+        .flp but the reload is deferred to a single reboot on exit, so a batch
+        of edits costs one reload instead of N. Nestable."""
+        self._reload_batch_depth += 1
+        try:
+            yield
+        finally:
+            self._reload_batch_depth -= 1
+            if self._reload_batch_depth == 0 and self._reload_pending:
+                self._reload_pending = False
+                lifecycle.reload_fl(self.project, self.link)
 
     def _bridge_ping(self) -> bool:
         """The breaker's gate: one stateless spool round trip proving the

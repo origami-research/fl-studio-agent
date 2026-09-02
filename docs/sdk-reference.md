@@ -10,6 +10,7 @@ The stable public surface is deliberately small:
 - `fl.set_tempo(...)` for confirmed tempo changes.
 - `fl.render(...)`, `fl.read_wav(...)`, and `fl.analyze(...)` for render/audio workflows.
 - `fl.track(...).set_automation(...)` for existing FL-authored automation clips.
+- `with fl.file_edit(): ...` to batch file-lane edits into a single FL reload.
 - `fl.track(...).params(...)` and `set_param(...)` for live generator plugin parameters.
 
 Failures from FL/session boundaries raise `fl_mcp.errors.ToolError`, whose

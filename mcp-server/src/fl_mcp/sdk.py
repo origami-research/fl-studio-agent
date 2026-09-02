@@ -13,6 +13,7 @@ session/flp/store. A private function appearing here is a design smell.
 from __future__ import annotations
 
 from collections.abc import Sequence
+from contextlib import AbstractContextManager
 from pathlib import Path
 from typing import Annotated
 
@@ -155,6 +156,21 @@ class FL:
 
     def snapshot(self) -> SessionState:
         return self._session.snapshot()
+
+    def file_edit(self) -> AbstractContextManager[None]:
+        """Batch file-lane edits (automation, channel levels, added plugins,
+        and the file fallback for notes/tempo) into ONE FL reload.
+
+        Each file-lane op rewrites the .flp and normally reloads FL - a full
+        restart. Group them so the reload happens once::
+
+            with fl.file_edit():
+                fl.track("Bass").set_automation(points)
+                fl.track("Kick").set_channel_levels(volume=0.9)
+
+        Live ops (notes over the bridge, tempo/params over the wire) are
+        unaffected - they never reload."""
+        return self._session.file_edit()
 
 
 class Track:

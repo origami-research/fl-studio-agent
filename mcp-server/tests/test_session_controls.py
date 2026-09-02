@@ -438,3 +438,41 @@ def test_plugin_params_without_a_wire_is_an_honest_error():
     with pytest.raises(errors.ToolError) as excinfo:
         session.plugin_params(0)
     assert excinfo.value.category == "control_plane_unavailable"
+
+
+def test_file_edit_batches_reloads_into_one(monkeypatch):
+    # N file-lane reloads inside file_edit() collapse to a single FL reboot.
+    from fl_mcp.session import lifecycle
+
+    session, _ = make_session()
+    reloads = []
+    monkeypatch.setattr(lifecycle, "reload_fl", lambda project, link: reloads.append(1))
+
+    with session.file_edit():
+        session._reload_fl()
+        session._reload_fl()
+        session._reload_fl()
+        assert reloads == [], "reloads must be deferred inside the batch"
+    assert reloads == [1], "exactly one reload on batch exit"
+
+
+def test_reload_outside_a_batch_is_immediate(monkeypatch):
+    from fl_mcp.session import lifecycle
+
+    session, _ = make_session()
+    reloads = []
+    monkeypatch.setattr(lifecycle, "reload_fl", lambda project, link: reloads.append(1))
+    session._reload_fl()
+    session._reload_fl()
+    assert reloads == [1, 1], "each reload is immediate when not batching"
+
+
+def test_file_edit_with_no_file_ops_does_not_reload(monkeypatch):
+    from fl_mcp.session import lifecycle
+
+    session, _ = make_session()
+    reloads = []
+    monkeypatch.setattr(lifecycle, "reload_fl", lambda project, link: reloads.append(1))
+    with session.file_edit():
+        pass
+    assert reloads == [], "an empty batch never reboots FL"
