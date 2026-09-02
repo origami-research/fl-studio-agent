@@ -4,7 +4,7 @@ import json
 import shutil
 from pathlib import Path
 
-from fl_mcp import dev_session
+from fl_mcp import dev_session, flp
 from fl_mcp.core.carriers.udp import BridgeEndpoint
 
 
@@ -14,6 +14,11 @@ def test_default_project_is_a_disposable_bridge_template():
     assert project.name == "fl_mcp_bridge.flp"
     template = Path(dev_session.__file__).resolve().parents[3] / "harness" / "projects" / "fl_mcp_bridge.flp"
     assert project.read_bytes() == template.read_bytes()
+    assert flp.read(project).playlist == (
+        flp.FlpPlaylistItem(
+            position=0, length=1536, track=1, pattern=1, channel=None, arrangement=0
+        ),
+    )
     shutil.rmtree(project.parent)
 
 

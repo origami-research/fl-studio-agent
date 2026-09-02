@@ -40,6 +40,10 @@ findings on `PatNum`/pattern length interaction]. Convention taught to the model
 tool docs: patterns are the model's workspace; renaming (`set_pattern_name`) is how it
 labels sections ("Verse Drums", "Hook Bass").
 
+Pattern 1 is also placed on playlist track 1 from beat 0 through the default 16-beat
+loop. The default note-write target is Pattern 1, so its notes are audible when FL
+renders the arrangement. This is a template invariant, not a render-time mutation.
+
 ### Mixer
 
 - Named inserts: `Drums`, `Bass`, `Music`, `FX`, and a utility insert named `MCP`.
