@@ -236,6 +236,10 @@ class FLSession:
         with self._write_guard("render_wav"):
             return controls.render_wav(self, output)
 
+    def save_project(self) -> int | None:
+        with self._write_guard("save_project"):
+            return controls.save_project(self)
+
     def set_channel_levels(
         self,
         channel: int,
@@ -330,7 +334,15 @@ class FLSession:
         fallback for notes/tempo) each rewrite the .flp and normally reload FL -
         a full SIGKILL+relaunch. Inside this block the edits still apply to the
         .flp but the reload is deferred to a single reboot on exit, so a batch
-        of edits costs one reload instead of N. Nestable."""
+        of edits costs one reload instead of N. On outermost entry, save live
+        bridge work first so the subsequent reload cannot discard it. Nestable."""
+        if self._reload_batch_depth == 0 and self.control is not None:
+            try:
+                if self._ensure_hello() is not None:
+                    self.save_project()
+            except errors.ToolError as exc:
+                if exc.category != "control_plane_unavailable":
+                    raise
         self._reload_batch_depth += 1
         try:
             yield

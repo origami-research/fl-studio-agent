@@ -39,6 +39,23 @@ GENERATOR_SLOT = -1
 _NUMBER = re.compile(r"^\\s*([+-]?(?:\\d+(?:\\.\\d*)?|\\.\\d+))\\s*$")
 
 
+def save_project(session: FLSession) -> int | None:
+    """Save the live project through FL's documented transport command.
+
+    [ASSUMED - live-verify]: the controller response is FL's handling flag,
+    not confirmation that a named project file was written.
+    """
+    if session._ensure_hello() is None or session.control is None:
+        raise errors.control_plane_unavailable("ctl.save", 0.0)
+    response = session.control.send_request("ctl.save", timeout=LIVE_SET_TIMEOUT_SECONDS)
+    if not response.ok:
+        detail = response.err or "no detail"
+        if errors.is_operation_unsafe(detail):
+            raise errors.operation_unsafe("ctl.save")
+        raise errors.fl_api_error("ctl.save", detail)
+    return response.ret if isinstance(response.ret, int) else None
+
+
 def render_wav(session: FLSession, output: Path) -> Path:
     """Do the blocking live menu export, then confirm its artifact exists.
 

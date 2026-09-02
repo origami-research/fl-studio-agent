@@ -332,6 +332,11 @@ def test_render_returns_the_confirmed_wav_path(fl, tmp_path):
     assert output.is_file()
 
 
+def test_save_sends_the_project_save_operation(fl, control):
+    assert fl.save() is None
+    assert control.ops == ["ctl.save"]
+
+
 def test_read_wav_loads_synthetic_pcm(fl, tmp_path):
     path = tmp_path / "samples.wav"
     frames = np.array([[-32768, 0], [0, 32767]], dtype="<i2")

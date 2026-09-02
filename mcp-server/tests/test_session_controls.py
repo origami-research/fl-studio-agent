@@ -57,6 +57,22 @@ def test_render_wav_uses_control_lane_and_confirms_artifact(tmp_path):
     assert ("ui.exportWav", [str(output.resolve())]) in control.calls
 
 
+def test_save_project_uses_control_lane_and_returns_handling_flag():
+    control = FakeControl(hello=HELLO, handlers={"ctl.save": lambda args: 8})
+    session, _ = make_session(control=control)
+
+    assert session.save_project() == 8
+    assert ("ctl.save", []) in control.calls
+
+
+def test_save_project_requires_control_plane():
+    session, _ = make_session()
+
+    with pytest.raises(errors.ToolError) as excinfo:
+        session.save_project()
+    assert excinfo.value.category == "control_plane_unavailable"
+
+
 def test_set_tempo_live_unconfirmed_raises():
     control = FakeControl(hello=HELLO, handlers={"mixer.setCurrentTempo": lambda args: True})
     session, _ = make_session(control=control)
@@ -454,6 +470,20 @@ def test_file_edit_batches_reloads_into_one(monkeypatch):
         session._reload_fl()
         assert reloads == [], "reloads must be deferred inside the batch"
     assert reloads == [1], "exactly one reload on batch exit"
+
+
+def test_file_edit_saves_live_work_before_reloading(monkeypatch):
+    from fl_mcp.session import lifecycle
+
+    session, _ = make_session(control=FakeControl(hello=HELLO))
+    events = []
+    monkeypatch.setattr(FLSession, "save_project", lambda self: events.append("save"))
+    monkeypatch.setattr(lifecycle, "reload_fl", lambda project, link: events.append("reload"))
+
+    with session.file_edit():
+        session._reload_fl()
+
+    assert events == ["save", "reload"]
 
 
 def test_reload_outside_a_batch_is_immediate(monkeypatch):

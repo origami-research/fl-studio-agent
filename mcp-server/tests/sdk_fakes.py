@@ -91,6 +91,13 @@ class FakeSession(FLSession):
         output.write_bytes(b"RIFF....WAVE")
         return output
 
+    def save_project(self) -> int | None:
+        if self.control is None:
+            from fl_mcp import errors
+
+            raise errors.control_plane_unavailable("ctl.save", 0.0)
+        return self.control.send_request("ctl.save").ret
+
     def set_automation(self, channel: int, points: list[AutomationPoint]) -> AutomationReceipt:
         return AutomationReceipt(backend="project-write", channel=channel, points=points)
 
