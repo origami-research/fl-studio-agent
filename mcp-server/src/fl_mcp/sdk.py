@@ -163,9 +163,9 @@ class FL:
         """Export the current live project to ``output`` and return the confirmed WAV path."""
         return self._session.render_wav(Path(output))
 
-    def save(self) -> int | None:
-        """Save the live project. [ASSUMED - live-verify]"""
-        return self._session.save_project()
+    def save(self) -> None:
+        """Save the live project to its .flp (live-verified 2026-09-02)."""
+        self._session.save_project()
 
     def analyze(self, wav: str | Path) -> AudioAnalysis:
         """Return deterministic audio measurements for a rendered WAV."""

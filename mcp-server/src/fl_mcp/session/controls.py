@@ -39,11 +39,13 @@ GENERATOR_SLOT = -1
 _NUMBER = re.compile(r"^\\s*([+-]?(?:\\d+(?:\\.\\d*)?|\\.\\d+))\\s*$")
 
 
-def save_project(session: FLSession) -> int | None:
-    """Save the live project through FL's documented transport command.
+def save_project(session: FLSession) -> None:
+    """Save the live project to its .flp via FL's FPT_Save transport command.
 
-    [ASSUMED - live-verify]: the controller response is FL's handling flag,
-    not confirmation that a named project file was written.
+    Live-verified 2026-09-02: live tempo 145 in RAM then save_project made the
+    on-disk .flp reparse to 145 (was 130). FL's globalTransport return for
+    FPT_Save is a non-flag internal int that varies per call, so it is NOT
+    surfaced - success is by-effect; a refusal raises below.
     """
     if session._ensure_hello() is None or session.control is None:
         raise errors.control_plane_unavailable("ctl.save", 0.0)
@@ -53,7 +55,6 @@ def save_project(session: FLSession) -> int | None:
         if errors.is_operation_unsafe(detail):
             raise errors.operation_unsafe("ctl.save")
         raise errors.fl_api_error("ctl.save", detail)
-    return response.ret if isinstance(response.ret, int) else None
 
 
 def render_wav(session: FLSession, output: Path) -> Path:

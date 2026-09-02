@@ -57,11 +57,11 @@ def test_render_wav_uses_control_lane_and_confirms_artifact(tmp_path):
     assert ("ui.exportWav", [str(output.resolve())]) in control.calls
 
 
-def test_save_project_uses_control_lane_and_returns_handling_flag():
+def test_save_project_uses_the_control_lane():
     control = FakeControl(hello=HELLO, handlers={"ctl.save": lambda args: 8})
     session, _ = make_session(control=control)
 
-    assert session.save_project() == 8
+    assert session.save_project() is None
     assert ("ctl.save", []) in control.calls
 
 
