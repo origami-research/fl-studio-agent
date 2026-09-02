@@ -44,6 +44,8 @@ def test_windows_processes_use_exact_image_names(monkeypatch):
     assert process.fl_pids() == [1234]
     process.fl_kill()
     assert seen[-1] == ["taskkill", "/PID", "1234", "/F", "/T"]
+    assert process.fl_kill_pid(1234) is True
+    assert seen[-1] == ["taskkill", "/PID", "1234", "/F", "/T"]
 
 
 def test_windows_launch_does_not_wait_for_fl_to_exit(monkeypatch, tmp_path):
@@ -53,9 +55,15 @@ def test_windows_launch_does_not_wait_for_fl_to_exit(monkeypatch, tmp_path):
     monkeypatch.setattr(
         process.subprocess,
         "Popen",
-        lambda args, *, env: started.append((args, env["FLMCP_SPOOL_ROOT"])),
+        lambda args, *, env: started.append((args, env["FLMCP_SPOOL_ROOT"], env["FLMCP_AGENT_PROJECT"])),
     )
 
     process.launch_fl(tmp_path / "song.flp", spool_root=tmp_path / "spool")
 
-    assert started == [([r"C:\\FL\\FL64.exe", str(tmp_path / "song.flp")], str(tmp_path / "spool"))]
+    assert started == [
+        (
+            [r"C:\\FL\\FL64.exe", str(tmp_path / "song.flp")],
+            str(tmp_path / "spool"),
+            str(tmp_path / "song.flp"),
+        )
+    ]

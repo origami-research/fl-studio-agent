@@ -115,6 +115,27 @@ def fl_kill() -> None:
             os.kill(pid, signal.SIGKILL)
 
 
+def fl_kill_pid(pid: int) -> bool:
+    """Kill one confirmed FL process, returning whether it was still running.
+
+    Callers that own one marked FL session must not use ``fl_kill()``, which
+    intentionally stops every FL process on the machine for reload workflows.
+    """
+    if pid == os.getpid() or pid not in fl_pids():
+        return False
+    if sys.platform == "win32":
+        try:
+            subprocess.run(["taskkill", "/PID", str(pid), "/F", "/T"], timeout=5)
+        except (OSError, subprocess.SubprocessError):
+            return False
+        return True
+    try:
+        os.kill(pid, signal.SIGKILL)
+    except (ProcessLookupError, PermissionError):
+        return False
+    return True
+
+
 def launch_fl(project: Path, *, spool_root: Path | None = None) -> None:
     """Ask the platform launcher to open ``project`` without waiting for FL to exit.
 
@@ -122,6 +143,7 @@ def launch_fl(project: Path, *, spool_root: Path | None = None) -> None:
     never mutate the server's ambient environment to select their mailbox.
     """
     env = os.environ.copy()
+    env["FLMCP_AGENT_PROJECT"] = str(project)
     if spool_root is not None:
         env["FLMCP_SPOOL_ROOT"] = str(spool_root)
     if sys.platform == "darwin":

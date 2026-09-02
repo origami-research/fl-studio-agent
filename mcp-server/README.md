@@ -64,6 +64,12 @@ Note format:
 uv run pytest
 ```
 
+For a live bridge and controller smoke, run `uv run fl-mcp-dev-session --no-repl`.
+It opens a disposable copy of `harness/projects/fl_mcp_bridge.flp`, waits for the
+bridge and control hello, then tears down only the FL process that published this
+session's bridge PID. Pass `--project PATH` to use a project, `--spool DIR` to
+inspect a session spool, or `--exec 'fl.tempo'` to evaluate live SDK code.
+
 `tests/test_pyscript.py` executes the real `.pyscript` against a fake `flpianoroll`
 built from the official API stubs, so the executor is covered without FL Studio. FL's
 own behavior still needs the manual smoke test in
