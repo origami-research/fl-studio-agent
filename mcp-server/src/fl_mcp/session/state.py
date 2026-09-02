@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from fl_mcp import errors, flp
+from fl_mcp.controller_version import CONTROLLER_PROTOCOL_VERSION, controller_protocol_matches
 from fl_mcp.core.carriers.spool import spool_roots
 from fl_mcp.fl.paths import piano_roll_scripts_dir
 from fl_mcp.fl.process import fl_process_running
@@ -102,10 +103,22 @@ def doctor(session: FLSession) -> DoctorReport:
         dropped = session.control.dropped_frames
         hello = session._ensure_hello()
         if hello is not None:
+            stale_controller = not controller_protocol_matches(hello.script_ver)
             control_plane = PlaneStatus(
                 connected=True,
-                detail=f"controller script {hello.script_ver} on FL {hello.fl_ver}, "
+                detail=(
+                    f"installed controller is stale vs this server "
+                    f"(controller {hello.script_ver}, expected {CONTROLLER_PROTOCOL_VERSION}); "
+                    if stale_controller
+                    else ""
+                )
+                + f"controller script {hello.script_ver} on FL {hello.fl_ver}, "
                 f"ppq {hello.ppq}, dropped_frames={dropped}",
+                fix=(
+                    "installed controller is stale vs this server - run fl-mcp-install and restart FL"
+                    if stale_controller
+                    else None
+                ),
             )
         elif dropped:
             control_plane = PlaneStatus(

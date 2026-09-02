@@ -8,6 +8,7 @@ import pytest
 from session_fakes import HELLO, FakeControl, make_session
 
 from fl_mcp import errors, flp
+from fl_mcp.controller_version import CONTROLLER_PROTOCOL_VERSION
 
 # --- snapshot ----------------------------------------------------------------
 
@@ -128,6 +129,20 @@ def test_doctor_all_connected(tmp_path, monkeypatch):
     assert "dropped_frames=3" in report.control_plane.detail
     assert report.note_plane.connected is True
     assert report.project_file.detail == str(project)
+
+
+def test_doctor_reports_a_stale_controller(tmp_path, monkeypatch):
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
+    stale_hello = HELLO.model_copy(update={"script_ver": "0.0.0"})
+    session, _ = make_session(control=FakeControl(hello=stale_hello))
+
+    report = session.doctor()
+
+    assert report.control_plane.connected is True
+    assert CONTROLLER_PROTOCOL_VERSION in report.control_plane.detail
+    assert report.control_plane.fix == (
+        "installed controller is stale vs this server - run fl-mcp-install and restart FL"
+    )
 
 
 def test_doctor_dropped_frames_without_hello_points_at_the_codec(tmp_path, monkeypatch):

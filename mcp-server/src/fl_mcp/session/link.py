@@ -9,6 +9,7 @@ from collections.abc import Callable
 from typing import Any, Protocol
 
 from fl_mcp import errors
+from fl_mcp.controller_version import CONTROLLER_PROTOCOL_VERSION, controller_protocol_matches
 from fl_mcp.core.carriers.wire import ControlUnavailable, MidiControl
 from fl_mcp.fl.process import fl_process_running
 from fl_mcp.schemas import ControlResponse, HelloEvent
@@ -66,6 +67,19 @@ class ControlLink:
         self.control = control
         self._control_factory = factory if factory is not None else MidiControl
         self._last_recycle = 0.0
+        self._warned_controller_versions: set[str] = set()
+
+    def _check_controller_protocol(self, hello: HelloEvent) -> HelloEvent:
+        """Warn once for each incompatible controller that announces itself."""
+        if not controller_protocol_matches(hello.script_ver) and hello.script_ver not in self._warned_controller_versions:
+            self._warned_controller_versions.add(hello.script_ver)
+            log.warning(
+                "controller protocol version mismatch: controller reports %s, server expects %s; "
+                "installed controller is stale vs this server - run fl-mcp-install and restart FL",
+                hello.script_ver,
+                CONTROLLER_PROTOCOL_VERSION,
+            )
+        return hello
 
     def hello(self) -> HelloEvent | None:
         """The ONE connectivity probe: the controller's hello, or None. Every
@@ -88,13 +102,13 @@ class ControlLink:
             # from the SysEx callback, milliseconds when alive) confirms the
             # wire is current before anything trusts it.
             if self.control.send_request("ping", timeout=PING_CONFIRM_SECONDS).ok:
-                return hello
+                return self._check_controller_protocol(hello)
         except errors.ToolError as exc:
             # A contended shared wire is LIVE, not dead: another session's op
             # held it. Recycling here (reopening ports) would be wrong and would
             # make every control op flap under load. Trust the hello we have.
             if exc.category == "control_plane_busy":
-                return hello
+                return self._check_controller_protocol(hello)
             log.debug("control hello probe failed: %s", exc.message)
         return self._recycle()
 
@@ -115,7 +129,9 @@ class ControlLink:
             self.control = None
             return None
         try:
-            return self.control.await_hello(timeout=RECYCLE_HELLO_WAIT_SECONDS)
+            return self._check_controller_protocol(
+                self.control.await_hello(timeout=RECYCLE_HELLO_WAIT_SECONDS)
+            )
         except errors.ToolError:
             log.exception("port recycle completed but FL did not answer hello")
             return None

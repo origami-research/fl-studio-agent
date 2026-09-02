@@ -21,6 +21,10 @@ uv run python -m fl_mcp.make_agent_project   # ~/Documents/Image-Line/FL Studio/
 uv run fl-mcp-install                         # note script + controller script + MIDI assignment
 ```
 
+The server derives its expected controller protocol version from the exact controller source that
+`fl-mcp-install` deploys. If `fl_doctor` reports a stale controller, run `fl-mcp-install` and
+restart FL Studio; the warning is advisory so compatible minor mismatches can still operate.
+
 The agent project is the **only** project the agent modifies; your own work is never touched, and a backup is written before every change.
 
 ## 3. (Live features) install the Bridge plugin

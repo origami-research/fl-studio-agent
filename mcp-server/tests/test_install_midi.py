@@ -8,6 +8,7 @@ including the reproduced cross-key overreach the audit flagged as CRITICAL.
 
 import pytest
 
+from fl_mcp.controller_version import controller_script_bytes
 from fl_mcp.fl import install
 
 
@@ -69,6 +70,16 @@ def test_normalizes_both_ports(reg):
 def test_missing_reg_warns(reg):
     # reg fixture points reg_xml_path() at a nonexistent path.
     assert install.configure_midi().startswith("WARN")
+
+
+def test_install_controller_copies_the_versioned_source(tmp_path, monkeypatch):
+    settings = tmp_path / "Settings"
+    settings.mkdir()
+    monkeypatch.setattr(install, "fl_settings_dirs", lambda: [settings])
+
+    installed = install.install_controller()
+
+    assert installed.read_bytes() == controller_script_bytes()
 
 
 def test_no_midi_section_warns_not_corrupt(reg):

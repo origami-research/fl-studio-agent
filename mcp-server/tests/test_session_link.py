@@ -17,6 +17,7 @@ from session_fakes import (
 )
 
 from fl_mcp import flp
+from fl_mcp.controller_version import CONTROLLER_PROTOCOL_VERSION
 from fl_mcp.schemas import ControlResponse
 from fl_mcp.session import FLSession, create_session
 from fl_mcp.session import facade as facade_mod
@@ -66,6 +67,24 @@ def test_project_dir_rejects_path_separators():
 
 
 # --- the hello probe and its self-heal ---------------------------------------
+
+
+def test_matching_controller_hello_does_not_warn(caplog):
+    session, _ = make_session(control=FakeControl(hello=HELLO))
+
+    assert session._ensure_hello() is HELLO
+    assert HELLO.script_ver == CONTROLLER_PROTOCOL_VERSION
+    assert "controller protocol version mismatch" not in caplog.text
+
+
+def test_stale_controller_hello_warns_once(caplog):
+    stale_hello = HELLO.model_copy(update={"script_ver": "0.0.0"})
+    session, _ = make_session(control=FakeControl(hello=stale_hello))
+
+    assert session._ensure_hello() is stale_hello
+    assert session._ensure_hello() is stale_hello
+    assert caplog.text.count("controller protocol version mismatch") == 1
+    assert CONTROLLER_PROTOCOL_VERSION in caplog.text
 
 
 def test_silent_wire_recycles_ports_when_fl_is_running(monkeypatch):

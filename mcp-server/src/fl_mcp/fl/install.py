@@ -18,6 +18,8 @@ import re
 import shutil
 from pathlib import Path
 
+from fl_mcp.controller_version import controller_script_bytes
+
 from .paths import fl_settings_dirs, piano_roll_scripts_dir
 
 SCRIPT_FILENAME = "MCP Write Notes.pyscript"
@@ -42,10 +44,6 @@ CONTROL_PORT = 1  # any matching int; input and output must agree
 def _source_script() -> Path:
     # repo layout: mcp-server/src/fl_mcp/fl/install.py -> <repo>/fl-scripts/piano-roll/
     return Path(__file__).resolve().parents[4] / "fl-scripts" / "piano-roll" / SCRIPT_FILENAME
-
-
-def _source_controller() -> Path:
-    return Path(__file__).resolve().parents[4] / "fl-scripts" / "controller" / CONTROLLER_FILENAME
 
 
 def script_dir() -> Path | None:
@@ -79,16 +77,13 @@ def install() -> Path:
 
 def install_controller() -> Path:
     """Copy the controller (MIDI device) script into Settings/Hardware/FLMCP/."""
-    source = _source_controller()
-    if not source.is_file():
-        raise FileNotFoundError(f"controller script not found in repo: {source}")
     settings = next((s for s in fl_settings_dirs() if s.is_dir()), None)
     if settings is None:
         raise FileNotFoundError("Could not find FL Studio's Settings folder.")
     dest_dir = settings / "Hardware" / CONTROLLER_SUBDIR
     dest_dir.mkdir(parents=True, exist_ok=True)
     dest = dest_dir / CONTROLLER_FILENAME
-    shutil.copy2(source, dest)
+    dest.write_bytes(controller_script_bytes())
     return dest
 
 

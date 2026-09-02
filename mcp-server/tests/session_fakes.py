@@ -17,6 +17,7 @@ from typing import Any, cast
 
 from fl_mcp import errors
 from fl_mcp.clock import now
+from fl_mcp.controller_version import CONTROLLER_PROTOCOL_VERSION
 from fl_mcp.core.carriers.wire import MidiControl
 from fl_mcp.core.transport import Transport
 from fl_mcp.schemas import (
@@ -35,7 +36,7 @@ from fl_mcp.session import detect as detect_mod
 from fl_mcp.session.detect import CapabilityProfileLike
 from fl_mcp.store import Store
 
-HELLO = HelloEvent(script_ver="test", fl_ver="2026", ppq=96)
+HELLO = HelloEvent(script_ver=CONTROLLER_PROTOCOL_VERSION, fl_ver="2026", ppq=96)
 TARGET = Target(pattern=1, channel=0)
 NOTES = [Note(key=60, start=0, length=1)]
 
