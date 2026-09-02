@@ -102,6 +102,44 @@ def test_project_write_records_then_reloads(monkeypatch, tmp_path, no_reload):
     assert no_reload == [True], "FL reloads exactly once, after the store recorded"
 
 
+def test_project_write_saves_live_state_before_writing_and_reloading(monkeypatch, tmp_path):
+    from fl_mcp.session import controls, lifecycle
+
+    events = []
+    project = tmp_path / "agent.flp"
+    control = FakeControl(hello=HELLO)
+    session, _ = make_session(control=control, project=project)
+    monkeypatch.setattr(controls, "save_project", lambda session: events.append("save"))
+    monkeypatch.setattr(
+        flp,
+        "write_notes",
+        lambda *args, **kwargs: events.append("write") or list(NOTES),
+    )
+    monkeypatch.setattr(lifecycle, "reload_fl", lambda project, link: events.append("reload"))
+
+    session.write_notes(TARGET, NOTES, "merge")
+
+    assert events == ["save", "write", "reload"]
+
+
+def test_project_write_skips_save_without_live_control(monkeypatch, tmp_path):
+    from fl_mcp.session import controls, lifecycle
+
+    events = []
+    session, _ = make_session(project=tmp_path / "agent.flp")
+    monkeypatch.setattr(controls, "save_project", lambda session: events.append("save"))
+    monkeypatch.setattr(
+        flp,
+        "write_notes",
+        lambda *args, **kwargs: events.append("write") or list(NOTES),
+    )
+    monkeypatch.setattr(lifecycle, "reload_fl", lambda project, link: events.append("reload"))
+
+    session.write_notes(TARGET, NOTES, "merge")
+
+    assert events == ["write", "reload"]
+
+
 def test_project_write_readback_mismatch_raises(monkeypatch, tmp_path, no_reload):
     def failing_write(path, notes, *, pattern, channel, mode):
         raise flp.FlpError("readback mismatch at note 3")

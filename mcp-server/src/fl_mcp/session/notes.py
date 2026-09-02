@@ -109,6 +109,7 @@ class FileLane:
             "inspect the .flp and retry."
         )
         try:
+            session._prepare_file_write()
             written = flp.write_notes(
                 session.project, notes, pattern=target.pattern, channel=target.channel, mode=mode
             )

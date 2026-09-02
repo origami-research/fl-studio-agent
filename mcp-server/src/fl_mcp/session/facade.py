@@ -161,6 +161,7 @@ class FLSession:
         # but defer the FL reload so N edits cost ONE reboot, not N.
         self._reload_batch_depth = 0
         self._reload_pending = False
+        self._file_write_prepared = False
 
     @property
     def control(self) -> ControlCarrier | None:
@@ -261,6 +262,7 @@ class FLSession:
                     "No project file is configured for adding an effect. "
                     "Effect records can only be written through the project file."
                 )
+            self._prepare_file_write()
             confirmed = tuple(flp.add_effect(self.project, insert_index, plugin_name))
             self._reload_fl()
             return confirmed
@@ -326,6 +328,26 @@ class FLSession:
             return
         lifecycle.reload_fl(self.project, self.link)
 
+    def _prepare_file_write(self) -> None:
+        """Save live FL state before a project-file mutation can reload it.
+
+        Saving after a .flp mutation is unsafe: FL's in-memory project can
+        overwrite that mutation. One save covers every write in a file_edit
+        batch; standalone writes prepare independently.
+        """
+        if self._file_write_prepared:
+            return
+        if self.control is None or self._ensure_hello() is None:
+            return
+        try:
+            controls.save_project(self)
+        except errors.ToolError as exc:
+            if exc.category != "control_plane_unavailable":
+                raise
+            return
+        if self._reload_batch_depth > 0:
+            self._file_write_prepared = True
+
     @contextmanager
     def file_edit(self) -> Iterator[None]:
         """Batch file-lane edits into ONE reload.
@@ -334,15 +356,10 @@ class FLSession:
         fallback for notes/tempo) each rewrite the .flp and normally reload FL -
         a full SIGKILL+relaunch. Inside this block the edits still apply to the
         .flp but the reload is deferred to a single reboot on exit, so a batch
-        of edits costs one reload instead of N. On outermost entry, save live
-        bridge work first so the subsequent reload cannot discard it. Nestable."""
-        if self._reload_batch_depth == 0 and self.control is not None:
-            try:
-                if self._ensure_hello() is not None:
-                    self.save_project()
-            except errors.ToolError as exc:
-                if exc.category != "control_plane_unavailable":
-                    raise
+        of edits costs one reload instead of N. The first file write saves
+        live bridge work before it mutates the .flp. Nestable."""
+        if self._reload_batch_depth == 0:
+            self._file_write_prepared = False
         self._reload_batch_depth += 1
         try:
             yield
@@ -351,6 +368,8 @@ class FLSession:
             if self._reload_batch_depth == 0 and self._reload_pending:
                 self._reload_pending = False
                 lifecycle.reload_fl(self.project, self.link)
+            if self._reload_batch_depth == 0:
+                self._file_write_prepared = False
 
     def _bridge_ping(self) -> bool:
         """The breaker's gate: one stateless spool round trip proving the

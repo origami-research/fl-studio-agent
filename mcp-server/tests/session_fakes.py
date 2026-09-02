@@ -78,6 +78,8 @@ class FakeControl:
             return ControlResponse(
                 id=len(self.calls), ok=self.hello is not None, err=None if self.hello else "dead wire"
             )
+        if op == "ctl.save" and op not in self.handlers:
+            return ControlResponse(id=len(self.calls), ok=True)
         if op not in self.handlers:
             return ControlResponse(id=len(self.calls), ok=False, err=f"no handler for {op}")
         ret = self.handlers[op](args or [])

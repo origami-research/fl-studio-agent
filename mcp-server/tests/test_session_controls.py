@@ -11,7 +11,7 @@ from session_fakes import HELLO, FakeControl, make_session
 
 from fl_mcp import errors, flp
 from fl_mcp.schemas import AutomationPoint, ControlResponse, PluginParamModel, PluginParamSpec
-from fl_mcp.session import FLSession, NotePlaneUnavailable, WriteRejected
+from fl_mcp.session import FLSession, NotePlaneUnavailable, WriteRejected, controls
 
 
 @pytest.fixture()
@@ -505,10 +505,28 @@ def test_file_edit_saves_live_work_before_reloading(monkeypatch):
 
     session, _ = make_session(control=FakeControl(hello=HELLO))
     events = []
-    monkeypatch.setattr(FLSession, "save_project", lambda self: events.append("save"))
+    monkeypatch.setattr(controls, "save_project", lambda session: events.append("save"))
     monkeypatch.setattr(lifecycle, "reload_fl", lambda project, link: events.append("reload"))
 
     with session.file_edit():
+        session._prepare_file_write()
+        session._reload_fl()
+
+    assert events == ["save", "reload"]
+
+
+def test_file_edit_saves_once_before_its_single_reload(monkeypatch):
+    from fl_mcp.session import lifecycle
+
+    session, _ = make_session(control=FakeControl(hello=HELLO))
+    events = []
+    monkeypatch.setattr(controls, "save_project", lambda session: events.append("save"))
+    monkeypatch.setattr(lifecycle, "reload_fl", lambda project, link: events.append("reload"))
+
+    with session.file_edit():
+        session._prepare_file_write()
+        session._reload_fl()
+        session._prepare_file_write()
         session._reload_fl()
 
     assert events == ["save", "reload"]

@@ -138,6 +138,7 @@ def set_tempo(session: FLSession, bpm: float) -> float:
         return float(readback.ret) / 1000.0
 
     if session.project is not None:
+        session._prepare_file_write()
         confirmed = flp.set_tempo(session.project, bpm)
         session._reload_fl()
         return confirmed
@@ -207,6 +208,7 @@ def set_channel_levels(
         )
 
     if session.project is not None:
+        session._prepare_file_write()
         confirmed = flp.set_channel_levels(
             session.project, channel, volume=volume, pan=pan, pitch_semitones=pitch_semitones
         )
@@ -234,6 +236,7 @@ def set_automation(
             "Automation clips currently require an existing FL-authored clip."
         )
     try:
+        session._prepare_file_write()
         saved = flp.write_automation(session.project, channel, points)
         project = flp.read(session.project)
         confirmed = next(item.automation for item in project.channels if item.index == channel)
