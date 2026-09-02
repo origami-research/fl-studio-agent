@@ -14,6 +14,7 @@ the authority for what is real and how new capability work is promoted.
 | Add or verify an FL capability | [33-capability-acquisition-model.md](33-capability-acquisition-model.md), [23-flp-reverse-engineering-playbook.md](23-flp-reverse-engineering-playbook.md), [25-fl-capability-catalog.md](25-fl-capability-catalog.md) |
 | Work on the rewrite or shared lane contracts | [26-master-plan.md](26-master-plan.md), [27-shared-surfaces.md](27-shared-surfaces.md), [21-v2-rewrite-spec.md](21-v2-rewrite-spec.md) |
 | Use the Python SDK | [sdk-reference.md](sdk-reference.md) |
+| Run the local merge gate | [gate.md](gate.md) |
 | Understand code-quality doctrine | `AGENTS.md`, [19-code-quality-proposal.md](19-code-quality-proposal.md) |
 
 ## Current canon
