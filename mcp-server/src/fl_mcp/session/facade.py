@@ -16,7 +16,7 @@ from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from pathlib import Path
 
-from fl_mcp import errors
+from fl_mcp import errors, flp
 from fl_mcp.core.carriers import CarrierUnavailable
 from fl_mcp.core.carriers.broker_client import BrokerControl
 from fl_mcp.core.carriers.spool import SpoolCarrier
@@ -248,6 +248,18 @@ class FLSession:
             return controls.set_channel_levels(
                 self, channel, volume=volume, pan=pan, pitch_semitones=pitch_semitones
             )
+
+    def add_effect(self, insert_index: int, plugin_name: str) -> tuple[flp.Effect, ...]:
+        """Add an FL-authored native effect record and return its file readback."""
+        with self._write_guard("add_effect"):
+            if self.project is None:
+                raise NotePlaneUnavailable(
+                    "No project file is configured for adding an effect. "
+                    "Effect records can only be written through the project file."
+                )
+            confirmed = tuple(flp.add_effect(self.project, insert_index, plugin_name))
+            self._reload_fl()
+            return confirmed
 
     def set_automation(
         self, channel: int, points: list[AutomationPoint]

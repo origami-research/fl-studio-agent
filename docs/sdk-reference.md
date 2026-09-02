@@ -192,6 +192,28 @@ fl.track("Bass").set_automation([
 ])
 ```
 
+### `track.set_channel_levels(volume: float | None = None, pan: float | None = None, pitch: int | None = None) -> ChannelLevels`
+
+**Availability:** project write. Updates one or more channel levels through
+the project file, then returns the saved-file readback. `volume` is normalized
+from 0 to 1, `pan` ranges from -1 (left) to 1 (right), and `pitch` is whole
+semitones from -48 to 48. Pass at least one value.
+
+```python
+confirmed = fl.track("Bass").set_channel_levels(volume=0.9, pan=-0.15)
+```
+
+### `fl.add_effect(insert_index: int, plugin_name: str) -> tuple[Effect, ...]`
+
+**Availability:** project write. Adds an effect using an FL-authored opaque
+record and returns the saved-file effect-chain readback. Current evidence only
+supports `fl.add_effect(0, "Fruity Parametric EQ 2")`: an empty Master slot 0.
+Other plugins or insert placements refuse rather than synthesize plugin state.
+
+```python
+effects = fl.add_effect(0, "Fruity Parametric EQ 2")
+```
+
 ### `track.params(query: str | None = None, limit: int = 40) -> list[PluginParam]`
 
 **Availability:** live-only. Reads the generator plugin's parameters. `query`
@@ -239,5 +261,7 @@ with `Model.model_validate(...)`.
 | `Note` | `key: int` (MIDI 0–127; note names such as `"C4"` are accepted on construction), `start: float` (beats), `length: float` (beats, >0), `velocity: float` (0–1, default .8), `pan: float` (0–1, default .5), `color: int` (0–15, default 0) |
 | `NoteWriteMode` | Literal `"merge"` or `"replace"` |
 | `AutomationPoint` | `position: float` (beats, >=0), `value: float` (normalized, -0.001–1.001), `tension: float` (-1–1, default 0) |
+| `ChannelLevels` | `channel: int`, `volume: float` (0–1), `pan: float` (-1–1), `pitch_semitones: int` (-48–48) |
+| `Effect` | `name: str`, `chunk: bytes` (opaque FL-authored plugin state) |
 | `AudioAnalysis` | `bpm: float | None`, `key: str | None`, `integrated_lufs: float`, `true_peak_dbfs: float`, `spectral_balance: SpectralBalance` (`low_dbfs`, `mid_dbfs`, `high_dbfs`) |
 | `PluginParam` | `index: int`, `name: str`, `value: float` (normalized 0–1), `display: str`, `kind: "continuous" | "stepped" | "enum" | "bool"`, `options: list[str] | None`, `minimum`, `maximum`, `step`, `unit` |

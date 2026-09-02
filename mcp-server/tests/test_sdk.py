@@ -19,13 +19,16 @@ mode drops by design (noted per docs/21 reporting duty):
 from __future__ import annotations
 
 import wave
+from pathlib import Path
 
 import numpy as np
 import pytest
+from flpkit import effects_at
 from sdk_fakes import DEFAULT_CHANNELS, FakeSession
+from session_fakes import make_session
 
 from fl_mcp import errors, sdk, theory
-from fl_mcp.schemas import AutomationPoint, Note, Target
+from fl_mcp.schemas import AutomationPoint, ChannelLevels, Note, Target
 from fl_mcp.sdk import ChannelNotFound, connect
 
 
@@ -200,6 +203,59 @@ def test_automation_points_normalize_and_validate_at_the_sdk_boundary(fl):
     assert exc_info.value.category == "invalid_argument"
     assert "Track.set_automation" in exc_info.value.message
     assert "value" in exc_info.value.message
+
+
+# -- channel levels -----------------------------------------------------------
+
+
+def test_track_set_channel_levels_validates_at_the_sdk_boundary(fl, fake_session):
+    with pytest.raises(errors.ToolError) as exc_info:
+        fl.track("Bass").set_channel_levels(volume=1.1)
+
+    assert exc_info.value.category == "invalid_argument"
+    assert "Track.set_channel_levels" in exc_info.value.message
+    assert "volume" in exc_info.value.message
+    assert fake_session.level_calls == []
+
+    with pytest.raises(errors.ToolError) as exc_info:
+        fl.track("Bass").set_channel_levels(pan=-1.1)
+
+    assert exc_info.value.category == "invalid_argument"
+    assert "pan" in exc_info.value.message
+    assert fake_session.level_calls == []
+
+    with pytest.raises(errors.ToolError) as exc_info:
+        fl.track("Bass").set_channel_levels(pitch=49)
+
+    assert exc_info.value.category == "invalid_argument"
+    assert "pitch" in exc_info.value.message
+    assert fake_session.level_calls == []
+
+
+def test_track_set_channel_levels_returns_the_confirmed_receipt(fl, fake_session):
+    confirmed = fl.track("Bass").set_channel_levels(volume=0.6, pan=-0.3, pitch=12)
+
+    assert confirmed == ChannelLevels(channel=1, volume=0.6, pan=-0.3, pitch_semitones=12)
+    assert fake_session.level_calls == [(1, 0.6, -0.3, 12)]
+
+
+# -- effects ------------------------------------------------------------------
+
+
+def test_add_effect_replays_the_checked_in_fl_authored_pair(tmp_path, monkeypatch):
+    evidence = Path(__file__).parent / "evidence/plugin-effect"
+    candidate = tmp_path / "candidate.flp"
+    candidate.write_bytes((evidence / "baseline.flp").read_bytes())
+    session, _ = make_session(project=candidate)
+    reloads: list[bool] = []
+    monkeypatch.setattr(session, "_reload_fl", lambda: reloads.append(True))
+
+    confirmed = connect(session).add_effect(0, "Fruity Parametric EQ 2")
+
+    expected = tuple(effects_at(evidence / "after-add-parametric-eq2-on-master.flp", 0))
+    assert confirmed == tuple(effects_at(candidate, 0))
+    assert confirmed == expected  # Each opaque effect chunk is byte-exact to the FL-authored pair.
+    assert reloads == [True]
 
 
 def test_track_pattern_is_validated_at_the_sdk_boundary(fl):

@@ -23,10 +23,12 @@ from pydantic import BaseModel, Field, TypeAdapter, ValidationError
 from fl_mcp import errors
 from fl_mcp.audio import AudioAnalysis, _read_wav, analyze_wav
 
+from .flp import Effect
 from .schemas import (
     AutomationPoint,
     AutomationReceipt,
     Channel,
+    ChannelLevels,
     Note,
     NoteWriteMode,
     PluginParam,
@@ -65,6 +67,17 @@ class _ParamSetArgs(BaseModel):
     # A normalized float is validated here; a str (display/option value) is
     # passed through and validated against the captured plugin model downstream.
     value: NormalizedValue | Annotated[str, Field(strict=True)]
+
+
+class _ChannelLevelsArgs(BaseModel):
+    volume: NormalizedValue | None = None
+    pan: Annotated[float, Field(strict=True, ge=-1, le=1)] | None = None
+    pitch: Annotated[int, Field(strict=True, ge=-48, le=48)] | None = None
+
+
+class _AddEffectArgs(BaseModel):
+    insert_index: SdkChannel
+    plugin_name: Annotated[str, Field(strict=True, min_length=1)]
 
 
 _NOTES = TypeAdapter(list[Note])
@@ -132,6 +145,19 @@ class FL:
     def set_tempo(self, bpm: float) -> float:
         """Returns FL's own read-back, never the request echo."""
         return self._session.set_tempo(bpm)
+
+    def add_effect(self, insert_index: int, plugin_name: str) -> tuple[Effect, ...]:
+        """Add a proven native effect to a mixer insert and return file readback.
+
+        The current FL-authored evidence supports only Fruity Parametric EQ 2
+        on the empty Master slot 0. Other placements or plugins refuse before
+        synthesizing opaque plugin state.
+        """
+        try:
+            args = _AddEffectArgs(insert_index=insert_index, plugin_name=plugin_name)
+        except ValidationError as exc:
+            raise errors.invalid_argument("fl.add_effect", str(exc)) from exc
+        return self._session.add_effect(args.insert_index, args.plugin_name)
 
     def render(self, output: str | Path) -> Path:
         """Export the current live project to ``output`` and return the confirmed WAV path."""
@@ -211,6 +237,22 @@ class Track:
         except ValidationError as exc:
             raise errors.invalid_argument("Track.set_automation", str(exc)) from exc
         return self._fl._session.set_automation(self.channel, normalized_points)
+
+    def set_channel_levels(
+        self, *, volume: float | None = None, pan: float | None = None, pitch: int | None = None
+    ) -> ChannelLevels:
+        """Set this channel's levels through the file lane and return its readback."""
+        try:
+            args = _ChannelLevelsArgs(volume=volume, pan=pan, pitch=pitch)
+        except ValidationError as exc:
+            raise errors.invalid_argument("Track.set_channel_levels", str(exc)) from exc
+        if args.volume is None and args.pan is None and args.pitch is None:
+            raise errors.invalid_argument(
+                "Track.set_channel_levels", "pass volume, pan, and/or pitch"
+            )
+        return self._fl._session.set_channel_levels(
+            self.channel, volume=args.volume, pan=args.pan, pitch_semitones=args.pitch
+        )
 
     def params(self, query: str | None = None, limit: int = 40) -> list[PluginParam]:
         """The channel generator's live parameters (E2: Sytrus exposes 597).

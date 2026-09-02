@@ -13,6 +13,7 @@ from fl_mcp.schemas import (
     AutomationPoint,
     AutomationReceipt,
     Channel,
+    ChannelLevels,
     ControlResponse,
     Note,
     NoteWriteMode,
@@ -61,6 +62,7 @@ class FakeSession(FLSession):
         self.fail_next_write: Exception | None = None
         self._channels = list(channels)
         self._next_id = 0
+        self.level_calls: list[tuple[int, float | None, float | None, int | None]] = []
 
     def write_notes(self, target: Target, notes: list[Note], mode: NoteWriteMode) -> WriteReceipt:
         if self.fail_next_write is not None:
@@ -91,6 +93,22 @@ class FakeSession(FLSession):
 
     def set_automation(self, channel: int, points: list[AutomationPoint]) -> AutomationReceipt:
         return AutomationReceipt(backend="project-write", channel=channel, points=points)
+
+    def set_channel_levels(
+        self,
+        channel: int,
+        *,
+        volume: float | None = None,
+        pan: float | None = None,
+        pitch_semitones: int | None = None,
+    ) -> ChannelLevels:
+        self.level_calls.append((channel, volume, pan, pitch_semitones))
+        return ChannelLevels(
+            channel=channel,
+            volume=0.8 if volume is None else volume,
+            pan=0.0 if pan is None else pan,
+            pitch_semitones=0 if pitch_semitones is None else pitch_semitones,
+        )
 
     def plugin_params(
         self, channel: int, *, query: str | None = None, limit: int = 40

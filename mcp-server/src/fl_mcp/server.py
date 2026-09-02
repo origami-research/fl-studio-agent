@@ -74,13 +74,17 @@ def run(code: str, ctx: Context) -> dict[str, Any]:
       with start/length in beats from pattern start.
     - Track.set_automation([AutomationPoint(position=0.0, value=0.5,
       tension=0.0)]) - position in beats, value normalized 0..1.
+    - Track.set_channel_levels(volume=0.9, pan=-0.15, pitch=0) - project-file
+      channel levels; volume 0..1, pan -1..1, pitch whole semitones -48..48.
     - Track.params(query="cutoff") / Track.set_param("cutoff", 0.55) - live
       generator plugin parameters, values normalized 0..1.
+    - fl.add_effect(0, "Fruity Parametric EQ 2") -> tuple[Effect, ...] -
+      project-file only; proven only for empty Master slot 0.
     - fl.render("out.wav") -> Path; fl.analyze(wav) -> bpm/key/LUFS/spectral
       balance; fl.read_wav(path) -> (samples, sample_rate).
     - fl.snapshot() -> tempo + channels.
     - with fl.file_edit(): ... - batch file-lane edits (automation, channel
-      levels) so FL reloads ONCE for the whole block instead of per edit.
+      levels, added effects) so FL reloads ONCE for the whole block instead of per edit.
     - theory.chord("C", "minor") / theory.scale("E", "minor") -> MIDI ints;
       theory.drums("x...x...x...x...", key="C1", step_beats=0.25) -> a
       ready-to-write [Note] step grid ('x' = hit, '.' = rest).
