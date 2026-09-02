@@ -27,6 +27,7 @@ from fl_mcp.errors import NotePlaneUnavailable
 from fl_mcp.fl.paths import primary_settings_dir
 from fl_mcp.observer import Observer
 from fl_mcp.ops import notes as ops_notes
+from fl_mcp.plugin_models import load_bundled_param_models
 from fl_mcp.schemas import (
     AutomationPoint,
     AutomationReceipt,
@@ -64,7 +65,7 @@ ENV_PROJECT = "FLMCP_AGENT_PROJECT"
 DEFAULT_PROJECT_NAME = "FLMCP Agent.flp"
 
 
-def create_session() -> FLSession:
+def create_session(*, plugin_param_models: tuple[PluginParamModel, ...] | None = None) -> FLSession:
     """THE factory, called once at the entry point (server lifespan or
     ``sdk.connect()``). Builds the wire (or None when python-rtmidi is missing
     or ports can't open - tools then degrade honestly), the spool, the store,
@@ -106,6 +107,9 @@ def create_session() -> FLSession:
         transport=Transport([UdpCarrier(), SpoolCarrier()]),
         store=Store(project_key=_project_key(project)),
         project=project,
+        plugin_param_models=(
+            load_bundled_param_models() if plugin_param_models is None else plugin_param_models
+        ),
     )
     session.prewarm()  # a live bridge is used from the first write, not the second (#93)
     return session
