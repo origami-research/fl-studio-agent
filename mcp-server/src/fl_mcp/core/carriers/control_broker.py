@@ -37,10 +37,30 @@ from fl_mcp.fl.paths import app_data_root
 log = logging.getLogger(__name__)
 
 SOCKET_NAME = "control-broker.sock"
+MAX_CLIENT_TIMEOUT_SECONDS = 60.0
 
 
 def default_socket_path() -> Path:
     return app_data_root() / SOCKET_NAME
+
+
+def _timeout_limit_error(timeout: float) -> ToolError:
+    return ToolError(
+        "control_plane_busy",
+        f"Requested control timeout {timeout:g}s exceeds the {MAX_CLIENT_TIMEOUT_SECONDS:g}s broker limit.",
+        "Retry with a timeout no greater than 60 seconds.",
+        retryable=True,
+    )
+
+
+def _error_envelope(exc: ToolError) -> dict[str, Any]:
+    return {
+        "kind": "error",
+        "category": exc.category,
+        "message": exc.message,
+        "fix": exc.fix,
+        "retryable": exc.retryable,
+    }
 
 
 class ControlBroker:
@@ -98,16 +118,19 @@ class ControlBroker:
         same typed failure - a busy wire must not look like a dead one."""
         try:
             req = json.loads(line)
+            timeout = float(req.get("timeout", 2.0))
+            if not 0 < timeout <= MAX_CLIENT_TIMEOUT_SECONDS:
+                return _error_envelope(_timeout_limit_error(timeout))
             response = self._wire.send_request(
                 req["op"],
                 args=req.get("args") or [],
                 kwargs=req.get("kwargs") or {},
-                timeout=float(req.get("timeout", 2.0)),
+                timeout=timeout,
                 pid=req.get("pid"),
             )
             return {"kind": "response", "response": response.model_dump()}
         except ToolError as exc:
-            return {"kind": "error", "category": exc.category, "message": exc.message, "fix": exc.fix, "retryable": exc.retryable}
+            return _error_envelope(exc)
         except Exception as exc:  # noqa: BLE001 - the broker boundary: a bad request must not drop the wire for other sessions
             return {"kind": "error", "category": "fl_api_error", "message": f"{type(exc).__name__}: {exc}", "fix": "Check the broker log.", "retryable": True}
 

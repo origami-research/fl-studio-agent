@@ -24,6 +24,7 @@ import itertools
 import logging
 import threading
 import time
+from collections import deque
 from collections.abc import Callable
 from typing import Any
 
@@ -47,6 +48,7 @@ REQ_PORT_NAME = "FLMCP Req"  # server -> FL (FL sees it as a MIDI input source)
 RES_PORT_NAME = "FLMCP Res"  # FL -> server (FL sees it as a MIDI output dest)
 
 RESPONSE_POLL_SECONDS = 0.005
+EVENT_BUFFER_SIZE = 256
 
 
 class ControlUnavailable(RuntimeError):
@@ -76,7 +78,7 @@ class MidiControl:
         self._lock = threading.Lock()  # the pending/response maps + port writes
         self._pending: dict[int, ControlRequest] = {}
         self._responses: dict[int, dict[str, Any]] = {}
-        self._events: list[dict[str, Any]] = []
+        self._events: deque[dict[str, Any]] = deque(maxlen=EVENT_BUFFER_SIZE)
         self._event_listeners: list[Callable[[dict[str, Any]], None]] = []
         self._reassembler = Reassembler()
         self._dropped_frames = 0
@@ -197,7 +199,8 @@ class MidiControl:
         self._event_listeners.append(fn)
 
     def drain_events(self) -> list[dict[str, Any]]:
-        events, self._events = self._events, []
+        events = list(self._events)
+        self._events.clear()
         return events
 
     @property

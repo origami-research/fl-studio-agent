@@ -110,6 +110,6 @@ else
     pytest_skipped="0"
 fi
 
-run_phase "ruff" uvx ruff check
+run_phase "ruff" uvx ruff check ..
 summary
 exit "$failed"

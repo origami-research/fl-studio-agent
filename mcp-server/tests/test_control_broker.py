@@ -12,11 +12,12 @@ import json
 import tempfile
 import threading
 from pathlib import Path
+from unittest.mock import Mock
 
 import pytest
 
 from fl_mcp.core.carriers.broker_client import BrokerControl
-from fl_mcp.core.carriers.control_broker import ControlBroker
+from fl_mcp.core.carriers.control_broker import MAX_CLIENT_TIMEOUT_SECONDS, ControlBroker
 from fl_mcp.errors import ToolError
 from fl_mcp.schemas import ControlResponse
 
@@ -129,3 +130,30 @@ def test_busy_wire_relays_as_busy_not_dead(broker, tmp_path):
     with pytest.raises(ToolError) as exc:
         control.send_request("busy", timeout=1.0)
     assert exc.value.category == "control_plane_busy"
+
+
+def test_broker_rejects_client_timeouts_over_its_shared_wire_limit(broker, tmp_path):
+    sock, wire = broker
+    control = BrokerControl(session_with_pid(tmp_path, 5), socket_path=sock)
+
+    with pytest.raises(ToolError) as exc:
+        control.send_request("slow", timeout=MAX_CLIENT_TIMEOUT_SECONDS + 1)
+
+    assert exc.value.category == "control_plane_busy"
+    assert wire.calls == []
+
+
+def test_broker_client_starts_the_broker_only_once(monkeypatch, tmp_path):
+    control = BrokerControl(session_with_pid(tmp_path, 5), socket_path=tmp_path / "missing.sock")
+    spawn = Mock()
+    monkeypatch.setattr("fl_mcp.core.carriers.broker_client.subprocess.Popen", spawn)
+    monkeypatch.setattr(control, "_try_connect", lambda: None)
+    ticks = iter((0.0, 11.0, 0.0, 11.0))
+    monkeypatch.setattr("fl_mcp.core.carriers.broker_client.time.monotonic", lambda: next(ticks))
+    monkeypatch.setattr("fl_mcp.core.carriers.broker_client.time.sleep", lambda seconds: None)
+
+    for _ in range(2):
+        with pytest.raises(ToolError, match="within 10s"):
+            control._connect()
+
+    assert spawn.call_count == 1

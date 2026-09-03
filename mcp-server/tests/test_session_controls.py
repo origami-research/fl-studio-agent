@@ -49,7 +49,7 @@ def test_render_wav_saves_then_subprocesses_the_resolved_fl_path(monkeypatch, tm
     commands: list[list[str]] = []
     events: list[str] = []
 
-    def render(command, check):
+    def render(command, check, timeout):
         events.append("render")
         commands.append(command)
         project.with_suffix(".wav").write_bytes(b"RIFF....WAVE")
@@ -72,7 +72,7 @@ def test_render_wav_raises_when_cli_wav_is_missing_or_empty(monkeypatch, tmp_pat
     project = tmp_path / "live.flp"
     project.write_bytes(b"FLhd")
 
-    def render(command, check):
+    def render(command, check, timeout):
         if wav is not None:
             project.with_suffix(".wav").write_bytes(wav)
 
@@ -472,6 +472,33 @@ def test_plugin_param_model_enriches_all_kinds_and_sets_display_values():
     assert (confirmed.value, confirmed.display) == (1.0, "Noise")
     with pytest.raises(ValueError, match="invalid option"):
         session.set_plugin_param(0, 2, "Triangle")
+
+
+def test_set_plugin_param_resolves_a_numeric_display_string_against_its_range():
+    state = {0: 0.5}
+
+    def set_value(args):
+        state[args[1]] = args[0]
+
+    control = FakeControl(
+        hello=HELLO,
+        handlers={
+            "plugins.getParamCount": lambda args: 1,
+            "plugins.getPluginName": lambda args: "Test Synth",
+            "plugins.getParamName": lambda args: "Cutoff",
+            "plugins.getParamValue": lambda args: state[args[0]],
+            "plugins.setParamValue": set_value,
+        },
+    )
+    model = PluginParamModel(
+        plugin="Test Synth",
+        parameters=(PluginParamSpec(index=0, name="Cutoff", kind="continuous", minimum=20, maximum=1000),),
+    )
+    session, _ = make_session(control=control, plugin_param_models=(model,))
+
+    session.set_plugin_param(0, "Cutoff", "440")
+
+    assert ("plugins.setParamValue", [pytest.approx(420 / 980), 0, 0, -1]) in control.calls
 
 
 def test_bool_param_accepts_option_and_round_trips():

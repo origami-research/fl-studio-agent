@@ -314,6 +314,17 @@ def test_event_listeners_receive_non_hello_events_and_drain_clears(rig):
     assert control.drain_events() == []
 
 
+def test_event_buffer_is_bounded_when_no_consumer_drains_it(rig):
+    control, midi_in, _midi_out = rig
+
+    for index in range(wire.EVENT_BUFFER_SIZE + 1):
+        _deliver_event(midi_in, op="dirty_channel", index=index)
+
+    events = control.drain_events()
+    assert len(events) == wire.EVENT_BUFFER_SIZE
+    assert events[0]["index"] == 1
+
+
 def test_listener_exception_is_contained_and_later_listeners_still_run(rig):
     control, midi_in, _midi_out = rig
     seen: list[dict] = []

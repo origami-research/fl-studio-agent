@@ -19,3 +19,21 @@ packages = ["harness"]
 # frozen-surface module that must stay beside the FL-side script it encodes
 # for, so it is pathed in place rather than moved or copied.
 dev-mode-dirs = [".", "fl-scripts/controller"]
+
+[tool.ruff]
+line-length = 110
+# The controller device runs inside FL's restricted Python host, where its
+# deliberate broad boundary handling cannot follow server-side Ruff rules.
+exclude = ["fl-scripts/controller/device_FLMCP.py"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "BLE", "TRY", "SIM", "PTH", "TID", "RUF"]
+ignore = ["TRY003", "PLC0415", "E501"]
+
+[tool.ruff.lint.per-file-ignores]
+"mcp-server/tests/**" = ["BLE", "TRY", "SIM105", "RUF059"]
+# These live experiments preserve their primary failure after restoring FL,
+# and report best-effort probes rather than treating them as test assertions.
+"experiments/e3_playlist_write.py" = ["BLE001", "RUF059", "TRY300"]
+# This standalone harness deliberately sets its import path before imports.
+"harness/doctor.py" = ["E402"]

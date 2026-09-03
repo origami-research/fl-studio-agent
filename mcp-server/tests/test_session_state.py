@@ -9,6 +9,7 @@ from session_fakes import HELLO, FakeControl, make_session
 
 from fl_mcp import errors, flp
 from fl_mcp.controller_version import CONTROLLER_PROTOCOL_VERSION
+from fl_mcp.core.carriers.broker_client import BrokerControl
 
 # --- snapshot ----------------------------------------------------------------
 
@@ -154,6 +155,17 @@ def test_doctor_dropped_frames_without_hello_points_at_the_codec(tmp_path, monke
     assert report.control_plane.connected is False
     assert "17" in report.control_plane.detail
     assert "codec" in report.control_plane.detail or "codec" in report.control_plane.fix
+
+
+def test_doctor_session_mode_silent_hello_is_not_a_codec_mismatch(tmp_path, monkeypatch):
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
+    control = BrokerControl(tmp_path / "session")
+    session, _ = make_session(control=control)  # type: ignore[arg-type]
+
+    report = session.doctor()
+
+    assert report.control_plane.connected is False
+    assert "codec" not in report.control_plane.detail.lower()
 
 
 def test_doctor_silent_wire_fix_names_the_dialog_not_a_restart(tmp_path, monkeypatch):

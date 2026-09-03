@@ -36,6 +36,7 @@ class BrokerControl:
         self._session_spool_root = session_spool_root
         self._socket_path = socket_path or default_socket_path()
         self._hello: HelloEvent | None = None
+        self._broker_spawned = False
 
     # -- identity ---------------------------------------------------------------
 
@@ -83,7 +84,7 @@ class BrokerControl:
         request = {"pid": pid, "op": op, "args": args or [], "kwargs": kwargs or {}, "timeout": timeout}
         # The socket round trip may take as long as the wire op plus broker
         # hop; give it headroom over the wire timeout.
-        conn = self._connect(deadline=time.monotonic() + timeout + 5.0)
+        conn = self._connect()
         try:
             conn.sendall((json.dumps(request) + "\n").encode())
             conn.settimeout(timeout + 5.0)
@@ -100,18 +101,21 @@ class BrokerControl:
             raise ToolError(envelope["category"], envelope["message"], envelope.get("fix", ""), retryable=envelope.get("retryable", True))
         return ControlResponse.model_validate(envelope["response"])
 
-    def _connect(self, deadline: float) -> socket.socket:
+    def _connect(self) -> socket.socket:
         """Connect to the broker, auto-starting it once if absent."""
         if (conn := self._try_connect()) is not None:
             return conn
-        # Not up: spawn one. The bind race is resolved broker-side (first wins),
-        # so a duplicate spawn simply exits.
-        subprocess.Popen(
-            [sys.executable, "-m", "fl_mcp.control_broker"],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            start_new_session=True,
-        )
+        if not self._broker_spawned:
+            # The bind race is resolved broker-side (first wins), so another
+            # client may launch the process that eventually answers us.
+            self._broker_spawned = True
+            subprocess.Popen(
+                [sys.executable, "-m", "fl_mcp.control_broker"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                start_new_session=True,
+            )
+        deadline = time.monotonic() + _BROKER_START_TIMEOUT
         while time.monotonic() < deadline:
             if (conn := self._try_connect()) is not None:
                 return conn
@@ -141,6 +145,7 @@ class BrokerControl:
     def drain_events(self) -> list:
         return []
 
+    @property
     def dropped_frames(self) -> int:
         return 0
 

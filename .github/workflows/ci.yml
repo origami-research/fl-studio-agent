@@ -17,6 +17,6 @@ jobs:
       # so a regression fails the PR instead of accumulating. Lint the whole tree
       # (src + tests) - test files are code too, and gating only src let lint rot
       # accumulate there unseen.
-      - run: .venv/bin/ruff check
+      - run: .venv/bin/ruff check ..
       # The fake-FL suite runs anywhere; live e2e (FL_E2E) is local/nightly only.
-      - run: .venv/bin/python -m pytest tests -q --ignore=tests/e2e
+      - run: .venv/bin/python -m pytest -q --ignore=tests/e2e

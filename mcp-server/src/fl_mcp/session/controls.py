@@ -39,11 +39,12 @@ PLUGIN_PARAMS_DEFAULT_LIMIT = 40
 PLUGIN_PARAM_TOLERANCE = 0.02
 SAVE_BUSY_RETRIES = 2
 SAVE_BUSY_RETRY_SECONDS = 0.25
+RENDER_TIMEOUT_SECONDS = 300.0
 
 # FL's plugins.* convention for "the channel's own generator, not a mixer
 # effect slot" (the slot argument every call here passes).
 GENERATOR_SLOT = -1
-_NUMBER = re.compile(r"^\\s*([+-]?(?:\\d+(?:\\.\\d*)?|\\.\\d+))\\s*$")
+_NUMBER = re.compile(r"^\s*([+-]?(?:\d+(?:\.\d*)?|\.\d+))\s*$")
 
 
 def save_project(session: FLSession) -> None:
@@ -80,8 +81,10 @@ def _render_saved_project(project: Path) -> Path:
     """
     executable = fl_app() / "Contents" / "MacOS" / fl_executable_name()
     try:
-        subprocess.run([str(executable), "-R", str(project)], check=True)
-    except (OSError, subprocess.CalledProcessError) as exc:
+        subprocess.run(
+            [str(executable), "-R", str(project)], check=True, timeout=RENDER_TIMEOUT_SECONDS
+        )
+    except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
         raise errors.ToolError(
             "render_failed",
             f"FL CLI could not render {project}: {exc}",
