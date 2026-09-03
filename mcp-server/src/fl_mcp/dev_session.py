@@ -22,6 +22,7 @@ from fl_mcp import sdk
 from fl_mcp.core.carriers.broker_client import BrokerControl
 from fl_mcp.core.carriers.udp import PORT_FILE, BridgeEndpoint, discover
 from fl_mcp.fl.process import fl_kill_pid, launch_fl
+from fl_mcp.template import template_path
 
 ENV_PROJECT = "FLMCP_AGENT_PROJECT"
 ENV_SPOOL = "FLMCP_SPOOL_ROOT"
@@ -72,7 +73,7 @@ def _parser() -> argparse.ArgumentParser:
 def _project(project: Path | None) -> tuple[Path, Path | None]:
     if project is not None:
         return project.expanduser().resolve(), None
-    template = Path(__file__).resolve().parents[3] / "harness" / "projects" / "fl_mcp_bridge.flp"
+    template = template_path()
     if not template.is_file():
         raise FileNotFoundError(f"bridge project template is missing: {template}")
     directory = Path(tempfile.mkdtemp(prefix="fl-mcp-dev-project-"))

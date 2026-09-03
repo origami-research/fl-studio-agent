@@ -2,17 +2,17 @@ from __future__ import annotations
 
 import json
 import shutil
-from pathlib import Path
 
 from fl_mcp import dev_session, flp
 from fl_mcp.core.carriers.udp import BridgeEndpoint
+from fl_mcp.template import template_path
 
 
 def test_default_project_is_a_disposable_bridge_template():
     project, copied = dev_session._project(None)
     assert copied == project
-    assert project.name == "fl_mcp_bridge.flp"
-    template = Path(dev_session.__file__).resolve().parents[3] / "harness" / "projects" / "fl_mcp_bridge.flp"
+    assert project.name == "session-template.flp"
+    template = template_path()
     assert project.read_bytes() == template.read_bytes()
     assert flp.read(project).playlist == (
         flp.FlpPlaylistItem(

@@ -16,6 +16,7 @@ fl-mcp = "fl_mcp.server:main"
 fl-mcp-dev-session = "fl_mcp.dev_session:main"
 fl-mcp-install = "fl_mcp.fl.install:main"
 fl-mcp-control-broker = "fl_mcp.control_broker:main"
+fl-mcp-template = "fl_mcp.template:main"
 
 [tool.hatch.metadata]
 # flpkit is our own extracted library, consumed straight from its repo
@@ -27,6 +28,7 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/fl_mcp"]
+artifacts = ["src/fl_mcp/assets/session-template.flp"]
 
 [tool.hatch.build.targets.wheel.force-include]
 "../fl-scripts/controller/device_FLMCP.py" = "fl_mcp/_controller/device_FLMCP.py"

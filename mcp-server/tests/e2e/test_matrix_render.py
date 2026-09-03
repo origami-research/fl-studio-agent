@@ -21,7 +21,6 @@ import shutil
 import subprocess
 import time
 import wave
-from pathlib import Path
 
 import flpkit as flp
 import pytest
@@ -105,7 +104,9 @@ def test_headless_render_produces_wav(project, render_gate, tmp_path):
 
 def test_bridge_template_pattern_one_renders_audible_audio(render_gate, tmp_path):
     """Pattern 1 is pre-placed so its normal note write reaches Song renders."""
-    template = Path(__file__).resolve().parents[3] / "harness" / "projects" / "fl_mcp_bridge.flp"
+    from fl_mcp.template import template_path
+
+    template = template_path()
     project = tmp_path / template.name
     shutil.copy2(template, project)
     flp.write_notes(

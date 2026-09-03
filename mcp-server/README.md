@@ -65,7 +65,7 @@ uv run pytest
 ```
 
 For a live bridge and controller smoke, run `uv run fl-mcp-dev-session --no-repl`.
-It opens a disposable copy of `harness/projects/fl_mcp_bridge.flp`, waits for the
+It opens a disposable copy of the packaged session template, waits for the
 bridge and control hello, then tears down only the FL process that published this
 session's bridge PID. Pass `--project PATH` to use a project, `--spool DIR` to
 inspect a session spool, or `--exec 'fl.tempo'` to evaluate live SDK code.

@@ -14,38 +14,9 @@ import sys
 from pathlib import Path
 
 from fl_mcp.fl import paths as flpaths
+from fl_mcp.template import template_path
 
 from .session import DEFAULT_PROJECT_NAME  # THE definition; session resolves the same path
-
-
-def _templates_dir() -> Path:
-    return flpaths.fl_app() / "Contents/Resources/FL/Data/Templates"
-
-
-# Chosen for its channel palette: Chords, Bass, Lead and Drums, on real
-# instruments (Sytrus on the lead). The previous default only had four 808 drum
-# samples plus one bass, so any melody had exactly one place to go and it was
-# the wrong timbre for most requests.
-#
-# Candidates are tried in order so a missing template degrades to a working
-# project rather than an error.
-TEMPLATE_CANDIDATES = (
-    "Utility/Create a chord progression/Create a chord progression.flp",
-    "Utility/Patch bank/Patch bank.flp",
-    "Minimal/Basic with limiter/Basic with limiter.flp",
-)
-
-
-def stock_template() -> Path:
-    base = _templates_dir()
-    for relative in TEMPLATE_CANDIDATES:
-        candidate = base / relative
-        if candidate.is_file():
-            return candidate
-    raise FileNotFoundError(
-        f"No usable FL template found under {base}. "
-        "Set FL_APP if FL Studio is installed elsewhere."
-    )
 
 
 def destination() -> Path:
@@ -64,7 +35,7 @@ def create(force: bool = False) -> Path:
     target = destination()
     if target.is_file() and not force:
         return target
-    shutil.copy2(stock_template(), target)
+    shutil.copy2(template_path(), target)
     return target
 
 
@@ -76,7 +47,7 @@ def main() -> int:
         return 1
     print(f"Agent project: {path}")
     print("\nNotes written by the agent go here, and FL is opened on it.")
-    print("Use --force to reset it back to the stock template.")
+    print("Use --force to reset it back to the packaged session template.")
     return 0
 
 

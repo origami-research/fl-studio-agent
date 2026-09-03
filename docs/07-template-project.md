@@ -92,7 +92,7 @@ loading happened at human time, control happens at model time.
 
 ## Distribution
 
-Repo layout ships `templates/FLMCP-Template.flp` + manifest + a `docs/setup.md`
-walkthrough (installer copies template into the user's FL projects folder on first
-run). The `.flp` is built by hand in FL Studio and versioned as a binary artifact;
-its manifest is the reviewable diff surface.
+The session template ships as package data at `fl_mcp/assets/session-template.flp`.
+Consumers must resolve it with `fl-mcp-template`, never copy it: this is the one
+canonical artifact used by the engine and its dev session. Its SHA-256 is
+`ff110f543ab6d41557d2eba0500a0fd6d715f861b3a877757a0d424cabf9a669`.
