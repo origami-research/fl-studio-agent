@@ -22,6 +22,8 @@ import sys
 from functools import cache
 from pathlib import Path
 
+from fl_mcp.contract import ENV_AGENT_PROJECT, ENV_SPOOL_ROOT
+
 from .paths import fl_app
 
 log = logging.getLogger(__name__)
@@ -143,9 +145,9 @@ def launch_fl(project: Path, *, spool_root: Path | None = None) -> None:
     never mutate the server's ambient environment to select their mailbox.
     """
     env = os.environ.copy()
-    env["FLMCP_AGENT_PROJECT"] = str(project)
+    env[ENV_AGENT_PROJECT] = str(project)
     if spool_root is not None:
-        env["FLMCP_SPOOL_ROOT"] = str(spool_root)
+        env[ENV_SPOOL_ROOT] = str(spool_root)
     if sys.platform == "darwin":
         subprocess.run(["open", "-a", str(fl_app()), str(project)], check=True, env=env)
         return

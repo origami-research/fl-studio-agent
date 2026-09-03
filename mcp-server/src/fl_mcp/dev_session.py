@@ -19,13 +19,14 @@ from pathlib import Path
 from typing import Any
 
 from fl_mcp import sdk
+from fl_mcp.contract import ENV_AGENT_PROJECT, ENV_SPOOL_ROOT
 from fl_mcp.core.carriers.broker_client import BrokerControl
 from fl_mcp.core.carriers.udp import PORT_FILE, BridgeEndpoint, discover
 from fl_mcp.fl.process import fl_kill_pid, launch_fl
 from fl_mcp.template import template_path
 
-ENV_PROJECT = "FLMCP_AGENT_PROJECT"
-ENV_SPOOL = "FLMCP_SPOOL_ROOT"
+ENV_PROJECT = ENV_AGENT_PROJECT
+ENV_SPOOL = ENV_SPOOL_ROOT
 MARKER_FILE = ".fl-mcp-dev-session.json"
 READY_TIMEOUT_SECONDS = 120.0
 

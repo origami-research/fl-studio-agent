@@ -34,6 +34,7 @@ from pathlib import Path
 from pydantic import BaseModel, Field, ValidationError
 
 from fl_mcp import errors
+from fl_mcp.contract import BRIDGE_PORT_FILE
 from fl_mcp.schemas import SCHEMA_VERSION, SpoolCommand, SpoolResponse
 
 from . import CarrierUnavailable
@@ -41,7 +42,7 @@ from .spool import read_json, spool_roots
 
 log = logging.getLogger(__name__)
 
-PORT_FILE = "bridge_udp.json"
+PORT_FILE = BRIDGE_PORT_FILE
 MAGIC = b"FLMCP1 "
 TOKEN_HEX_LEN = 32
 # The transport's declared ceiling (bridge_udp.h kMaxDatagramBytes); larger

@@ -1,0 +1,1058 @@
+{
+  "env": {
+    "BRIDGE_PORT_FILE": "bridge_udp.json",
+    "FLMCP_AGENT_PROJECT": "FLMCP_AGENT_PROJECT",
+    "FLMCP_SPOOL_ROOT": "FLMCP_SPOOL_ROOT",
+    "bridge_port_file_schema": {
+      "description": "Endpoint published by the native Bridge in each session spool.",
+      "properties": {
+        "pid": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Pid"
+        },
+        "port": {
+          "maximum": 65535,
+          "minimum": 1,
+          "title": "Port",
+          "type": "integer"
+        },
+        "proto": {
+          "title": "Proto",
+          "type": "integer"
+        },
+        "token": {
+          "maxLength": 32,
+          "minLength": 32,
+          "pattern": "^[0-9a-f]+$",
+          "title": "Token",
+          "type": "string"
+        },
+        "transport": {
+          "default": 1,
+          "title": "Transport",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "proto",
+        "port",
+        "token"
+      ],
+      "title": "BridgePortFile",
+      "type": "object"
+    }
+  },
+  "errors": {
+    "categories": [
+      "concurrent_write",
+      "control_plane_unavailable",
+      "control_plane_busy",
+      "note_plane_unavailable",
+      "invalid_argument",
+      "unknown_target",
+      "fl_api_error",
+      "unsupported_in_live_session",
+      "render_failed",
+      "stale_handle",
+      "operation_unsafe"
+    ],
+    "shape": {
+      "properties": {
+        "candidates": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Candidates"
+        },
+        "error": {
+          "title": "Error",
+          "type": "string"
+        },
+        "fix": {
+          "title": "Fix",
+          "type": "string"
+        },
+        "message": {
+          "title": "Message",
+          "type": "string"
+        },
+        "retryable": {
+          "title": "Retryable",
+          "type": "boolean"
+        },
+        "status": {
+          "const": "error",
+          "default": "error",
+          "title": "Status",
+          "type": "string"
+        }
+      },
+      "required": [
+        "error",
+        "message",
+        "fix",
+        "retryable"
+      ],
+      "title": "ToolErrorResult",
+      "type": "object"
+    }
+  },
+  "tools": [
+    {
+      "description": "Execute Python against the live FL Studio session. The namespace holds\n``fl`` (the SDK), ``theory``, ``Note``, and ``AutomationPoint``. A trailing\nexpression is repr'd like a REPL. Returns {\"stdout\", \"result\"} or, on any\nerror, {\"stdout\", \"traceback\"} - read the traceback and fix the call.\n\nThe full working surface (no introspection needed):\n- fl.set_tempo(140.0) -> confirmed BPM; fl.tempo reads it back.\n- fl.channels -> [Channel(index, name), ...].\n- fl.track(\"Bass\") / fl.track(2, pattern=1) -> Track (exact name, index, or\n  unique substring; pattern defaults to 1).\n- Track.write([Note(...), ...], mode=\"merge\"|\"replace\") -> receipt with\n  confirmed_notes; Track.notes() -> confirmed state; Track.clear().\n- Note(key=60 or \"C4\"/\"F#3\", start=0.0, length=1.0, velocity=0.8, pan=0.5)\n  with start/length in beats from pattern start.\n- Track.set_automation([AutomationPoint(position=0.0, value=0.5,\n  tension=0.0)]) - position in beats, value normalized 0..1.\n- Track.set_channel_levels(volume=0.9, pan=-0.15, pitch=0) - project-file\n  channel levels; volume 0..1, pan -1..1, pitch whole semitones -48..48.\n- Track.params(query=\"cutoff\") / Track.set_param(\"cutoff\", 0.55) - live\n  generator plugin parameters, values normalized 0..1.\n- fl.add_effect(0, \"Fruity Parametric EQ 2\") -> tuple[Effect, ...] -\n  project-file only; proven only for empty Master slot 0.\n- fl.render(\"out.wav\") -> Path; fl.analyze(wav) -> bpm/key/LUFS/spectral\n  balance; fl.read_wav(path) -> (samples, sample_rate).\n- fl.snapshot() -> tempo + channels.\n- with fl.file_edit(): ... - batch file-lane edits (automation, channel\n  levels, added effects) so FL reloads ONCE for the whole block instead of per edit.\n- theory.chord(\"C\", \"minor\") / theory.scale(\"E\", \"minor\") -> MIDI ints;\n  theory.drums(\"x...x...x...x...\", key=\"C1\", step_beats=0.25) -> a\n  ready-to-write [Note] step grid ('x' = hit, '.' = rest).\n\nEvery write returns FL's confirmed readback - trust it over your intent.",
+      "inputSchema": {
+        "properties": {
+          "code": {
+            "title": "Code",
+            "type": "string"
+          }
+        },
+        "required": [
+          "code"
+        ],
+        "title": "runArguments",
+        "type": "object"
+      },
+      "name": "run",
+      "outputSchema": {
+        "properties": {
+          "result": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Result"
+          },
+          "stdout": {
+            "title": "Stdout",
+            "type": "string"
+          },
+          "traceback": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Traceback"
+          }
+        },
+        "required": [
+          "stdout"
+        ],
+        "title": "RunResult",
+        "type": "object"
+      }
+    },
+    {
+      "description": "MCP tool. Read-only view of a target's notes with provenance and\nsize-aware compression (full list when small, summary when large).\n\n``channel`` is an index (a numeric string is tolerated - JSON models pass\n\"3\"); names resolve in the SDK, via ``run`` with ``fl.track(\"Lead\")``.",
+      "inputSchema": {
+        "properties": {
+          "channel": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "string"
+              }
+            ],
+            "title": "Channel"
+          },
+          "pattern": {
+            "title": "Pattern",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "pattern",
+          "channel"
+        ],
+        "title": "get_notesArguments",
+        "type": "object"
+      },
+      "name": "get_notes",
+      "outputSchema": {
+        "$defs": {
+          "GetNotesResult": {
+            "properties": {
+              "as_of": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "As Of"
+              },
+              "note_count": {
+                "title": "Note Count",
+                "type": "integer"
+              },
+              "notes": {
+                "anyOf": [
+                  {
+                    "items": {
+                      "$ref": "#/$defs/Note"
+                    },
+                    "type": "array"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Notes"
+              },
+              "provenance": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Provenance"
+              },
+              "summary": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/NotesSummary"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null
+              },
+              "target": {
+                "$ref": "#/$defs/Target"
+              }
+            },
+            "required": [
+              "target",
+              "provenance",
+              "as_of",
+              "note_count"
+            ],
+            "title": "GetNotesResult",
+            "type": "object"
+          },
+          "Note": {
+            "description": "One note, in musical units. C4 = MIDI 60 = middle C.\n\n``key`` is firmly an int after construction: \"C4\"/\"F#3\" are accepted as\ninput and resolved once by ``pitch.parse_key``. Use ``pitch.key_name`` for\ndisplay. No downstream code ever sees a union.",
+            "properties": {
+              "color": {
+                "default": 0,
+                "maximum": 15,
+                "minimum": 0,
+                "title": "Color",
+                "type": "integer"
+              },
+              "key": {
+                "maximum": 127,
+                "minimum": 0,
+                "title": "Key",
+                "type": "integer"
+              },
+              "length": {
+                "exclusiveMinimum": 0,
+                "maximum": 1024,
+                "title": "Length",
+                "type": "number"
+              },
+              "pan": {
+                "default": 0.5,
+                "maximum": 1,
+                "minimum": 0,
+                "title": "Pan",
+                "type": "number"
+              },
+              "start": {
+                "minimum": 0,
+                "title": "Start",
+                "type": "number"
+              },
+              "velocity": {
+                "default": 0.8,
+                "maximum": 1,
+                "minimum": 0,
+                "title": "Velocity",
+                "type": "number"
+              }
+            },
+            "required": [
+              "key",
+              "start",
+              "length"
+            ],
+            "title": "Note",
+            "type": "object"
+          },
+          "NotesSummary": {
+            "properties": {
+              "keys": {
+                "additionalProperties": {
+                  "type": "integer"
+                },
+                "propertyNames": {
+                  "enum": [
+                    "min",
+                    "max"
+                  ]
+                },
+                "title": "Keys",
+                "type": "object"
+              },
+              "note": {
+                "title": "Note",
+                "type": "string"
+              },
+              "sample": {
+                "items": {
+                  "$ref": "#/$defs/Note"
+                },
+                "title": "Sample",
+                "type": "array"
+              },
+              "span_beats": {
+                "additionalProperties": {
+                  "type": "number"
+                },
+                "propertyNames": {
+                  "enum": [
+                    "start",
+                    "end"
+                  ]
+                },
+                "title": "Span Beats",
+                "type": "object"
+              }
+            },
+            "required": [
+              "keys",
+              "span_beats",
+              "sample",
+              "note"
+            ],
+            "title": "NotesSummary",
+            "type": "object"
+          },
+          "Target": {
+            "description": "A pattern/channel coordinate. Firmly ints: channel names and the\n\"current\" default are resolved AT THE TOOL BOUNDARY (server/sdk), never\ncarried as a union or a -1 sentinel into the core.",
+            "properties": {
+              "channel": {
+                "minimum": 0,
+                "title": "Channel",
+                "type": "integer"
+              },
+              "pattern": {
+                "minimum": 1,
+                "title": "Pattern",
+                "type": "integer"
+              }
+            },
+            "required": [
+              "pattern",
+              "channel"
+            ],
+            "title": "Target",
+            "type": "object"
+          },
+          "ToolErrorResult": {
+            "properties": {
+              "candidates": {
+                "anyOf": [
+                  {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Candidates"
+              },
+              "error": {
+                "title": "Error",
+                "type": "string"
+              },
+              "fix": {
+                "title": "Fix",
+                "type": "string"
+              },
+              "message": {
+                "title": "Message",
+                "type": "string"
+              },
+              "retryable": {
+                "title": "Retryable",
+                "type": "boolean"
+              },
+              "status": {
+                "const": "error",
+                "default": "error",
+                "title": "Status",
+                "type": "string"
+              }
+            },
+            "required": [
+              "error",
+              "message",
+              "fix",
+              "retryable"
+            ],
+            "title": "ToolErrorResult",
+            "type": "object"
+          }
+        },
+        "properties": {
+          "result": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/GetNotesResult"
+              },
+              {
+                "$ref": "#/$defs/ToolErrorResult"
+              }
+            ],
+            "title": "Result"
+          }
+        },
+        "required": [
+          "result"
+        ],
+        "title": "get_notesOutput",
+        "type": "object"
+      }
+    },
+    {
+      "description": "Read what is currently in the project - key, tempo, and what each channel has.\n\nCall this before writing, so additions fit what is already there. It returns\nan analysis rather than a note dump: a 56-note project summarises to about\n20 tokens instead of ~960, and the summary answers the questions that\nactually get asked.\n\nArgs:\n    detail: \"summary\" (default) for tempo, inferred key and a per-channel\n        digest - note count, span in beats, register, pitch classes, and for\n        bass-register parts the root motion. Use \"notes\" only when you need\n        individual notes, such as harmonising an existing line.\n    channel: With detail=\"notes\", limit to one channel index.\n\nReturns:\n    For \"summary\", a `summary` string is included that is already formatted\n    for reading. Key inference carries a confidence and can be wrong on\n    modal or chromatic material - treat \"low\" as \"no reliable key\".",
+      "inputSchema": {
+        "properties": {
+          "channel": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Channel"
+          },
+          "detail": {
+            "default": "summary",
+            "title": "Detail",
+            "type": "string"
+          }
+        },
+        "title": "get_sceneArguments",
+        "type": "object"
+      },
+      "name": "get_scene",
+      "outputSchema": {
+        "$defs": {
+          "GetSceneResult": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/SceneSummary"
+              },
+              {
+                "$ref": "#/$defs/SceneNotesResult"
+              }
+            ],
+            "title": "GetSceneResult"
+          },
+          "SceneNote": {
+            "properties": {
+              "channel": {
+                "title": "Channel",
+                "type": "integer"
+              },
+              "key": {
+                "title": "Key",
+                "type": "string"
+              },
+              "length": {
+                "title": "Length",
+                "type": "number"
+              },
+              "midi": {
+                "title": "Midi",
+                "type": "integer"
+              },
+              "start": {
+                "title": "Start",
+                "type": "number"
+              },
+              "velocity": {
+                "title": "Velocity",
+                "type": "number"
+              }
+            },
+            "required": [
+              "channel",
+              "key",
+              "midi",
+              "start",
+              "length",
+              "velocity"
+            ],
+            "title": "SceneNote",
+            "type": "object"
+          },
+          "SceneNotesResult": {
+            "properties": {
+              "notes": {
+                "items": {
+                  "$ref": "#/$defs/SceneNote"
+                },
+                "title": "Notes",
+                "type": "array"
+              }
+            },
+            "required": [
+              "notes"
+            ],
+            "title": "SceneNotesResult",
+            "type": "object"
+          },
+          "SceneSummary": {
+            "properties": {
+              "automations": {
+                "items": {
+                  "additionalProperties": true,
+                  "type": "object"
+                },
+                "title": "Automations",
+                "type": "array"
+              },
+              "channels": {
+                "items": {
+                  "additionalProperties": true,
+                  "type": "object"
+                },
+                "title": "Channels",
+                "type": "array"
+              },
+              "key": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Key"
+              },
+              "key_confidence": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Key Confidence"
+              },
+              "note_count": {
+                "title": "Note Count",
+                "type": "integer"
+              },
+              "playlist": {
+                "additionalProperties": true,
+                "title": "Playlist",
+                "type": "object"
+              },
+              "summary": {
+                "title": "Summary",
+                "type": "string"
+              },
+              "tempo": {
+                "anyOf": [
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Tempo"
+              }
+            },
+            "required": [
+              "tempo",
+              "key",
+              "note_count",
+              "playlist",
+              "channels",
+              "summary"
+            ],
+            "title": "SceneSummary",
+            "type": "object"
+          },
+          "ToolErrorResult": {
+            "properties": {
+              "candidates": {
+                "anyOf": [
+                  {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Candidates"
+              },
+              "error": {
+                "title": "Error",
+                "type": "string"
+              },
+              "fix": {
+                "title": "Fix",
+                "type": "string"
+              },
+              "message": {
+                "title": "Message",
+                "type": "string"
+              },
+              "retryable": {
+                "title": "Retryable",
+                "type": "boolean"
+              },
+              "status": {
+                "const": "error",
+                "default": "error",
+                "title": "Status",
+                "type": "string"
+              }
+            },
+            "required": [
+              "error",
+              "message",
+              "fix",
+              "retryable"
+            ],
+            "title": "ToolErrorResult",
+            "type": "object"
+          }
+        },
+        "properties": {
+          "result": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/GetSceneResult"
+              },
+              {
+                "$ref": "#/$defs/ToolErrorResult"
+              }
+            ],
+            "title": "Result"
+          }
+        },
+        "required": [
+          "result"
+        ],
+        "title": "get_sceneOutput",
+        "type": "object"
+      }
+    },
+    {
+      "description": "Render the live session to a WAV for listening. Returns {\"path\",\n\"wavBase64\"} (base64 of the WAV, omitted with a note when the file\nexceeds the size cap). Requires the live FL link; render takes seconds.\nCall analyze afterwards for measurements.",
+      "inputSchema": {
+        "properties": {},
+        "title": "renderArguments",
+        "type": "object"
+      },
+      "name": "render",
+      "outputSchema": {
+        "$defs": {
+          "RenderResult": {
+            "properties": {
+              "note": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Note"
+              },
+              "path": {
+                "title": "Path",
+                "type": "string"
+              },
+              "wavBase64": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Wavbase64"
+              }
+            },
+            "required": [
+              "path"
+            ],
+            "title": "RenderResult",
+            "type": "object"
+          },
+          "ToolErrorResult": {
+            "properties": {
+              "candidates": {
+                "anyOf": [
+                  {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Candidates"
+              },
+              "error": {
+                "title": "Error",
+                "type": "string"
+              },
+              "fix": {
+                "title": "Fix",
+                "type": "string"
+              },
+              "message": {
+                "title": "Message",
+                "type": "string"
+              },
+              "retryable": {
+                "title": "Retryable",
+                "type": "boolean"
+              },
+              "status": {
+                "const": "error",
+                "default": "error",
+                "title": "Status",
+                "type": "string"
+              }
+            },
+            "required": [
+              "error",
+              "message",
+              "fix",
+              "retryable"
+            ],
+            "title": "ToolErrorResult",
+            "type": "object"
+          }
+        },
+        "properties": {
+          "result": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/RenderResult"
+              },
+              {
+                "$ref": "#/$defs/ToolErrorResult"
+              }
+            ],
+            "title": "Result"
+          }
+        },
+        "required": [
+          "result"
+        ],
+        "title": "renderOutput",
+        "type": "object"
+      }
+    },
+    {
+      "description": "Measure a rendered WAV: bpm, key, integrated LUFS, true peak, and\nspectral balance. ``wav`` defaults to the most recent render (rendering\nfresh if none exists yet).",
+      "inputSchema": {
+        "properties": {
+          "wav": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Wav"
+          }
+        },
+        "title": "analyzeArguments",
+        "type": "object"
+      },
+      "name": "analyze",
+      "outputSchema": {
+        "$defs": {
+          "AudioAnalysis": {
+            "properties": {
+              "bpm": {
+                "anyOf": [
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Bpm"
+              },
+              "integrated_lufs": {
+                "title": "Integrated Lufs",
+                "type": "number"
+              },
+              "key": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Key"
+              },
+              "spectral_balance": {
+                "$ref": "#/$defs/SpectralBalance"
+              },
+              "true_peak_dbfs": {
+                "title": "True Peak Dbfs",
+                "type": "number"
+              }
+            },
+            "required": [
+              "bpm",
+              "key",
+              "integrated_lufs",
+              "true_peak_dbfs",
+              "spectral_balance"
+            ],
+            "title": "AudioAnalysis",
+            "type": "object"
+          },
+          "SpectralBalance": {
+            "description": "Mean-square level by conventional production bands, in dBFS.",
+            "properties": {
+              "high_dbfs": {
+                "title": "High Dbfs",
+                "type": "number"
+              },
+              "low_dbfs": {
+                "title": "Low Dbfs",
+                "type": "number"
+              },
+              "mid_dbfs": {
+                "title": "Mid Dbfs",
+                "type": "number"
+              }
+            },
+            "required": [
+              "low_dbfs",
+              "mid_dbfs",
+              "high_dbfs"
+            ],
+            "title": "SpectralBalance",
+            "type": "object"
+          },
+          "ToolErrorResult": {
+            "properties": {
+              "candidates": {
+                "anyOf": [
+                  {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Candidates"
+              },
+              "error": {
+                "title": "Error",
+                "type": "string"
+              },
+              "fix": {
+                "title": "Fix",
+                "type": "string"
+              },
+              "message": {
+                "title": "Message",
+                "type": "string"
+              },
+              "retryable": {
+                "title": "Retryable",
+                "type": "boolean"
+              },
+              "status": {
+                "const": "error",
+                "default": "error",
+                "title": "Status",
+                "type": "string"
+              }
+            },
+            "required": [
+              "error",
+              "message",
+              "fix",
+              "retryable"
+            ],
+            "title": "ToolErrorResult",
+            "type": "object"
+          }
+        },
+        "properties": {
+          "result": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/AudioAnalysis"
+              },
+              {
+                "$ref": "#/$defs/ToolErrorResult"
+              }
+            ],
+            "title": "Result"
+          }
+        },
+        "required": [
+          "result"
+        ],
+        "title": "analyzeOutput",
+        "type": "object"
+      }
+    },
+    {
+      "description": "MCP tool. Return the typed session diagnostic report.",
+      "inputSchema": {
+        "properties": {},
+        "title": "fl_doctorArguments",
+        "type": "object"
+      },
+      "name": "fl_doctor",
+      "outputSchema": {
+        "$defs": {
+          "PlaneStatus": {
+            "properties": {
+              "connected": {
+                "title": "Connected",
+                "type": "boolean"
+              },
+              "detail": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Detail"
+              },
+              "fix": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Fix"
+              }
+            },
+            "required": [
+              "connected"
+            ],
+            "title": "PlaneStatus",
+            "type": "object"
+          }
+        },
+        "properties": {
+          "control_plane": {
+            "$ref": "#/$defs/PlaneStatus"
+          },
+          "note_plane": {
+            "$ref": "#/$defs/PlaneStatus"
+          },
+          "project_file": {
+            "$ref": "#/$defs/PlaneStatus"
+          },
+          "status": {
+            "enum": [
+              "ok",
+              "degraded"
+            ],
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status",
+          "control_plane",
+          "note_plane",
+          "project_file"
+        ],
+        "title": "DoctorReport",
+        "type": "object"
+      }
+    }
+  ],
+  "version": "0.1.0"
+}

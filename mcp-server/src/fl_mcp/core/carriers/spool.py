@@ -35,6 +35,7 @@ from pathlib import Path
 from typing import Any
 
 from fl_mcp import errors
+from fl_mcp.contract import ENV_SPOOL_ROOT
 from fl_mcp.fl.paths import SPOOL_SUBDIRS, fl_settings_dirs
 from fl_mcp.schemas import SCHEMA_VERSION, SpoolCommand, SpoolResponse
 
@@ -223,7 +224,7 @@ def read_json(path: Path) -> dict[str, Any] | None:
 
 def spool_roots() -> list[Path]:
     """The session spool override, or measured writable FL settings roots."""
-    override = os.environ.get("FLMCP_SPOOL_ROOT")
+    override = os.environ.get(ENV_SPOOL_ROOT)
     if override:
         return [Path(override)]
     return [settings / sub for settings in fl_settings_dirs() for sub in SPOOL_SUBDIRS]

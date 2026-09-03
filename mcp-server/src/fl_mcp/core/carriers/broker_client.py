@@ -21,11 +21,11 @@ import sys
 import time
 from pathlib import Path
 
+from fl_mcp.contract import BRIDGE_PORT_FILE
 from fl_mcp.core.carriers.control_broker import default_socket_path
 from fl_mcp.errors import ToolError, control_plane_unavailable
 from fl_mcp.schemas import ControlResponse, HelloEvent
 
-BRIDGE_PORT_FILE = "bridge_udp.json"
 _BROKER_START_TIMEOUT = 10.0
 
 

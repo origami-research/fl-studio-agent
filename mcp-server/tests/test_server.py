@@ -14,7 +14,9 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
-from fl_mcp import server
+from fl_mcp import __version__, server
+from fl_mcp.audio import AudioAnalysis, SpectralBalance
+from fl_mcp.contract import build_version
 from fl_mcp.errors import ToolError
 from fl_mcp.schemas import DoctorReport, Note, NoteSetRef, PlaneStatus, Target
 
@@ -69,27 +71,29 @@ def _ctx(fl: Any = None, session: Any = None) -> Any:
 
 def test_run_returns_repr_of_last_expression():
     result = server.run("x = 2\nx * 3", _ctx())
-    assert result == {"stdout": "", "result": "6"}
+    assert result.stdout == ""
+    assert result.result == "6"
 
 
 def test_run_captures_stdout_without_leaking_to_the_wire(capsys):
     result = server.run("print('hi')", _ctx())
-    assert result == {"stdout": "hi\n", "result": None}
+    assert result.stdout == "hi\n"
+    assert result.result is None
     assert capsys.readouterr().out == ""  # nothing reached real stdout
 
 
 def test_run_namespace_holds_fl_and_theory():
     fl = SimpleNamespace(tempo=120.5)
     result = server.run("fl.tempo", _ctx(fl=fl))
-    assert result["result"] == "120.5"
+    assert result.result == "120.5"
     result = server.run("theory.__name__", _ctx())
-    assert result["result"] == "'fl_mcp.theory'"
+    assert result.result == "'fl_mcp.theory'"
 
 
 def test_run_error_reads_like_python_with_no_server_frames():
     result = server.run("print('before')\n1 / 0", _ctx())
-    assert result["stdout"] == "before\n"  # output up to the failure is kept
-    tb = result["traceback"]
+    assert result.stdout == "before\n"  # output up to the failure is kept
+    tb = result.traceback
     assert "ZeroDivisionError" in tb
     assert '"<fl>", line 2' in tb
     assert "server.py" not in tb  # the exec plumbing is not the user's problem
@@ -98,23 +102,24 @@ def test_run_error_reads_like_python_with_no_server_frames():
 
 def test_run_syntax_error_is_a_traceback_not_a_crash():
     result = server.run("def broken(:", _ctx())
-    assert "SyntaxError" in result["traceback"]
+    assert "SyntaxError" in result.traceback
 
 
 def test_run_survives_sys_exit():
     result = server.run("import sys\nsys.exit(3)", _ctx())
-    assert "SystemExit" in result["traceback"]
+    assert "SystemExit" in result.traceback
 
 
 def test_run_assignment_only_yields_none_result():
     result = server.run("x = 41", _ctx())
-    assert result == {"stdout": "", "result": None}
+    assert result.stdout == ""
+    assert result.result is None
 
 
 def test_run_exposes_automation_point():
     result = server.run("AutomationPoint(position=1, value=0.5)", _ctx())
 
-    assert result["result"] == "AutomationPoint(position=1.0, value=0.5, tension=0.0)"
+    assert result.result == "AutomationPoint(position=1.0, value=0.5, tension=0.0)"
 
 
 # -- get_notes ----------------------------------------------------------------
@@ -137,55 +142,55 @@ def test_get_notes_small_returns_the_full_list_with_provenance():
     target = Target(pattern=2, channel=3)
     session = _FakeSession(notes=_notes(3), ref=_ref(target))
     result = server.get_notes(2, 3, _ctx(session=session))
-    assert result["target"] == {"pattern": 2, "channel": 3}
-    assert result["provenance"] == "project"
-    assert result["as_of"] == "2026-08-27T00:00:00+00:00"
-    assert result["note_count"] == 3
-    assert len(result["notes"]) == 3
-    assert result["notes"][0]["key"] == 60
+    assert result.target == target
+    assert result.provenance == "project"
+    assert result.as_of == "2026-08-27T00:00:00+00:00"
+    assert result.note_count == 3
+    assert len(result.notes) == 3
+    assert result.notes[0].key == 60
     assert session.read_targets == [target]
 
 
 def test_get_notes_large_returns_a_summary_not_a_page_dump():
     session = _FakeSession(notes=_notes(server.GET_NOTES_FULL_LIST_MAX + 100))
     result = server.get_notes(1, 0, _ctx(session=session))
-    assert "notes" not in result
-    summary = result["summary"]
-    assert result["note_count"] == server.GET_NOTES_FULL_LIST_MAX + 100
-    assert summary["keys"] == {"min": 60, "max": 71}
-    assert summary["span_beats"]["start"] == 0.0
-    assert len(summary["sample"]) == server.GET_NOTES_SAMPLE_SIZE
+    assert result.notes is None
+    summary = result.summary
+    assert result.note_count == server.GET_NOTES_FULL_LIST_MAX + 100
+    assert summary.keys == {"min": 60, "max": 71}
+    assert summary.span_beats["start"] == 0.0
+    assert len(summary.sample) == server.GET_NOTES_SAMPLE_SIZE
 
 
 def test_get_notes_tolerates_numeric_string_channel():
     session = _FakeSession(notes=[])
     result = server.get_notes(1, "3", _ctx(session=session))
-    assert result["target"] == {"pattern": 1, "channel": 3}
-    assert result["provenance"] is None
+    assert result.target == Target(pattern=1, channel=3)
+    assert result.provenance is None
 
 
 def test_get_notes_rejects_a_bad_target_with_a_fix():
     result = server.get_notes(0, 0, _ctx(session=_FakeSession()))
-    assert "error" in result
-    assert "fix" in result
+    assert result.error == "invalid_argument"
+    assert result.fix
 
 
 def test_get_notes_surfaces_tool_errors_structured():
     err = ToolError("note_plane_unavailable", "no backend", "run fl_doctor", retryable=True)
     session = _FakeSession(error=err)
     result = server.get_notes(1, 0, _ctx(session=session))
-    assert result["status"] == "error"
-    assert result["error"] == "note_plane_unavailable"
+    assert result.status == "error"
+    assert result.error == "note_plane_unavailable"
 
 
 # -- fl_doctor ----------------------------------------------------------------
 
 
-def test_fl_doctor_is_exactly_the_model_dump():
+def test_fl_doctor_returns_the_typed_report():
     session = _FakeSession()
     result = server.fl_doctor(_ctx(session=session))
-    assert result == session.doctor().model_dump()
-    assert result["control_plane"]["fix"] == "open FL"
+    assert result == session.doctor()
+    assert result.control_plane.fix == "open FL"
 
 
 # -- main / logging -----------------------------------------------------------
@@ -209,6 +214,14 @@ def test_main_logs_to_stderr_at_the_env_level(monkeypatch):
     finally:
         root.handlers[:] = saved_handlers
         root.setLevel(saved_level)
+
+
+def test_server_info_uses_the_installed_package_version_and_build_description():
+    mcp = server.create_server()
+
+    assert mcp.name == server.SERVER_NAME
+    assert mcp.version == __version__
+    assert build_version() in mcp.description
 
 
 # --- run() namespace (addendum A12) -------------------------------------------
@@ -237,15 +250,15 @@ def test_run_namespace_can_actually_write_notes(monkeypatch):
         _ctx(FakeFL()),
     )
 
-    assert "traceback" not in out, out.get("traceback")
-    assert out["result"] == "'wrote 1'"
+    assert out.traceback is None, out.traceback
+    assert out.result == "'wrote 1'"
     assert captured["mode"] == "replace"
     assert captured["notes"][0].key == 60  # "C4" resolved at construction
 
 
 def test_run_namespace_exposes_theory_alongside_note():
     out = server.run("theory.chord('C4')", _ctx(object()))
-    assert out["result"] == "[60, 64, 67]"
+    assert out.result == "[60, 64, 67]"
 
 
 # --- MCP registration round trip (addendum A15) --------------------------------
@@ -298,15 +311,15 @@ class _RenderFl:
             wav.writeframes((np.zeros(441)).astype("<i2").tobytes())
         return output
 
-    def analyze(self, wav: Path) -> Any:
+    def analyze(self, wav: Path) -> AudioAnalysis:
         self.analyzed.append(Path(wav))
-
-        class _Report:
-            @staticmethod
-            def model_dump() -> dict[str, Any]:
-                return {"bpm": 140.0, "integrated_lufs": -12.0}
-
-        return _Report()
+        return AudioAnalysis(
+            bpm=140.0,
+            key=None,
+            integrated_lufs=-12.0,
+            true_peak_dbfs=-1.0,
+            spectral_balance=SpectralBalance(low_dbfs=-20.0, mid_dbfs=-20.0, high_dbfs=-20.0),
+        )
 
 
 def test_render_returns_path_and_wav_base64():
@@ -314,8 +327,8 @@ def test_render_returns_path_and_wav_base64():
 
     ctx = _ctx(fl=_RenderFl())
     result = server.render(ctx)
-    assert Path(result["path"]).exists()
-    assert base64.b64decode(result["wavBase64"])[:4] == b"RIFF"
+    assert Path(result.path).exists()
+    assert base64.b64decode(result.wavBase64)[:4] == b"RIFF"
 
 
 def test_analyze_defaults_to_the_most_recent_render():
@@ -323,12 +336,13 @@ def test_analyze_defaults_to_the_most_recent_render():
     ctx = _ctx(fl=fl)
     rendered = server.render(ctx)
     metrics = server.analyze(ctx)
-    assert metrics == {"bpm": 140.0, "integrated_lufs": -12.0}
-    assert fl.analyzed == [Path(rendered["path"])]
+    assert metrics.bpm == 140.0
+    assert metrics.integrated_lufs == -12.0
+    assert fl.analyzed == [Path(rendered.path)]
 
 
 def test_analyze_renders_fresh_when_nothing_was_rendered_yet():
     fl = _RenderFl()
     metrics = server.analyze(_ctx(fl=fl))
-    assert metrics["bpm"] == 140.0
+    assert metrics.bpm == 140.0
     assert len(fl.analyzed) == 1

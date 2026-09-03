@@ -17,6 +17,7 @@ from contextlib import contextmanager
 from pathlib import Path
 
 from fl_mcp import errors, flp
+from fl_mcp.contract import ENV_AGENT_PROJECT, ENV_SPOOL_ROOT
 from fl_mcp.core.carriers import CarrierUnavailable
 from fl_mcp.core.carriers.broker_client import BrokerControl
 from fl_mcp.core.carriers.spool import SpoolCarrier
@@ -61,7 +62,7 @@ from .notes import BridgeLane, FileLane
 log = logging.getLogger(__name__)
 
 # The project this session may rewrite (the project-write backend's target).
-ENV_PROJECT = "FLMCP_AGENT_PROJECT"
+ENV_PROJECT = ENV_AGENT_PROJECT
 DEFAULT_PROJECT_NAME = "FLMCP Agent.flp"
 
 
@@ -74,7 +75,7 @@ def create_session(*, plugin_param_models: tuple[PluginParamModel, ...] | None =
     # rides the pid-addressed ctl file lane (#150). The MIDI wire is never
     # opened - its port names are fixed constants, so two sessions' wires
     # cross-connect nondeterministically, which is worse than no wire.
-    spool_override = os.environ.get("FLMCP_SPOOL_ROOT")
+    spool_override = os.environ.get(ENV_SPOOL_ROOT)
     control: ControlCarrier | None
     control_factory: Callable[[], ControlCarrier] | None = None
     if spool_override:

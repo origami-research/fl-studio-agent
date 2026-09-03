@@ -24,11 +24,22 @@ from typing import Any
 from mcp.server.mcpserver import Context, MCPServer
 from pydantic import ValidationError
 
-from fl_mcp import theory
+from fl_mcp import __version__, theory
+from fl_mcp.audio import AudioAnalysis
+from fl_mcp.contract import (
+    GetNotesResult,
+    GetSceneResult,
+    RenderResult,
+    RunResult,
+    SceneNotesResult,
+    SceneSummary,
+    ToolErrorResult,
+    build_version,
+)
 from fl_mcp.errors import ToolError
 
 from . import flp, scene, sdk
-from .schemas import AutomationPoint, Note, Target
+from .schemas import AutomationPoint, DoctorReport, Note, Target
 from .session import create_session
 
 log = logging.getLogger(__name__)
@@ -57,7 +68,7 @@ async def lifespan(server: Any) -> Any:
             session.control.close()
 
 
-def run(code: str, ctx: Context) -> dict[str, Any]:
+def run(code: str, ctx: Context) -> RunResult:
     """Execute Python against the live FL Studio session. The namespace holds
     ``fl`` (the SDK), ``theory``, ``Note``, and ``AutomationPoint``. A trailing
     expression is repr'd like a REPL. Returns {"stdout", "result"} or, on any
@@ -108,7 +119,9 @@ def run(code: str, ctx: Context) -> dict[str, Any]:
     try:
         tree = ast.parse(code, mode="exec")
     except SyntaxError as exc:
-        return {"traceback": "".join(traceback.format_exception_only(exc))}
+        return RunResult(
+            stdout="", traceback="".join(traceback.format_exception_only(exc))
+        )
 
     # REPL semantics: a trailing expression is evaluated and repr'd, so
     # `fl.tempo` answers like Python instead of printing nothing.
@@ -123,17 +136,16 @@ def run(code: str, ctx: Context) -> dict[str, Any]:
             result = eval(compile(last_expr, "<fl>", "eval"), namespace) if last_expr else None
     except BaseException as exc:  # noqa: BLE001 - the REPL boundary: user code (incl. sys.exit) must never kill the server; its error IS the result
         frames = exc.__traceback__.tb_next if exc.__traceback__ else None
-        return {
-            "stdout": stdout.getvalue(),
-            "traceback": "".join(traceback.format_exception(type(exc), exc, frames)),
-        }
-    return {
-        "stdout": stdout.getvalue(),
-        "result": None if result is None else repr(result),
-    }
+        return RunResult(
+            stdout=stdout.getvalue(),
+            traceback="".join(traceback.format_exception(type(exc), exc, frames)),
+        )
+    return RunResult(
+        stdout=stdout.getvalue(), result=None if result is None else repr(result)
+    )
 
 
-def get_notes(pattern: int, channel: int | str, ctx: Context) -> dict[str, Any]:
+def get_notes(pattern: int, channel: int | str, ctx: Context) -> GetNotesResult | ToolErrorResult:
     """MCP tool. Read-only view of a target's notes with provenance and
     size-aware compression (full list when small, summary when large).
 
@@ -145,12 +157,14 @@ def get_notes(pattern: int, channel: int | str, ctx: Context) -> dict[str, Any]:
         target = Target(pattern=pattern, channel=channel)  # pydantic coerces "3" -> 3
         notes = session.read_notes(target)
     except ValidationError as exc:
-        return {
-            "error": str(exc),
-            "fix": 'pattern >= 1 and channel >= 0, as integers. For a channel by name, use run: fl.track("Lead").notes()',
-        }
+        return ToolErrorResult(
+            error="invalid_argument",
+            message=str(exc),
+            fix='pattern >= 1 and channel >= 0, as integers. For a channel by name, use run: fl.track("Lead").notes()',
+            retryable=False,
+        )
     except ToolError as exc:
-        return exc.to_dict()
+        return _tool_error_result(exc)
 
     ref = session.store.ref_at(target)
     result: dict[str, Any] = {
@@ -161,7 +175,7 @@ def get_notes(pattern: int, channel: int | str, ctx: Context) -> dict[str, Any]:
     }
     if len(notes) <= GET_NOTES_FULL_LIST_MAX:
         result["notes"] = [n.canonical() for n in notes]
-        return result
+        return GetNotesResult.model_validate(result)
     result["summary"] = {
         "keys": {"min": min(n.key for n in notes), "max": max(n.key for n in notes)},
         "span_beats": {
@@ -171,14 +185,13 @@ def get_notes(pattern: int, channel: int | str, ctx: Context) -> dict[str, Any]:
         "sample": [n.canonical() for n in sorted(notes, key=lambda n: n.start)[:GET_NOTES_SAMPLE_SIZE]],
         "note": f"{len(notes)} notes is too many to list; this is a summary. Filter in run() for detail.",
     }
-    return result
+    return GetNotesResult.model_validate(result)
 
 
-def fl_doctor(ctx: Context) -> dict[str, Any]:
-    """MCP tool. session.doctor().model_dump() - the only place the report
-    becomes a dict."""
+def fl_doctor(ctx: Context) -> DoctorReport:
+    """MCP tool. Return the typed session diagnostic report."""
     session = ctx.request_context.lifespan_context["session"]
-    return session.doctor().model_dump()
+    return session.doctor()
 
 
 # A render is only listenable if the caller can retrieve it; wavBase64 is
@@ -188,7 +201,7 @@ RENDER_WAV_BASE64_MAX_BYTES = 12 * 1024 * 1024
 _LAST_RENDER_KEY = "last_render"
 
 
-def render(ctx: Context) -> dict[str, Any]:
+def render(ctx: Context) -> RenderResult | ToolErrorResult:
     """Render the live session to a WAV for listening. Returns {"path",
     "wavBase64"} (base64 of the WAV, omitted with a note when the file
     exceeds the size cap). Requires the live FL link; render takes seconds.
@@ -198,7 +211,7 @@ def render(ctx: Context) -> dict[str, Any]:
     try:
         path = fl.render(output)
     except ToolError as exc:
-        return exc.to_dict()
+        return _tool_error_result(exc)
     ctx.request_context.lifespan_context[_LAST_RENDER_KEY] = path
     result: dict[str, Any] = {"path": str(path)}
     data = path.read_bytes()
@@ -206,10 +219,10 @@ def render(ctx: Context) -> dict[str, Any]:
         result["wavBase64"] = base64.b64encode(data).decode("ascii")
     else:
         result["note"] = f"WAV is {len(data)} bytes (> {RENDER_WAV_BASE64_MAX_BYTES}); read it from path instead."
-    return result
+    return RenderResult.model_validate(result)
 
 
-def analyze(ctx: Context, wav: str | None = None) -> dict[str, Any]:
+def analyze(ctx: Context, wav: str | None = None) -> AudioAnalysis | ToolErrorResult:
     """Measure a rendered WAV: bpm, key, integrated LUFS, true peak, and
     spectral balance. ``wav`` defaults to the most recent render (rendering
     fresh if none exists yet)."""
@@ -219,14 +232,19 @@ def analyze(ctx: Context, wav: str | None = None) -> dict[str, Any]:
         if path is None:
             path = fl.render(Path(tempfile.mkdtemp(prefix="flmcp-render-")) / "render.wav")
             ctx.request_context.lifespan_context[_LAST_RENDER_KEY] = path
-        return fl.analyze(path).model_dump()
+        return AudioAnalysis.model_validate(fl.analyze(path))
     except ToolError as exc:
-        return exc.to_dict()
+        return _tool_error_result(exc)
     except OSError as exc:
-        return {"error": str(exc), "fix": "Pass the path returned by render, or call render first."}
+        return ToolErrorResult(
+            error="invalid_argument",
+            message=str(exc),
+            fix="Pass the path returned by render, or call render first.",
+            retryable=False,
+        )
 
 
-def get_scene(ctx: Context, detail: str = "summary", channel: int | None = None) -> dict[str, Any]:
+def get_scene(ctx: Context, detail: str = "summary", channel: int | None = None) -> GetSceneResult | ToolErrorResult:
     """Read what is currently in the project - key, tempo, and what each channel has.
 
     Call this before writing, so additions fit what is already there. It returns
@@ -249,16 +267,54 @@ def get_scene(ctx: Context, detail: str = "summary", channel: int | None = None)
     session = ctx.request_context.lifespan_context["session"]
     project = session.project
     if project is None:
-        return {"error": "No project file configured. Run: python -m fl_mcp.make_agent_project"}
+        return ToolErrorResult(
+            error="invalid_argument",
+            message="No project file configured.",
+            fix="Run: python -m fl_mcp.make_agent_project",
+            retryable=False,
+        )
 
     if detail == "notes":
-        return {"notes": scene.notes_detail(project, channel)}
+        return GetSceneResult(SceneNotesResult.model_validate({"notes": scene.notes_detail(project, channel)}))
     if detail != "summary":
-        return {"error": f'detail must be "summary" or "notes", got {detail!r}'}
+        return ToolErrorResult(
+            error="invalid_argument",
+            message=f'detail must be "summary" or "notes", got {detail!r}',
+            fix='Use detail="summary" or detail="notes".',
+            retryable=False,
+        )
 
     proj = flp.read(project)
     names = {c.index: c.name for c in proj.channels}
-    return scene.summarize(project, names, tempo=proj.tempo)
+    return GetSceneResult(SceneSummary.model_validate(scene.summarize(project, names, tempo=proj.tempo)))
+
+
+def tool_definitions() -> tuple[Any, ...]:
+    """The engine's complete MCP tool surface, in stable presentation order."""
+    return run, get_notes, get_scene, render, analyze, fl_doctor
+
+
+def _tool_error_result(exc: ToolError) -> ToolErrorResult:
+    return ToolErrorResult(
+        error=exc.category,
+        message=exc.message,
+        fix=exc.fix,
+        retryable=exc.retryable,
+        candidates=exc.candidates,
+    )
+
+
+def create_server() -> MCPServer:
+    """Create the versioned MCP server without opening its transport."""
+    server = MCPServer(
+        SERVER_NAME,
+        version=__version__,
+        description=f"FL Studio MCP {build_version()}",
+        lifespan=lifespan,
+    )
+    for tool in tool_definitions():
+        server.add_tool(tool)
+    return server
 
 
 def main() -> None:
@@ -270,7 +326,4 @@ def main() -> None:
         format="%(asctime)s %(name)s %(levelname)s %(message)s",
         force=True,  # stdout is the JSON-RPC wire; no prior handler may hold it
     )
-    server = MCPServer(SERVER_NAME, lifespan=lifespan)
-    for tool in (run, get_notes, get_scene, render, analyze, fl_doctor):
-        server.add_tool(tool)
-    server.run()
+    create_server().run()

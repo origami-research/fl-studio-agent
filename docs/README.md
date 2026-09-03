@@ -14,6 +14,7 @@ the authority for what is real and how new capability work is promoted.
 | Add or verify an FL capability | [33-capability-acquisition-model.md](33-capability-acquisition-model.md), [23-flp-reverse-engineering-playbook.md](23-flp-reverse-engineering-playbook.md), [25-fl-capability-catalog.md](25-fl-capability-catalog.md) |
 | Work on the rewrite or shared lane contracts | [26-master-plan.md](26-master-plan.md), [27-shared-surfaces.md](27-shared-surfaces.md), [21-v2-rewrite-spec.md](21-v2-rewrite-spec.md) |
 | Use the Python SDK | [sdk-reference.md](sdk-reference.md) |
+| Integrate the MCP engine | [`../contracts/fl-mcp.json`](../contracts/fl-mcp.json) |
 | Run the local merge gate | [gate.md](gate.md) |
 | Understand code-quality doctrine | `AGENTS.md`, [19-code-quality-proposal.md](19-code-quality-proposal.md) |
 
@@ -35,6 +36,7 @@ Durable references and active implementation contracts:
 - [29-generic-pipelines.md](29-generic-pipelines.md) — codec, transport, router, and discovery pipeline contracts.
 - [30-surfaces-and-readability.md](30-surfaces-and-readability.md) — two-file readability contract.
 - [33-capability-acquisition-model.md](33-capability-acquisition-model.md) — capability evidence ladder and acquisition model.
+- [36-engine-contract.md](36-engine-contract.md) - generated MCP tool, error, and environment contract.
 - [sdk-reference.md](sdk-reference.md) — implemented SDK and write/render/analyze workflow.
 - [READING_GUIDE.md](READING_GUIDE.md) — capability-to-feature/pipeline navigation and verification net.
 
