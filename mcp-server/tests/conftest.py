@@ -7,10 +7,23 @@ the action log - is the shipped code, not a mock of it.
 
 from __future__ import annotations
 
+import sys
+
 import pytest
 from sdk_fakes import DEFAULT_CHANNELS, FakeControl, FakeSession
 
 from fl_mcp.store import Store
+
+
+def pytest_configure(config):
+    config.addinivalue_line("markers", "platform(name): test requires one operating-system contract")
+
+
+def pytest_collection_modifyitems(config, items):
+    for item in items:
+        marker = item.get_closest_marker("platform")
+        if marker and marker.args and marker.args[0] != sys.platform:
+            item.add_marker(pytest.mark.skip(reason=f"requires platform {marker.args[0]!r}"))
 
 
 @pytest.fixture

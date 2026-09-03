@@ -4,13 +4,14 @@
 
 Production runs FL Studio on Windows through RDP streaming, while macOS remains the development rig.
 
+
 The engine stays one Python codebase with an OS-neutral core and one runtime-selected `Platform` implementation at its outer boundary.
 
 The native Bridge stays one CMake source tree and emits a macOS dylib or Windows DLL from platform-specific source leaves.
 
 No feature code may select an OS, construct a platform socket, invoke an FL executable, or enumerate processes after this boundary exists.
 
-The five seams are MIDI wire creation, broker endpoint, render command, FL discovery, and process sweep.
+The five Python seams are MIDI wire creation, broker endpoint, render command, FL discovery, and process sweep. Native GUI-thread marshalling is the corresponding bridge seam.
 
 The spool protocol, UDP protocol, FLP codec, transport routing, controller protocol, store, schemas, and session behavior remain OS-neutral.
 
@@ -36,9 +37,9 @@ Lockfile wheel names are packaging metadata rather than platform behavior, and a
 | --- | --- | --- |
 | `mcp-server/src/fl_mcp/core/carriers/wire.py:68-99` | Imports `rtmidi` and calls `open_virtual_port` for the fixed request and response ports. | MIDI wire factory. |
 | `mcp-server/src/fl_mcp/session/facade.py:68-97` | `create_session` directly chooses `MidiControl` or `BrokerControl` and builds the rest of the session. | Selection point that must obtain its control carrier from `Platform`. |
-| `mcp-server/src/fl_mcp/core/carriers/control_broker.py:10-18,42-80,115-123` | Defines, binds, probes, unlinks, and serves an `AF_UNIX` broker socket. | Broker endpoint. |
-| `mcp-server/src/fl_mcp/core/carriers/broker_client.py:9-11,24,35-37,103-130` | Imports the Unix default socket path and connects through `AF_UNIX` after broker auto-start. | Broker endpoint. |
-| `mcp-server/tests/test_control_broker.py:1-2,45-61` | Tests the real Unix-socket broker and works around the macOS pathname limit. | Broker endpoint test that needs endpoint-parametrized coverage. |
+| `mcp-server/src/fl_mcp/core/carriers/control_broker.py:10-18,42-80,115-123` | Defines, binds, probes, unlinks, and serves an `AF_UNIX` broker socket. | Replace with the shared loopback-TCP endpoint. |
+| `mcp-server/src/fl_mcp/core/carriers/broker_client.py:9-11,24,35-37,103-130` | Imports the Unix default socket path and connects through `AF_UNIX` after broker auto-start. | Replace with the shared loopback-TCP endpoint. |
+| `mcp-server/tests/test_control_broker.py:1-2,45-61` | Tests the real Unix-socket broker and works around the macOS pathname limit. | Replace with endpoint-parametrized loopback-TCP coverage. |
 | `mcp-server/tests/test_carrier_wire.py:2,34-55,71-99,139-152` | Fakes `rtmidi`, virtual-port opening, missing backend, and a CoreMIDI error. | MIDI wire factory test. |
 | `mcp-server/src/fl_mcp/session/state.py:95-97` | Reports that an unavailable virtual MIDI wire needs `python-rtmidi`. | MIDI wire factory diagnostic. |
 | `mcp-server/src/fl_mcp/fl/paths.py:32-50` | Resolves `FL_APP` or `/Applications/FL Studio*.app`, with an existing Windows `Program Files/.../FL64.exe` branch. | FL discovery. |
@@ -76,7 +77,7 @@ Lockfile wheel names are packaging metadata rather than platform behavior, and a
 | `native/CMakeLists.txt:92-108` | Builds one bridge target and assigns `.dylib` or `.dll`. | Native bridge build target. |
 | `native/CMakeLists.txt:146-160` | Links the GUI test to CoreFoundation only on Apple. | Native GUI-thread seam. |
 | `native/CMakeLists.txt:187-198` | Runs Mach-O vtable inspection only on Apple. | Native macOS ABI verification. |
-| `native/bridge/src/bridge_gui.cpp:6-45` | Imports libdispatch and pthread, then uses the Cocoa main queue on Apple. | Native GUI-thread seam that needs a Windows implementation or an explicit unsupported operation. |
+| `native/bridge/src/bridge_gui.cpp:6-45` | Imports libdispatch and pthread, then uses the Cocoa main queue on Apple. | Native GUI-thread marshalling seam that needs a Windows implementation or an explicit unsupported operation. |
 | `native/bridge/tests/bridge_gui_test.cpp:18-64` | Imports CoreFoundation and pthread to drain the macOS main queue. | Native GUI-thread test. |
 | `native/bridge/src/bridge_discover.cpp:3-4` | Imports `mmap` and `unistd` for macOS reverse-engineering passes. | Native macOS ABI discovery. |
 | `native/bridge/src/bridge_discover_windows.cpp:1-15` | Fails discovery operations closed on Windows rather than guessing a dispatcher ABI. | Native Windows safety seam. |
@@ -99,52 +100,25 @@ Lockfile wheel names are packaging metadata rather than platform behavior, and a
 
 ## Boundary design
 
-Add `fl_mcp.platform` as the only runtime module that imports `sys.platform` and owns the concrete operating-system adapters.
+Add `fl_mcp.platform` as the only runtime module that imports `sys.platform` and owns concrete operating-system adapters. Step 1 creates this package only. Nothing calls it yet, so it changes no session behavior.
 
-Keep `fl_mcp.fl.paths` and `fl_mcp.fl.process` as compatibility-free implementation details that move behind the boundary in the same PR that changes their callers.
-
-Use a `Protocol` because session callers need only behavior, while tests can supply a small typed fake without patching module-global platform state.
+Keep `fl_mcp.fl.paths` and `fl_mcp.fl.process` as compatibility-free implementation details until their callers move behind the boundary. Use a `Protocol` so callers can use a small typed fake without patching module-global platform state.
 
 ```python
-from __future__ import annotations
-
-from collections.abc import Callable, Sequence
-from pathlib import Path
-from typing import Protocol
-
-from fl_mcp.session.link import ControlCarrier
-
-
 class Platform(Protocol):
     def control_factory(self) -> Callable[[], ControlCarrier]: ...
-    def broker_endpoint(self) -> "BrokerEndpoint": ...
+    def broker_endpoint(self) -> BrokerEndpoint: ...
     def render_command(self, project: Path) -> Sequence[str]: ...
-    def fl_install(self) -> "FLInstall": ...
-    def sweep_fl(self) -> "ProcessSweep": ...
+    def fl_install(self) -> FLInstall: ...
+    def sweep_fl(self) -> ProcessSweep: ...
 ```
 
-`BrokerEndpoint` owns bind, connect, stale-endpoint cleanup, and an endpoint identifier, so neither `ControlBroker` nor `BrokerControl` imports `socket.AF_UNIX`.
+`BrokerEndpoint` is one immutable TCP-loopback value object for every platform: `host="127.0.0.1"`, ephemeral `port`, 128-bit `token`, and `port_file` for discovery. It owns bind, connect, stale-endpoint cleanup, and its identifier, so neither broker side imports `AF_UNIX`. This is the existing proven pattern in `core/carriers/udp.py` and `bridge_udp.json`: one code path, no 104-character socket-path limit, and no Node pipe semantics to preserve because the broker is Python-only. Delete the AF_UNIX endpoint rather than retaining it beside a named pipe. Named pipes are not a target.
 
-`FLInstall` returns the authoritative executable, settings directories, templates directory, data directory, native plugin directory, engine image if supported, and app-data root.
-
-`ProcessSweep` lists exact FL process identities, kills either all listed processes or one confirmed PID, reports whether a process is running, and launches a project.
-
-`Platform.render_command(project)` returns a complete immutable argv and never causes the subprocess side effect itself.
-
-The caller continues to own `subprocess.run(..., check=True)` so the render failure boundary remains explicit and testable.
-
-`MacPlatform` uses the existing CoreMIDI virtual-port factory, Unix-domain endpoint, app bundle resolver, plist executable lookup, `pgrep -x`, exact PID signals, `open -a`, and `-R` renderer.
+`FLInstall` returns the authoritative executable, settings directories, templates directory, data directory, native plugin directory, engine image when supported, and app-data root. `ProcessSweep` lists exact FL process identities, kills either all listed processes or one confirmed PID, reports whether FL is running, and launches a project. `Platform.render_command(project)` returns complete immutable argv and never runs it.
 
 
-Unsupported platforms return an `UnsupportedPlatform` whose control factory and FL actions raise typed, actionable failures rather than silently selecting macOS paths.
-
-`platform_for(sys.platform)` maps `darwin` to `MacPlatform`, `win32` to `WindowsPlatform`, and every other value to `UnsupportedPlatform`.
-
-`create_session` receives an optional `platform: Platform | None = None`, resolves `platform_for(sys.platform)` once when absent, passes its broker endpoint to `BrokerControl`, and passes its MIDI factory to the broker or direct wire path.
-
-The resulting `FLSession` stores no operating-system name and all downstream session modules receive the `Platform` capabilities they actually need through its constructor-owned collaborators.
-
-The existing `FLMCP_SPOOL_ROOT` rule remains an OS-neutral session-routing decision and must not be folded into platform selection.
+Later, `create_session` receives an optional `platform: Platform | None = None`, resolves `platform_for(sys.platform)` once when absent, and injects the endpoint and control factory. `FLSession` stores no OS name. `FLMCP_SPOOL_ROOT` remains an OS-neutral routing decision.
 
 ### MIDI wire decision
 
@@ -155,19 +129,15 @@ The CoreMIDI implementation remains valid only on macOS because it creates virtu
 
 The Windows factory reads names from an explicit `FLMCP_MIDI_REQUEST_PORT` and `FLMCP_MIDI_RESPONSE_PORT` configuration after provisioning, opens existing ports by name, and fails with a typed setup diagnostic that names the missing dependency and ports.
 
-The installer owns provisioning and the doctor verifies both ports and one request-response round trip before it claims MIDI control is usable.
+The installer provisions both ports. The doctor verifies both ports and one request-response round trip across a noninteractive reboot before it claims MIDI control is usable.
 
 This keeps MIDI semantics, message framing, the one-machine broker, and PID addressing unchanged while honestly isolating the Windows driver dependency.
 
 ### Broker endpoint decision
 
-The broker must keep its one-owner bind invariant and newline-JSON protocol without depending on Unix pathname behavior.
+The broker keeps its one-owner bind invariant and newline-JSON protocol over authenticated loopback TCP on `127.0.0.1`. It binds an ephemeral port, writes a port file containing that port and a 128-bit token, and authenticates every connection with that token. This canonical endpoint is identical on macOS and Windows.
 
-Use an endpoint abstraction with `UnixBrokerEndpoint` on macOS and `WindowsNamedPipeBrokerEndpoint` on Windows, with authenticated current-user pipe ACLs and a stable pipe name derived from the same per-user app-data identity.
-
-Do not use loopback TCP as the default because a named pipe preserves local-only ownership and avoids port allocation, firewall, and cross-user exposure.
-
-The broker protocol remains request-per-connection and the endpoint adapter supplies a socket-like connection wrapper or a minimal line-connection protocol.
+The former AF_UNIX and named-pipe designs are deleted. A single transport prevents platform drift and avoids Unix socket pathname limits. The request-per-connection protocol remains unchanged.
 
 ### Render command decision
 
@@ -175,8 +145,7 @@ The render seam returns platform-specific argv for a saved project copy and prod
 
 macOS retains the proven `<bundle>/Contents/MacOS/<CFBundleExecutable> -R <project>` form.
 
-
-The Windows implementation must not land as enabled until a real saved copy renders, the expected WAV is discovered, and audio analysis successfully reads it back.
+[Image-Line's export manual](https://www.image-line.com/fl-studio-learning/fl-studio-online-manual/html/fformats_save_export.htm) documents the Windows form `FL.exe /R /E<ext> /F<folder> [project.flp]`, with `/O<folder>` also available. The two forum-reported failure modes are that FL can [remain open after CLI render](https://forum.image-line.com/viewtopic.php?t=287758) and that [missing assets can raise a blocking popup](https://forum.image-line.com/viewtopic.php?t=177807). Windows stays `VERIFY-ON-WINDOWS`: the render step needs a timeout, output-completion check, and controlled kill. It cannot be enabled until a real saved copy renders and audio analysis reads the discovered artifact.
 
 ### FL discovery and process-sweep decision
 
@@ -184,9 +153,7 @@ The Windows implementation must not land as enabled until a real saved copy rend
 
 The existing Windows `FL64.exe` and `tasklist` implementation is useful evidence but must become `WindowsPlatform` behavior rather than more `sys.platform` branches in `fl.paths` and `fl.process`.
 
-The existing exact-name process invariant stays mandatory because broad `pgrep`, `pkill`, and command-line matching were explicitly refuted as safe process control.
-
-The Windows equivalent filters the exact executable image name, parses machine-readable process data, and kills only confirmed PIDs with `taskkill /PID <pid> /F /T`.
+The existing exact-image-name plus owned-PID invariant stays mandatory because broad `pgrep`, `pkill`, and command-line matching were explicitly refuted. On Windows, the session project path in `Win32_Process.CommandLine` is the ownership marker that replaces the unreadable child environment marker. It is never the sole filter: first match the exact FL image name, then confirm an owned PID and its project path, then kill only that PID with `taskkill /PID <pid> /F /T`.
 
 ### Native bridge and CMake decision
 
@@ -194,7 +161,7 @@ Keep one `bridge` target named `FL MCP Bridge_x64` with no prefix, producing `.d
 
 Keep the portable spool executor, command ledger, note conversion, JSON protocol, and SDK headers common to both artifacts.
 
-Keep macOS Free Pascal dispatcher discovery, Mach-O scraper evidence, and live UDP disabled on Windows until independently proven there, as `bridge_discover_windows.cpp` and `bridge_udp_windows.cpp` already do.
+Keep macOS Free Pascal dispatcher discovery, Mach-O scraper evidence, and live UDP disabled on Windows until independently proven there, as `bridge_discover_windows.cpp` and `bridge_udp_windows.cpp` already do. This supersedes private-product research that says to preserve UDP: Windows is spool-first.
 
 Replace direct POSIX includes in portable bridge and test sources with a small filesystem and temporary-directory adapter, so the core and its unit tests compile under MSVC.
 
@@ -208,7 +175,12 @@ The matrix does not claim live-FL validation because the proprietary SDK and ins
 
 
 
-Its landing must be folded into the Windows deployment and verification sections before Windows production enablement, without changing this interface boundary.
+## Native effort table
+
+| Surface | Work | Evidence gate |
+| --- | --- | --- |
+| `native/bridge/src/bridge_gui.cpp` | Measure FL's Windows callback-thread contract, then implement marshalling or fail closed synchronously. | Real FL GUI-thread proof on Windows. |
+| Portable bridge core and tests | Replace POSIX filesystem, temporary-directory, and sanitizer assumptions. | MSVC build and portable CTest. |
 
 ## Test policy
 
@@ -230,6 +202,8 @@ The existing Windows path and process tests become direct `WindowsPlatform` unit
 ## Mechanical PR sequence
 
 These steps start only after the currently parked engine PRs merge, because this document deliberately does not touch their files or create a competing seam.
+
+
 
 1. Add typed platform value objects, the `Platform` protocol, `platform_for`, and fake-platform tests without changing session behavior.
 
@@ -253,17 +227,17 @@ These steps start only after the currently parked engine PRs merge, because this
 
    VERIFY-ON-WINDOWS: determine the accepted `/R` and export argv, prove a saved copy yields the expected WAV, and run analysis on that WAV.
 
-5. Introduce `BrokerEndpoint`, adapt the existing Unix broker without protocol changes, and make `create_session` inject the endpoint and control factory.
+5. Introduce the shared loopback-TCP `BrokerEndpoint`, replace the existing AF_UNIX broker, and make `create_session` inject the endpoint and control factory.
 
-   Gate: Unix broker ownership, stale cleanup, multi-session PID routing, and all existing session-link tests stay green on macOS.
+   Gate: loopback broker ownership, stale cleanup, token rejection, multi-session PID routing, and all existing session-link tests stay green on macOS.
 
-   VERIFY-ON-WINDOWS: named-pipe creation, current-user access restriction, first-owner behavior, stale-owner recovery, and concurrent broker-client routing.
+   VERIFY-ON-WINDOWS: loopback-only bind, port-file discovery, token rejection, first-owner behavior, stale-owner recovery, and concurrent broker-client routing.
 
 6. Split `MidiControl` into OS-neutral framing plus factory-owned opening, retain CoreMIDI creation on macOS, and add the configured Windows existing-port factory and doctor contract.
 
    Gate: all fake wire tests, broker tests, and direct macOS control behavior stay green.
 
-   VERIFY-ON-WINDOWS: provision loopMIDI or MIDI Services endpoints, open both ports, prove hello and PID-addressed round trips, and confirm failure diagnostics when unprovisioned.
+   VERIFY-ON-WINDOWS: provision loopMIDI endpoints, open both ports, prove hello and PID-addressed round trips across a noninteractive reboot, and confirm failure diagnostics when unprovisioned.
 
 7. Make the CMake bridge core and portable tests compile with both Clang and MSVC, select platform source leaves for every target, and remove unguarded POSIX and sanitizer assumptions.
 
