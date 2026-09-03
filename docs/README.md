@@ -37,6 +37,8 @@ Durable references and active implementation contracts:
 - [30-surfaces-and-readability.md](30-surfaces-and-readability.md) — two-file readability contract.
 - [33-capability-acquisition-model.md](33-capability-acquisition-model.md) — capability evidence ladder and acquisition model.
 - [36-engine-contract.md](36-engine-contract.md) - generated MCP tool, error, and environment contract.
+- [34-per-session-control.md](34-per-session-control.md) - machine-wide control broker and per-session addressing.
+- [07-template-project.md](07-template-project.md) - template project conventions and limits.
 - [sdk-reference.md](sdk-reference.md) — implemented SDK and write/render/analyze workflow.
 - [READING_GUIDE.md](READING_GUIDE.md) — capability-to-feature/pipeline navigation and verification net.
 

@@ -6,12 +6,12 @@ Verdict: **the controller-script interpreter cannot write files, so a bridge-fre
 ## What was tested
 
 The proposal (issue #8): drop virtual MIDI for the control plane and carry commands/responses as JSON files, polled by the controller script's `OnIdle`. Built end to end:
-- controller script: `OnIdle` polls `ctl_cmd_<id>.json`, dispatches, writes `ctl_resp_<id>.json`, tombstones the command;
+- controller script: `OnIdle` polls command files, dispatches, writes response files, then tombstones the command;
 - server: `control_spool.py` writes commands and polls for responses (no MIDI, no bridge process).
 
 ## The three facts the live run established
 
-Measured via a `ctl.selftest` diagnostic op called over the (working) MIDI path, so the result is independent of the spool path itself:
+Measured via a now-removed diagnostic op called over the working MIDI path, so the result is independent of the spool path itself:
 
 1. **`OnIdle` fires** — 39-40 calls observed. The polling loop runs. This unknown is retired positively.
 2. **Reads work** — `os.listdir` on `Settings/Piano roll scripts/FLMCP` succeeds and sees the command files the server wrote.
@@ -55,4 +55,4 @@ Remaining manual step in the whole system: none for the control plane. The only 
 ## Artifacts on this branch
 
 - `control_spool.py` — the server-side spool client (removed after the verdict; it was never viable as the sole transport and had no live callers). This doc is its record.
-- `fl-scripts/controller/device_FLMCP.py` — `OnIdle` spool poll + `ctl.selftest`/`ctl.poll` diagnostics (the diagnostics are worth keeping; they answer sandbox questions over MIDI in one call).
+- `fl-scripts/controller/device_FLMCP.py` previously contained the `OnIdle` spool poll and sandbox diagnostics; both were removed when the broker replaced this refuted design.

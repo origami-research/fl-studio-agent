@@ -17,7 +17,7 @@ from fl_mcp.schemas import ControlResponse, HelloEvent
 
 class ControlCarrier(Protocol):
     """The surface the link needs; satisfied by MidiControl (wire) and
-    BrokerControl (pid-addressed broker, #158)."""
+    BrokerControl (session mode, pid-addressed via the machine-wide broker, #158)."""
 
     def is_live(self) -> bool: ...
     def await_hello(self, timeout: float = ...) -> HelloEvent: ...

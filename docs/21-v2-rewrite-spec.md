@@ -154,7 +154,7 @@ measured against real FL, not reasoned about.
 
 ### A5. v1 silently discards every CHUNKED control-plane response (real bug)
 
-`state.snapshot` and `ctl.selftest` never answer - not at 8s, not at 45s - while
+`state.snapshot` and the former sandbox diagnostic never answer - not at 8s, not at 45s - while
 small ops (`channelCount`, `getChannelName`, `undo`, `state.undo_probe`,
 `getCurrentTempo`, `setCurrentTempo`) answer in under 3s.
 

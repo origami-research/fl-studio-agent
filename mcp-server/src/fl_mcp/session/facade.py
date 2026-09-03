@@ -71,10 +71,9 @@ def create_session(*, plugin_param_models: tuple[PluginParamModel, ...] | None =
     ``sdk.connect()``). Builds the wire (or None when python-rtmidi is missing
     or ports can't open - tools then degrade honestly), the spool, the store,
     and resolves the project file. No lazy construction hidden in getters."""
-    # Session mode (FLMCP_SPOOL_ROOT set, e.g. an arena contestant): control
-    # rides the pid-addressed ctl file lane (#150). The MIDI wire is never
-    # opened - its port names are fixed constants, so two sessions' wires
-    # cross-connect nondeterministically, which is worse than no wire.
+    # Session mode (FLMCP_SPOOL_ROOT set, e.g. an arena contestant) uses
+    # BrokerControl: the machine-wide MIDI wire broadcasts pid-addressed
+    # requests through one bind-wins broker.
     spool_override = os.environ.get(ENV_SPOOL_ROOT)
     control: ControlCarrier | None
     control_factory: Callable[[], ControlCarrier] | None = None
