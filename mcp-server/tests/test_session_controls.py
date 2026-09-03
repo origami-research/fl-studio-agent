@@ -93,6 +93,24 @@ def test_save_project_uses_the_control_lane():
     assert ("ctl.save", []) in control.calls
 
 
+def test_save_project_retries_a_busy_control_wire(monkeypatch):
+    attempts = 0
+
+    def save(args):
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise errors.control_plane_busy("ctl.save", 8.0)
+        return 8
+
+    monkeypatch.setattr(controls.time, "sleep", lambda seconds: None)
+    control = FakeControl(hello=HELLO, handlers={"ctl.save": save})
+    session, _ = make_session(control=control)
+
+    assert session.save_project() is None
+    assert attempts == 2
+
+
 def test_save_project_requires_control_plane():
     session, _ = make_session()
 

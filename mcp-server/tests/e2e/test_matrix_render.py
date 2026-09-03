@@ -17,16 +17,20 @@ from __future__ import annotations
 
 import contextlib
 import os
+import shutil
 import subprocess
 import time
 import wave
+from pathlib import Path
 
 import flpkit as flp
 import pytest
 from harness import flctl
 
 from e2e.matrix import run_file_cycle, selected
+from fl_mcp.audio import analyze_wav
 from fl_mcp.fl.paths import fl_app
+from fl_mcp.schemas import Note
 
 pytestmark = pytest.mark.e2e
 
@@ -97,3 +101,26 @@ def test_headless_render_produces_wav(project, render_gate, tmp_path):
             f"[{project.id} / step:headless-render] rendered {seconds:.1f}s but the "
             f"arrangement we wrote spans {expected:.1f}s - the render ignored our clips"
         )
+
+
+def test_bridge_template_pattern_one_renders_audible_audio(render_gate, tmp_path):
+    """Pattern 1 is pre-placed so its normal note write reaches Song renders."""
+    template = Path(__file__).resolve().parents[3] / "harness" / "projects" / "fl_mcp_bridge.flp"
+    project = tmp_path / template.name
+    shutil.copy2(template, project)
+    flp.write_notes(
+        project,
+        [Note(key=60, start=beat, length=0.25, velocity=1.0, pan=0.5) for beat in range(4)],
+        pattern=1,
+        channel=0,
+        mode="replace",
+    )
+    assert any(item.pattern == 1 for item in flp.read(project).playlist)
+
+    binary = next(iter((fl_app() / "Contents/MacOS").glob("*")), None)
+    assert binary is not None, "FL binary not found under Contents/MacOS"
+    subprocess.run([str(binary), "-R", str(project)], check=True)
+
+    analysis = analyze_wav(project.with_suffix(".wav"))
+    assert analysis.integrated_lufs > -120.0
+    assert analysis.true_peak_dbfs > -240.0

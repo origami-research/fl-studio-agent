@@ -9,6 +9,7 @@ from __future__ import annotations
 import re
 import shutil
 import subprocess
+import time
 from math import isfinite
 from numbers import Real
 from pathlib import Path
@@ -36,6 +37,8 @@ if TYPE_CHECKING:
 # (E2: set 0.42 -> stored 0.41875), and big synths are big - bound the listing.
 PLUGIN_PARAMS_DEFAULT_LIMIT = 40
 PLUGIN_PARAM_TOLERANCE = 0.02
+SAVE_BUSY_RETRIES = 2
+SAVE_BUSY_RETRY_SECONDS = 0.25
 
 # FL's plugins.* convention for "the channel's own generator, not a mixer
 # effect slot" (the slot argument every call here passes).
@@ -53,7 +56,14 @@ def save_project(session: FLSession) -> None:
     """
     if session._ensure_hello() is None or session.control is None:
         raise errors.control_plane_unavailable("ctl.save", 0.0)
-    response = session.control.send_request("ctl.save", timeout=LIVE_SET_TIMEOUT_SECONDS)
+    for attempt in range(SAVE_BUSY_RETRIES + 1):
+        try:
+            response = session.control.send_request("ctl.save", timeout=LIVE_SET_TIMEOUT_SECONDS)
+            break
+        except errors.ToolError as exc:
+            if exc.category != "control_plane_busy" or attempt == SAVE_BUSY_RETRIES:
+                raise
+            time.sleep(SAVE_BUSY_RETRY_SECONDS)
     if not response.ok:
         detail = response.err or "no detail"
         if errors.is_operation_unsafe(detail):
