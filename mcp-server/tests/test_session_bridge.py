@@ -230,6 +230,38 @@ def test_profile_live_channel_targeting_widens_eligibility(
 # -- the breaker at the session seam ------------------------------------------
 
 
+def test_prewarm_closes_the_breaker_before_the_first_bridge_write(
+    monkeypatch, tmp_path, bridge_env, no_reload
+):
+    project = project_flp(monkeypatch, tmp_path)
+    spool = FakeSpool(responses={"ping": PING_OK, "add_notes": BRIDGE_OK})
+    session, _ = make_session(
+        control=selected_channel_control(0), transport=spool, project=project
+    )
+
+    session.prewarm()
+
+    assert session.breaker.closed is True
+    assert session.write_notes(TARGET, NOTES, "merge").backend == "bridge"
+    assert [op for op, _ in spool.sent] == ["ping", "add_notes"]
+
+
+def test_failed_prewarm_keeps_the_first_write_on_the_file_lane(
+    monkeypatch, tmp_path, bridge_env, no_reload
+):
+    monkeypatch.setattr(flp, "write_notes", lambda path, notes, *, pattern, channel, mode: list(notes))
+    spool = FakeSpool()  # no ping response: the bridge cannot prove its pumps run
+    session, _ = make_session(
+        control=selected_channel_control(0), transport=spool, project=tmp_path / "agent.flp"
+    )
+
+    session.prewarm()
+
+    assert session.breaker.closed is False
+    assert session.write_notes(TARGET, NOTES, "merge").backend == "project-write"
+    assert [op for op, _ in spool.sent] == ["ping", "ping"]
+
+
 def test_failed_ping_falls_back_to_file_for_that_call(
     monkeypatch, tmp_path, bridge_env, no_reload
 ):
