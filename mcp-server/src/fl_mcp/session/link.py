@@ -95,6 +95,7 @@ class ControlLink:
         """
         if self.control is None:
             return None
+        hello: HelloEvent | None = None
         try:
             hello = self.control.await_hello(timeout=HELLO_PROBE_SECONDS)
             # The stored hello is STICKY across an FL death (dogfood A12): a
@@ -108,7 +109,14 @@ class ControlLink:
             # held it. Recycling here (reopening ports) would be wrong and would
             # make every control op flap under load. Trust the hello we have.
             if exc.category == "control_plane_busy":
-                return self._check_controller_protocol(hello)
+                if hello is not None:
+                    return self._check_controller_protocol(hello)
+                # The wire was held before this session ever heard a hello
+                # (two sessions starting at once, run 7). Live, not dead:
+                # report "not connected yet" and let the caller retry; never
+                # recycle, and never crash the server on an unbound name.
+                log.debug("control wire busy before the first hello: %s", exc.message)
+                return None
             log.debug("control hello probe failed: %s", exc.message)
         return self._recycle()
 
