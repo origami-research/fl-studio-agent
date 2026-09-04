@@ -217,7 +217,8 @@ class Track:
 
     def write(self, notes: Sequence[NoteInput], mode: NoteWriteMode = "merge") -> WriteReceipt:
         """Applies NOW. Raises on failure; the receipt carries the confirmed
-        note count (readback) and which backend applied."""
+        note count and backend, or ``unconfirmed_write=True`` when FL accepted
+        a bridge command but its live state could not be read back."""
         try:
             normalized_notes = _NOTES.validate_python(notes)
             normalized_mode = _WRITE_MODE.validate_python(mode)

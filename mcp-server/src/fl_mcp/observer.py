@@ -401,12 +401,20 @@ class Observer:
                 ):
                     raise UserEditing(target, action, window)
 
-    def record_agent_write(self, target: Target, notes: list[Note]) -> None:
+    def record_agent_write(self, target: Target, notes: list[Note]) -> bool:
         """The agent-echo suppressant: after a verified write, the note lane
         reports the target's post-write notes (its READBACK, never its
         intent) so the next checkpoint does not attribute the agent's own
         change to the user - and so the guard never blocks the agent on
         itself."""
-        with self._lock:
-            if self._baseline is not None:
-                self._baseline[(target.pattern, target.channel)] = list(notes)
+        try:
+            with self._lock:
+                if self._baseline is not None:
+                    self._baseline[(target.pattern, target.channel)] = list(notes)
+        except Exception:
+            # This is bookkeeping after an applied write.  A malformed
+            # observer baseline must never turn that write into a failure.
+            log.exception("could not record confirmed agent write in observer")
+            return False
+        else:
+            return True

@@ -394,6 +394,22 @@ def test_recorded_agent_write_neither_events_nor_self_blocks(score_env) -> None:
     observer.guard_write(TARGET)  # and never gates the agent against itself
 
 
+def test_record_agent_write_cannot_fail_an_applied_write(score_env, monkeypatch, caplog) -> None:
+    """Observer bookkeeping is advisory after a confirmed write, never a failure path."""
+    observer, save, _state, _clock = score_env
+    save([])
+    observer.poll()
+
+    class BrokenBaseline(dict):
+        def __setitem__(self, key, value):
+            raise RuntimeError("stale baseline")
+
+    observer._baseline = BrokenBaseline()
+    with caplog.at_level("ERROR"):
+        assert observer.record_agent_write(TARGET, [Note(key=60, start=0, length=1)]) is False
+    assert any("could not record confirmed agent write" in record.message for record in caplog.records)
+
+
 def test_user_edit_beside_an_agent_write_still_surfaces(score_env) -> None:
     observer, save, _state, _clock = score_env
     save([])

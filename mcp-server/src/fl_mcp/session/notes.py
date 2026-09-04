@@ -7,8 +7,8 @@
   receipts on writes that all landed in one roll (dogfood, docs/21 A12).
 - **BridgeLane ("bridge")**: live targeted notes via the native Bridge plugin
   over the transport. Eligible per call from evidence only - its ``can_serve``
-  is the one-liner over ``core.router.bridge_provides``; its receipts are
-  file readback, never the bridge's echo.
+  is the one-liner over ``core.router.bridge_provides``; it saves FL's live
+  state before parsing its receipt, never trusting a lagging file or echo.
 
 Routing itself is ``core.router.route`` via ``fl_mcp.ops.notes`` - no note
 branch lives here. A lane failure RAISES; it never silently falls through - a
@@ -35,6 +35,8 @@ from fl_mcp.core.router import (
 from fl_mcp.errors import NotePlaneUnavailable, WriteRejected
 from fl_mcp.fl.process import fl_process_running
 from fl_mcp.schemas import Note, NoteDelta, NoteWriteMode, Target, WriteReceipt
+
+from . import controls
 
 if TYPE_CHECKING:
     from .facade import FLSession
@@ -129,18 +131,7 @@ class FileLane:
 
     def read(self, target: Target) -> list[Note]:
         session = self._session
-        ppq = flp.read(session.project).ppq
-        notes = [
-            Note(
-                key=n.key,
-                start=n.position / ppq,
-                length=n.length / ppq,
-                # FL stores 0..128; this SDK exposes 0..1, where 127 is full.
-                velocity=min(n.velocity / 127, 1.0),
-                pan=n.pan / 128,
-            )
-            for n in flp.notes_at(session.project, target.pattern, target.channel)
-        ]
+        notes = _project_notes(session, target)
         session.store.mark_ground_truth(target, notes)
         return notes
 
@@ -168,8 +159,19 @@ class BridgeLane:
             )
         else:
             command_id = self._send("clear_notes", target=target)
+        readback = self._live_readback(target, command_id)
+        if readback is None:
+            return WriteReceipt(
+                backend=self.name,
+                target=target,
+                confirmed_notes=None,
+                unconfirmed_write=True,
+                delta=NoteDelta(),
+            )
         delta = _record(self._session, target, notes, mode, self.name, command_id)
-        readback = self._file_lane_readback(target, command_id)
+        # The persisted post-write state is authoritative over the shadow
+        # update above, whose purpose is the durable action log and delta.
+        self._session.store.mark_ground_truth(target, readback)
         self._session.observer.record_agent_write(target, readback)
         return WriteReceipt(
             backend=self.name,
@@ -224,18 +226,34 @@ class BridgeLane:
         hello = session._ensure_hello()
         return hello.ppq if hello is not None else None
 
-    def _file_lane_readback(self, target: Target, command_id: int) -> list[Note]:
-        """Readback notes for a bridge receipt - never the bridge's echo
-        (FHD_AddNotesToPR returns nothing, so its notes_written is what it
-        SENT). The only read of record today is the project file, which LAGS
-        the live session until FL saves - so this may exclude the very
-        write it confirms. That gap is deliberate until a live note readback
-        exists (the observer's poll-and-diff read, R2)."""
+    def _live_readback(self, target: Target, command_id: int) -> list[Note] | None:
+        """Persist FL's live state, then parse that post-save state.
+
+        The Bridge response only proves that it dispatched its write; its
+        ``notes_written`` is an echo.  Saving through FL closes the live-to-
+        file boundary without a reload, so the parsed file is a readback of
+        the live session rather than the stale pre-write project.  A failure
+        here is a missing measurement after an applied command, not a failed
+        write, and must therefore produce an honest unconfirmed receipt.
+        """
         try:
-            return flp.notes_at(self._session.project, target.pattern, target.channel)
-        except flp.FlpError as exc:
-            raise WriteRejected(
-                f"the bridge applied command {command_id} but the file readback "
-                f"failed: {exc}; the write is UNCONFIRMED.",
-                fix="Inspect the project file and the bridge status files, then retry.",
-            ) from exc
+            controls.save_project(self._session)
+            return _project_notes(self._session, target)
+        except Exception:
+            log.exception("bridge command %d applied but live note readback is unavailable", command_id)
+            return None
+
+
+def _project_notes(session: FLSession, target: Target) -> list[Note]:
+    """Decode one target from a project that is known current by its caller."""
+    ppq = flp.read(session.project).ppq
+    return [
+        Note(
+            key=n.key,
+            start=n.position / ppq,
+            length=n.length / ppq,
+            velocity=min(n.velocity / 127, 1.0),
+            pan=n.pan / 128,
+        )
+        for n in flp.notes_at(session.project, target.pattern, target.channel)
+    ]

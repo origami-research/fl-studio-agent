@@ -154,7 +154,9 @@ public `channel: int` and `pattern: int` attributes are the resolved indices.
 
 **Availability:** project write. `notes` are musical notes to apply. `mode` is
 `"merge"` to add them or `"replace"` to replace this target's notes. Returns a
-receipt with backend, target, confirmed note count, and delta.
+receipt with backend, target, confirmed note count, and delta. A bridge command
+that FL applied but whose live state could not be read back has
+`unconfirmed_write=True` and `confirmed_notes=None` rather than a stale count.
 
 ```python
 receipt = fl.track("Bass").write(

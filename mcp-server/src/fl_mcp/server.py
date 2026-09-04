@@ -126,7 +126,9 @@ def run(code: str, ctx: Context) -> RunResult:
       theory.drums("x...x...x...x...", key="C1", step_beats=0.25) -> a
       ready-to-write [Note] step grid ('x' = hit, '.' = rest).
 
-    Every write returns FL's confirmed readback - trust it over your intent.
+    Every write returns FL's confirmed readback when available. If a bridge
+    command applied but live state could not be read back, its receipt has
+    ``unconfirmed_write=True`` and ``confirmed_notes=None``.
     """
     # Engineering notes (not part of the model-facing description above):
     # ``Note``/``AutomationPoint`` are in the namespace because ``Track.write``

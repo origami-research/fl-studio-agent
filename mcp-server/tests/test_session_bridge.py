@@ -15,6 +15,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from flpkit import FlpNote
 from session_fakes import (
     HELLO,
     NOTES,
@@ -27,7 +28,7 @@ from session_fakes import (
 from fl_mcp import errors, flp
 from fl_mcp.core.router import route
 from fl_mcp.ops import notes as ops_notes
-from fl_mcp.schemas import SpoolResponse, Target
+from fl_mcp.schemas import Note, SpoolResponse, Target
 from fl_mcp.session import FLSession, WriteRejected
 from fl_mcp.session import detect as detect_mod
 from fl_mcp.session import notes as notes_mod
@@ -84,7 +85,14 @@ def project_flp(monkeypatch, tmp_path, *, ppq=192, file_notes=2):
     """The flp seams the bridge path touches: ppq for the stamp, notes_at for
     the readback. write_notes raises - the bridge path must never file-write."""
     monkeypatch.setattr(flp, "read", lambda path: SimpleNamespace(ppq=ppq, notes=[]))
-    monkeypatch.setattr(flp, "notes_at", lambda path, pattern, channel: [object()] * file_notes)
+    monkeypatch.setattr(
+        flp,
+        "notes_at",
+        lambda path, pattern, channel: [
+            FlpNote(position=0, length=96, key=60, channel=channel, velocity=100, pan=64)
+        ]
+        * file_notes,
+    )
 
     def never(*a, **k):
         raise AssertionError("the bridge path must not write the project file")
@@ -343,8 +351,52 @@ def test_bridge_readback_failure_is_unconfirmed(monkeypatch, tmp_path, bridge_en
         control=selected_channel_control(0), transport=spool, project=tmp_path / "agent.flp"
     )
 
-    with pytest.raises(WriteRejected, match="UNCONFIRMED"):
-        session.write_notes(TARGET, NOTES, "merge")
+    receipt = session.write_notes(TARGET, NOTES, "merge")
+
+    assert receipt.backend == "bridge"
+    assert receipt.unconfirmed_write is True
+    assert receipt.confirmed_notes is None
+    assert receipt.delta.is_empty()
+
+
+def test_bridge_rewrite_saves_live_readback_for_replace_and_merge(
+    monkeypatch, tmp_path, bridge_env, no_reload
+):
+    """Regression: existing live notes must not leak into a stale receipt.
+
+    The fake bridge response deliberately lies about its count. Each save
+    exposes FL's post-write state: replace removes the legacy note, then merge
+    retains the replacement and adds its note.
+    """
+    existing = FlpNote(position=0, length=96, key=48, channel=0, velocity=100, pan=64)
+    replaced = FlpNote(position=0, length=96, key=60, channel=0, velocity=100, pan=64)
+    merged = FlpNote(position=96, length=96, key=64, channel=0, velocity=100, pan=64)
+    post_save = [[replaced], [replaced, merged]]
+    saves: list[int] = []
+    monkeypatch.setattr(flp, "read", lambda path: SimpleNamespace(ppq=96))
+    monkeypatch.setattr(flp, "notes_at", lambda path, pattern, channel: post_save[len(saves) - 1])
+    monkeypatch.setattr(notes_mod.controls, "save_project", lambda session: saves.append(1))
+    spool = FakeSpool(responses={"ping": PING_OK, "add_notes": BRIDGE_OK})
+    session, _ = make_session(
+        control=selected_channel_control(0), transport=spool, project=tmp_path / "agent.flp"
+    )
+    assert session.project is not None
+    session.project.write_bytes(b"FLhd")
+    session.observer._baseline = {
+        (1, 0): [Note(key=existing.key, start=0, length=1, velocity=existing.velocity / 127, pan=0.5)]
+    }
+    session.observer._baseline_mtime_ns = session.project.stat().st_mtime_ns
+
+    replaced_receipt = session.write_notes(TARGET, [Note(key=60, start=0, length=1)], "replace")
+    merged_receipt = session.write_notes(TARGET, [Note(key=64, start=1, length=1)], "merge")
+
+    assert [replaced_receipt.confirmed_notes, merged_receipt.confirmed_notes] == [1, 2]
+    assert not replaced_receipt.unconfirmed_write and not merged_receipt.unconfirmed_write
+    assert saves == [1, 1]
+    assert session.observer._baseline[(1, 0)] == [
+        Note(key=60, start=0, length=1, velocity=100 / 127, pan=0.5),
+        Note(key=64, start=1, length=1, velocity=100 / 127, pan=0.5),
+    ]
 
 
 def test_ppq_stamp_falls_back_to_hello_when_file_unreadable(

@@ -85,11 +85,17 @@ class NoteDelta(BaseModel):
 
 
 class WriteReceipt(BaseModel):
-    """What a write CONFIRMED (readback), never what was requested."""
+    """What a write CONFIRMED (readback), never what was requested.
+
+    ``unconfirmed_write`` means FL accepted a live bridge command but its
+    post-write state could not be read.  In that case ``confirmed_notes`` is
+    deliberately absent rather than a stale file count.
+    """
 
     backend: Backend
     target: Target
-    confirmed_notes: int  # notes on this target in the saved/live state, post-write
+    confirmed_notes: int | None  # notes on this target in the saved/live state, post-write
+    unconfirmed_write: bool = False
     delta: NoteDelta
 
 
