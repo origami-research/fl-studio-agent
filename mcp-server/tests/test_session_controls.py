@@ -7,6 +7,7 @@ refusal is retryable - never a fallthrough (addenda A6/A11).
 from __future__ import annotations
 
 import subprocess
+import tempfile
 
 import pytest
 from session_fakes import HELLO, FakeControl, make_session
@@ -22,6 +23,7 @@ def no_reload(monkeypatch):
     calls: list[bool] = []
     monkeypatch.setattr(FLSession, "_reload_fl", lambda self: calls.append(True))
     return calls
+
 
 UNSAFE = ControlResponse(id=1, ok=False, err="Operation unsafe at current time (mid-cycle)")
 
@@ -51,7 +53,7 @@ def test_render_wav_saves_then_subprocesses_the_resolved_fl_path(monkeypatch, tm
     commands: list[list[str]] = []
     events: list[str] = []
 
-    def render(command, check, timeout):
+    def render(command, check, timeout, env=None):
         events.append("render")
         commands.append(command)
         project.with_suffix(".wav").write_bytes(b"RIFF....WAVE")
@@ -74,7 +76,7 @@ def test_render_wav_raises_when_cli_wav_is_missing_or_empty(monkeypatch, tmp_pat
     project = tmp_path / "live.flp"
     project.write_bytes(b"FLhd")
 
-    def render(command, check, timeout):
+    def render(command, check, timeout, env=None):
         if wav is not None:
             project.with_suffix(".wav").write_bytes(wav)
 
@@ -91,7 +93,7 @@ def test_render_wav_maps_a_subprocess_timeout_to_render_failed(monkeypatch, tmp_
     project = tmp_path / "live.flp"
     project.write_bytes(b"FLhd")
 
-    def render(command, check, timeout):
+    def render(command, check, timeout, env=None):
         raise subprocess.TimeoutExpired(command, timeout)
 
     monkeypatch.setattr("fl_mcp.session.controls.subprocess.run", render)
@@ -162,9 +164,7 @@ def test_set_tempo_no_backend_raises():
 def test_set_tempo_unsafe_refusal_never_falls_through(monkeypatch, tmp_path, no_reload):
     """The warm-up window after _reload_fl (A6): degrade to the file backend
     here and you have rebuilt the v1 cascade bug."""
-    monkeypatch.setattr(
-        flp, "set_tempo", lambda *a: pytest.fail("must not fall through to the file backend")
-    )
+    monkeypatch.setattr(flp, "set_tempo", lambda *a: pytest.fail("must not fall through to the file backend"))
     control = FakeControl(hello=HELLO, handlers={"mixer.setCurrentTempo": lambda args: UNSAFE})
     session, _ = make_session(control=control, project=tmp_path / "agent.flp")
 
@@ -199,9 +199,7 @@ def test_levels_live_all_fields_with_readback():
     assert ("channels.setChannelPitch", [2, 12, 1]) in control.calls
 
 
-def test_levels_live_partial_failure_raises_and_never_falls_through(
-    monkeypatch, tmp_path, no_reload
-):
+def test_levels_live_partial_failure_raises_and_never_falls_through(monkeypatch, tmp_path, no_reload):
     """The v1 bug this lane exists to fix: volume lands live, pan fails, and the
     fallback reloads FL from the file - silently discarding the volume. v2
     raises instead, naming what was kept."""
@@ -244,7 +242,9 @@ def test_automation_project_backend_returns_reparsed_points(monkeypatch, tmp_pat
     monkeypatch.setattr(
         flp,
         "read",
-        lambda _path: type("Project", (), {"channels": [type("Channel", (), {"index": 2, "automation": saved})()]})(),
+        lambda _path: type(
+            "Project", (), {"channels": [type("Channel", (), {"index": 2, "automation": saved})()]}
+        )(),
     )
     session, _ = make_session(project=tmp_path / "agent.flp")
 
@@ -531,9 +531,7 @@ def test_bool_param_accepts_option_and_round_trips():
             ),
         ),
     )
-    session, _ = make_session(
-        control=_param_control({0: 0.0}), plugin_param_models=(model,)
-    )
+    session, _ = make_session(control=_param_control({0: 0.0}), plugin_param_models=(model,))
 
     confirmed = session.set_plugin_param(0, 0, "On")
     assert (confirmed.kind, confirmed.value, confirmed.display) == ("bool", 1.0, "On")
@@ -660,3 +658,33 @@ def test_session_reload_refuses_without_touching_lifecycle(monkeypatch, tmp_path
 
     assert excinfo.value.category == "file_lane_requires_reload"
     assert reloads == []
+
+
+def test_render_child_never_inherits_the_live_session_identity(monkeypatch, tmp_path):
+    """The -R render FL loads the Bridge too; it must publish into a throwaway spool, never ours."""
+    from fl_mcp.contract import ENV_AGENT_PROJECT, ENV_SPOOL_ROOT
+
+    project = tmp_path / "live.flp"
+    project.write_bytes(b"FLhd")
+    monkeypatch.setenv(ENV_SPOOL_ROOT, str(tmp_path / "live-spool"))
+    monkeypatch.setenv(ENV_AGENT_PROJECT, str(project))
+    seen: dict[str, object] = {}
+
+    def render(command, check, timeout, env):
+        seen["env"] = env
+        raise subprocess.TimeoutExpired(command, timeout)
+
+    monkeypatch.setattr("fl_mcp.session.controls.subprocess.run", render)
+    control = FakeControl(hello=HELLO, handlers={"ctl.save": lambda args: None})
+    session, _ = make_session(control=control, project=project)
+
+    with pytest.raises(errors.ToolError):
+        session.render_wav(tmp_path / "mix.wav")
+
+    env = seen["env"]
+    assert isinstance(env, dict)
+    assert env[ENV_SPOOL_ROOT] != str(tmp_path / "live-spool"), "the render child joined the live session"
+    assert (
+        env[ENV_SPOOL_ROOT].startswith(tempfile.gettempdir()) or "flmcp-render-spool-" in env[ENV_SPOOL_ROOT]
+    )
+    assert ENV_AGENT_PROJECT not in env

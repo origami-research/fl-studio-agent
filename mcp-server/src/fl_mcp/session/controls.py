@@ -6,9 +6,11 @@ landed - it never falls through to the file path (the v1 cascade bug).
 
 from __future__ import annotations
 
+import os
 import re
 import shutil
 import subprocess
+import tempfile
 import time
 from math import isfinite
 from numbers import Real
@@ -16,6 +18,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from fl_mcp import errors, flp
+from fl_mcp.contract import ENV_AGENT_PROJECT, ENV_SPOOL_ROOT
 from fl_mcp.errors import NotePlaneUnavailable, WriteRejected
 from fl_mcp.fl.paths import fl_app
 from fl_mcp.fl.process import fl_executable_name
@@ -82,7 +85,10 @@ def _render_saved_project(project: Path) -> Path:
     executable = fl_app() / "Contents" / "MacOS" / fl_executable_name()
     try:
         subprocess.run(
-            [str(executable), "-R", str(project)], check=True, timeout=RENDER_TIMEOUT_SECONDS
+            [str(executable), "-R", str(project)],
+            check=True,
+            timeout=RENDER_TIMEOUT_SECONDS,
+            env=_render_env(),
         )
     except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
         raise errors.ToolError(
@@ -92,6 +98,22 @@ def _render_saved_project(project: Path) -> Path:
             retryable=True,
         ) from exc
     return project.with_suffix(".wav")
+
+
+def _render_env() -> dict[str, str]:
+    """The render child must never join the live session.
+
+    FL's ``-R`` render is a second FL process that loads the same project, so it
+    loads the Bridge too. Inheriting this session's ``FLMCP_SPOOL_ROOT`` made
+    that render-only FL publish ITS pid into the live session's port file, then
+    exit: the broker addressed a dead pid ("No response to ctl.save"), and the
+    arena's liveness watcher declared the producer's FL lost (live run 9,
+    2026-09-04). The render gets a throwaway spool root and no agent project.
+    """
+    env = os.environ.copy()
+    env.pop(ENV_AGENT_PROJECT, None)
+    env[ENV_SPOOL_ROOT] = tempfile.mkdtemp(prefix="flmcp-render-spool-")
+    return env
 
 
 def render_wav(session: FLSession, output: Path) -> Path:
@@ -139,9 +161,7 @@ def set_tempo(session: FLSession, bpm: float) -> float:
                 f"mixer.setCurrentTempo({bpm}) failed inside FL: {resp.err}",
                 fix="Check the value (10-999 BPM) and retry.",
             )
-        readback = session.control.send_request(
-            "mixer.getCurrentTempo", timeout=LIVE_READ_TIMEOUT_SECONDS
-        )
+        readback = session.control.send_request("mixer.getCurrentTempo", timeout=LIVE_READ_TIMEOUT_SECONDS)
         if not readback.ok or readback.ret is None:
             raise WriteRejected(
                 f"tempo was sent but the readback did not answer ({readback.err}); "
@@ -157,8 +177,7 @@ def set_tempo(session: FLSession, bpm: float) -> float:
         return confirmed
 
     raise NotePlaneUnavailable(
-        "No backend can set the tempo: the control plane is not connected and no "
-        "project file is configured."
+        "No backend can set the tempo: the control plane is not connected and no project file is configured."
     )
 
 
@@ -208,8 +227,7 @@ def set_channel_levels(
             resp = session.control.send_request(op, args=args, timeout=LIVE_READ_TIMEOUT_SECONDS)
             if not resp.ok or resp.ret is None:
                 raise WriteRejected(
-                    f"levels were applied but {op} did not answer ({resp.err}); "
-                    "the result is UNCONFIRMED.",
+                    f"levels were applied but {op} did not answer ({resp.err}); the result is UNCONFIRMED.",
                     fix="Run fl_doctor, then retry.",
                 )
             readbacks[field_name] = resp.ret
@@ -234,9 +252,7 @@ def set_channel_levels(
     )
 
 
-def set_automation(
-    session: FLSession, channel: int, points: list[AutomationPoint]
-) -> AutomationReceipt:
+def set_automation(session: FLSession, channel: int, points: list[AutomationPoint]) -> AutomationReceipt:
     """Replace an existing automation clip and return its saved-file readback.
 
     There is no verified live automation writer.  ``flpkit`` carries the
@@ -268,10 +284,7 @@ def set_automation(
     return AutomationReceipt(
         backend="project-write",
         channel=channel,
-        points=[
-            AutomationPoint(position=p.position, value=p.value, tension=p.tension)
-            for p in confirmed
-        ],
+        points=[AutomationPoint(position=p.position, value=p.value, tension=p.tension) for p in confirmed],
     )
 
 
@@ -407,16 +420,12 @@ def plugin_params(
         name = str(_plugin_read(session, "plugins.getParamName", [index, channel, GENERATOR_SLOT]))
         if query is not None and query.lower() not in name.lower():
             continue
-        value = float(
-            _plugin_read(session, "plugins.getParamValue", [index, channel, GENERATOR_SLOT])
-        )
+        value = float(_plugin_read(session, "plugins.getParamValue", [index, channel, GENERATOR_SLOT]))
         out.append(_param(index, name, value, _spec(model, index, name)))
     return out
 
 
-def set_plugin_param(
-    session: FLSession, channel: int, param: int | str, value: float | str
-) -> PluginParam:
+def set_plugin_param(session: FLSession, channel: int, param: int | str, value: float | str) -> PluginParam:
     """Set one parameter (by index, or by unique name/substring) and return
     the READBACK. FL quantizes to the plugin's own step grid, so the
     confirmed value may differ slightly from the request - beyond
@@ -430,15 +439,13 @@ def set_plugin_param(
             names = ", ".join(p.name for p in matches) or "(no matches)"
             raise errors.fl_api_error(
                 "plugins.setParamValue",
-                f"param {param!r} is {'ambiguous' if matches else 'unknown'} on channel "
-                f"{channel}: {names}",
+                f"param {param!r} is {'ambiguous' if matches else 'unknown'} on channel {channel}: {names}",
             )
         index = chosen[0].index
     else:
         if isinstance(param, bool) or not isinstance(param, int):
             raise TypeError(
-                "plugin param index must be a non-negative integer returned by track.params(), "
-                f"got {param!r}"
+                f"plugin param index must be a non-negative integer returned by track.params(), got {param!r}"
             )
         index = param
         count = _plugin_param_count(session, channel)
@@ -463,9 +470,7 @@ def set_plugin_param(
     if not resp.ok:
         raise errors.fl_api_error("plugins.setParamValue", resp.err or "no detail")
 
-    confirmed = float(
-        _plugin_read(session, "plugins.getParamValue", [index, channel, GENERATOR_SLOT])
-    )
+    confirmed = float(_plugin_read(session, "plugins.getParamValue", [index, channel, GENERATOR_SLOT]))
     if abs(confirmed - requested) > PLUGIN_PARAM_TOLERANCE:
         raise WriteRejected(
             f"param {name!r} readback {confirmed} is not the requested {requested}",
