@@ -28,6 +28,7 @@ ErrorCategory = Literal[
     "stale_handle",
     "operation_unsafe",
     "fl_relaunch_required",
+    "file_lane_requires_reload",
 ]
 
 
@@ -209,4 +210,16 @@ def unsupported_in_live_session(action: str) -> ToolError:
         f"{action} is not possible while FL Studio is running with a live session.",
         "This requires the template project convention (docs/07) - set it up at "
         "project-creation time, not during a live session.",
+    )
+
+
+def file_lane_requires_reload() -> ToolError:
+    """Session mode has no safe in-place project reload primitive."""
+    return ToolError(
+        "file_lane_requires_reload",
+        "This edit requires reopening the project file, which is unavailable during a live session.",
+        "Use live lanes during the match: notes through the Bridge; tempo, plugin parameters, and "
+        "channel levels through the control wire. Automation clips and adding effects have no live "
+        "equivalent yet. Retry after the session ends.",
+        retryable=True,
     )

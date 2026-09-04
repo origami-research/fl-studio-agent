@@ -10,13 +10,19 @@ The stable public surface is deliberately small:
 - `fl.set_tempo(...)` for confirmed tempo changes.
 - `fl.render(...)`, `fl.read_wav(...)`, and `fl.analyze(...)` for render/audio workflows.
 - `fl.track(...).set_automation(...)` for existing FL-authored automation clips.
-- `with fl.file_edit(): ...` to batch file-lane edits into a single FL reload.
+- `with fl.file_edit(): ...` to batch file-lane edits into a single FL reload in development mode.
 - `fl.track(...).params(...)` and `set_param(...)` for live generator plugin parameters.
 
 Failures from FL/session boundaries raise `fl_mcp.errors.ToolError`, whose
 `category`, `message`, `fix`, and `retryable` fields are intended to be read by
 callers. Channel lookup failures raise `ChannelNotFound`, a `ValueError`, with
 the current channel list in the message.
+
+When `FLMCP_SPOOL_ROOT` is set, the session is running a live match and never
+kills or reopens FL. `file_edit()` and every file-lane fallback raise retryable
+`file_lane_requires_reload` before changing the project file. Use Bridge notes
+and wire tempo, parameters, or channel levels instead. Automation clips and
+adding effects have no live equivalent yet.
 
 ```python
 from fl_mcp.sdk import connect

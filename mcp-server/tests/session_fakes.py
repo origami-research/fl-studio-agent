@@ -135,6 +135,7 @@ def make_session(
     transport: FakeSpool | Transport | None = None,
     store: FakeStore | None = None,
     project: Path | None = None,
+    session_spool_root: Path | None = None,
     profile: CapabilityProfileLike | None = None,
     plugin_param_models: tuple[PluginParamModel, ...] = (),
 ) -> tuple[FLSession, FakeStore]:
@@ -146,6 +147,7 @@ def make_session(
         transport=cast(Transport, transport or FakeSpool()),
         store=cast(Store, store),
         project=project,
+        session_spool_root=session_spool_root,
         # NEVER the real MidiControl in the fast suite (real ports + open FL
         # segfault rtmidi); a recycle in a test yields another silent fake.
         control_factory=cast(Any, lambda: FakeControl(hello=None)),

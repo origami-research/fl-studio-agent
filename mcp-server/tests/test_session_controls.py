@@ -599,34 +599,46 @@ def test_file_edit_with_no_file_ops_does_not_reload(monkeypatch):
     assert reloads == [], "an empty batch never reboots FL"
 
 
-def test_session_reload_with_dead_bridge_pid_is_retryable(monkeypatch, tmp_path):
-    """A file write must not silently restart an FL instance another session owns."""
-    from fl_mcp.session import facade
+def test_session_file_edit_refuses_before_the_file_lane(monkeypatch, tmp_path):
+    """Regression for live arenas: file_edit must never initiate a session reboot."""
+    from fl_mcp.session import lifecycle
 
-    session, _ = make_session(project=tmp_path / "agent.flp")
-    session.session_spool_root = tmp_path
-    session._session_bridge_pid = 4321
-    (tmp_path / "bridge_udp.json").write_text('{"pid": 4321}')
-    monkeypatch.setattr(facade, "pid_alive", lambda pid: False)
+    session, _ = make_session(project=tmp_path / "agent.flp", session_spool_root=tmp_path)
+    reloads: list[bool] = []
+    monkeypatch.setattr(lifecycle, "reload_fl", lambda *args, **kwargs: reloads.append(True))
 
-    with pytest.raises(errors.ToolError) as excinfo:
-        session._reload_fl()
+    with pytest.raises(errors.ToolError) as excinfo, session.file_edit():
+        pass
 
-    assert excinfo.value.category == "fl_relaunch_required"
+    assert excinfo.value.category == "file_lane_requires_reload"
     assert excinfo.value.retryable is True
+    assert reloads == []
 
 
-def test_session_reload_with_replaced_bridge_pid_is_retryable(monkeypatch, tmp_path):
-    """A live PID is still wrong when another session replaced this session's FL."""
-    from fl_mcp.session import facade
+def test_session_file_fallback_refuses_before_mutating_project(monkeypatch, tmp_path):
+    """A failed live lane cannot turn into a hidden session file write/reboot."""
+    project = tmp_path / "agent.flp"
+    writes: list[bool] = []
+    monkeypatch.setattr(flp, "set_tempo", lambda *args: writes.append(True))
+    session, _ = make_session(project=project, session_spool_root=tmp_path)
 
-    session, _ = make_session(project=tmp_path / "agent.flp")
-    session.session_spool_root = tmp_path
-    session._session_bridge_pid = 4321
-    (tmp_path / "bridge_udp.json").write_text('{"pid": 9876}')
-    monkeypatch.setattr(facade, "pid_alive", lambda pid: True)
+    with pytest.raises(errors.ToolError) as excinfo:
+        session.set_tempo(140)
+
+    assert excinfo.value.category == "file_lane_requires_reload"
+    assert writes == []
+
+
+def test_session_reload_refuses_without_touching_lifecycle(monkeypatch, tmp_path):
+    """The session invariant applies even if a caller reaches _reload_fl directly."""
+    from fl_mcp.session import lifecycle
+
+    session, _ = make_session(project=tmp_path / "agent.flp", session_spool_root=tmp_path)
+    reloads: list[bool] = []
+    monkeypatch.setattr(lifecycle, "reload_fl", lambda *args, **kwargs: reloads.append(True))
 
     with pytest.raises(errors.ToolError) as excinfo:
         session._reload_fl()
 
-    assert excinfo.value.category == "fl_relaunch_required"
+    assert excinfo.value.category == "file_lane_requires_reload"
+    assert reloads == []

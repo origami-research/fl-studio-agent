@@ -18,6 +18,13 @@ bridge metadata, starts or connects to the broker, and sends the request with
 that id. Direct `MidiControl` remains the single-session development carrier.
 Both satisfy `ControlCarrier`, so callers use the same control surface.
 
+A session-mode FL process is never killed by the engine. FL 2026 exposes no
+verified controller-script operation that reloads the current `.flp` in place,
+so the file lane refuses before writing with retryable
+`file_lane_requires_reload`. During a match use the Bridge for notes and the
+control wire for tempo, plugin parameters, and channel levels; automation clips
+and adding effects still have no live equivalent.
+
 ## Failure model
 
 The broker preserves the control carrier's typed failure boundary:

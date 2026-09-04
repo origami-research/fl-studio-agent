@@ -188,8 +188,10 @@ class FL:
         return self._session.snapshot()
 
     def file_edit(self) -> AbstractContextManager[None]:
-        """Batch file-lane edits (automation, channel levels, added plugins,
-        and the file fallback for notes/tempo) into ONE FL reload.
+        """Batch development-mode file-lane edits into ONE FL reload.
+
+        Session mode refuses this context before writing: it never kills FL
+        during a match. Use the live note and control lanes there.
 
         Each file-lane op rewrites the .flp and normally reloads FL - a full
         restart. Group them so the reload happens once::
@@ -198,8 +200,8 @@ class FL:
                 fl.track("Bass").set_automation(points)
                 fl.track("Kick").set_channel_levels(volume=0.9)
 
-        Live ops (notes over the bridge, tempo/params over the wire) are
-        unaffected - they never reload."""
+        Live ops (notes over the bridge, tempo/params/levels over the wire)
+        are unaffected - they never reload."""
         return self._session.file_edit()
 
 

@@ -120,8 +120,11 @@ def run(code: str, ctx: Context) -> RunResult:
     - fl.render("out.wav") -> Path; fl.analyze(wav) -> bpm/key/LUFS/spectral
       balance; fl.read_wav(path) -> (samples, sample_rate).
     - fl.snapshot() -> tempo + channels.
-    - with fl.file_edit(): ... - batch file-lane edits (automation, channel
-      levels, added effects) so FL reloads ONCE for the whole block instead of per edit.
+    - Session mode (FLMCP_SPOOL_ROOT set, including a match) never reboots FL.
+      Use notes through the Bridge and tempo, params, or levels through the control
+      wire. `fl.file_edit()` is unavailable there because automation clips and adding
+      effects still need a project reload. Outside session mode, `with fl.file_edit():`
+      batches those file-lane edits into one reload.
     - theory.chord("C", "minor") / theory.scale("E", "minor") -> MIDI ints;
       theory.drums("x...x...x...x...", key="C1", step_beats=0.25) -> a
       ready-to-write [Note] step grid ('x' = hit, '.' = rest).

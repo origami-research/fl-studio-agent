@@ -54,3 +54,4 @@ ignore = ["TRY003", "PLC0415", "E501"]  # E402 retired: fl/ quarantine fixed the
 
 [tool.pytest.ini_options]
 testpaths = ["tests", "../fl-scripts/controller/tests"]
+markers = ["e2e: requires a deliberate live FL Studio session"]

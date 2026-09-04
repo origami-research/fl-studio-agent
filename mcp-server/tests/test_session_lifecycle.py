@@ -29,44 +29,6 @@ def _temporary_launch_lock_root(monkeypatch, tmp_path):
     monkeypatch.setattr(process, "app_data_root", lambda: tmp_path / "app-data")
 
 
-def test_concurrent_session_reloads_wait_for_the_first_port_file(monkeypatch, tmp_path):
-    """The second kill/boot cannot begin before the first session publishes."""
-    first_launch = threading.Event()
-    release_first = threading.Event()
-    second_launcher = threading.Event()
-    launches: list[int] = []
-
-    monkeypatch.setattr(lifecycle, "fl_process_running", lambda: False)
-    monkeypatch.setattr(lifecycle, "bridge_pid", lambda root: None)
-
-    def launch(
-        project: Path, *, spool_root: Path, killed_pid: int | None, deadline: float
-    ) -> int:
-        launches.append(len(launches) + 1)
-        if len(launches) == 1:
-            first_launch.set()
-            assert release_first.wait(2)
-        else:
-            second_launcher.set()
-        return 100 + len(launches)
-
-    monkeypatch.setattr(lifecycle, "launch_fl", launch)
-    root = tmp_path / "session"
-    threads = [
-        threading.Thread(target=lifecycle.reload_fl, args=(tmp_path / "a.flp", _Link()), kwargs={"spool_root": root}),
-        threading.Thread(target=lifecycle.reload_fl, args=(tmp_path / "b.flp", _Link()), kwargs={"spool_root": root}),
-    ]
-    threads[0].start()
-    assert first_launch.wait(2)
-    threads[1].start()
-    assert not second_launcher.is_set(), "the second reload waits for the first port-file writer"
-    release_first.set()
-    for thread in threads:
-        thread.join(2)
-        assert not thread.is_alive()
-    assert launches == [1, 2]
-
-
 def test_reload_releases_launch_lock_after_a_launch_error(monkeypatch, tmp_path):
     """A failed launcher never strands later session reloads behind its lock."""
     monkeypatch.setattr(lifecycle, "fl_process_running", lambda: False)
@@ -90,32 +52,16 @@ def test_reload_releases_launch_lock_after_a_launch_error(monkeypatch, tmp_path)
     assert calls == 2
 
 
-def test_reload_releases_launch_lock_after_port_file_deadline(monkeypatch, tmp_path):
-    """A missing fresh Bridge PID also releases the machine-wide boot lock."""
-    monkeypatch.setattr(lifecycle, "fl_process_running", lambda: False)
-    monkeypatch.setattr(lifecycle, "FL_OPEN_ATTEMPTS", 1)
-    monkeypatch.setattr(lifecycle.time, "sleep", lambda _: None)
-    monkeypatch.setattr(lifecycle, "bridge_pid", lambda root: None)
-    def no_bridge_pid(
-        project: Path, *, spool_root: Path, killed_pid: int | None, deadline: float
-    ) -> int:
-        raise OSError("no Bridge PID")
+def test_session_reload_is_refused_before_lifecycle_touches_fl(monkeypatch, tmp_path):
+    """The lifecycle seam itself preserves the no-session-reboot invariant."""
+    launched: list[bool] = []
+    monkeypatch.setattr(lifecycle, "launch_fl", lambda *args, **kwargs: launched.append(True))
 
-    monkeypatch.setattr(lifecycle, "launch_fl", no_bridge_pid)
+    with pytest.raises(errors.ToolError) as excinfo:
+        lifecycle.reload_fl(tmp_path / "agent.flp", _Link(), spool_root=tmp_path / "session")
 
-    with pytest.raises(errors.ToolError):
-        lifecycle.reload_fl(tmp_path / "a.flp", _Link(), spool_root=tmp_path / "session")
-    monkeypatch.setattr(
-        lifecycle, "launch_fl", lambda project, *, spool_root, killed_pid, deadline: 99
-    )
-    later = threading.Thread(
-        target=lifecycle.reload_fl,
-        args=(tmp_path / "b.flp", _Link()),
-        kwargs={"spool_root": tmp_path / "session"},
-    )
-    later.start()
-    later.join(2)
-    assert not later.is_alive(), "a port-file deadline must release the lock for another caller"
+    assert excinfo.value.category == "file_lane_requires_reload"
+    assert launched == []
 
 
 def test_launch_spawns_the_executable_and_returns_its_bridge_pid(monkeypatch, tmp_path):

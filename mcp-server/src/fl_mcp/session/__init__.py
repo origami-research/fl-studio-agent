@@ -6,7 +6,7 @@ chosen per call from evidence (docs/27 §2; there is no flag):
 
 - facade.py    - FLSession (thin delegation) + create_session()
 - link.py      - ControlLink: wire liveness, hot-plug self-heal, settle
-- lifecycle.py - reload_fl (the quarantined SIGKILL + reopen)
+- lifecycle.py - development-mode reload_fl (the quarantined SIGKILL + reopen)
 - detect.py    - Capabilities + detect() + BridgeBreaker (the evidence; the
                  routing rule is fl_mcp.core.router.route via fl_mcp.ops)
 - notes.py     - FileLane + BridgeLane (docs/30 Lanes) + read_notes

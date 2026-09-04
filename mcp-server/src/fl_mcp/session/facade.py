@@ -26,7 +26,6 @@ from fl_mcp.core.carriers.wire import ControlUnavailable, MidiControl
 from fl_mcp.core.transport import Transport
 from fl_mcp.errors import NotePlaneUnavailable
 from fl_mcp.fl.paths import primary_settings_dir
-from fl_mcp.fl.process import bridge_pid, pid_alive
 from fl_mcp.observer import Observer
 from fl_mcp.ops import notes as ops_notes
 from fl_mcp.plugin_models import load_bundled_param_models
@@ -164,12 +163,11 @@ class FLSession:
         self.bridge_lane = BridgeLane(self)
         self.observer = Observer(project=project)
         self.session_spool_root = session_spool_root
-        self._session_bridge_pid = (
-            bridge_pid(session_spool_root) if session_spool_root is not None else None
-        )
         self._write_lock = threading.Lock()
-        # File-edit batching: inside file_edit(), file-lane ops write the .flp
-        # but defer the FL reload so N edits cost ONE reboot, not N.
+        # Development-mode file-edit batching: file-lane ops write the .flp
+        # but defer the FL reload so N edits cost ONE reboot, not N. Session
+        # mode refuses this lane before a file mutation because FL has no
+        # verified in-place project reload API.
         self._reload_batch_depth = 0
         self._reload_pending = False
         self._file_write_prepared = False
@@ -337,34 +335,13 @@ class FLSession:
         if self._reload_batch_depth > 0:
             self._reload_pending = True
             return
-        self._require_session_fl()
-        if self.session_spool_root is None:
-            lifecycle.reload_fl(self.project, self.link)
-        else:
-            self._session_bridge_pid = lifecycle.reload_fl(
-                self.project, self.link, spool_root=self.session_spool_root
-            )
+        self._require_file_lane()
+        lifecycle.reload_fl(self.project, self.link)
 
-    def _require_session_fl(self) -> None:
-        """A session file lane may never silently reload somebody else's FL."""
-        if self.session_spool_root is None:
-            return
-        current_pid = bridge_pid(self.session_spool_root)
-        if (
-            current_pid is None
-            or not pid_alive(current_pid)
-            or (
-                self._session_bridge_pid is not None
-                and current_pid != self._session_bridge_pid
-            )
-        ):
-            raise errors.ToolError(
-                "fl_relaunch_required",
-                "This session's FL is no longer the live Bridge owner; its file-lane "
-                "change was not reloaded.",
-                "Relaunch this session's FL, wait for its Bridge port file, then retry.",
-                retryable=True,
-            )
+    def _require_file_lane(self) -> None:
+        """Refuse before mutating a session project that cannot reload in place."""
+        if self.session_spool_root is not None:
+            raise errors.file_lane_requires_reload()
 
     def _prepare_file_write(self) -> None:
         """Save live FL state before a project-file mutation can reload it.
@@ -373,6 +350,7 @@ class FLSession:
         overwrite that mutation. One save covers every write in a file_edit
         batch; standalone writes prepare independently.
         """
+        self._require_file_lane()
         if self._file_write_prepared:
             return
         if self.control is None or self._ensure_hello() is None:
@@ -388,7 +366,7 @@ class FLSession:
 
     @contextmanager
     def file_edit(self) -> Iterator[None]:
-        """Batch file-lane edits into ONE reload.
+        """Batch development-mode file-lane edits into ONE reload.
 
         File-lane ops (automation, channel levels, added plugins, and the file
         fallback for notes/tempo) each rewrite the .flp and normally reload FL -
@@ -396,6 +374,7 @@ class FLSession:
         .flp but the reload is deferred to a single reboot on exit, so a batch
         of edits costs one reload instead of N. The first file write saves
         live bridge work before it mutates the .flp. Nestable."""
+        self._require_file_lane()
         if self._reload_batch_depth == 0:
             self._file_write_prepared = False
         self._reload_batch_depth += 1
