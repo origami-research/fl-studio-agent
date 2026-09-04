@@ -33,10 +33,11 @@ from fl_mcp.core.router import (
     satisfied,
 )
 from fl_mcp.errors import NotePlaneUnavailable, WriteRejected
-from fl_mcp.fl.process import fl_process_running
+from fl_mcp.fl.process import bridge_pid, fl_process_running, pid_alive
 from fl_mcp.schemas import Note, NoteDelta, NoteWriteMode, Target, WriteReceipt
 
 from . import controls
+from .detect import BRIDGE_HEARTBEAT_FILE, BRIDGE_HEARTBEAT_FRESH_SECONDS, read_heartbeat
 
 if TYPE_CHECKING:
     from .facade import FLSession
@@ -51,6 +52,33 @@ BRIDGE_RESPONSE_TIMEOUT_SECONDS = 10.0
 
 # The op kinds these lanes execute (fl_mcp/ops/notes.py declares them).
 NOTE_KINDS = ("write_notes", "clear_notes")
+
+
+def _refuse_if_session_bridge_stalled(session: FLSession) -> None:
+    """A session note write reached the file lane: say WHY the bridge was skipped.
+
+    In session mode the file lane is refused anyway (``file_lane_requires_reload``),
+    but when the reason the router skipped the bridge is a loaded bridge whose
+    GUI-thread tick has stopped (a locked Mac, a modal dialog), the producer must
+    hear that diagnosis, not "requires reopening the project file".
+    """
+    root = session.session_spool_root
+    if root is None:
+        return
+    heartbeat = read_heartbeat(root / BRIDGE_HEARTBEAT_FILE)
+    if heartbeat.at is None or heartbeat.age <= BRIDGE_HEARTBEAT_FRESH_SECONDS:
+        return
+    if not pid_alive(bridge_pid(root)):
+        return  # FL itself is gone; the liveness path owns that story
+    age = int(heartbeat.age)
+    raise errors.ToolError(
+        "note_plane_unavailable",
+        f"The FL MCP Bridge is loaded but has not ticked for {age} s: FL's GUI thread "
+        "is not pumping, so this session's notes cannot be written right now.",
+        "On macOS this happens while the screen is locked; unlock the Mac, or bring FL "
+        "out of a modal dialog, then retry. Run fl_doctor to confirm the note plane.",
+        retryable=True,
+    )
 
 
 def read_notes(session: FLSession, target: Target) -> list[Note]:
@@ -106,10 +134,8 @@ class FileLane:
         session = self._session
         target, notes, mode = op.target, list(data), op.mode
         what = op.kind.replace("_", " ")
-        fix = (
-            "The project file was restored by the readback check failing; "
-            "inspect the .flp and retry."
-        )
+        fix = "The project file was restored by the readback check failing; inspect the .flp and retry."
+        _refuse_if_session_bridge_stalled(session)
         try:
             session._prepare_file_write()
             written = flp.write_notes(
@@ -154,9 +180,7 @@ class BridgeLane:
         if op.kind == "write_notes":
             # add_notes is the bridge wire's write vocabulary; clear_notes is
             # its own wire op (the consumer replaces with empty).
-            command_id = self._send(
-                "add_notes", target=target, notes=notes, mode=mode, ppq=self._ppq()
-            )
+            command_id = self._send("add_notes", target=target, notes=notes, mode=mode, ppq=self._ppq())
         else:
             command_id = self._send("clear_notes", target=target)
         readback = self._live_readback(target, command_id)

@@ -9,7 +9,9 @@ echo; test_session_notes.py stays authoritative for the file lane.
 
 from __future__ import annotations
 
+import json
 import math
+import os
 import time
 from pathlib import Path
 from types import SimpleNamespace
@@ -88,10 +90,9 @@ def project_flp(monkeypatch, tmp_path, *, ppq=192, file_notes=2):
     monkeypatch.setattr(
         flp,
         "notes_at",
-        lambda path, pattern, channel: [
-            FlpNote(position=0, length=96, key=60, channel=channel, velocity=100, pan=64)
-        ]
-        * file_notes,
+        lambda path, pattern, channel: (
+            [FlpNote(position=0, length=96, key=60, channel=channel, velocity=100, pan=64)] * file_notes
+        ),
     )
 
     def never(*a, **k):
@@ -106,14 +107,10 @@ def project_flp(monkeypatch, tmp_path, *, ppq=192, file_notes=2):
 # -- eligibility: evidence in, lane out ---------------------------------------
 
 
-def test_fresh_heartbeat_and_matching_channel_routes_bridge(
-    monkeypatch, tmp_path, bridge_env, no_reload
-):
+def test_fresh_heartbeat_and_matching_channel_routes_bridge(monkeypatch, tmp_path, bridge_env, no_reload):
     project = project_flp(monkeypatch, tmp_path, ppq=192, file_notes=2)
     spool = FakeSpool(responses={"ping": PING_OK, "add_notes": BRIDGE_OK})
-    session, store = make_session(
-        control=selected_channel_control(0), transport=spool, project=project
-    )
+    session, store = make_session(control=selected_channel_control(0), transport=spool, project=project)
 
     receipt = session.write_notes(TARGET, NOTES, "merge")
 
@@ -178,6 +175,10 @@ def test_stale_heartbeat_refuses_a_session_write_before_the_bridge_timeout(
 ):
     """Session mode has no safe file fallback, so a stopped tick fails immediately."""
     write_heartbeat(bridge_env, unix_time=int(time.time() - 3600))
+    # The bridge port file names a LIVE FL: the tick stopped while FL is up.
+    (tmp_path / "bridge_udp.json").write_text(
+        json.dumps({"proto": 2, "transport": 1, "port": 1, "token": "t", "pid": os.getpid()})
+    )
     writes: list[bool] = []
     monkeypatch.setattr(flp, "write_notes", lambda *args, **kwargs: writes.append(True))
     spool = FakeSpool()
@@ -191,16 +192,37 @@ def test_stale_heartbeat_refuses_a_session_write_before_the_bridge_timeout(
     with pytest.raises(errors.ToolError) as excinfo:
         session.write_notes(TARGET, NOTES, "merge")
 
-    assert excinfo.value.category == "file_lane_requires_reload"
+    # The producer hears the diagnosis (a loaded bridge whose GUI-thread tick
+    # stopped: locked Mac, modal dialog), never "requires reopening the file".
+    assert excinfo.value.category == "note_plane_unavailable"
+    assert "has not ticked" in excinfo.value.message
+    assert "screen is locked" in (excinfo.value.fix or "")
     assert excinfo.value.retryable is True
     assert spool.sent == []
     assert writes == []
 
 
-@pytest.mark.parametrize("proto", [None, 1], ids=["missing", "mismatched"])
-def test_unspoken_heartbeat_proto_routes_project_write(
-    monkeypatch, tmp_path, bridge_env, no_reload, proto
+def test_stale_heartbeat_with_fl_gone_is_not_blamed_on_the_gui_thread(
+    monkeypatch, tmp_path, bridge_env, no_reload
 ):
+    """No live bridge pid: the stopped tick is FL being gone, so the session
+    file-lane refusal stands and the liveness path owns the story."""
+    write_heartbeat(bridge_env, unix_time=int(time.time() - 3600))
+    monkeypatch.setattr("fl_mcp.session.notes.pid_alive", lambda pid: False)
+    monkeypatch.setattr(flp, "write_notes", lambda *args, **kwargs: None)
+    session, _ = make_session(
+        control=selected_channel_control(0),
+        transport=FakeSpool(),
+        project=tmp_path / "agent.flp",
+        session_spool_root=tmp_path,
+    )
+    with pytest.raises(errors.ToolError) as excinfo:
+        session.write_notes(TARGET, NOTES, "merge")
+    assert excinfo.value.category == "file_lane_requires_reload"
+
+
+@pytest.mark.parametrize("proto", [None, 1], ids=["missing", "mismatched"])
+def test_unspoken_heartbeat_proto_routes_project_write(monkeypatch, tmp_path, bridge_env, no_reload, proto):
     """A heartbeat whose protocol the server does not speak is refused -
     exactly analogous to the wire's dropped-frames codec check."""
     write_heartbeat(bridge_env, proto=proto)
@@ -214,9 +236,7 @@ def test_unspoken_heartbeat_proto_routes_project_write(
     assert spool.sent == []
 
 
-def test_selected_channel_mismatch_routes_project_write(
-    monkeypatch, tmp_path, bridge_env, no_reload
-):
+def test_selected_channel_mismatch_routes_project_write(monkeypatch, tmp_path, bridge_env, no_reload):
     """VERDICT Q2: a bridge write lands in the SELECTED channel, whatever the
     target says - so a mismatch must route to the file lane, not write wrong."""
     monkeypatch.setattr(flp, "write_notes", lambda path, notes, *, pattern, channel, mode: list(notes))
@@ -242,9 +262,7 @@ def test_wire_down_cannot_prove_the_channel_routes_project_write(
     assert spool.sent == []
 
 
-def test_profile_live_channel_targeting_widens_eligibility(
-    monkeypatch, tmp_path, bridge_env, no_reload
-):
+def test_profile_live_channel_targeting_widens_eligibility(monkeypatch, tmp_path, bridge_env, no_reload):
     """When a profile reports live channel selection (R2 select-then-write),
     the channel constraint dissolves; only the predicate widens (docs/27 §2)."""
     project = project_flp(monkeypatch, tmp_path)
@@ -267,9 +285,7 @@ def test_prewarm_closes_the_breaker_before_the_first_bridge_write(
 ):
     project = project_flp(monkeypatch, tmp_path)
     spool = FakeSpool(responses={"ping": PING_OK, "add_notes": BRIDGE_OK})
-    session, _ = make_session(
-        control=selected_channel_control(0), transport=spool, project=project
-    )
+    session, _ = make_session(control=selected_channel_control(0), transport=spool, project=project)
 
     session.prewarm()
 
@@ -278,9 +294,7 @@ def test_prewarm_closes_the_breaker_before_the_first_bridge_write(
     assert [op for op, _ in spool.sent] == ["ping", "add_notes"]
 
 
-def test_failed_prewarm_keeps_the_first_write_on_the_file_lane(
-    monkeypatch, tmp_path, bridge_env, no_reload
-):
+def test_failed_prewarm_keeps_the_first_write_on_the_file_lane(monkeypatch, tmp_path, bridge_env, no_reload):
     monkeypatch.setattr(flp, "write_notes", lambda path, notes, *, pattern, channel, mode: list(notes))
     spool = FakeSpool()  # no ping response: the bridge cannot prove its pumps run
     session, _ = make_session(
@@ -294,9 +308,7 @@ def test_failed_prewarm_keeps_the_first_write_on_the_file_lane(
     assert [op for op, _ in spool.sent] == ["ping", "ping"]
 
 
-def test_failed_ping_falls_back_to_file_for_that_call(
-    monkeypatch, tmp_path, bridge_env, no_reload
-):
+def test_failed_ping_falls_back_to_file_for_that_call(monkeypatch, tmp_path, bridge_env, no_reload):
     """R4 B2-7's failure mode: a wedged GUI thread keeps writing heartbeats
     while pumps never run. The ping gate catches it and the call lands on the
     file lane instead of burning the command timeout."""
@@ -347,9 +359,7 @@ def test_bridge_timeout_propagates_and_soft_fails_while_fl_lives(
     assert session.breaker.last_hard_fingerprint is None
 
 
-def test_bridge_timeout_with_fl_dead_is_a_hard_failure(
-    monkeypatch, tmp_path, bridge_env, no_reload
-):
+def test_bridge_timeout_with_fl_dead_is_a_hard_failure(monkeypatch, tmp_path, bridge_env, no_reload):
     """An unacked command with FL gone: the command may have been the trigger,
     so the breaker opens outright and remembers the fingerprint."""
     project = project_flp(monkeypatch, tmp_path)
@@ -423,9 +433,7 @@ def test_bridge_rewrite_saves_live_readback_for_replace_and_merge(
     ]
 
 
-def test_ppq_stamp_falls_back_to_hello_when_file_unreadable(
-    monkeypatch, tmp_path, bridge_env, no_reload
-):
+def test_ppq_stamp_falls_back_to_hello_when_file_unreadable(monkeypatch, tmp_path, bridge_env, no_reload):
     def unreadable(path):
         raise flp.FlpError("torn header")
 
