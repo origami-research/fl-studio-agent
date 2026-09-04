@@ -42,14 +42,6 @@
 - [FL Scripting API functionality thread (Image-Line forums)](https://forum.image-line.com/viewtopic.php?t=309492)
   - years of evidence that no Python-API path writes persistent notes cross-channel.
 
-## Context (product landscape)
-
-- [Design Arena](https://www.designarena.ai/) - the playbook reference for the
-  (deferred) arena product direction.
-- [Artificial Analysis Music Arena](https://artificialanalysis.ai/music/leaderboard/instrumental)
-  - existing prompt→song arena (Suno/Udio-class specialist models); why "producer
-  bench" should benchmark general LLMs producing, not song generators.
-
 ## Facts pinned during research (with dates)
 
 - fl-studio-mcp: MIT, ~3.1k LOC Python, last commit 2026-08-02, 109 stars (checked

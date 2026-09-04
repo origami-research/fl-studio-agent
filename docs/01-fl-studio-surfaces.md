@@ -142,8 +142,7 @@ FL.exe /R [filename] /E<mp3,ogg,wav,flac> /F<source folder> /O<dest folder> /M /
 Batch-renders `.flp` files to audio or MIDI without interactive use; available since
 FL 12. [VERIFIED - Image-Line manual "Exporting Audio & MIDI"]. Caveats: paths with
 spaces are problematic; GUI may still appear during render; requires a licensed FL
-install. Role in our design: secondary - "bounce what we made" tool, and the future
-offline-arena path.
+install. Role in this engine: a secondary export path.
 
 ## Escape hatch: PyFLP (third party)
 

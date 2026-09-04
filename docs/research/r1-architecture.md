@@ -244,7 +244,7 @@ pytest fl-scripts/controller/tests      # 8 tests
 cmake --build native/build && ctest --test-dir native/build
 ```
 
-Red GitHub checks on this repo are billing infrastructure, not signal; the PR body records the local counts, and the head hash is re-verified at merge time.
+When hosted checks are unavailable, the PR body records local counts and the head hash is re-verified at merge time.
 Only P4 additionally needs a live FL window (its promotion gate, section 2), run under the standing live-verification rules (close FL before pytest; ports before launch).
 
 ## 7. Dependencies on other research areas

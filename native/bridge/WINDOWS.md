@@ -9,7 +9,7 @@ macOS-specific. Windows UDP is also disabled until a live Windows FL run
 validates it; the durable file-spool carrier remains active.
 
 
-On the Windows Server 2022 build box described in
+On a supported Windows Server 2022 build host:
 
 1. Install FL Studio x64 and launch it once as the build user.
 2. Install **Visual Studio 2022 Build Tools**, including the MSVC x64/x86 build

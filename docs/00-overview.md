@@ -98,10 +98,9 @@ well-trodden Python-API-over-SysEx path.
 - **Creating new patterns.** No dispatcher or API call exists. [VERIFIED - no such
   constant in `fp_plugclass.h`; none in the Python API] Covered by the template
   project's pre-created pattern bank.
-- **Headless / server-side operation ("the private product" backend).** FL requires a GUI
-  session and a license per machine. The offline pipeline (PyFLP compose → `FL.exe /R`
-  render) is documented in 01 as a future direction, but this product is a *live
-  creative tool*, deliberately.
+- **Headless / server-side operation.** FL requires an interactive GUI session. This
+  engine is deliberately designed for live, user-visible creative workflows; offline
+  tooling is a separate concern.
 - **Audio recording, playlist arrangement editing beyond clip drops, Edison scripting.**
   Later.
 

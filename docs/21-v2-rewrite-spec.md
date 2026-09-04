@@ -208,11 +208,9 @@ a caller-visible parameter on the frozen signature - that is the seam.
 
 ### A7. CI is red for a non-code reason (human item, not a lane blocker)
 
-Every GitHub Actions run on this repo fails in ~4s having executed **zero steps**
-(10/10 runs, including on `main` and on PR #35). That is a repo/account-level Actions
-problem - billing or org policy - not a workflow or code defect, and it is not
-fixable from here. The gates in this document are all local commands and are
-unaffected. Flagged for the owner.
+The GitHub Actions gate was unavailable when this document was written. The
+gates in this document are local commands and are unaffected. Restore and verify
+the hosted gate before relying on it for release evidence.
 
 ## Manager addendum 3 (2026-08-27): the channel-levels map, SOLVED
 
@@ -793,7 +791,8 @@ Overall: degraded
 - **`channels.setChannelPitch` mode**: Lane S assumed `mode=1` (semitones) for the
   live pitch path and flagged it unverified. Readback guards make a wrong mode raise
   rather than corrupt, but it is untested against FL.
-- **CI**: red for an account/billing reason, zero steps executed on every run.
+- **CI**: unavailable when this document was written; local verification remains
+  the recorded gate.
 
 ## Addendum 7: G3 live half PASSED (2026-08-28) - and the "binding" myth corrected
 

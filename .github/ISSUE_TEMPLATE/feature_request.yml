@@ -1,0 +1,19 @@
+name: Feature request
+description: Propose a public-safe, evidence-backed capability.
+title: "feature: "
+labels: ["triage"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: State the user-facing need and the public-safe context.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposal
+      description: Include capability evidence, expected readback, and verification.
+    validations:
+      required: true

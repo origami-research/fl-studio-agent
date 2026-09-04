@@ -93,7 +93,7 @@ macOS signing/notarization, first-run walkthrough, `fl_doctor` polish. Public re
 
 **Later / explicitly deferred:** MIDI-direct plugin transport (replace spool if
 latency ever matters), Edison/audio tooling, playlist arrangement tools, multi-project
-sessions, the private-product offline pipeline (PyFLP compose + CLI render at scale).
+sessions, and large-scale offline composition/rendering workflows.
 
 ## Open-questions ledger
 

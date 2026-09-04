@@ -52,6 +52,7 @@ Status tags: **current** describes the shipped system, **research** records evid
 - [30-surfaces-and-readability.md](30-surfaces-and-readability.md) - **current** readability contract.
 - [33-capability-acquisition-model.md](33-capability-acquisition-model.md) - **current** evidence ladder.
 - [34-per-session-control.md](34-per-session-control.md) - **current** broker control lane.
+- [oss-history-rewrite-plan.md](oss-history-rewrite-plan.md) - reviewable history-rewrite plan for a future public mirror (research).
 - [36-engine-contract.md](36-engine-contract.md) - generated MCP tool, error, and environment contract.
 - [26-master-plan.md](26-master-plan.md) - **superseded** pointer to the current canon.
 - [sdk-reference.md](sdk-reference.md) - **current** SDK reference.

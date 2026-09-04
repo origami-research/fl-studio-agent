@@ -1,0 +1,29 @@
+name: Bug report
+description: Report a reproducible problem after public launch.
+title: "bug: "
+labels: ["triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        This template is a launch draft. Do not include credentials, private projects,
+        or proprietary FL Studio files.
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior and reproduction
+      description: Include the smallest public-safe reproduction and command output.
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: fl-studio-mcp version or commit
+    validations:
+      required: true
