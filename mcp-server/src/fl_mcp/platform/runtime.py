@@ -52,7 +52,7 @@ class ProcessSweep(Protocol):
 
     def kill_pid(self, pid: int) -> bool: ...
 
-    def launch(self, project: Path, *, spool_root: Path | None = None) -> None: ...
+    def launch(self, project: Path, *, spool_root: Path | None = None) -> int | None: ...
 
 
 @runtime_checkable
@@ -86,8 +86,8 @@ class _ExistingProcessSweep:
     def kill_pid(self, pid: int) -> bool:
         return process.fl_kill_pid(pid)
 
-    def launch(self, project: Path, *, spool_root: Path | None = None) -> None:
-        process.launch_fl(project, spool_root=spool_root)
+    def launch(self, project: Path, *, spool_root: Path | None = None) -> int | None:
+        return process.launch_fl(project, spool_root=spool_root)
 
 
 def _existing_install() -> FLInstall:

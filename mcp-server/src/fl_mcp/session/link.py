@@ -11,7 +11,7 @@ from typing import Any, Protocol
 from fl_mcp import errors
 from fl_mcp.controller_version import CONTROLLER_PROTOCOL_VERSION, controller_protocol_matches
 from fl_mcp.core.carriers.wire import ControlUnavailable, MidiControl
-from fl_mcp.fl.process import fl_process_running
+from fl_mcp.fl.process import FL_BOOT_TIMEOUT_SECONDS, fl_process_running
 from fl_mcp.schemas import ControlResponse, HelloEvent
 
 
@@ -50,7 +50,6 @@ LIVE_READ_TIMEOUT_SECONDS = 2.0
 # retry during boot, and a parked op can land LATE, undoing a newer one
 # (issue #47). Waiting until a composite read answers makes transport ops
 # reliable; measured settle was ~12s, so the bound leaves headroom.
-SETTLE_TIMEOUT_SECONDS = 45.0
 SETTLE_POLL_SECONDS = 1.0
 
 
@@ -183,7 +182,7 @@ class ControlLink:
         itself succeeded, and the next live op will surface its own error."""
         if self.control is None:
             return
-        deadline = time.monotonic() + SETTLE_TIMEOUT_SECONDS
+        deadline = time.monotonic() + FL_BOOT_TIMEOUT_SECONDS
         while time.monotonic() < deadline:
             try:
                 if self.control.send_request("state.snapshot", timeout=5.0).ok:
@@ -191,4 +190,4 @@ class ControlLink:
             except errors.ToolError as exc:
                 log.debug("settle snapshot probe failed: %s", exc.message)
             time.sleep(SETTLE_POLL_SECONDS)
-        log.warning("FL did not settle within %ss of relaunch", SETTLE_TIMEOUT_SECONDS)
+        log.warning("FL did not settle within %ss of relaunch", FL_BOOT_TIMEOUT_SECONDS)

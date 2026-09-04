@@ -8,7 +8,7 @@ from fl_mcp import errors, flp
 from fl_mcp.controller_version import CONTROLLER_PROTOCOL_VERSION, controller_protocol_matches
 from fl_mcp.core.carriers.spool import spool_roots
 from fl_mcp.fl.paths import piano_roll_scripts_dir
-from fl_mcp.fl.process import fl_process_running
+from fl_mcp.fl.process import bridge_pid, fl_process_running, pid_alive
 from fl_mcp.schemas import Channel, DoctorReport, PlaneStatus, SessionState
 
 if TYPE_CHECKING:
@@ -89,6 +89,9 @@ def snapshot(session: FLSession) -> SessionState:
 def doctor(session: FLSession) -> DoctorReport:
     """Typed report - control plane, note plane, project file - with a
     concrete ``fix`` string per degraded plane."""
+    fl_pid = bridge_pid(session.session_spool_root) if session.session_spool_root else None
+    fl_pid_alive = pid_alive(fl_pid) if session.session_spool_root else None
+    liveness = {"fl_pid": fl_pid, "fl_pid_alive": fl_pid_alive}
     if session.control is None:
         control_plane = PlaneStatus(
             connected=False,
@@ -96,6 +99,7 @@ def doctor(session: FLSession) -> DoctorReport:
             "ports could not be opened",
             fix="Install python-rtmidi (`uv pip install python-rtmidi`) and restart "
             "the MCP server.",
+            **liveness,
         )
     else:
         # Captured BEFORE the probe: the hello probe may recycle a silent
@@ -119,6 +123,7 @@ def doctor(session: FLSession) -> DoctorReport:
                     if stale_controller
                     else None
                 ),
+                **liveness,
             )
         elif dropped:
             control_plane = PlaneStatus(
@@ -127,6 +132,7 @@ def doctor(session: FLSession) -> DoctorReport:
                 "as malformed - a codec mismatch, not a missing connection",
                 fix="Reinstall the controller script so its embedded codec matches "
                 "the server (`python -m fl_mcp.fl.install`), then restart FL Studio.",
+                **liveness,
             )
         elif fl_process_running():
             control_plane = PlaneStatus(
@@ -135,12 +141,14 @@ def doctor(session: FLSession) -> DoctorReport:
                 fix="Close any dialog in FL (its welcome screen blocks the controller), and "
                 "confirm the FLMCP controller script is assigned in FL's MIDI settings "
                 "(`python -m fl_mcp.fl.install`). Ports self-heal; launch order does not matter.",
+                **liveness,
             )
         else:
             control_plane = PlaneStatus(
                 connected=False,
                 detail="ports are open; FL Studio is not running",
                 fix="Launch FL Studio - the FLMCP controller script connects at startup.",
+                **liveness,
             )
 
     scripts_dir = piano_roll_scripts_dir()
@@ -183,7 +191,12 @@ def doctor(session: FLSession) -> DoctorReport:
     else:
         project_file = PlaneStatus(connected=True, detail=str(session.project))
 
-    all_connected = control_plane.connected and note_plane.connected and project_file.connected
+    all_connected = (
+        control_plane.connected
+        and note_plane.connected
+        and project_file.connected
+        and (fl_pid_alive is not False)
+    )
     return DoctorReport(
         status="ok" if all_connected else "degraded",
         control_plane=control_plane,

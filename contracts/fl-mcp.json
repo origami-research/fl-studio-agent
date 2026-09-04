@@ -62,7 +62,8 @@
       "unsupported_in_live_session",
       "render_failed",
       "stale_handle",
-      "operation_unsafe"
+      "operation_unsafe",
+      "fl_relaunch_required"
     ],
     "delivery": "ToolErrorResult JSON is delivered as the text content of isError tool results.",
     "shape": {
@@ -761,6 +762,30 @@
                 ],
                 "default": null,
                 "title": "Fix"
+              },
+              "fl_pid": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Fl Pid"
+              },
+              "fl_pid_alive": {
+                "anyOf": [
+                  {
+                    "type": "boolean"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Fl Pid Alive"
               }
             },
             "required": [

@@ -170,7 +170,7 @@ def test_reload_reconnects_the_wire_fresh(monkeypatch, tmp_path):
     monkeypatch.setattr(flp, "write_notes", lambda path, notes, *, pattern, channel, mode: list(notes))
     monkeypatch.setattr(lifecycle_mod, "fl_process_running", lambda: False)  # skip the pkill branch
     monkeypatch.setattr(lifecycle_mod, "launch_fl", lambda project: None)
-    monkeypatch.setattr(link_mod, "SETTLE_TIMEOUT_SECONDS", 0.0)  # no FL to settle on
+    monkeypatch.setattr(link_mod, "FL_BOOT_TIMEOUT_SECONDS", 0.0)  # no FL to settle on
     old = FakeControl(hello=HELLO)
     fresh = FakeControl(hello=HELLO)
     session, _ = make_session(control=old, transport=FakeSpool(), project=tmp_path / "agent.flp")
@@ -204,6 +204,6 @@ def test_settle_times_out_quietly_when_fl_never_answers(monkeypatch, caplog):
     control = FakeControl(handlers={})  # snapshot always errors
     session, _ = make_session(control=control)
     monkeypatch.setattr(link_mod, "SETTLE_POLL_SECONDS", 0.0)
-    monkeypatch.setattr(link_mod, "SETTLE_TIMEOUT_SECONDS", 0.05)
+    monkeypatch.setattr(link_mod, "FL_BOOT_TIMEOUT_SECONDS", 0.05)
     session.link.settle()  # must not raise: the reload itself succeeded
     assert any("settle" in r.message for r in caplog.records)

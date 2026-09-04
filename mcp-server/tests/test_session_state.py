@@ -168,6 +168,21 @@ def test_doctor_session_mode_silent_hello_is_not_a_codec_mismatch(tmp_path, monk
     assert "codec" not in report.control_plane.detail.lower()
 
 
+def test_doctor_reports_a_dead_session_bridge_pid(tmp_path, monkeypatch):
+    """The port file is evidence, not a cached control-carrier PID."""
+    from fl_mcp.session import state as state_mod
+
+    session, _ = make_session()
+    session.session_spool_root = tmp_path
+    (tmp_path / "bridge_udp.json").write_text('{"pid": 4321}')
+    monkeypatch.setattr(state_mod, "pid_alive", lambda pid: False)
+
+    report = session.doctor()
+
+    assert report.control_plane.fl_pid == 4321
+    assert report.control_plane.fl_pid_alive is False
+
+
 def test_doctor_silent_wire_fix_names_the_dialog_not_a_restart(tmp_path, monkeypatch):
     """Ports self-heal now (hot-plug, docs/21 A12), so 'restart FL' is no longer
     the advice - the remaining silent-wire causes are a blocking dialog or a

@@ -167,6 +167,8 @@ class PlaneStatus(BaseModel):
     connected: bool
     detail: str | None = None
     fix: str | None = None
+    fl_pid: int | None = None
+    fl_pid_alive: bool | None = None
 
 
 class DoctorReport(BaseModel):

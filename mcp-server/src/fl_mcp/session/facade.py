@@ -26,6 +26,7 @@ from fl_mcp.core.carriers.wire import ControlUnavailable, MidiControl
 from fl_mcp.core.transport import Transport
 from fl_mcp.errors import NotePlaneUnavailable
 from fl_mcp.fl.paths import primary_settings_dir
+from fl_mcp.fl.process import bridge_pid, pid_alive
 from fl_mcp.observer import Observer
 from fl_mcp.ops import notes as ops_notes
 from fl_mcp.plugin_models import load_bundled_param_models
@@ -110,6 +111,7 @@ def create_session(*, plugin_param_models: tuple[PluginParamModel, ...] | None =
         plugin_param_models=(
             load_bundled_param_models() if plugin_param_models is None else plugin_param_models
         ),
+        session_spool_root=Path(spool_override) if spool_override else None,
     )
     session.prewarm()  # a live bridge is used from the first write, not the second (#93)
     return session
@@ -149,6 +151,7 @@ class FLSession:
         control_factory: Callable[[], ControlCarrier] | None = None,
         profile: CapabilityProfileLike | None = None,
         plugin_param_models: tuple[PluginParamModel, ...] = (),
+        session_spool_root: Path | None = None,
     ) -> None:
         self.link = ControlLink(control, factory=control_factory)
         self.plugin_param_models = plugin_param_models
@@ -160,6 +163,10 @@ class FLSession:
         self.file_lane = FileLane(self)
         self.bridge_lane = BridgeLane(self)
         self.observer = Observer(project=project)
+        self.session_spool_root = session_spool_root
+        self._session_bridge_pid = (
+            bridge_pid(session_spool_root) if session_spool_root is not None else None
+        )
         self._write_lock = threading.Lock()
         # File-edit batching: inside file_edit(), file-lane ops write the .flp
         # but defer the FL reload so N edits cost ONE reboot, not N.
@@ -330,7 +337,34 @@ class FLSession:
         if self._reload_batch_depth > 0:
             self._reload_pending = True
             return
-        lifecycle.reload_fl(self.project, self.link)
+        self._require_session_fl()
+        if self.session_spool_root is None:
+            lifecycle.reload_fl(self.project, self.link)
+        else:
+            self._session_bridge_pid = lifecycle.reload_fl(
+                self.project, self.link, spool_root=self.session_spool_root
+            )
+
+    def _require_session_fl(self) -> None:
+        """A session file lane may never silently reload somebody else's FL."""
+        if self.session_spool_root is None:
+            return
+        current_pid = bridge_pid(self.session_spool_root)
+        if (
+            current_pid is None
+            or not pid_alive(current_pid)
+            or (
+                self._session_bridge_pid is not None
+                and current_pid != self._session_bridge_pid
+            )
+        ):
+            raise errors.ToolError(
+                "fl_relaunch_required",
+                "This session's FL is no longer the live Bridge owner; its file-lane "
+                "change was not reloaded.",
+                "Relaunch this session's FL, wait for its Bridge port file, then retry.",
+                retryable=True,
+            )
 
     def _prepare_file_write(self) -> None:
         """Save live FL state before a project-file mutation can reload it.
@@ -371,7 +405,7 @@ class FLSession:
             self._reload_batch_depth -= 1
             if self._reload_batch_depth == 0 and self._reload_pending:
                 self._reload_pending = False
-                lifecycle.reload_fl(self.project, self.link)
+                self._reload_fl()
             if self._reload_batch_depth == 0:
                 self._file_write_prepared = False
 

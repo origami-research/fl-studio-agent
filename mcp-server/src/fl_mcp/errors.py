@@ -26,6 +26,7 @@ ErrorCategory = Literal[
     "render_failed",
     "stale_handle",
     "operation_unsafe",
+    "fl_relaunch_required",
 ]
 
 

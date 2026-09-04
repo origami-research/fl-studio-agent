@@ -597,3 +597,36 @@ def test_file_edit_with_no_file_ops_does_not_reload(monkeypatch):
     with session.file_edit():
         pass
     assert reloads == [], "an empty batch never reboots FL"
+
+
+def test_session_reload_with_dead_bridge_pid_is_retryable(monkeypatch, tmp_path):
+    """A file write must not silently restart an FL instance another session owns."""
+    from fl_mcp.session import facade
+
+    session, _ = make_session(project=tmp_path / "agent.flp")
+    session.session_spool_root = tmp_path
+    session._session_bridge_pid = 4321
+    (tmp_path / "bridge_udp.json").write_text('{"pid": 4321}')
+    monkeypatch.setattr(facade, "pid_alive", lambda pid: False)
+
+    with pytest.raises(errors.ToolError) as excinfo:
+        session._reload_fl()
+
+    assert excinfo.value.category == "fl_relaunch_required"
+    assert excinfo.value.retryable is True
+
+
+def test_session_reload_with_replaced_bridge_pid_is_retryable(monkeypatch, tmp_path):
+    """A live PID is still wrong when another session replaced this session's FL."""
+    from fl_mcp.session import facade
+
+    session, _ = make_session(project=tmp_path / "agent.flp")
+    session.session_spool_root = tmp_path
+    session._session_bridge_pid = 4321
+    (tmp_path / "bridge_udp.json").write_text('{"pid": 9876}')
+    monkeypatch.setattr(facade, "pid_alive", lambda pid: True)
+
+    with pytest.raises(errors.ToolError) as excinfo:
+        session._reload_fl()
+
+    assert excinfo.value.category == "fl_relaunch_required"

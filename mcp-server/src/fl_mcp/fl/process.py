@@ -13,18 +13,21 @@ from __future__ import annotations
 import contextlib
 import csv
 import io
+import json
 import logging
 import os
 import plistlib
 import signal
 import subprocess
 import sys
+import threading
+import time
 from functools import cache
 from pathlib import Path
 
 from fl_mcp.contract import ENV_AGENT_PROJECT, ENV_SPOOL_ROOT
 
-from .paths import fl_app
+from .paths import app_data_root, fl_app
 
 log = logging.getLogger(__name__)
 
@@ -32,6 +35,82 @@ log = logging.getLogger(__name__)
 # be read, which on a machine without FL just makes the pgrep find nothing.
 _FALLBACK_EXECUTABLE = "OsxFL"
 _WINDOWS_EXECUTABLE = "FL64.exe"
+FL_BOOT_TIMEOUT_SECONDS = 45.0
+_launch_lock = threading.RLock()
+_launch_lock_state = threading.local()
+
+
+@contextlib.contextmanager
+def fl_launch_lock() -> object:
+    """Serialize FL boots across this machine.
+
+    macOS uses an advisory file lock; the in-process lock makes the same
+    invariant hold for concurrent callers before they become separate engine
+    processes. Windows deliberately remains a no-file-lock platform seam.
+    """
+    with _launch_lock:
+        depth = getattr(_launch_lock_state, "depth", 0)
+        _launch_lock_state.depth = depth + 1
+        if depth:
+            try:
+                yield
+            finally:
+                _launch_lock_state.depth -= 1
+            return
+        lock_file = None
+        try:
+            if sys.platform == "darwin":
+                import fcntl
+
+                path = app_data_root() / "fl-launch.lock"
+                path.parent.mkdir(parents=True, exist_ok=True)
+                lock_file = path.open("a+")
+                try:
+                    fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                except BlockingIOError:
+                    log.info("waiting for machine-wide FL launch lock")
+                    fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+                log.info("acquired machine-wide FL launch lock")
+            yield
+        finally:
+            _launch_lock_state.depth -= 1
+            if lock_file is not None:
+                with contextlib.suppress(OSError):
+                    fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+                lock_file.close()
+
+
+def pid_alive(pid: int | None) -> bool:
+    """Whether a concrete process PID is still alive, without naming its image."""
+    if pid is None or pid <= 0:
+        return False
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
+def bridge_pid(spool_root: Path) -> int | None:
+    """Read the current Bridge owner PID from one session's port file."""
+    try:
+        payload = json.loads((spool_root / "bridge_udp.json").read_text())
+    except (OSError, ValueError):
+        return None
+    pid = payload.get("pid")
+    return pid if isinstance(pid, int) and pid > 0 else None
+
+
+def wait_for_bridge_pid(spool_root: Path, killed_pid: int | None, deadline: float) -> int | None:
+    """Wait for this session's live Bridge owner, replacing ``killed_pid`` if set."""
+    while time.monotonic() < deadline:
+        pid = bridge_pid(spool_root)
+        if pid_alive(pid) and (killed_pid is None or pid != killed_pid):
+            return pid
+        time.sleep(0.1)
+    return None
 
 
 @cache
@@ -138,20 +217,41 @@ def fl_kill_pid(pid: int) -> bool:
     return True
 
 
-def launch_fl(project: Path, *, spool_root: Path | None = None) -> None:
+def launch_fl(
+    project: Path,
+    *,
+    spool_root: Path | None = None,
+    killed_pid: int | None = None,
+    deadline: float | None = None,
+) -> int | None:
     """Ask the platform launcher to open ``project`` without waiting for FL to exit.
 
     ``spool_root`` is passed only to the child process, so concurrent sessions
     never mutate the server's ambient environment to select their mailbox.
     """
-    env = os.environ.copy()
-    env[ENV_AGENT_PROJECT] = str(project)
-    if spool_root is not None:
-        env[ENV_SPOOL_ROOT] = str(spool_root)
-    if sys.platform == "darwin":
-        subprocess.run(["open", "-a", str(fl_app()), str(project)], check=True, env=env)
-        return
-    if sys.platform == "win32":
-        subprocess.Popen([str(fl_app()), str(project)], env=env)
-        return
-    raise OSError(f"FL launch is unsupported on {sys.platform}")
+    with fl_launch_lock():
+        env = os.environ.copy()
+        env[ENV_AGENT_PROJECT] = str(project)
+        if spool_root is not None:
+            env[ENV_SPOOL_ROOT] = str(spool_root)
+        if sys.platform == "darwin":
+            subprocess.run(["open", "-a", str(fl_app()), str(project)], check=True, env=env)
+            if spool_root is None:
+                return None
+            # ``open -a`` only focuses an already-running FL. Its port-file PID
+            # is success unless this reload explicitly killed that PID.
+            pid = bridge_pid(spool_root)
+            if killed_pid is None and pid_alive(pid):
+                return pid
+            pid = wait_for_bridge_pid(
+                spool_root,
+                killed_pid,
+                deadline if deadline is not None else time.monotonic() + FL_BOOT_TIMEOUT_SECONDS,
+            )
+            if pid is None:
+                raise OSError("this session's Bridge port file did not publish a fresh live PID")
+            return pid
+        if sys.platform == "win32":
+            subprocess.Popen([str(fl_app()), str(project)], env=env)
+            return None
+        raise OSError(f"FL launch is unsupported on {sys.platform}")
