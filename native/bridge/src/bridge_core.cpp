@@ -147,6 +147,9 @@ std::string FormatHeartbeat(const HeartbeatState &s) {
   out += "chan=" + std::to_string(s.channel) + "\n";
   out += "event_seq=" + std::to_string(s.event_seq) + "\n";
   out += "event_dropped=" + std::to_string(s.event_dropped) + "\n";
+  out += std::string("abi=") + s.abi + "\n";
+  out += "render_blocks=" + std::to_string(s.render_blocks) + "\n";
+  out += "render_rate=" + std::to_string(s.render_rate) + "\n";
   return out;
 }
 

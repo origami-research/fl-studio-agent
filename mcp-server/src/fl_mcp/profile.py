@@ -26,6 +26,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import platform
 import plistlib
 from dataclasses import dataclass, field
 from importlib import resources
@@ -150,6 +151,21 @@ class CapabilityProfile:
 
 class ProfileError(ValueError):
     """A profile document that cannot be trusted: unreadable, wrong version, malformed."""
+
+
+@dataclass(frozen=True)
+class FLBuild:
+    version: str
+    build: int
+    arch: str
+
+    def label(self) -> str:
+        return f"FL {self.version} build {self.build} ({self.arch})"
+
+
+def _arch() -> str:
+    machine = platform.machine().lower()
+    return {"aarch64": "arm64", "amd64": "x86_64"}.get(machine, machine)
 
 
 def _addr(value: object) -> int:
@@ -482,8 +498,8 @@ def _spool_profile_path() -> Path | None:
     return None
 
 
-def detect_fl_version() -> tuple[str, int] | None:
-    """(fl_version, fl_build) of the installed FL app, from its Info.plist.
+def detect_fl_version() -> FLBuild | None:
+    """Installed FL version, build, and process architecture from Info.plist.
 
     CFBundleShortVersionString is "26.1.5.5384": three version components and
     the build number. Returns None when there is no readable FL install -
@@ -494,7 +510,7 @@ def detect_fl_version() -> tuple[str, int] | None:
         with plist.open("rb") as fh:
             doc = plistlib.load(fh)
         parts = str(doc["CFBundleShortVersionString"]).split(".")
-        return ".".join(parts[:3]), int(parts[3])
+        return FLBuild(".".join(parts[:3]), int(parts[3]), _arch())
     except (OSError, KeyError, ValueError, IndexError, plistlib.InvalidFileException):
         return None
 
@@ -509,15 +525,19 @@ def packaged_profiles() -> dict[str, dict]:
     return out
 
 
-def _packaged_match(version: str, build: int) -> CapabilityProfile | None:
+def _packaged_match(build: FLBuild) -> CapabilityProfile | None:
     for name, doc in sorted(packaged_profiles().items()):
         try:
             profile = parse_profile(doc)
         except ProfileError as exc:
             log.warning("packaged profile %s is malformed, skipping: %s", name, exc)
             continue
-        if profile.meta.fl_version == version and profile.meta.fl_build == build:
-            log.info("capability profile: packaged %s (FL %s build %d)", name, version, build)
+        if (profile.meta.fl_version, profile.meta.fl_build, profile.meta.arch) == (
+            build.version,
+            build.build,
+            build.arch,
+        ):
+            log.info("capability profile: packaged %s (%s)", name, build.label())
             return profile
     return None
 
@@ -545,7 +565,7 @@ def load_profile() -> CapabilityProfile:
 
     detected = detect_fl_version()
     if detected is not None:
-        profile = _packaged_match(*detected)
+        profile = _packaged_match(_normalise_build(detected))
         if profile is not None:
             return profile
 
@@ -561,10 +581,48 @@ def load_profile() -> CapabilityProfile:
     return BUILTIN_FALLBACK
 
 
+def _normalise_build(value: FLBuild | tuple[str, int] | tuple[str, int, str]) -> FLBuild:
+    """Accept the former test seam while all production detection carries arch."""
+    if isinstance(value, FLBuild):
+        return value
+    if len(value) == 2:
+        return FLBuild(value[0], value[1], _arch())
+    return FLBuild(value[0], value[1], value[2])
+
+
+def profile_gate() -> tuple[bool, str]:
+    """Whether the running install exactly matches a shipped profile.
+
+    Overrides and fallback profiles are useful for development research, but do
+    not prove a production session's ABI. Session mode therefore uses this
+    narrow gate before it can touch the live host.
+    """
+    detected = detect_fl_version()
+    if detected is None:
+        # No install is not an unknown build. Offline development and test
+        # sessions have no host to protect; a running FL install always yields
+        # an identity before session mode can make a live call.
+        return True, "FL build not detected"
+    build = _normalise_build(detected)
+    if _packaged_match(build) is not None:
+        return True, build.label()
+    return False, f"unsupported {build.label()}; capture a profile with `python -m fl_mcp.discover`"
+
+
+def installed_bridge_build() -> str | None:
+    """The exact build the installer put the native dylib beside, if recorded."""
+    record = flpaths.fl_app() / "Contents/Resources/FL/Plugins/Fruity/Effects/FL MCP Bridge/bridge_installed_for.txt"
+    try:
+        return record.read_text(encoding="utf-8").strip() or None
+    except OSError:
+        return None
+
+
 __all__ = [
     "BUILTIN_FALLBACK",
     "CapabilityProfile",
     "DispatcherFacts",
+    "FLBuild",
     "FlpFacts",
     "FstFacts",
     "FstFieldFact",
@@ -577,8 +635,10 @@ __all__ = [
     "TickFacts",
     "UnsafeFact",
     "detect_fl_version",
+    "installed_bridge_build",
     "load_profile",
     "packaged_profiles",
     "parse_profile",
+    "profile_gate",
     "profile_to_dict",
 ]

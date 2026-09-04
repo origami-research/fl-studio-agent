@@ -59,6 +59,7 @@
 #include <vector>
 
 #include "bridge_core.h"
+#include "bridge_abi.h"
 #include "fl_host_abi.h"
 #include "bridge_events.h"
 #include "bridge_gui.h"
@@ -238,6 +239,10 @@ struct TickState : std::enable_shared_from_this<TickState> {
   // own counter rather than overloading this one.
   std::atomic<int> commands_applied{0};
   std::atomic<int> notes_written{0};
+  bridge_abi::Handshake abi;
+  std::atomic<long long> render_blocks{0};
+  std::atomic<long long> last_heartbeat_render_blocks{0};
+  std::atomic<long long> last_heartbeat_ns{0};
 
   // Called from the tick, on whatever thread FL ticks us on. Never touches the
   // host. At most one pump is in flight, so a GUI thread that stalls can only
@@ -256,7 +261,11 @@ struct TickState : std::enable_shared_from_this<TickState> {
   void Count(const bridge_core::PollOutcome &outcome);
 };
 
-void WriteHeartbeat(const TickState &state, long long tick) {
+void WriteHeartbeat(TickState &state, long long tick) {
+  const long long now_ns = MonotonicNanos();
+  const long long previous_ns = state.last_heartbeat_ns.exchange(now_ns);
+  const long long blocks = state.render_blocks.load();
+  const long long previous_blocks = state.last_heartbeat_render_blocks.exchange(blocks);
   bridge_core::HeartbeatState hb;
   hb.tick = tick;
   hb.applied = state.commands_applied.load();
@@ -274,6 +283,11 @@ void WriteHeartbeat(const TickState &state, long long tick) {
   hb.channel = -1;  // no FL selected-channel getter exists (VERDICT Q2); always unknown
   hb.event_seq = (long long)state.events.last_seq();
   hb.event_dropped = (long long)state.events.dropped();
+  hb.abi = state.abi.heartbeat_abi();
+  hb.render_blocks = blocks;
+  hb.render_rate = previous_ns > 0 && now_ns > previous_ns
+                       ? (blocks - previous_blocks) * 1000000000LL / (now_ns - previous_ns)
+                       : 0;
   WriteSmall("bridge_heartbeat.txt", bridge_core::FormatHeartbeat(hb).c_str());
 }
 
@@ -335,6 +349,7 @@ void TickState::RequestPump() {
 }
 
 void TickState::Pump() {
+  if (!abi.allows_host_dispatch()) return;
   ++pumps_ran;
   try {
     // UDP first (the latency path), then the file spool (the fallback). Both
@@ -491,6 +506,7 @@ class Bridge {
   ~Bridge() = default;
 
   int tick_counter_ = 0;
+  const long long constructed_ns_ = MonotonicNanos();
   long long heartbeat_tick_ = 0;
   // The live half of the plugin: host pointer, UDP transport, ack cache and
   // counters, shared with any GUI-thread pump this instance queued so the pump
@@ -527,6 +543,16 @@ Bridge::Bridge(TPluginTag tag, TFruityPlugHost *host) {
     state_->host = host;
     state_->host_tag = tag;
     bridge_core::SetHostCallTrace(WriteHostCallTrace);
+    // This must remain the first host call. The palette-count query is a
+    // read-only SDK operation with a bounded non-zero result; a wrong VMT
+    // offset or incompatible host fails closed before any mutation is possible.
+    state_->abi.Begin(fl_abi::HostDispatch(state_->host, state_->host_tag,
+                                           FHD_GetColorRGBValue, 0, -1));
+    if (state_->abi.status() == bridge_abi::Status::kMismatch) {
+      WriteStatus((std::string("abi_mismatch:") + state_->abi.detail()).c_str());
+      WriteHeartbeat(*state_, 0);
+      return;
+    }
     // The tick is Idle_Public, and FL delivers it only while the plugin's UI is
     // visible unless the plugin asks for "always" (fp_plugclass.h: FHD_WantIdle,
     // Value 2). This plugin has no UI, so a project saved with its wrapper
@@ -552,7 +578,7 @@ Bridge::Bridge(TPluginTag tag, TFruityPlugHost *host) {
       state_->event_log = std::make_unique<bridge_events::EventLog>(std::move(event_paths));
     }
     WriteHeartbeat(*state_, 0);
-    WriteStatus("loaded");
+    WriteStatus("abi_probing");
   } catch (...) {
     WriteStatus("constructor_exception");
   }
@@ -565,6 +591,7 @@ Bridge::Bridge(TPluginTag tag, TFruityPlugHost *host) {
 // this thread is deliberate - liveness keeps reporting even if the GUI thread is
 // the thing that stalls, and `gui_pending` is then the number that says so.
 void Bridge::RequestIdleAlways() {
+  if (state_->abi.status() == bridge_abi::Status::kMismatch) return;
   if (idle_requested_.load()) return;
   if (!bridge_gui::OnGuiThread()) return;  // host calls stay on the GUI thread by construction
   try {
@@ -577,6 +604,17 @@ void Bridge::RequestIdleAlways() {
 }
 
 void Bridge::Tick() {
+  state_->abi.ObserveIdle();
+  state_->abi.Evaluate((MonotonicNanos() - constructed_ns_) / 1000000000.0);
+  if (state_->abi.status() == bridge_abi::Status::kMismatch) {
+    WriteStatus((std::string("abi_mismatch:") + state_->abi.detail()).c_str());
+    WriteHeartbeat(*state_, ++heartbeat_tick_);
+    return;
+  }
+  if (!state_->abi.allows_host_dispatch()) {
+    WriteHeartbeat(*state_, ++heartbeat_tick_);
+    return;
+  }
   if (++tick_counter_ < kPollEveryNTicks) return;
   tick_counter_ = 0;
   try {
@@ -614,7 +652,7 @@ intptr_t _stdcall Bridge::Dispatcher(intptr_t id, intptr_t index, intptr_t value
   // answers 0 ("not handled") - the same answer the pad build returned when it
   // loaded and ran stably. Logged so a future need is visible.
   LogExtSlot(26, id, index, value);
-  RequestIdleAlways();
+  state_->abi.ObserveDispatcher(id, value);
   // Forward the subscribed push events to the ring (docs/27 s5-6). This runs on
   // whatever thread FL sends the message on - some FPD_* are (GM), i.e. the
   // mixing thread - so it must only stamp the lock-free ring, never touch the
@@ -660,6 +698,7 @@ int _stdcall Bridge::ProcessParam(int index, int value, int rec_flags) {
   return value;
 }
 void _stdcall Bridge::Eff_Render(PWAV32FS source, PWAV32FS dest, int length) {
+  ++state_->render_blocks;
   if (source != dest && length > 0) memcpy(dest, source, sizeof(TWAV32FS) * (size_t)length);
 }
 void _stdcall Bridge::Gen_Render(PWAV32FS dest, int &length) {

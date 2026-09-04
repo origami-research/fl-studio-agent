@@ -22,10 +22,12 @@ from fl_mcp import profile as profile_mod
 from fl_mcp.fl import paths as flpaths
 from fl_mcp.profile import (
     BUILTIN_FALLBACK,
+    FLBuild,
     ProfileError,
     load_profile,
     packaged_profiles,
     parse_profile,
+    profile_gate,
     profile_to_dict,
 )
 
@@ -122,7 +124,7 @@ def test_spool_profile_beats_packaged(pinned_env, monkeypatch, packaged_doc):
     doc["ppq"]["default"] = 222
     _write(settings / "Piano roll scripts" / "FLMCP" / "profile.json", doc)
     monkeypatch.setattr(flpaths, "fl_settings_dirs", lambda: [settings])
-    monkeypatch.setattr(profile_mod, "detect_fl_version", lambda: ("26.1.5", 5384))
+    monkeypatch.setattr(profile_mod, "detect_fl_version", lambda: FLBuild("26.1.5", 5384, "arm64"))
     assert load_profile().ppq_default == 222
 
 
@@ -132,7 +134,7 @@ def test_malformed_spool_profile_falls_through(pinned_env, monkeypatch, caplog):
     path.parent.mkdir(parents=True)
     path.write_text("{not json")
     monkeypatch.setattr(flpaths, "fl_settings_dirs", lambda: [settings])
-    monkeypatch.setattr(profile_mod, "detect_fl_version", lambda: ("26.1.5", 5384))
+    monkeypatch.setattr(profile_mod, "detect_fl_version", lambda: FLBuild("26.1.5", 5384, "arm64"))
     with caplog.at_level(logging.WARNING, logger="fl_mcp.profile"):
         profile = load_profile()
     assert profile.meta.sources != ("builtin-fallback",)  # reached the packaged tier
@@ -140,7 +142,7 @@ def test_malformed_spool_profile_falls_through(pinned_env, monkeypatch, caplog):
 
 
 def test_packaged_profile_matches_detected_version(pinned_env, monkeypatch, caplog):
-    monkeypatch.setattr(profile_mod, "detect_fl_version", lambda: ("26.1.5", 5384))
+    monkeypatch.setattr(profile_mod, "detect_fl_version", lambda: FLBuild("26.1.5", 5384, "arm64"))
     with caplog.at_level(logging.WARNING, logger="fl_mcp.profile"):
         profile = load_profile()
     assert profile.meta.fl_version == "26.1.5"
@@ -150,7 +152,7 @@ def test_packaged_profile_matches_detected_version(pinned_env, monkeypatch, capl
 
 
 def test_unknown_fl_version_falls_back_with_named_warning(pinned_env, monkeypatch, caplog):
-    monkeypatch.setattr(profile_mod, "detect_fl_version", lambda: ("99.0.0", 1))
+    monkeypatch.setattr(profile_mod, "detect_fl_version", lambda: FLBuild("99.0.0", 1, "arm64"))
     with caplog.at_level(logging.WARNING, logger="fl_mcp.profile"):
         profile = load_profile()
     assert profile is BUILTIN_FALLBACK
@@ -168,6 +170,17 @@ def test_no_fl_detected_falls_back(pinned_env, caplog):
     with caplog.at_level(logging.WARNING, logger="fl_mcp.profile"):
         assert load_profile() is BUILTIN_FALLBACK
     assert any("BUILTIN_FALLBACK" in r.message for r in caplog.records)
+
+
+def test_profile_gate_requires_version_build_and_arch(monkeypatch):
+    monkeypatch.setattr(profile_mod, "detect_fl_version", lambda: FLBuild("26.1.5", 5384, "arm64"))
+    assert profile_gate() == (True, "FL 26.1.5 build 5384 (arm64)")
+    monkeypatch.setattr(profile_mod, "detect_fl_version", lambda: FLBuild("26.1.5", 5384, "x86_64"))
+    supported, detail = profile_gate()
+    assert supported is False
+    assert detail == (
+        "unsupported FL 26.1.5 build 5384 (x86_64); capture a profile with `python -m fl_mcp.discover`"
+    )
 
 
 # --- drift alarm -------------------------------------------------------------

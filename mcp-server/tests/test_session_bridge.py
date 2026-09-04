@@ -49,13 +49,15 @@ BRIDGE_OK = SpoolResponse(id=0, ok=True, op="add_notes", notes_written=999)  # 9
 LIVE_PROFILE = SimpleNamespace(capabilities=SimpleNamespace(channel_targeting_live=True))
 
 
-def write_heartbeat(path: Path, *, unix_time: int | None = None, proto: int | None = 2) -> None:
+def write_heartbeat(path: Path, *, unix_time: int | None = None, proto: int | None = 2, abi: str | None = "ok") -> None:
     """A heartbeat as L4's bridge writes it (docs/27 §6): chan=-1 always (no
     FL getter for the selected channel exists), pat=-1 until a first write."""
     lines = ["tick=12", "applied=0", "pid=1", "backend=bridge"]
     lines.append(f"unix_time={int(time.time()) if unix_time is None else unix_time}")
     if proto is not None:
         lines.append(f"proto={proto}")
+    if abi is not None:
+        lines.append(f"abi={abi}")
     lines += ["pat=-1", "chan=-1"]
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 

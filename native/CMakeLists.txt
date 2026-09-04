@@ -86,6 +86,7 @@ target_compile_options(fl_sdk PUBLIC
 # static_assert contract).
 add_library(bridge SHARED
     bridge/src/bridge.cpp
+    bridge/src/bridge_abi.cpp
     bridge/src/bridge_core.cpp
     bridge/src/bridge_events.cpp
     bridge/src/bridge_gui.cpp
@@ -122,6 +123,14 @@ target_compile_options(bridge_core_test PRIVATE
     -Wno-ignored-attributes
 )
 target_link_options(bridge_core_test PRIVATE -fsanitize=address,undefined)
+
+add_executable(bridge_abi_test
+    bridge/tests/bridge_abi_test.cpp
+    bridge/src/bridge_abi.cpp
+)
+target_include_directories(bridge_abi_test PRIVATE "${FL_SDK_DIR}" "${FL_ABI_DIR}" bridge/src bridge/tests)
+target_compile_options(bridge_abi_test PRIVATE -fsanitize=address,undefined -g -Wno-ignored-attributes)
+target_link_options(bridge_abi_test PRIVATE -fsanitize=address,undefined)
 
 # Event forwarding + heartbeat format unit test: the lock-free ring under a
 # producer/consumer race, the pinned JSONL schema, the log's truncation cap,
@@ -179,6 +188,7 @@ target_link_options(bridge_udp_test PRIVATE -fsanitize=address,undefined)
 enable_testing()
 
 add_test(NAME bridge_core_test COMMAND bridge_core_test)
+add_test(NAME bridge_abi_test COMMAND bridge_abi_test)
 add_test(NAME bridge_events_test COMMAND bridge_events_test)
 add_test(NAME bridge_gui_test COMMAND bridge_gui_test)
 add_test(NAME bridge_udp_test COMMAND bridge_udp_test)

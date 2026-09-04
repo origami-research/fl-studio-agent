@@ -11,6 +11,7 @@ from fl_mcp.controller_version import CONTROLLER_PROTOCOL_VERSION, controller_pr
 from fl_mcp.core.carriers.spool import spool_roots
 from fl_mcp.fl.paths import piano_roll_scripts_dir
 from fl_mcp.fl.process import bridge_pid, fl_process_running, pid_alive
+from fl_mcp.profile import installed_bridge_build, profile_gate
 from fl_mcp.schemas import Channel, DoctorReport, PlaneStatus, SessionState
 
 from .detect import BRIDGE_HEARTBEAT_FILE, BRIDGE_HEARTBEAT_FRESH_SECONDS, read_heartbeat
@@ -125,6 +126,21 @@ def doctor(session: FLSession, *, clock: Callable[[], float] = time.time) -> Doc
         note_plane = _note_plane_status(clock=clock)
     except Exception as exc:  # noqa: BLE001 - doctor must report failed probes
         note_plane = failed_probe("note plane", exc)
+    supported, profile_detail = profile_gate()
+    if not supported and profile_detail.startswith("unsupported "):
+        note_plane = PlaneStatus(
+            connected=False,
+            detail=profile_detail,
+            fix="Capture and review this build's profile with `python -m fl_mcp.discover`, then install the rebuilt Bridge.",
+        )
+    installed_for = installed_bridge_build()
+    if installed_for is not None and supported and installed_for != profile_detail:
+        detail = f"Bridge installed for {installed_for}, running {profile_detail}"
+        note_plane = PlaneStatus(
+            connected=False,
+            detail=detail,
+            fix="Rebuild and reinstall the Bridge against the running FL build.",
+        )
 
     try:
         project_file = _project_file_status(session)
@@ -217,6 +233,13 @@ def _note_plane_status(*, clock: Callable[[], float] = time.time) -> PlaneStatus
         pid = bridge_pid(root)
         if pid_alive(pid):
             heartbeat = read_heartbeat(root / BRIDGE_HEARTBEAT_FILE, clock=clock)
+            if heartbeat.abi == "mismatch":
+                detail = "The FL MCP Bridge ABI handshake failed; host dispatch is disabled."
+                return PlaneStatus(
+                    connected=False,
+                    detail=detail,
+                    fix=f"{detail} Capture a profile for this FL build and install the rebuilt Bridge.",
+                )
             if heartbeat.at is not None and heartbeat.age > BRIDGE_HEARTBEAT_FRESH_SECONDS:
                 age = int(heartbeat.age)
                 detail = (
@@ -230,6 +253,13 @@ def _note_plane_status(*, clock: Callable[[], float] = time.time) -> PlaneStatus
                         f"{detail} On macOS this happens while the screen is locked; "
                         "unlock the Mac, or bring FL out of a modal dialog."
                     ),
+                )
+            if heartbeat.abi == "ok" and heartbeat.render_rate == 0:
+                detail = "FL's audio engine is not running (no output device?)."
+                return PlaneStatus(
+                    connected=False,
+                    detail=detail,
+                    fix=f"{detail} Select a persistent audio output device in FL Studio, then confirm render_rate is above zero.",
                 )
     return PlaneStatus(
         connected=True,

@@ -73,6 +73,14 @@ fi
 
 mkdir -p "$DEST"
 cp "$BUILD" "$DEST/$DYLIB"
+BUILD_ID="$(defaults read "$FL_APP/Contents/Info" CFBundleShortVersionString 2>/dev/null || true)"
+BUILD_VERSION="${BUILD_ID%.*}"
+BUILD_NUMBER="${BUILD_ID##*.}"
+if [ -z "$BUILD_ID" ] || [ "$BUILD_VERSION" = "$BUILD_ID" ]; then
+    echo "Could not read FL build from $FL_APP/Contents/Info.plist" >&2
+    exit 1
+fi
+printf 'FL %s build %s (%s)\n' "$BUILD_VERSION" "$BUILD_NUMBER" "$(uname -m)" > "$DEST/bridge_installed_for.txt"
 # Capital V matches the field name in stock plugins' Plugin.nfo (e.g. Fruity
 # Balance: "ps_Vendorname=Image-Line").
 printf 'ps_Vendorname=FL MCP\n' > "$DEST/Plugin.nfo"

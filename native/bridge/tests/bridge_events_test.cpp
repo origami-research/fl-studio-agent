@@ -258,6 +258,9 @@ int main() {
     hb.pattern = 3;    // learned from a bridge write's SetCurrentPattern
     hb.channel = -1;   // no getter exists -> always unknown
     hb.event_seq = 9;
+    hb.abi = "ok";
+    hb.render_blocks = 12;
+    hb.render_rate = 3;
     std::string text = bridge_core::FormatHeartbeat(hb);
     CHECK(Contains(text, "proto=2\n"));
     CHECK(Contains(text, "pat=3\n"));
@@ -265,6 +268,9 @@ int main() {
     CHECK(Contains(text, "backend=bridge\n"));
     CHECK(Contains(text, "tick=42\n"));
     CHECK(Contains(text, "event_seq=9\n"));
+    CHECK(Contains(text, "abi=ok\n"));
+    CHECK(Contains(text, "render_blocks=12\n"));
+    CHECK(Contains(text, "render_rate=3\n"));
     // Unknown pattern is -1, the same sentinel L1 maps to None.
     bridge_core::HeartbeatState fresh;
     CHECK(Contains(bridge_core::FormatHeartbeat(fresh), "pat=-1\n"));

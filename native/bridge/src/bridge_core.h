@@ -153,6 +153,9 @@ struct HeartbeatState {
   int channel = -1;
   long long event_seq = 0;    // highest forwarded event seq (resync point for L3)
   long long event_dropped = 0;
+  const char *abi = "probing";
+  long long render_blocks = 0;
+  long long render_rate = 0;
 };
 
 // The heartbeat text, newline-terminated key=value lines. The key set and

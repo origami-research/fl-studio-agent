@@ -74,9 +74,11 @@ class Heartbeat:
     proto: int | None
     pattern: int | None
     channel: int | None
+    abi: str | None
+    render_rate: int | None
 
 
-_NO_HEARTBEAT = Heartbeat(age=math.inf, at=None, proto=None, pattern=None, channel=None)
+_NO_HEARTBEAT = Heartbeat(age=math.inf, at=None, proto=None, pattern=None, channel=None, abi=None, render_rate=None)
 
 
 def read_heartbeat(path: Path, *, clock: Callable[[], float] = time.time) -> Heartbeat:
@@ -86,9 +88,13 @@ def read_heartbeat(path: Path, *, clock: Callable[[], float] = time.time) -> Hea
     except OSError:
         return _NO_HEARTBEAT
     fields: dict[str, int] = {}
+    abi: str | None = None
     for line in text.splitlines():
         key, sep, value = line.partition("=")
         if not sep:
+            continue
+        if key == "abi":
+            abi = value if value in {"ok", "probing", "mismatch"} else None
             continue
         try:
             fields[key] = int(value)
@@ -116,6 +122,8 @@ def read_heartbeat(path: Path, *, clock: Callable[[], float] = time.time) -> Hea
         proto=fields.get("proto"),
         pattern=context("pat"),
         channel=context("chan"),
+        abi=abi,
+        render_rate=fields.get("render_rate"),
     )
 
 
@@ -146,7 +154,11 @@ def detect(
         candidate = read_heartbeat(root / BRIDGE_HEARTBEAT_FILE)
         if candidate.age < best.age:
             best = candidate
-    live = best.age <= BRIDGE_HEARTBEAT_FRESH_SECONDS and best.proto == BRIDGE_PROTO
+    live = (
+        best.age <= BRIDGE_HEARTBEAT_FRESH_SECONDS
+        and best.proto == BRIDGE_PROTO
+        and best.abi == "ok"
+    )
     return Capabilities(
         bridge_live=live,
         bridge_pattern=best.pattern if live else None,

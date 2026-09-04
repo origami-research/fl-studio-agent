@@ -13,6 +13,11 @@ Capability acquisition is governed by the [capability acquisition model](33-capa
 
 ## The map
 
+| Safety check | Coverage | Path to close / note |
+|---|---|---|
+| Bridge ABI handshake | load-time | Read-only `FHD_GetColorRGBValue` palette count, followed by `FPD_SetSampleRate`, `FPD_SetBlockSize`, and `Idle_Public` in three seconds. A mismatch writes `bridge_status=abi_mismatch:<detail>` and blocks host dispatch. |
+| Audio engine | live heartbeat | `render_blocks` counts `Eff_Render`; `render_rate` measures blocks per heartbeat interval. A zero rate means FL's audio engine is not running, so inspect the configured output device. |
+
 | Capability | Coverage | Care | Path to close / note |
 |---|---|---|---|
 | Notes - read | file | T1 | **PROBE VERDICT: no readback getter exists** - reads stay file-based (Cmd+S + flpkit) |

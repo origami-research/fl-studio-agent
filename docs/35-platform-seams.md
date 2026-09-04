@@ -2,6 +2,12 @@
 
 ## Decision
 
+Windows runner images need a persistent virtual audio output device, selected
+in FL Studio's audio settings. RDP's redirected device appears with the judge
+session and vanishes when it ends. The Bridge heartbeat must show
+`render_rate > 0` before a run starts; zero means FL's audio engine is not
+running, commonly because no output device is available.
+
 Production runs FL Studio on Windows through RDP streaming, while macOS remains the development rig.
 
 

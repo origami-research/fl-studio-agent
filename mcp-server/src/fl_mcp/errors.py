@@ -30,6 +30,7 @@ ErrorCategory = Literal[
     "operation_unsafe",
     "fl_relaunch_required",
     "file_lane_requires_reload",
+    "unsupported_fl_build",
 ]
 
 

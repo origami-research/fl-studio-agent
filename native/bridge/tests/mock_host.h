@@ -41,6 +41,7 @@ class MockHost : public fl_mock::FpcHost {
  public:
   std::vector<CapturedChord> chords;
   int set_dirty_calls = 0;
+  int palette_count = 16;
   // Every call verbatim, so a test can assert the full argument shape and not
   // just the payload. The shape is Fruity Convolver's, read off FL 2026's own
   // shipping effect: x0=Self, x1=Sender (the plugin's HostTag, from [plug+8]),
@@ -51,6 +52,9 @@ class MockHost : public fl_mock::FpcHost {
   std::intptr_t Dispatch(std::intptr_t sender, std::intptr_t id, std::intptr_t index,
                          std::intptr_t value) override {
     calls.push_back({sender, id, index, value});
+    if (id == FHD_GetColorRGBValue && value == -1) {
+      return palette_count;
+    }
     if (id == FHD_AddNotesToPR && value != 0) {
       const TNotesParams *p = reinterpret_cast<const TNotesParams *>(value);
       CapturedChord c;

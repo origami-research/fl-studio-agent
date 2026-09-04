@@ -29,6 +29,7 @@ from fl_mcp.fl.paths import primary_settings_dir
 from fl_mcp.observer import Observer
 from fl_mcp.ops import notes as ops_notes
 from fl_mcp.plugin_models import load_bundled_param_models
+from fl_mcp.profile import profile_gate
 from fl_mcp.schemas import (
     AutomationPoint,
     AutomationReceipt,
@@ -163,6 +164,9 @@ class FLSession:
         self.bridge_lane = BridgeLane(self)
         self.observer = Observer(project=project)
         self.session_spool_root = session_spool_root
+        self._profile_supported, self._profile_gate_detail = profile_gate()
+        if not self._profile_supported:
+            log.warning("%s", self._profile_gate_detail)
         self._write_lock = threading.Lock()
         # Development-mode file-edit batching: file-lane ops write the .flp
         # but defer the FL reload so N edits cost ONE reboot, not N. Session
@@ -399,6 +403,12 @@ class FLSession:
 
     @contextmanager
     def _write_guard(self, action: str) -> Iterator[None]:
+        if self.session_spool_root is not None and not self._profile_supported:
+            raise errors.ToolError(
+                "unsupported_fl_build",
+                f"Live operation '{action}' refused: {self._profile_gate_detail}",
+                "Run the capture command on this FL install, ship its reviewed profile, then retry.",
+            )
         if not self._write_lock.acquire(blocking=False):
             raise errors.concurrent_write(action)
         try:

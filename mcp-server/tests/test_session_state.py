@@ -112,6 +112,19 @@ def test_doctor_all_degraded_names_a_fix_per_plane(tmp_path, monkeypatch):
     assert "make_agent_project" in report.project_file.fix
 
 
+def test_doctor_names_an_unknown_fl_build_and_capture_command(tmp_path, monkeypatch):
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
+    monkeypatch.setattr(
+        state_mod,
+        "profile_gate",
+        lambda: (False, "unsupported FL 99.0.0 build 1 (arm64); capture a profile with `python -m fl_mcp.discover`"),
+    )
+    report = make_session()[0].doctor()
+    assert report.status == "degraded"
+    assert report.note_plane.detail.startswith("unsupported FL 99.0.0")
+    assert "python -m fl_mcp.discover" in report.note_plane.fix
+
+
 def test_doctor_reports_probe_failures_instead_of_raising(tmp_path):
     """Doctor remains usable when the control wire and project file are both broken."""
 
@@ -169,7 +182,7 @@ def test_note_plane_is_connected_with_a_fresh_bridge_heartbeat(tmp_path, monkeyp
     """A live bridge's fresh tick proves its note lane can answer."""
     _install_note_script(tmp_path)
     heartbeat = tmp_path / "bridge_heartbeat.txt"
-    heartbeat.write_text("unix_time=100\nproto=2\n", encoding="utf-8")
+    heartbeat.write_text("unix_time=100\nproto=2\nabi=ok\nrender_rate=1\n", encoding="utf-8")
     (tmp_path / "bridge_udp.json").write_text('{"pid": 123}', encoding="utf-8")
     monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
     monkeypatch.setattr(state_mod, "spool_roots", lambda: [tmp_path])
@@ -185,7 +198,7 @@ def test_note_plane_reports_a_live_bridge_with_a_stale_heartbeat(tmp_path, monke
     """A loaded bridge without GUI ticks must not consume a producer's timeout."""
     _install_note_script(tmp_path)
     heartbeat = tmp_path / "bridge_heartbeat.txt"
-    heartbeat.write_text("unix_time=100\nproto=2\n", encoding="utf-8")
+    heartbeat.write_text("unix_time=100\nproto=2\nabi=ok\nrender_rate=1\n", encoding="utf-8")
     (tmp_path / "bridge_udp.json").write_text('{"pid": 123}', encoding="utf-8")
     monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
     monkeypatch.setattr(state_mod, "spool_roots", lambda: [tmp_path])
