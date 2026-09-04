@@ -43,6 +43,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     endpoint: BridgeEndpoint | None = None
     _prepare(spool, marker, token)
     try:
+        # Ports before FL: the broker owns the MIDI ports, so it must exist before
+        # FL boots (FL binds ports that exist at launch; hot-plug is best effort).
+        with contextlib.suppress(Exception):
+            BrokerControl(spool).send_request("ping", timeout=1.0)
         launch_fl(project, spool_root=spool)
         endpoint = _wait_for_bridge(spool)
         _wait_for_hello(spool)
@@ -108,19 +112,30 @@ def _wait_for_bridge(spool: Path) -> BridgeEndpoint:
 
 
 def _wait_for_hello(spool: Path) -> None:
-    """Wait for the controller's hello in slices the broker accepts (its per-request cap is 60 s)."""
+    """Wait for the controller through the SAME path fl-mcp uses.
+
+    A raw BrokerControl.await_hello never recycles a silent wire, so this tool
+    could report "controller attached, no response" forever while fl-mcp itself
+    connected fine (the arena's real-engine test). ControlLink.hello() recycles
+    the ports for a hot-plug bind exactly like the server does.
+    """
     import time
 
+    from fl_mcp.session.facade import create_session
+
     deadline = time.monotonic() + READY_TIMEOUT_SECONDS
-    last: Exception | None = None
-    while time.monotonic() < deadline:
-        try:
-            BrokerControl(spool).await_hello(timeout=HELLO_SLICE_SECONDS)
-        except Exception as exc:  # noqa: BLE001 - retried until the deadline, then re-raised
-            last = exc
-        else:
-            return
-    raise RuntimeError(f"no controller hello within {READY_TIMEOUT_SECONDS:g}s") from last
+    session = create_session()
+    try:
+        while time.monotonic() < deadline:
+            if session.link.hello() is not None:
+                return
+            time.sleep(1.0)
+    finally:
+        if session.control is not None:
+            session.control.close()
+    raise TimeoutError(
+        f"no controller hello within {READY_TIMEOUT_SECONDS:g}s (FL up, wire silent after recycles)"
+    )
 
 
 @contextlib.contextmanager
