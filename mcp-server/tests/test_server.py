@@ -404,3 +404,12 @@ def test_run_refuses_getattr_and_type_as_dunder_side_doors():
         payload = json.loads(response.content[0].text)
         assert payload["error"] == "restricted_namespace"
         assert offender in payload["message"]
+
+
+def test_run_allows_dir_for_discovery_without_opening_dunder_access():
+    """dir(fl) is how a model discovers the SDK; names are strings, and getattr stays refused."""
+    result = server.run(
+        "names = dir(fl)\nprint(isinstance(names, list), 'track' in names)",
+        _ctx(fl=SimpleNamespace(track=lambda *_: None)),
+    )
+    assert result.stdout.strip() == "True True", result
