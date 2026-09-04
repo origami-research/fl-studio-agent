@@ -173,6 +173,30 @@ def test_stale_heartbeat_routes_project_write(monkeypatch, tmp_path, bridge_env,
     assert spool.sent == [], "a dead bridge must never receive commands"
 
 
+def test_stale_heartbeat_refuses_a_session_write_before_the_bridge_timeout(
+    monkeypatch, tmp_path, bridge_env, no_reload
+):
+    """Session mode has no safe file fallback, so a stopped tick fails immediately."""
+    write_heartbeat(bridge_env, unix_time=int(time.time() - 3600))
+    writes: list[bool] = []
+    monkeypatch.setattr(flp, "write_notes", lambda *args, **kwargs: writes.append(True))
+    spool = FakeSpool()
+    session, _ = make_session(
+        control=selected_channel_control(0),
+        transport=spool,
+        project=tmp_path / "agent.flp",
+        session_spool_root=tmp_path,
+    )
+
+    with pytest.raises(errors.ToolError) as excinfo:
+        session.write_notes(TARGET, NOTES, "merge")
+
+    assert excinfo.value.category == "file_lane_requires_reload"
+    assert excinfo.value.retryable is True
+    assert spool.sent == []
+    assert writes == []
+
+
 @pytest.mark.parametrize("proto", [None, 1], ids=["missing", "mismatched"])
 def test_unspoken_heartbeat_proto_routes_project_write(
     monkeypatch, tmp_path, bridge_env, no_reload, proto

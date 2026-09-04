@@ -10,6 +10,7 @@ from session_fakes import HELLO, FakeControl, make_session
 from fl_mcp import errors, flp
 from fl_mcp.controller_version import CONTROLLER_PROTOCOL_VERSION
 from fl_mcp.core.carriers.broker_client import BrokerControl
+from fl_mcp.session import state as state_mod
 
 # --- snapshot ----------------------------------------------------------------
 
@@ -156,6 +157,62 @@ def test_doctor_all_connected(tmp_path, monkeypatch):
     assert "dropped_frames=3" in report.control_plane.detail
     assert report.note_plane.connected is True
     assert report.project_file.detail == str(project)
+
+
+def _install_note_script(tmp_path: Path) -> None:
+    scripts = tmp_path / "Documents" / "Image-Line" / "FL Studio" / "Settings" / "Piano roll scripts"
+    scripts.mkdir(parents=True)
+    (scripts / "MCP Write Notes.pyscript").write_text("# installed", encoding="utf-8")
+
+
+def test_note_plane_is_connected_with_a_fresh_bridge_heartbeat(tmp_path, monkeypatch):
+    """A live bridge's fresh tick proves its note lane can answer."""
+    _install_note_script(tmp_path)
+    heartbeat = tmp_path / "bridge_heartbeat.txt"
+    heartbeat.write_text("unix_time=100\nproto=2\n", encoding="utf-8")
+    (tmp_path / "bridge_udp.json").write_text('{"pid": 123}', encoding="utf-8")
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
+    monkeypatch.setattr(state_mod, "spool_roots", lambda: [tmp_path])
+    monkeypatch.setattr(state_mod, "pid_alive", lambda pid: pid == 123)
+
+    session, _ = make_session()
+    status = state_mod.doctor(session, clock=lambda: 105.0).note_plane
+
+    assert status.connected is True
+
+
+def test_note_plane_reports_a_live_bridge_with_a_stale_heartbeat(tmp_path, monkeypatch):
+    """A loaded bridge without GUI ticks must not consume a producer's timeout."""
+    _install_note_script(tmp_path)
+    heartbeat = tmp_path / "bridge_heartbeat.txt"
+    heartbeat.write_text("unix_time=100\nproto=2\n", encoding="utf-8")
+    (tmp_path / "bridge_udp.json").write_text('{"pid": 123}', encoding="utf-8")
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
+    monkeypatch.setattr(state_mod, "spool_roots", lambda: [tmp_path])
+    monkeypatch.setattr(state_mod, "pid_alive", lambda pid: pid == 123)
+
+    session, _ = make_session()
+    report = state_mod.doctor(session, clock=lambda: 111.0)
+    status = report.note_plane
+
+    assert status.connected is False
+    assert report.status == "degraded"
+    assert status.detail == "The FL MCP Bridge is loaded but has not ticked for 11 s: FL's GUI thread is not pumping."
+    assert status.fix == (
+        "The FL MCP Bridge is loaded but has not ticked for 11 s: FL's GUI thread is not pumping. "
+        "On macOS this happens while the screen is locked; unlock the Mac, or bring FL out of a modal dialog."
+    )
+
+
+def test_note_plane_without_a_heartbeat_keeps_existing_script_behavior(tmp_path, monkeypatch):
+    _install_note_script(tmp_path)
+    (tmp_path / "bridge_udp.json").write_text('{"pid": 123}', encoding="utf-8")
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
+    monkeypatch.setattr(state_mod, "spool_roots", lambda: [tmp_path])
+    monkeypatch.setattr(state_mod, "pid_alive", lambda pid: pid == 123)
+
+    session, _ = make_session()
+    assert state_mod.doctor(session, clock=lambda: 111.0).note_plane.connected is True
 
 
 def test_doctor_reports_a_stale_controller(tmp_path, monkeypatch):

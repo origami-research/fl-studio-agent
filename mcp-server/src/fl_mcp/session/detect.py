@@ -30,8 +30,9 @@ if TYPE_CHECKING:
 
 BRIDGE_HEARTBEAT_FILE = "bridge_heartbeat.txt"
 # The bridge rewrites its heartbeat every throttled tick (sub-second while FL
-# is responsive), so a stale heartbeat means FL quit or the plugin is gone.
-BRIDGE_HEARTBEAT_FRESH_SECONDS = 15.0
+# is responsive). Ten seconds admits ordinary filesystem jitter while still
+# refusing a bridge whose GUI-thread tick has stopped.
+BRIDGE_HEARTBEAT_FRESH_SECONDS = 10.0
 # The heartbeat protocol this server speaks; a heartbeat without a matching
 # proto= line is refused, exactly analogous to the wire's dropped-frames
 # codec check in doctor(). "Plugin loaded AND compatible" - the heartbeat IS
@@ -78,7 +79,7 @@ class Heartbeat:
 _NO_HEARTBEAT = Heartbeat(age=math.inf, at=None, proto=None, pattern=None, channel=None)
 
 
-def read_heartbeat(path: Path) -> Heartbeat:
+def read_heartbeat(path: Path, *, clock: Callable[[], float] = time.time) -> Heartbeat:
     """Parse one heartbeat file, failing closed on any missing/garbled field."""
     try:
         text = path.read_text(encoding="utf-8")
@@ -92,8 +93,15 @@ def read_heartbeat(path: Path) -> Heartbeat:
         try:
             fields[key] = int(value)
         except ValueError:
+            if key == "unix_time":
+                return _NO_HEARTBEAT
             continue
     at = fields.get("unix_time")
+    if at is None:
+        try:
+            at = int(path.stat().st_mtime)
+        except OSError:
+            return _NO_HEARTBEAT
 
     def context(key: str) -> int | None:
         # The bridge stamps -1 for "unknown": chan= ALWAYS (no FL getter for
@@ -103,7 +111,7 @@ def read_heartbeat(path: Path) -> Heartbeat:
         return value if value is not None and value >= 0 else None
 
     return Heartbeat(
-        age=max(0.0, time.time() - at) if at is not None else math.inf,
+        age=max(0.0, clock() - at),
         at=float(at) if at is not None else None,
         proto=fields.get("proto"),
         pattern=context("pat"),
@@ -255,5 +263,3 @@ class BridgeBreaker:
             else:
                 self.record_soft_failure()
         return self.closed
-
-

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import time
+from collections.abc import Callable
 from typing import TYPE_CHECKING
 
 from fl_mcp import errors, flp
@@ -10,6 +12,8 @@ from fl_mcp.core.carriers.spool import spool_roots
 from fl_mcp.fl.paths import piano_roll_scripts_dir
 from fl_mcp.fl.process import bridge_pid, fl_process_running, pid_alive
 from fl_mcp.schemas import Channel, DoctorReport, PlaneStatus, SessionState
+
+from .detect import BRIDGE_HEARTBEAT_FILE, BRIDGE_HEARTBEAT_FRESH_SECONDS, read_heartbeat
 
 if TYPE_CHECKING:
     from .facade import FLSession
@@ -84,7 +88,7 @@ def snapshot(session: FLSession) -> SessionState:
     )
 
 
-def doctor(session: FLSession) -> DoctorReport:
+def doctor(session: FLSession, *, clock: Callable[[], float] = time.time) -> DoctorReport:
     """Typed report - control plane, note plane, project file - with a
     concrete ``fix`` string per degraded plane."""
 
@@ -118,7 +122,7 @@ def doctor(session: FLSession) -> DoctorReport:
         control_plane = failed_probe("control plane", exc)
 
     try:
-        note_plane = _note_plane_status()
+        note_plane = _note_plane_status(clock=clock)
     except Exception as exc:  # noqa: BLE001 - doctor must report failed probes
         note_plane = failed_probe("note plane", exc)
 
@@ -193,7 +197,7 @@ def _control_plane_status(session: FLSession, liveness: dict[str, int | bool | N
     )
 
 
-def _note_plane_status() -> PlaneStatus:
+def _note_plane_status(*, clock: Callable[[], float] = time.time) -> PlaneStatus:
     scripts_dir = piano_roll_scripts_dir()
     script_installed = scripts_dir is not None and (scripts_dir / PYSCRIPT_NAME).is_file()
     roots = spool_roots()
@@ -209,6 +213,24 @@ def _note_plane_status() -> PlaneStatus:
             detail=f"the '{PYSCRIPT_NAME}' piano-roll script is not installed",
             fix="Run `python -m fl_mcp.fl.install`, then restart FL Studio.",
         )
+    for root in roots:
+        pid = bridge_pid(root)
+        if pid_alive(pid):
+            heartbeat = read_heartbeat(root / BRIDGE_HEARTBEAT_FILE, clock=clock)
+            if heartbeat.at is not None and heartbeat.age > BRIDGE_HEARTBEAT_FRESH_SECONDS:
+                age = int(heartbeat.age)
+                detail = (
+                    f"The FL MCP Bridge is loaded but has not ticked for {age} s: "
+                    "FL's GUI thread is not pumping."
+                )
+                return PlaneStatus(
+                    connected=False,
+                    detail=detail,
+                    fix=(
+                        f"{detail} On macOS this happens while the screen is locked; "
+                        "unlock the Mac, or bring FL out of a modal dialog."
+                    ),
+                )
     return PlaneStatus(
         connected=True,
         detail=f"spool at {roots[0]} (the bridge lane routes automatically "
