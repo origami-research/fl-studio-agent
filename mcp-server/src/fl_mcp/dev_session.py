@@ -29,6 +29,8 @@ ENV_PROJECT = ENV_AGENT_PROJECT
 ENV_SPOOL = ENV_SPOOL_ROOT
 MARKER_FILE = ".fl-mcp-dev-session.json"
 READY_TIMEOUT_SECONDS = 120.0
+# The broker caps one control request at 60 s; wait for hello in bounded slices.
+HELLO_SLICE_SECONDS = 30.0
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -106,7 +108,19 @@ def _wait_for_bridge(spool: Path) -> BridgeEndpoint:
 
 
 def _wait_for_hello(spool: Path) -> None:
-    BrokerControl(spool).await_hello(timeout=READY_TIMEOUT_SECONDS)
+    """Wait for the controller's hello in slices the broker accepts (its per-request cap is 60 s)."""
+    import time
+
+    deadline = time.monotonic() + READY_TIMEOUT_SECONDS
+    last: Exception | None = None
+    while time.monotonic() < deadline:
+        try:
+            BrokerControl(spool).await_hello(timeout=HELLO_SLICE_SECONDS)
+        except Exception as exc:  # noqa: BLE001 - retried until the deadline, then re-raised
+            last = exc
+        else:
+            return
+    raise RuntimeError(f"no controller hello within {READY_TIMEOUT_SECONDS:g}s") from last
 
 
 @contextlib.contextmanager
