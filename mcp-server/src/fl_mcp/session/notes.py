@@ -37,7 +37,13 @@ from fl_mcp.fl.process import bridge_pid, fl_process_running, pid_alive
 from fl_mcp.schemas import Note, NoteDelta, NoteWriteMode, Target, WriteReceipt
 
 from . import controls
-from .detect import BRIDGE_HEARTBEAT_FILE, BRIDGE_HEARTBEAT_FRESH_SECONDS, read_heartbeat
+from .detect import (
+    BRIDGE_HEARTBEAT_FILE,
+    BRIDGE_HEARTBEAT_FRESH_SECONDS,
+    _selected_channel,
+    read_heartbeat,
+)
+from .link import LIVE_SET_TIMEOUT_SECONDS
 
 if TYPE_CHECKING:
     from .facade import FLSession
@@ -177,6 +183,7 @@ class BridgeLane:
 
     def apply(self, op: Operation, data: Sequence[Note]) -> WriteReceipt:
         target, notes, mode = op.target, list(data), op.mode
+        self._select_target_channel(target.channel)
         if op.kind == "write_notes":
             # add_notes is the bridge wire's write vocabulary; clear_notes is
             # its own wire op (the consumer replaces with empty).
@@ -202,6 +209,44 @@ class BridgeLane:
             target=target,
             confirmed_notes=len(readback),
             delta=delta,
+        )
+
+    def _select_target_channel(self, target_channel: int | None) -> None:
+        """Make the Bridge's selected-channel side effect match the target.
+
+        The router admitted this lane because the profile proves this exact
+        select-then-verify sequence. The readback is mandatory: a Bridge
+        command is never sent unless FL reports the requested channel.
+        Selection intentionally remains changed so consecutive channel writes
+        do not thrash FL's visible selection.
+        """
+        if target_channel is None:
+            return
+        session = self._session
+        if session.caps.bridge_channel == target_channel:
+            return
+        response = session.link.request(
+            "select_channels", args=[[target_channel]], timeout=LIVE_SET_TIMEOUT_SECONDS
+        )
+        if not response.ok:
+            detail = response.err or "no detail"
+            if errors.is_operation_unsafe(detail):
+                raise errors.operation_unsafe("select_channels")
+            raise errors.ToolError(
+                "fl_api_error",
+                f"FL Studio refused select_channels for channel {target_channel}: {detail}",
+                "Retry after FL finishes its current operation. No notes were sent to the Bridge.",
+                retryable=True,
+            )
+        selected = _selected_channel(session.link)
+        if selected == target_channel:
+            return
+        actual = "an unknown channel" if selected is None else f"channel {selected}"
+        raise errors.ToolError(
+            "fl_api_error",
+            f"FL Studio is on {actual} after selecting channel {target_channel}; no notes were sent.",
+            "Retry after FL settles. The requested notes were not sent to the Bridge.",
+            retryable=True,
         )
 
     def read(self, target: Target) -> list[Note]:

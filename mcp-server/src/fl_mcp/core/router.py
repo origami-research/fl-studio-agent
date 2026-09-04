@@ -39,9 +39,8 @@ class Capability(Flag):
     # e.g. a plugin's parameters).
     LIVE = auto()
     # Must VERIFIABLY land on the op's coordinates. The file lane provides
-    # this by construction; the bridge only with channel-match evidence
-    # (PROBE_VERDICT Q2: ChanNum is ignored, notes land in the SELECTED
-    # channel).
+    # this by construction; the bridge by selecting then wire-verifying the
+    # requested channel before it sends a command (ChanNum is ignored).
     TARGETED = auto()
 
 
@@ -180,15 +179,16 @@ FILE_PROVIDES = Capability.FILE | Capability.TARGETED
 
 def bridge_provides(op: Operation, caps: Capabilities) -> Capability:
     """What the live bridge provides under this evidence: LIVE when the
-    heartbeat proves it ticking; TARGETED only when the op's channel
-    constraint is verifiably satisfied - the wire-read selected channel
-    equals the target (channel targeting is bridge-blind, PROBE_VERDICT Q2) -
-    until a profile reports live channel targeting, which widens only this
-    predicate."""
+    heartbeat proves it ticking; TARGETED when the profile proves its
+    select-then-verify guard, or when the wire-read selected channel already
+    equals the target."""
     if not caps.bridge_live:
         return Capability(0)
     provided = Capability.LIVE
-    if caps.profile.capabilities.channel_targeting_live or (
+    if (
+        caps.profile.capabilities.channel_targeting_live
+        and caps.bridge_channel is not None
+    ) or (
         op.target.channel is not None and op.target.channel == caps.bridge_channel
     ):
         provided |= Capability.TARGETED

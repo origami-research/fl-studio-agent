@@ -453,7 +453,7 @@ BUILTIN_FALLBACK = CapabilityProfile(
     capabilities=ProfileCapabilities(
         note_readback_live=False,
         pattern_targeting_live=True,
-        channel_targeting_live=False,
+        channel_targeting_live=True,
         score_edit_push=False,
     ),
     tick=TickFacts(mean_ms=8.7, max_ms=30.5, frontmost_required=True),

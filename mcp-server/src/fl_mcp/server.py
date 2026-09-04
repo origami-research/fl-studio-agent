@@ -242,8 +242,10 @@ def run(code: str, ctx: Context) -> RunResult:
     - fl.channels -> [Channel(index, name), ...].
     - fl.track("Bass") / fl.track(2, pattern=1) -> Track (exact name, index, or
       unique substring; pattern defaults to 1).
-    - Track.write([Note(...), ...], mode="merge"|"replace") -> receipt with
-      confirmed_notes; Track.notes() -> confirmed state; Track.clear().
+    - Track.write([Note(...), ...], mode="merge"|"replace") writes to the
+      channel named by Track, selecting and verifying it live when needed;
+      it returns a receipt with confirmed_notes. Track.notes() -> confirmed
+      state; Track.clear() clears that named channel.
     - Note(key=60 or "C4"/"F#3", start=0.0, length=1.0, velocity=0.8, pan=0.5)
       with start/length in beats from pattern start.
     - Track.set_channel_levels(volume=0.9, pan=-0.15, pitch=0) - project-file

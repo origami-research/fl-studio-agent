@@ -236,17 +236,66 @@ def test_unspoken_heartbeat_proto_routes_project_write(monkeypatch, tmp_path, br
     assert spool.sent == []
 
 
-def test_selected_channel_mismatch_routes_project_write(monkeypatch, tmp_path, bridge_env, no_reload):
-    """VERDICT Q2: a bridge write lands in the SELECTED channel, whatever the
-    target says - so a mismatch must route to the file lane, not write wrong."""
-    monkeypatch.setattr(flp, "write_notes", lambda path, notes, *, pattern, channel, mode: list(notes))
-    spool = FakeSpool(responses={"ping": PING_OK})
-    session, _ = make_session(
-        control=selected_channel_control(3), transport=spool, project=tmp_path / "agent.flp"
-    )
+def test_matching_target_channel_skips_selection(monkeypatch, tmp_path, bridge_env, no_reload):
+    """The selected target needs no control mutation before its Bridge write."""
+    project = project_flp(monkeypatch, tmp_path)
+    control = selected_channel_control(0)
+    spool = FakeSpool(responses={"ping": PING_OK, "add_notes": BRIDGE_OK})
+    session, _ = make_session(control=control, transport=spool, project=project)
 
-    assert session.write_notes(TARGET, NOTES, "merge").backend == "project-write"
-    assert spool.sent == [], "not even a ping - the channel constraint failed first"
+    assert session.write_notes(TARGET, NOTES, "merge").backend == "bridge"
+    assert "select_channels" not in [op for op, _ in control.calls]
+
+
+def test_mismatched_target_selects_and_verifies_before_bridge_write(
+    monkeypatch, tmp_path, bridge_env, no_reload
+):
+    """Q2 regression: select exactly the target, verify it, then write live."""
+    project = project_flp(monkeypatch, tmp_path)
+    selected = {"channel": 3}
+
+    def select(args):
+        assert args == [[0]]
+        selected["channel"] = args[0][0]
+
+    control = FakeControl(
+        hello=HELLO,
+        handlers={
+            "channels.selectedChannel": lambda args: selected["channel"],
+            "select_channels": select,
+        },
+    )
+    spool = FakeSpool(responses={"ping": PING_OK, "add_notes": BRIDGE_OK})
+    session, _ = make_session(control=control, transport=spool, project=project)
+
+    assert session.write_notes(TARGET, NOTES, "merge").backend == "bridge"
+    assert [op for op, _ in control.calls].count("select_channels") == 1
+    assert session.caps.bridge_channel == 0
+    assert [op for op, _ in spool.sent] == ["ping", "add_notes"]
+
+
+def test_channel_selection_readback_mismatch_refuses_before_bridge_command(
+    monkeypatch, tmp_path, bridge_env, no_reload
+):
+    """A failed selection readback is retryable and can never write the wrong roll."""
+    project = project_flp(monkeypatch, tmp_path)
+    control = FakeControl(
+        hello=HELLO,
+        handlers={
+            "channels.selectedChannel": lambda args: 3,
+            "select_channels": lambda args: None,
+        },
+    )
+    spool = FakeSpool(responses={"ping": PING_OK, "add_notes": BRIDGE_OK})
+    session, _ = make_session(control=control, transport=spool, project=project)
+
+    with pytest.raises(errors.ToolError) as excinfo:
+        session.write_notes(TARGET, NOTES, "merge")
+
+    assert excinfo.value.category == "fl_api_error"
+    assert excinfo.value.retryable is True
+    assert "channel 3" in excinfo.value.message
+    assert spool.sent == [("ping", {})]
 
 
 def test_wire_down_cannot_prove_the_channel_routes_project_write(
@@ -263,12 +312,18 @@ def test_wire_down_cannot_prove_the_channel_routes_project_write(
 
 
 def test_profile_live_channel_targeting_widens_eligibility(monkeypatch, tmp_path, bridge_env, no_reload):
-    """When a profile reports live channel selection (R2 select-then-write),
-    the channel constraint dissolves; only the predicate widens (docs/27 §2)."""
+    """The live profile admits a mismatch only when the guard can select it."""
     project = project_flp(monkeypatch, tmp_path)
     spool = FakeSpool(responses={"ping": PING_OK, "add_notes": BRIDGE_OK})
+    selected = {"channel": 3}
     session, _ = make_session(
-        control=selected_channel_control(3),  # mismatch - irrelevant now
+        control=FakeControl(
+            hello=HELLO,
+            handlers={
+                "channels.selectedChannel": lambda args: selected["channel"],
+                "select_channels": lambda args: selected.update(channel=args[0][0]),
+            },
+        ),
         transport=spool,
         project=project,
         profile=LIVE_PROFILE,
@@ -583,4 +638,5 @@ def test_pick_never_pings_when_cheaper_evidence_already_fails():
 
 def test_pick_honors_profile_channel_targeting():
     breaker = BridgeBreaker(ScriptedPing(True))
-    assert pick(caps(bridge_channel=None, profile=LIVE_PROFILE), breaker) == "bridge"
+    assert pick(caps(bridge_channel=3, profile=LIVE_PROFILE), breaker) == "bridge"
+    assert pick(caps(bridge_channel=None, profile=LIVE_PROFILE), breaker) == "project-write"

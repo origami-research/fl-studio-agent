@@ -70,7 +70,7 @@ def test_packaged_profile_parses(packaged_doc):
     assert profile.flp.playlist_stride == 88
     assert profile.fst.version_string == "11.5.5"
     assert profile.capabilities.pattern_targeting_live is True
-    assert profile.capabilities.channel_targeting_live is False
+    assert profile.capabilities.channel_targeting_live is True
     assert "FPD_SetPlaying" in profile.push_events
     assert profile.spool_roots == ("Piano roll scripts/FLMCP", "Piano roll scripts")
 

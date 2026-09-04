@@ -1,6 +1,6 @@
 """Notes: TARGETED writes to a (pattern, channel). The bridge serves them live
-when the channel-match evidence holds (PROBE_VERDICT Q2: PatNum honored,
-ChanNum blind); the file lane serves everything else by byte surgery."""
+after it selects and wire-verifies the target channel (PROBE_VERDICT Q2:
+PatNum honored, ChanNum blind); the file lane serves everything else by byte surgery."""
 
 from __future__ import annotations
 

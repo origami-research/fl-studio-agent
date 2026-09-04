@@ -91,9 +91,9 @@ TABLE = [
     pytest.param(
         notes.WRITE,
         {"bridge_channel": None, "profile": LIVE_TARGETING},
-        True,
-        "bridge",
-        id="notes.write/profile-widens-targeting",
+        None,
+        "project-write",
+        id="notes.write/profile-needs-wire-readback",
     ),
     pytest.param(notes.CLEAR, {}, True, "bridge", id="notes.clear/full-evidence"),
     pytest.param(notes.CLEAR, {"bridge_live": False}, None, "project-write", id="notes.clear/bridge-down"),

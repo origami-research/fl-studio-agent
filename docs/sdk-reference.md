@@ -13,6 +13,9 @@ The stable public surface is deliberately small:
 - `with fl.file_edit(): ...` to batch file-lane edits into a single FL reload in development mode.
 - `fl.track(...).params(...)` and `set_param(...)` for live generator plugin parameters.
 
+Notes always go to the channel named by `fl.track(...)`; live Bridge writes select and verify that
+channel first when it is not already selected in FL.
+
 Failures from FL/session boundaries raise `fl_mcp.errors.ToolError`, whose
 `category`, `message`, `fix`, and `retryable` fields are intended to be read by
 callers. Channel lookup failures raise `ChannelNotFound`, a `ValueError`, with

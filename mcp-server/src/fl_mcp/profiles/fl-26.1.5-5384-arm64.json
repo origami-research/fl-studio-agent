@@ -267,7 +267,7 @@
   "capabilities": {
     "note_readback_live": false,
     "pattern_targeting_live": true,
-    "channel_targeting_live": false,
+    "channel_targeting_live": true,
     "score_edit_push": false
   }
 }
