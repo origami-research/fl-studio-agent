@@ -59,6 +59,7 @@
 #include <vector>
 
 #include "bridge_core.h"
+#include "fl_host_abi.h"
 #include "bridge_events.h"
 #include "bridge_gui.h"
 #include "bridge_udp.h"
@@ -481,6 +482,8 @@ class Bridge {
 
  private:
   void Tick();
+  void RequestIdleAlways();
+  std::atomic<bool> idle_requested_{false};
 
   // Non-virtual, private: only DestroyObject (`delete this`) destroys the
   // object, exactly the SDK contract - and non-virtual keeps dtor slots out of
@@ -524,9 +527,15 @@ Bridge::Bridge(TPluginTag tag, TFruityPlugHost *host) {
     state_->host = host;
     state_->host_tag = tag;
     bridge_core::SetHostCallTrace(WriteHostCallTrace);
-    // Deliberately no FHD_WantIdle: the base-free ABI gets its autonomous
-    // callback from the extended tick (slot 27), and FHD_WantIdle was the
-    // dispatcher call implicated in the earlier crash chain (run 5).
+    // The tick is Idle_Public, and FL delivers it only while the plugin's UI is
+    // visible unless the plugin asks for "always" (fp_plugclass.h: FHD_WantIdle,
+    // Value 2). This plugin has no UI, so a project saved with its wrapper
+    // window closed never ticked at all: live runs 1-8 on 2026-09-04 showed
+    // tick=0 for whole matches, unlocked, focused, App Nap disabled. The
+    // earlier "no FHD_WantIdle needed" claim held only while a wrapper window
+    // happened to be open. Construction is (G); the request is idempotent and
+    // repeated from Dispatcher on the GUI thread in case a host ignores it here.
+    RequestIdleAlways();
     // A failed UDP start (no urandom, no writable root) leaves udp null and
     // the plugin serves the file spool alone - the transport is an upgrade,
     // never a requirement.
@@ -555,6 +564,18 @@ Bridge::Bridge(TPluginTag tag, TFruityPlugHost *host) {
 // even if a future build ticks us from somewhere else. The heartbeat staying on
 // this thread is deliberate - liveness keeps reporting even if the GUI thread is
 // the thing that stalls, and `gui_pending` is then the number that says so.
+void Bridge::RequestIdleAlways() {
+  if (idle_requested_.load()) return;
+  if (!bridge_gui::OnGuiThread()) return;  // host calls stay on the GUI thread by construction
+  try {
+    fl_abi::HostDispatch(state_->host, state_->host_tag, FHD_WantIdle, 0, 2);
+    idle_requested_.store(true);
+    WriteStatus("idle_requested");
+  } catch (...) {
+    WriteStatus("want_idle_exception");
+  }
+}
+
 void Bridge::Tick() {
   if (++tick_counter_ < kPollEveryNTicks) return;
   tick_counter_ = 0;
@@ -593,6 +614,7 @@ intptr_t _stdcall Bridge::Dispatcher(intptr_t id, intptr_t index, intptr_t value
   // answers 0 ("not handled") - the same answer the pad build returned when it
   // loaded and ran stably. Logged so a future need is visible.
   LogExtSlot(26, id, index, value);
+  RequestIdleAlways();
   // Forward the subscribed push events to the ring (docs/27 s5-6). This runs on
   // whatever thread FL sends the message on - some FPD_* are (GM), i.e. the
   // mixing thread - so it must only stamp the lock-free ring, never touch the
@@ -610,7 +632,8 @@ intptr_t _stdcall Bridge::Dispatcher(intptr_t id, intptr_t index, intptr_t value
 void _stdcall Bridge::Idle_Public() {
   // VMT +216, and THE tick. This is the SDK's own (G) idle callback - FL 2026
   // drives it from the Cocoa main run loop, so the pump runs inline with no
-  // queueing at all and no FHD_WantIdle is needed. Before the FPC VMT offsets
+  // queueing at all. FL only delivers it for a hidden UI after FHD_WantIdle=2
+  // (RequestIdleAlways, in the constructor). Before the FPC VMT offsets
   // were understood this same callback was reached as an unnamed "slot 27".
   LogExtSlot(27, 0, 0, 0);
   Tick();
