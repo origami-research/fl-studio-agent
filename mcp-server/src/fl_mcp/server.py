@@ -22,6 +22,7 @@ from pathlib import Path
 from typing import Any
 
 from mcp.server.mcpserver import Context, MCPServer
+from mcp.types import CallToolResult, TextContent
 from pydantic import ValidationError
 
 from fl_mcp import __version__, theory
@@ -145,7 +146,7 @@ def run(code: str, ctx: Context) -> RunResult:
     )
 
 
-def get_notes(pattern: int, channel: int | str, ctx: Context) -> GetNotesResult | ToolErrorResult:
+def get_notes(pattern: int, channel: int | str, ctx: Context) -> GetNotesResult:
     """MCP tool. Read-only view of a target's notes with provenance and
     size-aware compression (full list when small, summary when large).
 
@@ -157,14 +158,16 @@ def get_notes(pattern: int, channel: int | str, ctx: Context) -> GetNotesResult 
         target = Target(pattern=pattern, channel=channel)  # pydantic coerces "3" -> 3
         notes = session.read_notes(target)
     except ValidationError as exc:
-        return ToolErrorResult(
-            error="invalid_argument",
-            message=str(exc),
-            fix='pattern >= 1 and channel >= 0, as integers. For a channel by name, use run: fl.track("Lead").notes()',
-            retryable=False,
+        return _tool_error_response(
+            ToolErrorResult(
+                error="invalid_argument",
+                message=str(exc),
+                fix='pattern >= 1 and channel >= 0, as integers. For a channel by name, use run: fl.track("Lead").notes()',
+                retryable=False,
+            )
         )
     except ToolError as exc:
-        return _tool_error_result(exc)
+        return _tool_error_response(_tool_error_result(exc))
 
     ref = session.store.ref_at(target)
     result: dict[str, Any] = {
@@ -201,7 +204,7 @@ RENDER_WAV_BASE64_MAX_BYTES = 12 * 1024 * 1024
 _LAST_RENDER_KEY = "last_render"
 
 
-def render(ctx: Context) -> RenderResult | ToolErrorResult:
+def render(ctx: Context) -> RenderResult:
     """Render the live session to a WAV for listening. Returns {"path",
     "wavBase64"} (base64 of the WAV, omitted with a note when the file
     exceeds the size cap). Requires the live FL link; render takes seconds.
@@ -211,7 +214,7 @@ def render(ctx: Context) -> RenderResult | ToolErrorResult:
     try:
         path = fl.render(output)
     except ToolError as exc:
-        return _tool_error_result(exc)
+        return _tool_error_response(_tool_error_result(exc))
     ctx.request_context.lifespan_context[_LAST_RENDER_KEY] = path
     result: dict[str, Any] = {"path": str(path)}
     data = path.read_bytes()
@@ -222,7 +225,7 @@ def render(ctx: Context) -> RenderResult | ToolErrorResult:
     return RenderResult.model_validate(result)
 
 
-def analyze(ctx: Context, wav: str | None = None) -> AudioAnalysis | ToolErrorResult:
+def analyze(ctx: Context, wav: str | None = None) -> AudioAnalysis:
     """Measure a rendered WAV: bpm, key, integrated LUFS, true peak, and
     spectral balance. ``wav`` defaults to the most recent render (rendering
     fresh if none exists yet)."""
@@ -234,17 +237,19 @@ def analyze(ctx: Context, wav: str | None = None) -> AudioAnalysis | ToolErrorRe
             ctx.request_context.lifespan_context[_LAST_RENDER_KEY] = path
         return AudioAnalysis.model_validate(fl.analyze(path))
     except ToolError as exc:
-        return _tool_error_result(exc)
+        return _tool_error_response(_tool_error_result(exc))
     except OSError as exc:
-        return ToolErrorResult(
-            error="invalid_argument",
-            message=str(exc),
-            fix="Pass the path returned by render, or call render first.",
-            retryable=False,
+        return _tool_error_response(
+            ToolErrorResult(
+                error="invalid_argument",
+                message=str(exc),
+                fix="Pass the path returned by render, or call render first.",
+                retryable=False,
+            )
         )
 
 
-def get_scene(ctx: Context, detail: str = "summary", channel: int | None = None) -> GetSceneResult | ToolErrorResult:
+def get_scene(ctx: Context, detail: str = "summary", channel: int | None = None) -> GetSceneResult:
     """Read what is currently in the project - key, tempo, and what each channel has.
 
     Call this before writing, so additions fit what is already there. It returns
@@ -267,21 +272,25 @@ def get_scene(ctx: Context, detail: str = "summary", channel: int | None = None)
     session = ctx.request_context.lifespan_context["session"]
     project = session.project
     if project is None:
-        return ToolErrorResult(
-            error="invalid_argument",
-            message="No project file configured.",
-            fix="Run: python -m fl_mcp.make_agent_project",
-            retryable=False,
+        return _tool_error_response(
+            ToolErrorResult(
+                error="invalid_argument",
+                message="No project file configured.",
+                fix="Run: python -m fl_mcp.make_agent_project",
+                retryable=False,
+            )
         )
 
     if detail == "notes":
         return GetSceneResult(SceneNotesResult.model_validate({"notes": scene.notes_detail(project, channel)}))
     if detail != "summary":
-        return ToolErrorResult(
-            error="invalid_argument",
-            message=f'detail must be "summary" or "notes", got {detail!r}',
-            fix='Use detail="summary" or detail="notes".',
-            retryable=False,
+        return _tool_error_response(
+            ToolErrorResult(
+                error="invalid_argument",
+                message=f'detail must be "summary" or "notes", got {detail!r}',
+                fix='Use detail="summary" or detail="notes".',
+                retryable=False,
+            )
         )
 
     proj = flp.read(project)
@@ -301,6 +310,14 @@ def _tool_error_result(exc: ToolError) -> ToolErrorResult:
         fix=exc.fix,
         retryable=exc.retryable,
         candidates=exc.candidates,
+    )
+
+
+def _tool_error_response(error: ToolErrorResult) -> CallToolResult:
+    """Deliver an anticipated engine failure through MCP's isError channel."""
+    return CallToolResult(
+        content=[TextContent(type="text", text=error.model_dump_json())],
+        is_error=True,
     )
 
 

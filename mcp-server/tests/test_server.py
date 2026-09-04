@@ -7,12 +7,15 @@ hello/tempo round trip is the manager-run half of the gate.
 
 from __future__ import annotations
 
+import json
 import logging
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
+
+from mcp.types import CallToolResult
 
 from fl_mcp import __version__, server
 from fl_mcp.audio import AudioAnalysis, SpectralBalance
@@ -170,17 +173,25 @@ def test_get_notes_tolerates_numeric_string_channel():
 
 
 def test_get_notes_rejects_a_bad_target_with_a_fix():
-    result = server.get_notes(0, 0, _ctx(session=_FakeSession()))
-    assert result.error == "invalid_argument"
-    assert result.fix
+    response = server.get_notes(0, 0, _ctx(session=_FakeSession()))
+
+    assert isinstance(response, CallToolResult)
+    assert response.is_error
+    result = json.loads(response.content[0].text)
+    assert result["error"] == "invalid_argument"
+    assert result["fix"]
 
 
 def test_get_notes_surfaces_tool_errors_structured():
     err = ToolError("note_plane_unavailable", "no backend", "run fl_doctor", retryable=True)
     session = _FakeSession(error=err)
-    result = server.get_notes(1, 0, _ctx(session=session))
-    assert result.status == "error"
-    assert result.error == "note_plane_unavailable"
+    response = server.get_notes(1, 0, _ctx(session=session))
+
+    assert isinstance(response, CallToolResult)
+    assert response.is_error
+    result = json.loads(response.content[0].text)
+    assert result["status"] == "error"
+    assert result["error"] == "note_plane_unavailable"
 
 
 # -- fl_doctor ----------------------------------------------------------------

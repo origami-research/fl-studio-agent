@@ -64,6 +64,7 @@
       "stale_handle",
       "operation_unsafe"
     ],
+    "delivery": "ToolErrorResult JSON is delivered as the text content of isError tool results.",
     "shape": {
       "properties": {
         "candidates": {
@@ -199,73 +200,6 @@
       "name": "get_notes",
       "outputSchema": {
         "$defs": {
-          "GetNotesResult": {
-            "properties": {
-              "as_of": {
-                "anyOf": [
-                  {
-                    "type": "string"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ],
-                "title": "As Of"
-              },
-              "note_count": {
-                "title": "Note Count",
-                "type": "integer"
-              },
-              "notes": {
-                "anyOf": [
-                  {
-                    "items": {
-                      "$ref": "#/$defs/Note"
-                    },
-                    "type": "array"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ],
-                "default": null,
-                "title": "Notes"
-              },
-              "provenance": {
-                "anyOf": [
-                  {
-                    "type": "string"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ],
-                "title": "Provenance"
-              },
-              "summary": {
-                "anyOf": [
-                  {
-                    "$ref": "#/$defs/NotesSummary"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ],
-                "default": null
-              },
-              "target": {
-                "$ref": "#/$defs/Target"
-              }
-            },
-            "required": [
-              "target",
-              "provenance",
-              "as_of",
-              "note_count"
-            ],
-            "title": "GetNotesResult",
-            "type": "object"
-          },
           "Note": {
             "description": "One note, in musical units. C4 = MIDI 60 = middle C.\n\n``key`` is firmly an int after construction: \"C4\"/\"F#3\" are accepted as\ninput and resolved once by ``pitch.parse_key``. Use ``pitch.key_name`` for\ndisplay. No downstream code ever sees a union.",
             "properties": {
@@ -385,74 +319,72 @@
             ],
             "title": "Target",
             "type": "object"
-          },
-          "ToolErrorResult": {
-            "properties": {
-              "candidates": {
-                "anyOf": [
-                  {
-                    "items": {
-                      "type": "string"
-                    },
-                    "type": "array"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ],
-                "default": null,
-                "title": "Candidates"
-              },
-              "error": {
-                "title": "Error",
-                "type": "string"
-              },
-              "fix": {
-                "title": "Fix",
-                "type": "string"
-              },
-              "message": {
-                "title": "Message",
-                "type": "string"
-              },
-              "retryable": {
-                "title": "Retryable",
-                "type": "boolean"
-              },
-              "status": {
-                "const": "error",
-                "default": "error",
-                "title": "Status",
-                "type": "string"
-              }
-            },
-            "required": [
-              "error",
-              "message",
-              "fix",
-              "retryable"
-            ],
-            "title": "ToolErrorResult",
-            "type": "object"
           }
         },
         "properties": {
-          "result": {
+          "as_of": {
             "anyOf": [
               {
-                "$ref": "#/$defs/GetNotesResult"
+                "type": "string"
               },
               {
-                "$ref": "#/$defs/ToolErrorResult"
+                "type": "null"
               }
             ],
-            "title": "Result"
+            "title": "As Of"
+          },
+          "note_count": {
+            "title": "Note Count",
+            "type": "integer"
+          },
+          "notes": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/$defs/Note"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Notes"
+          },
+          "provenance": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Provenance"
+          },
+          "summary": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/NotesSummary"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "target": {
+            "$ref": "#/$defs/Target"
           }
         },
         "required": [
-          "result"
+          "target",
+          "provenance",
+          "as_of",
+          "note_count"
         ],
-        "title": "get_notesOutput",
+        "title": "GetNotesResult",
         "type": "object"
       }
     },
@@ -484,17 +416,6 @@
       "name": "get_scene",
       "outputSchema": {
         "$defs": {
-          "GetSceneResult": {
-            "anyOf": [
-              {
-                "$ref": "#/$defs/SceneSummary"
-              },
-              {
-                "$ref": "#/$defs/SceneNotesResult"
-              }
-            ],
-            "title": "GetSceneResult"
-          },
           "SceneNote": {
             "properties": {
               "channel": {
@@ -625,75 +546,17 @@
             ],
             "title": "SceneSummary",
             "type": "object"
+          }
+        },
+        "anyOf": [
+          {
+            "$ref": "#/$defs/SceneSummary"
           },
-          "ToolErrorResult": {
-            "properties": {
-              "candidates": {
-                "anyOf": [
-                  {
-                    "items": {
-                      "type": "string"
-                    },
-                    "type": "array"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ],
-                "default": null,
-                "title": "Candidates"
-              },
-              "error": {
-                "title": "Error",
-                "type": "string"
-              },
-              "fix": {
-                "title": "Fix",
-                "type": "string"
-              },
-              "message": {
-                "title": "Message",
-                "type": "string"
-              },
-              "retryable": {
-                "title": "Retryable",
-                "type": "boolean"
-              },
-              "status": {
-                "const": "error",
-                "default": "error",
-                "title": "Status",
-                "type": "string"
-              }
-            },
-            "required": [
-              "error",
-              "message",
-              "fix",
-              "retryable"
-            ],
-            "title": "ToolErrorResult",
-            "type": "object"
+          {
+            "$ref": "#/$defs/SceneNotesResult"
           }
-        },
-        "properties": {
-          "result": {
-            "anyOf": [
-              {
-                "$ref": "#/$defs/GetSceneResult"
-              },
-              {
-                "$ref": "#/$defs/ToolErrorResult"
-              }
-            ],
-            "title": "Result"
-          }
-        },
-        "required": [
-          "result"
         ],
-        "title": "get_sceneOutput",
-        "type": "object"
+        "title": "GetSceneResult"
       }
     },
     {
@@ -705,111 +568,40 @@
       },
       "name": "render",
       "outputSchema": {
-        "$defs": {
-          "RenderResult": {
-            "properties": {
-              "note": {
-                "anyOf": [
-                  {
-                    "type": "string"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ],
-                "default": null,
-                "title": "Note"
-              },
-              "path": {
-                "title": "Path",
-                "type": "string"
-              },
-              "wavBase64": {
-                "anyOf": [
-                  {
-                    "type": "string"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ],
-                "default": null,
-                "title": "Wavbase64"
-              }
-            },
-            "required": [
-              "path"
-            ],
-            "title": "RenderResult",
-            "type": "object"
-          },
-          "ToolErrorResult": {
-            "properties": {
-              "candidates": {
-                "anyOf": [
-                  {
-                    "items": {
-                      "type": "string"
-                    },
-                    "type": "array"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ],
-                "default": null,
-                "title": "Candidates"
-              },
-              "error": {
-                "title": "Error",
-                "type": "string"
-              },
-              "fix": {
-                "title": "Fix",
-                "type": "string"
-              },
-              "message": {
-                "title": "Message",
-                "type": "string"
-              },
-              "retryable": {
-                "title": "Retryable",
-                "type": "boolean"
-              },
-              "status": {
-                "const": "error",
-                "default": "error",
-                "title": "Status",
-                "type": "string"
-              }
-            },
-            "required": [
-              "error",
-              "message",
-              "fix",
-              "retryable"
-            ],
-            "title": "ToolErrorResult",
-            "type": "object"
-          }
-        },
         "properties": {
-          "result": {
+          "note": {
             "anyOf": [
               {
-                "$ref": "#/$defs/RenderResult"
+                "type": "string"
               },
               {
-                "$ref": "#/$defs/ToolErrorResult"
+                "type": "null"
               }
             ],
-            "title": "Result"
+            "default": null,
+            "title": "Note"
+          },
+          "path": {
+            "title": "Path",
+            "type": "string"
+          },
+          "wavBase64": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Wavbase64"
           }
         },
         "required": [
-          "result"
+          "path"
         ],
-        "title": "renderOutput",
+        "title": "RenderResult",
         "type": "object"
       }
     },
@@ -836,52 +628,6 @@
       "name": "analyze",
       "outputSchema": {
         "$defs": {
-          "AudioAnalysis": {
-            "properties": {
-              "bpm": {
-                "anyOf": [
-                  {
-                    "type": "number"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ],
-                "title": "Bpm"
-              },
-              "integrated_lufs": {
-                "title": "Integrated Lufs",
-                "type": "number"
-              },
-              "key": {
-                "anyOf": [
-                  {
-                    "type": "string"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ],
-                "title": "Key"
-              },
-              "spectral_balance": {
-                "$ref": "#/$defs/SpectralBalance"
-              },
-              "true_peak_dbfs": {
-                "title": "True Peak Dbfs",
-                "type": "number"
-              }
-            },
-            "required": [
-              "bpm",
-              "key",
-              "integrated_lufs",
-              "true_peak_dbfs",
-              "spectral_balance"
-            ],
-            "title": "AudioAnalysis",
-            "type": "object"
-          },
           "SpectralBalance": {
             "description": "Mean-square level by conventional production bands, in dBFS.",
             "properties": {
@@ -905,74 +651,51 @@
             ],
             "title": "SpectralBalance",
             "type": "object"
-          },
-          "ToolErrorResult": {
-            "properties": {
-              "candidates": {
-                "anyOf": [
-                  {
-                    "items": {
-                      "type": "string"
-                    },
-                    "type": "array"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ],
-                "default": null,
-                "title": "Candidates"
-              },
-              "error": {
-                "title": "Error",
-                "type": "string"
-              },
-              "fix": {
-                "title": "Fix",
-                "type": "string"
-              },
-              "message": {
-                "title": "Message",
-                "type": "string"
-              },
-              "retryable": {
-                "title": "Retryable",
-                "type": "boolean"
-              },
-              "status": {
-                "const": "error",
-                "default": "error",
-                "title": "Status",
-                "type": "string"
-              }
-            },
-            "required": [
-              "error",
-              "message",
-              "fix",
-              "retryable"
-            ],
-            "title": "ToolErrorResult",
-            "type": "object"
           }
         },
         "properties": {
-          "result": {
+          "bpm": {
             "anyOf": [
               {
-                "$ref": "#/$defs/AudioAnalysis"
+                "type": "number"
               },
               {
-                "$ref": "#/$defs/ToolErrorResult"
+                "type": "null"
               }
             ],
-            "title": "Result"
+            "title": "Bpm"
+          },
+          "integrated_lufs": {
+            "title": "Integrated Lufs",
+            "type": "number"
+          },
+          "key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Key"
+          },
+          "spectral_balance": {
+            "$ref": "#/$defs/SpectralBalance"
+          },
+          "true_peak_dbfs": {
+            "title": "True Peak Dbfs",
+            "type": "number"
           }
         },
         "required": [
-          "result"
+          "bpm",
+          "key",
+          "integrated_lufs",
+          "true_peak_dbfs",
+          "spectral_balance"
         ],
-        "title": "analyzeOutput",
+        "title": "AudioAnalysis",
         "type": "object"
       }
     },

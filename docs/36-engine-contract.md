@@ -12,3 +12,10 @@ The contract is built from the registered MCP tools and their Pydantic input
 and output models. It also publishes the supported session environment names
 and the Bridge port-file schema. The test suite fails when the checked-in file
 does not match the generated contract.
+
+Tools publish only their success model as `outputSchema`. Anticipated engine
+failures are `ToolErrorResult` JSON in the text content of MCP `isError` tool
+results, not an alternate successful output shape. The server returns an
+explicit MCP `CallToolResult` for these failures because the installed SDK
+otherwise prefixes raised exceptions. Consumers must check `isError` before
+decoding a tool result against its output schema.

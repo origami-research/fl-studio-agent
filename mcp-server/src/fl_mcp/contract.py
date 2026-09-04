@@ -148,6 +148,7 @@ def build_contract() -> dict[str, Any]:
         "errors": {
             "categories": list(_error_categories()),
             "shape": ToolErrorResult.model_json_schema(),
+            "delivery": "ToolErrorResult JSON is delivered as the text content of isError tool results.",
         },
     }
 
