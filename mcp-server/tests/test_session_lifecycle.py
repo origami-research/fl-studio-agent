@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import json
+import os
+import signal
 import threading
 from pathlib import Path
 
@@ -35,7 +38,6 @@ def test_concurrent_session_reloads_wait_for_the_first_port_file(monkeypatch, tm
 
     monkeypatch.setattr(lifecycle, "fl_process_running", lambda: False)
     monkeypatch.setattr(lifecycle, "bridge_pid", lambda root: None)
-    monkeypatch.setattr(lifecycle, "RELAUNCH_SETTLE_SECONDS", 0.0)
 
     def launch(
         project: Path, *, spool_root: Path, killed_pid: int | None, deadline: float
@@ -116,17 +118,62 @@ def test_reload_releases_launch_lock_after_port_file_deadline(monkeypatch, tmp_p
     assert not later.is_alive(), "a port-file deadline must release the lock for another caller"
 
 
-def test_launch_returns_the_live_session_pid_without_waiting(monkeypatch, tmp_path):
-    """Direct session launch treats an already-live Bridge owner as ready."""
+def test_launch_spawns_the_executable_and_returns_its_bridge_pid(monkeypatch, tmp_path):
+    """A launch owns a new FL process; the port file supplies its real PID."""
     monkeypatch.setattr(process.sys, "platform", "darwin")
-    monkeypatch.setattr(process, "fl_app", lambda: tmp_path / "FL Studio.app")
-    monkeypatch.setattr(process.subprocess, "run", lambda *args, **kwargs: None)
-    monkeypatch.setattr(process, "bridge_pid", lambda root: 1234)
-    monkeypatch.setattr(process, "pid_alive", lambda pid: pid == 1234)
-    monkeypatch.setattr(
-        process,
-        "wait_for_bridge_pid",
-        lambda *args: pytest.fail("a live session PID must not wait for a replacement"),
-    )
+    executable = _fake_fl_executable(tmp_path)
+    monkeypatch.setattr(process, "fl_app", lambda: executable.parents[2])
+    monkeypatch.setattr(process, "fl_executable_name", lambda: executable.name)
+    spool = tmp_path / "session"
+    project = tmp_path / "song.flp"
 
-    assert process.launch_fl(tmp_path / "song.flp", spool_root=tmp_path / "session") == 1234
+    pid = process.launch_fl(project, spool_root=spool)
+
+    try:
+        recorded = json.loads((spool / "launch.json").read_text())
+        assert pid == recorded["pid"]
+        assert recorded == {
+            "pid": pid,
+            "project": str(project),
+            "spool_root": str(spool),
+            "agent_project": str(project),
+        }
+        assert os.getsid(pid) == pid
+    finally:
+        os.killpg(pid, signal.SIGKILL)
+
+
+def test_two_session_launches_spawn_two_fl_processes(monkeypatch, tmp_path):
+    """Direct executable launches cannot focus another session's FL instead."""
+    monkeypatch.setattr(process.sys, "platform", "darwin")
+    executable = _fake_fl_executable(tmp_path)
+    monkeypatch.setattr(process, "fl_app", lambda: executable.parents[2])
+    monkeypatch.setattr(process, "fl_executable_name", lambda: executable.name)
+    first_spool, second_spool = tmp_path / "first", tmp_path / "second"
+
+    first_pid = process.launch_fl(tmp_path / "first.flp", spool_root=first_spool)
+    second_pid = process.launch_fl(tmp_path / "second.flp", spool_root=second_spool)
+
+    try:
+        assert first_pid != second_pid
+        assert process.pid_alive(first_pid)
+        assert process.pid_alive(second_pid)
+    finally:
+        os.killpg(first_pid, signal.SIGKILL)
+        os.killpg(second_pid, signal.SIGKILL)
+
+
+def _fake_fl_executable(tmp_path: Path) -> Path:
+    """A tiny stand-in that reports the child environment through the port file."""
+    executable = tmp_path / "FL Studio.app" / "Contents" / "MacOS" / "OsxFL"
+    executable.parent.mkdir(parents=True)
+    executable.write_text(
+        "#!/bin/sh\n"
+        "mkdir -p \"$FLMCP_SPOOL_ROOT\"\n"
+        "printf '{\"pid\":%s}' \"$$\" > \"$FLMCP_SPOOL_ROOT/bridge_udp.json\"\n"
+        "printf '{\"pid\":%s,\"project\":\"%s\",\"spool_root\":\"%s\",\"agent_project\":\"%s\"}' "
+        "\"$$\" \"$1\" \"$FLMCP_SPOOL_ROOT\" \"$FLMCP_AGENT_PROJECT\" > \"$FLMCP_SPOOL_ROOT/launch.json\"\n"
+        "sleep 30\n"
+    )
+    executable.chmod(0o755)
+    return executable

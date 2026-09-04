@@ -50,7 +50,7 @@ Capability acquisition is governed by the [capability acquisition model](33-capa
 
 - CI runs, but fails at `uv --system` on an externally managed interpreter; merges rely on local runs. OWNER lever.
 - Bridge routes by capability detection (no flag): fresh heartbeat + proto match + ping = eligible, file lane otherwise. LIVE-UNVERIFIED post-integration; the RUNBOOK_BRIDGE_V3 window is the promotion gate.
-- Bridge session isolation: `FLMCP_SPOOL_ROOT` selects one shared server/Bridge mailbox; default roots remain the measured FL fallback. Unit-covered; two-live-FL confirmation remains an orchestrator run.
+- Bridge session isolation: `FLMCP_SPOOL_ROOT` selects one shared server/Bridge mailbox; default roots remain the measured FL fallback. FL is always started by spawning its executable with this session environment, never `open -a`, because LaunchServices makes FL single-instance. Unit-covered; two-live-FL confirmation remains an orchestrator run.
 - Robustness built offline, unverified live: bulkhead invariant set, circuit breaker, agent-vs-human guard (observer). See #54.
 - Licensing/template project deferred (pending license).
 

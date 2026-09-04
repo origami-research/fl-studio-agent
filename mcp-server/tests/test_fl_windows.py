@@ -48,22 +48,31 @@ def test_windows_processes_use_exact_image_names(monkeypatch):
     assert seen[-1] == ["taskkill", "/PID", "1234", "/F", "/T"]
 
 
-def test_windows_launch_does_not_wait_for_fl_to_exit(monkeypatch, tmp_path):
+def test_windows_launch_spawns_the_executable_and_waits_for_its_bridge_pid(monkeypatch, tmp_path):
     monkeypatch.setattr(process.sys, "platform", "win32")
     monkeypatch.setattr(process, "fl_app", lambda: Path(r"C:\\FL\\FL64.exe"))
-    started: list[list[str]] = []
+    started: list[tuple[list[str], str, str, bool]] = []
     monkeypatch.setattr(
         process.subprocess,
         "Popen",
-        lambda args, *, env: started.append((args, env["FLMCP_SPOOL_ROOT"], env["FLMCP_AGENT_PROJECT"])),
+        lambda args, **kwargs: started.append(
+            (
+                args,
+                kwargs["env"]["FLMCP_SPOOL_ROOT"],
+                kwargs["env"]["FLMCP_AGENT_PROJECT"],
+                kwargs["start_new_session"],
+            )
+        ),
     )
+    monkeypatch.setattr(process, "wait_for_bridge_pid", lambda *args: 1234)
 
-    process.launch_fl(tmp_path / "song.flp", spool_root=tmp_path / "spool")
+    assert process.launch_fl(tmp_path / "song.flp", spool_root=tmp_path / "spool") == 1234
 
     assert started == [
         (
             [r"C:\\FL\\FL64.exe", str(tmp_path / "song.flp")],
             str(tmp_path / "spool"),
             str(tmp_path / "song.flp"),
+            True,
         )
     ]

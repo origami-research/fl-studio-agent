@@ -217,6 +217,14 @@ def fl_kill_pid(pid: int) -> bool:
     return True
 
 
+def fl_executable() -> Path:
+    """The FL executable, not its macOS application bundle."""
+    app = fl_app()
+    if sys.platform == "win32":
+        return app
+    return app / "Contents" / "MacOS" / fl_executable_name()
+
+
 def launch_fl(
     project: Path,
     *,
@@ -224,34 +232,35 @@ def launch_fl(
     killed_pid: int | None = None,
     deadline: float | None = None,
 ) -> int | None:
-    """Ask the platform launcher to open ``project`` without waiting for FL to exit.
+    """Spawn FL's executable for ``project`` and return its Bridge owner PID.
 
     ``spool_root`` is passed only to the child process, so concurrent sessions
     never mutate the server's ambient environment to select their mailbox.
+    The child PID is intentionally not returned: FL re-execs while booting, so
+    the Bridge port file is the authoritative process identity.
     """
     with fl_launch_lock():
         env = os.environ.copy()
         env[ENV_AGENT_PROJECT] = str(project)
         if spool_root is not None:
             env[ENV_SPOOL_ROOT] = str(spool_root)
-        if sys.platform == "darwin":
-            subprocess.run(["open", "-a", str(fl_app()), str(project)], check=True, env=env)
-            if spool_root is None:
-                return None
-            # ``open -a`` only focuses an already-running FL. Its port-file PID
-            # is success unless this reload explicitly killed that PID.
-            pid = bridge_pid(spool_root)
-            if killed_pid is None and pid_alive(pid):
-                return pid
-            pid = wait_for_bridge_pid(
-                spool_root,
-                killed_pid,
-                deadline if deadline is not None else time.monotonic() + FL_BOOT_TIMEOUT_SECONDS,
-            )
-            if pid is None:
-                raise OSError("this session's Bridge port file did not publish a fresh live PID")
-            return pid
-        if sys.platform == "win32":
-            subprocess.Popen([str(fl_app()), str(project)], env=env)
+        if sys.platform not in {"darwin", "win32"}:
+            raise OSError(f"FL launch is unsupported on {sys.platform}")
+        subprocess.Popen(
+            [str(fl_executable()), str(project)],
+            env=env,
+            start_new_session=True,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        if spool_root is None:
             return None
-        raise OSError(f"FL launch is unsupported on {sys.platform}")
+        pid = wait_for_bridge_pid(
+            spool_root,
+            killed_pid,
+            deadline if deadline is not None else time.monotonic() + FL_BOOT_TIMEOUT_SECONDS,
+        )
+        if pid is None:
+            raise OSError("this session's Bridge port file did not publish a fresh live PID")
+        return pid

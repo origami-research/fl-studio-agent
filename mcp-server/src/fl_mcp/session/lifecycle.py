@@ -17,10 +17,6 @@ from fl_mcp.fl.process import (
 
 from .link import ControlLink
 
-# Right after a SIGKILL, LaunchServices still has the dead process registered;
-# it clears in a second or two, so the relaunch waits before retrying.
-RELAUNCH_SETTLE_SECONDS = 2.0
-
 FL_STOP_TIMEOUT_SECONDS = 20.0
 FL_OPEN_ATTEMPTS = 6
 
@@ -29,8 +25,8 @@ def reload_fl(
     project: Path | None, link: ControlLink, *, spool_root: Path | None = None
 ) -> int | None:
     """UGLY(U5), quarantined: FL has no 'reopen this file' API and a polite
-    quit blocks on save dialogs. SIGKILL, wait RELAUNCH_SETTLE_SECONDS,
-    then ``open`` with bounded retries."""
+    quit blocks on save dialogs. SIGKILL, then directly spawn FL with bounded
+    retries."""
     if project is None:
         raise ValueError("_reload_fl requires a resolved project file")
 
@@ -46,7 +42,6 @@ def reload_fl(
             deadline = time.monotonic() + FL_STOP_TIMEOUT_SECONDS
             while time.monotonic() < deadline and fl_process_running():
                 time.sleep(0.2)
-            time.sleep(RELAUNCH_SETTLE_SECONDS)
 
         last = ""
         boot_deadline = time.monotonic() + FL_BOOT_TIMEOUT_SECONDS if spool_root is not None else None
