@@ -1,4 +1,4 @@
-# Sytrus parameter model — live capture required
+# Sytrus parameter model - live capture required
 
 This file is deliberately not a synthetic parameter map. A complete Sytrus
 map must enumerate all 597 live indices and values, then attach independently

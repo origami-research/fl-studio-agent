@@ -157,7 +157,7 @@ def test_unknown_fl_version_falls_back_with_named_warning(pinned_env, monkeypatc
     text = caplog.text
     # The warning names each fact that fell back and where it is hardcoded.
     assert "dispatcher.handled_max_id" in text
-    assert "probe_safety.h" in text
+    assert "fl_dispatch_ledger.h" in text
     assert "dispatcher.vmt_first_method_offset" in text
     assert "structs.TNoteParams/TNotesParams" in text
     assert "ppq.default" in text

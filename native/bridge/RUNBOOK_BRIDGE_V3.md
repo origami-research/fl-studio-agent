@@ -2,7 +2,7 @@
 
 Orchestrator-run, supervised-window procedure, in the RUNBOOK_BRIDGE_V2 pattern.
 Repo agents never launch, kill, or drive FL; this document is the contract for the human/orchestrator who does.
-Scope: what PR "L4 native" added - the completed bulkhead invariant set, the heartbeat `proto=`/`pat=`/`chan=` lines, `bridge_events.jsonl` forwarding, and the `wp_*` discovery ops that replaced `native/probe/`.
+Scope: what PR "L4 native" added - the completed bulkhead invariant set, the heartbeat `proto=`/`pat=`/`chan=` lines, `bridge_events.jsonl` forwarding, and the `wp_*` discovery ops that replaced the deleted `native/probe/` source. Findings and evidence remain retained.
 
 ## 0. Offline gate (run before any live step)
 
@@ -112,6 +112,6 @@ Live acceptance for this PR: `wp_getters` returns the known-good FL 2026 values 
 
 ## 5. What no longer exists (do not look for it)
 
-- `native/probe/` source, `run_probe.sh`, `analyze_probe.py`, `make_fst.py`, `stamp_probe_project.py`, `install_probe.sh`, the probe session-token ritual, `probe_*.txt` command files.
-  `PROBE_VERDICT_2026-08-30.md`, `PROBE_FINDINGS.md` and `evidence-2026-08-30/` remain as the durable record.
+- The `native/probe/` source, `run_probe.sh`, `analyze_probe.py`, `make_fst.py`, `stamp_probe_project.py`, `install_probe.sh`, the probe session-token ritual, and `probe_*.txt` command files are deleted.
+  `PROBE_VERDICT_2026-08-30.md`, `PROBE_FINDINGS.md`, and `evidence-2026-08-30/` remain as retained findings and evidence.
 - The probe's `.fst` minting flow: the Bridge installs via `install_bridge.sh` as before; nothing needs a plugin rescan.

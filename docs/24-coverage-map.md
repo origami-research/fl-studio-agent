@@ -22,12 +22,14 @@ Capability acquisition is governed by the [capability acquisition model](33-capa
 | Observe user actions - transport/selection/routing | **push-capable** | T1 | **PROBE VERDICT: FL pushes SetPlaying/SongPosChanged/SetFocus/ContextInfoChanged/RoutingChanged** live |
 | Observe user actions - score edits | poll-and-diff | T1 | no edit push; poll cost ~0ms vs 8.7ms tick (affordable) |
 | Tempo / transport | live (machine-wide wire; broker in session mode) | T2 | covered; multi-session control uses BrokerControl with pid-addressed broadcast ([docs/34](34-per-session-control.md)) |
+| Control broker | live (broker) | T4 | live-verified (#158); one machine-wide broker (pid-addressed broadcast over the single MIDI wire) owns controller requests and prevents one FL session from consuming another's control traffic. |
 | Plugin params (existing plugin) | live (wire) | T2 | normalized read/set is live-verified (#50). The documented API exposes only name/value; formatted display, kind, ranges and option labels require a captured per-plugin model. Sytrus full-model capture is pending the exact live run in `docs/research/plugin-param-model-sytrus.md`. |
 | Channel levels (vol/pan/pitch) | file | T2 | covered (flpkit) |
 | Playlist / arrangement - read | file | T2 | covered (flpkit 0.2) |
 | Playlist clips - write | file, FL-verified | T2 | covered (flpkit 0.4); live version needs host call (unknown) |
 | Automation clips - read | file | T2 | covered (flpkit 0.3) |
-| **Automation - WRITE (existing clip)** | file+reload, save/reparse equality-verified | T2 | covered (flpkit 0.6): carries the FL-authored header/trailer and patches points; flpkit verifies its save/reparse and `Track.set_automation()` independently reparses for equality before reload. **New clip + target link: NONE** — a 2026-08-31 launch-only attempt produced byte-identical files, so it is not evidence; the strict E2E gate requires an FL-authored one-action pair before a creator exists (docs/research/automation-create-flp-re-2026-08-31.md). |
+| File-edit batching | file+reload | T4 | live-verified (#163); `with fl.file_edit():` batches file-lane changes and reloads FL once after confirmed reparse. |
+| **Automation - WRITE (existing clip)** | file+reload, save/reparse equality-verified | T2 | covered (flpkit 0.6): carries the FL-authored header/trailer and patches points; flpkit verifies its save/reparse and `Track.set_automation()` independently reparses for equality before reload. **New clip + target link: NONE** - a 2026-08-31 launch-only attempt produced byte-identical files, so it is not evidence; the strict E2E gate requires an FL-authored one-action pair before a creator exists (docs/research/automation-create-flp-re-2026-08-31.md). |
 | **Mixer routing (sends/inserts)** | NONE | T2 | Corpus map: routing bitmap=235; mixer params=225 candidate ids 192/193/64..191. No FL-authored minimal pair or writer yet. E9's strict xfailed, artifact-owned gate requires the checked-in baseline/changed volume pair; provenance rejects any public `MixerFormat`/writer seam until then (docs/research/mixer-routing-flp-re-2026-08-31.md). |
 | **Effect chains (add EQ/reverb/comp)** | file, one native reference | T2 | The checked-in FL-authored pair supports only adding native Fruity Parametric EQ 2 to an empty Master slot 0. `flpkit.add_plugin(path, target, plugin_name, kind)` reads the whole opaque record from its typed reference DB and reparses it after writing; unrecorded native plugins and all VST defaults refuse rather than synthesize state. Other inserts, slots, effects, and VSTs remain NONE. |
 | **Add/remove instruments** | NONE | T2 | same static candidate map. The corpus establishes the same opaque tuple before 236 for a rack generator, but no add-instrument pair or writer exists; I1 and V1 are required evidence ([checklist](research/plugin-add-minimal-pair-capture-checklist.md)). |
@@ -38,7 +40,8 @@ Capability acquisition is governed by the [capability acquisition model](33-capa
 | Piano-roll transforms (quantize/arp/strum) | NONE | T3 | we write raw notes; FL's tools via piano-roll scripting API (documented) |
 | Markers / time & key sig / groove | NONE | T3 | file RE; some via controller API (documented) |
 | Stem export / MIDI export | NONE | T3 | render is full-mix only (-R); stems need per-track routing or CLI flags (unknown) |
-| Full-mix render | save then CLI render (`-R`) [ASSUMED-live-verify] | T3 | `fl.render(path)` saves the live project, invokes FL's CLI on that `.flp`, and accepts only a non-empty WAV. The macOS flag spelling and adjacent output path still need the operator's live verification. |
+| Live project save | live (wire) | T2 | live-verified (#164, #167): `FPT_Save` persists live state, and the saved `.flp` is reparsed to confirm the resulting project state. |
+| Full-mix render | save then CLI render (`-R`) | T3 | live-verified (#169): `fl.render(path)` saves the live project, invokes FL's CLI on that `.flp`, and accepts only a non-empty WAV. |
 | Render analysis (BPM/key/loudness/peak/spectrum) | local WAV | T2 | `fl.analyze(path)` is deterministic Python measurement, no model or FL session required. |
 | Scene analysis (key/digest) | file | T2 | covered (get_scene) |
 | Undo / redo control | undo via wire | T3 | redo + file-lane revert unbuilt (store content-addresses writes) |
@@ -70,7 +73,7 @@ ledger and can take down the user's FL session.  No host call was added.
 **Safe mitigation now.** Do not put `fl.render()` in the ears loop. It saves
 the live project then invokes the separate FL CLI renderer, validates the WAV,
 and remains a user-visible, single-flight operation at a bounded cadence.
-The macOS `-R` command and adjacent WAV output are **ASSUMED-live-verify**.
+The macOS `-R` command and adjacent WAV output were live-verified in #169.
 
 **Next evidence step.** On a matching FLEngine dylib, statically disassemble
 the jump-table targets for the undocumented, non-quarantined ids and identify a

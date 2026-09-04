@@ -4,13 +4,13 @@ Goal: cover everything an AI producer can do in FL Studio. This maps every capab
 
 ## The key reframe
 
-The "hard walls" (arrangement, automation, pattern creation, plugin loading) were walls for FL's **live API only**. The **project-write backend** rewrites the `.flp` file directly (parse events with PyFLP → edit/insert → save → reopen), so it can express **anything the file format holds** — which is nearly everything FL does. The frontier is not "FL has no API"; it is "how much of the `.flp` event grammar we correctly author." Only one thing is genuinely impossible: editing a plugin's *internal* saved state (an opaque vendor blob).
+The "hard walls" (arrangement, automation, pattern creation, plugin loading) were walls for FL's **live API only**. The **project-write backend** rewrites the `.flp` file directly (parse events with PyFLP → edit/insert → save → reopen), so it can express **anything the file format holds** - which is nearly everything FL does. The frontier is not "FL has no API"; it is "how much of the `.flp` event grammar we correctly author." Only one thing is genuinely impossible: editing a plugin's *internal* saved state (an opaque vendor blob).
 
 So there are three real mechanisms, and every capability routes to one:
 
-- **LIVE** — the server-hosted MIDI control plane, in place, no reopen. Best UX; limited to what FL's scripting API exposes.
-- **FILE** — project-write via `flp_writer`/PyFLP. Reaches the whole file format; costs an FL reopen. This is how the walls fall.
-- **IMPOSSIBLE** — a plugin's internal state (Serum's wavetable, a preset's guts). True of every approach, including a human using a text editor.
+- **LIVE** - the server-hosted MIDI control plane, in place, no reopen. Best UX; limited to what FL's scripting API exposes.
+- **FILE** - project-write via `flp_writer`/PyFLP. Reaches the whole file format; costs an FL reopen. This is how the walls fall.
+- **IMPOSSIBLE** - a plugin's internal state (Serum's wavetable, a preset's guts). True of every approach, including a human using a text editor.
 
 The router (docs/17) already picks LIVE-first, FILE-fallback per capability; this doc is the capability catalog it routes over.
 
@@ -78,7 +78,7 @@ Status: ✅ built · 🟡 partial · 🔵 reachable, unbuilt · ⛔ impossible.
 | Read / set parameters (any VST/AU/native), by index or name | LIVE (`plugins.*`) | ✅ |
 | Load a plugin with a preset | FILE (splice plugin+state chunk) or NATIVE | 🔵 |
 | Select plugin presets | FILE / NATIVE | 🔵 |
-| Edit a plugin's *internal* state (wavetable, matrix) | — | ⛔ |
+| Edit a plugin's *internal* state (wavetable, matrix) | - | ⛔ |
 
 ### Automation
 | Capability | Mechanism | Status |
@@ -99,19 +99,19 @@ Status: ✅ built · 🟡 partial · 🔵 reachable, unbuilt · ⛔ impossible.
 
 Every FILE capability below is: author the `.flp` event structure → write it → **open in real FL and confirm it renders correctly** → lock it behind a round-trip test. The real-FL gate is non-negotiable (a wrong byte corrupts the project silently).
 
-1. **`sync_from_project`** (finish note read-back) — small, high value; makes provenance honest. Uses the existing `.flp` reader.
-2. **Pattern creation + naming** (FILE) — retires the template-pattern-bank workaround; prerequisite for arrangement.
-3. **Playlist clip placement / arrangement** (FILE) — the single biggest coverage win; unlocks "produce a full song."
-4. **Automation clips** (FILE) — the other headline wall; unlocks dynamics/movement.
-5. **Channel + effect provisioning** (FILE) — create channels, load plugins, add effects without the template.
-6. **Offline render** — turn a project into audio, closing the compose→listen loop.
-7. **Extended note fields + note selection read** — fidelity + editing intelligence.
+1. **`sync_from_project`** (finish note read-back) - small, high value; makes provenance honest. Uses the existing `.flp` reader.
+2. **Pattern creation + naming** (FILE) - retires the template-pattern-bank workaround; prerequisite for arrangement.
+3. **Playlist clip placement / arrangement** (FILE) - the single biggest coverage win; unlocks "produce a full song."
+4. **Automation clips** (FILE) - the other headline wall; unlocks dynamics/movement.
+5. **Channel + effect provisioning** (FILE) - create channels, load plugins, add effects without the template.
+6. **Offline render** - turn a project into audio, closing the compose→listen loop.
+7. **Extended note fields + note selection read** - fidelity + editing intelligence.
 
 ## Grounded feasibility of the FILE-write frontier (measured 2026-08-27)
 
 Parsing real FL 2026 projects with PyFLP split the frontier by actual cost:
 
-- **Tractable now (PyFLP round-trips it):** notes (done), and — with moderate event-authoring effort — pattern create/name, channel provisioning, project settings. These edit or insert well-supported event types and can be round-trip tested (write → re-parse → assert) before the real-FL confirm.
+- **Tractable now (PyFLP round-trips it):** notes (done), and - with moderate event-authoring effort - pattern create/name, channel provisioning, project settings. These edit or insert well-supported event types and can be round-trip tested (write → re-parse → assert) before the real-FL confirm.
 - **RE-heavy (PyFLP is fragile here):** playlist/arrangement clip placement and automation clips. PyFLP's own *reader* raised `KeyError` on a stock demo's arrangement (the clip→channel iid map), so authoring reliable *writes* is raw-byte reverse-engineering of the format, not a library call - a real program per feature, each with heavy real-FL verification (a wrong byte corrupts the project silently). This is the file-format analogue of the native-plugin saga: doable, but measured in sessions, not hours.
 - **Impossible:** a plugin's internal state (below).
 
@@ -119,6 +119,6 @@ So "the walls fall via file-write" is true in principle; in practice notes + pat
 
 ## What stays impossible (be honest)
 
-- A plugin's **internal** state: its wavetable, its preset's guts, its modulation matrix. We load plugins, pick presets, and set exposed parameters — we never reach inside the vendor's opaque blob. No approach can, short of that vendor's own API.
+- A plugin's **internal** state: its wavetable, its preset's guts, its modulation matrix. We load plugins, pick presets, and set exposed parameters - we never reach inside the vendor's opaque blob. No approach can, short of that vendor's own API.
 
-That single exclusion aside, the `.flp`-write frontier puts essentially the whole of FL's producer surface in reach. The work is authoring each event structure correctly and verifying it against real FL — which is now unblocked.
+That single exclusion aside, the `.flp`-write frontier puts essentially the whole of FL's producer surface in reach. The work is authoring each event structure correctly and verifying it against real FL - which is now unblocked.

@@ -2,7 +2,7 @@
 # Install the production FL MCP Bridge plugin into FL Studio's native effects
 # folder.
 #
-# FL only loads native ("Fruity") plugins from inside its own app bundle — there
+# FL only loads native ("Fruity") plugins from inside its own app bundle - there
 # is no per-user location like there is for VSTs. That folder is group writable,
 # so no sudo is needed. FL ships with the entitlement
 # com.apple.security.cs.disable-library-validation (verified with

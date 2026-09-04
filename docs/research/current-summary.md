@@ -8,10 +8,10 @@ spent 2026-09-01 synthesis notes it replaces.
 
 - Open GitHub gates: #54, #63, #64, #93.
 - Current docs references: `docs/23-flp-reverse-engineering-playbook.md`,
-  `docs/24-coverage-map.md`, `docs/25-final-plan.md`,
+  `docs/24-coverage-map.md`, `docs/26-master-plan.md`,
   `docs/25-fl-capability-catalog.md`,
   `docs/26-master-plan.md`, `docs/27-shared-surfaces.md`,
-  `docs/28-forward-plan.md`, `docs/29-generic-pipelines.md`,
+  `docs/29-generic-pipelines.md`,
   `docs/33-capability-acquisition-model.md`, and `docs/sdk-reference.md`.
 - Current code/test references: `mcp-server/src/fl_mcp/profile.py`,
   `mcp-server/src/fl_mcp/gen_layout.py`,

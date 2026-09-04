@@ -3,14 +3,14 @@
 Why this is not just "return the notes"
 ---------------------------------------
 Dumping raw notes costs ~960 tokens for a 56-note project and tells a model
-almost nothing it can act on — it still has to infer key, register and rhythm
+almost nothing it can act on - it still has to infer key, register and rhythm
 from a list of `{midi, channel, start_beat}`. The same scene as a summary is
 about 20 tokens *and* already answers the questions that get asked: what key is
 this, what is on each channel, where is there room.
 
 So the default is analysis, not enumeration. Note-level detail is available on
-request, for the cases that genuinely need it — harmonising an existing line,
-say — rather than being paid for on every read.
+request, for the cases that genuinely need it - harmonising an existing line,
+say - rather than being paid for on every read.
 
 What is deliberately absent
 ---------------------------
@@ -124,7 +124,7 @@ MAJOR = (0, 2, 4, 5, 7, 9, 11)
 MINOR = (0, 2, 3, 5, 7, 8, 10)  # natural minor
 
 # Below this, a channel's material is treated as bass-like and reported as root
-# motion — the harmonic skeleton — rather than as a pitch-class set.
+# motion - the harmonic skeleton - rather than as a pitch-class set.
 BASS_REGISTER_CEILING = 55  # G3
 
 
@@ -161,7 +161,7 @@ def _infer_key(weighted: dict[int, int]) -> tuple[str, str]:
     """Best-fitting major/minor key, with a confidence label.
 
     Scores each of the 24 keys by how much of the material falls inside its
-    scale, weighted by how often each pitch class occurs — so a passing
+    scale, weighted by how often each pitch class occurs - so a passing
     chromatic note counts for less than a repeated tonic. Confidence comes from
     the margin over the runner-up, because a near-tie means the material is
     genuinely ambiguous and should be reported as such.
@@ -200,7 +200,7 @@ MAX_ROOT_MOTION_BARS = 8
 
 
 def _root_motion(rows: list) -> list[str]:
-    """The lowest note in each bar — a bass line's harmonic skeleton.
+    """The lowest note in each bar - a bass line's harmonic skeleton.
 
     Reported instead of chord names on purpose: naming chords from sparse or
     arpeggiated material guesses wrong often, and a wrong label is worse than a

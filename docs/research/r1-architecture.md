@@ -4,7 +4,7 @@ Research plan, 2026-08-30.
 Pays the three debts of issue #80 under the doctrine of #54: one canonical path, capability detection instead of flags, boundaries verify by readback, net-negative line count.
 Everything here is behavior-preserving except one deliberate, sequenced change: the death of `FL_MCP_BRIDGE`.
 
-Evidence base: `docs/25-final-plan.md`, `docs/24-coverage-map.md`, `native/probe/PROBE_VERDICT_2026-08-30.md` (the live verdicts), `native/bridge/BRIDGE_FINDINGS.md`, `docs/19-code-quality-proposal.md`, issues #54/#64/#68/#80.
+Evidence base: `docs/26-master-plan.md`, `docs/24-coverage-map.md`, `native/probe/PROBE_VERDICT_2026-08-30.md` (the live verdicts), `native/bridge/BRIDGE_FINDINGS.md`, `docs/19-code-quality-proposal.md`, issues #54/#64/#68/#80.
 
 ## 0. Summary of the plan
 

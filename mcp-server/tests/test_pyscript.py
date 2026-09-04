@@ -277,7 +277,7 @@ def test_fully_unwritable_spool_warns_instead_of_silently_duplicating(fl_home, s
 
 
 def test_unreadable_spool_is_diagnosed(fl_home, spool):
-    """File visible but open() refused — must name the path, not say 'nothing to apply'."""
+    """File visible but open() refused - must name the path, not say 'nothing to apply'."""
     write_notes(spool, [{"key": "C4", "start": 0, "length": 1}])
 
     # Nothing is readable: emulates the spool sitting outside FL's tree.

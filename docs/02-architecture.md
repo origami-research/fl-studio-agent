@@ -1,4 +1,4 @@
-# 02 — Architecture
+# 02 - Architecture
 
 ## Components
 
@@ -35,16 +35,16 @@ Three planes, separated by **which mechanism can do the job** (see matrix in 01)
 
 ### Why the note plane uses a file spool, not MIDI
 
-The control plane must be MIDI — that's the only way to reach the embedded Python
+The control plane must be MIDI - that's the only way to reach the embedded Python
 interpreter. But the Bridge plugin is our own native code, and how commands reach *it*
 is our choice. Candidates considered:
 
 1. **File spool polled on Idle** (chosen). `FHD_WantIdle` with `Value=2` gives the
-   plugin an idle callback **even when its editor is closed** [VERIFIED — header
+   plugin an idle callback **even when its editor is closed** [VERIFIED - header
    comment]. The plugin polls a spool directory each idle tick, executes pending
    commands, writes responses. No focus stealing, no MIDI routing configuration for the
    user, no 7-bit encoding of note data, trivially debuggable (the protocol is files
-   you can read). Latency is one idle period — tens of milliseconds, imperceptible for
+   you can read). Latency is one idle period - tens of milliseconds, imperceptible for
    "AI writes a bassline."
 2. MIDI SysEx routed to the plugin (`FHD_WantMIDIInput`). Zero-file purity, but whether
    global MIDI input actually reaches a native *effect* plugin is undocumented
@@ -55,7 +55,7 @@ is our choice. Candidates considered:
 
 ### Why the control plane is not also a file spool
 
-The controller script *could* poll files too — but `OnIdle` budget is tight (the whole
+The controller script *could* poll files too - but `OnIdle` budget is tight (the whole
 script shares FL's event loop, ~20 ms cadence [VERIFIED]), filesystem access from the
 embedded interpreter is less certain than `OnSysEx` (which is the documented,
 Flapi-proven path), and SysEx gives us push semantics with no polling cost. MIDI in,
@@ -97,17 +97,17 @@ Knob moves on screen; sound changes if playing.
 
 **FL Studio owns the truth. The MCP server holds two derived views:**
 
-1. **Live state cache** — names, counts, selection, param values. Readable on demand
+1. **Live state cache** - names, counts, selection, param values. Readable on demand
    through the control plane (the Python API has getters for all of it). Cheap to
    refresh; never trusted for long.
-2. **Shadow score** — the note contents of every pattern/channel the *server itself*
+2. **Shadow score** - the note contents of every pattern/channel the *server itself*
    wrote. Maintained because **no live surface can read notes back**
-   [VERIFIED — gap in both Python API and SDK]. Write-through: every successful
+   [VERIFIED - gap in both Python API and SDK]. Write-through: every successful
    `write_notes`/`clear_notes` updates it.
 
 The shadow score drifts if the human edits notes by hand. Two mitigations:
 
-- **Declared convention** (template, 07): patterns are partitioned — the model works in
+- **Declared convention** (template, 07): patterns are partitioned - the model works in
   its patterns; a human editing them accepts that the model's memory of those patterns
   goes stale.
 - **Resync tool** (`sync_from_project`): control plane triggers Save (Ctrl+S
@@ -117,7 +117,7 @@ The shadow score drifts if the human edits notes by hand. Two mitigations:
 
 **Single-writer rule:** while a session is active, the MCP server is the only automated
 writer. The offline plane (PyFLP writes, CLI renders) operates **only on saved copies**
-under a different filename — never on the file FL has open. This kills the
+under a different filename - never on the file FL has open. This kills the
 clobber-on-save failure mode by construction.
 
 ## Threading and safety (the crash frontier)
@@ -128,7 +128,7 @@ This is where a naive implementation kills the user's project. Rules:
   thread). Never from audio render callbacks, never from our own threads.
   `FHD_AddNotesToPR` mutates project data; GUI thread is the conservative context.
   [ASSUMED-safe; Spike 1 validates under playback]
-- If the plugin ever needs its own threads (it shouldn't in v1 — spool I/O is fast),
+- If the plugin ever needs its own threads (it shouldn't in v1 - spool I/O is fast),
   declare `FHD_SetThreadSafe` and honor `LockMix_Shared` per SDK docs. Prefer not to.
 - Keep per-Idle work bounded: process at most N commands (default 4) per tick; a
   10,000-note write is chunked by the *server*, not the plugin.
@@ -142,7 +142,7 @@ This is where a naive implementation kills the user's project. Rules:
 
 | Failure | Detection | Recovery |
 |---|---|---|
-| FL not running / project closed | Control-plane heartbeat (ping every 5 s) times out | Server marks session down; tools return actionable error ("FL Studio not reachable — is the project open?") |
+| FL not running / project closed | Control-plane heartbeat (ping every 5 s) times out | Server marks session down; tools return actionable error ("FL Studio not reachable - is the project open?") |
 | Bridge plugin not loaded | Spool command unclaimed after T=2 s | Error names the exact fix ("load 'FL MCP Bridge' on any mixer insert") |
 | Controller script not attached | SysEx request times out but spool works | Same pattern; error names the MIDI-settings fix |
 | Command crashes/undefined behavior in plugin | Response file with `ok:false, error:...`; plugin never lets exceptions escape the dispatcher boundary | Server surfaces error; command is idempotent-keyed so safe to retry |
@@ -155,8 +155,8 @@ This is where a naive implementation kills the user's project. Rules:
 - **Keystroke/`osascript` GUI automation** (karl-andres approach): focus-stealing,
   single-flight, fragile. The Bridge plugin exists precisely to delete this.
 - **All-offline PyFLP writes with FL as a viewer**: requires close/reopen of the
-  project per change — the opposite of realtime.
+  project per change - the opposite of realtime.
 - **Depending on the Flapi package**: unmaintained, `main` mid-refactor. We vendor the
   *pattern* (two loopback ports, SysEx framing) in our own controller script/server.
 - **`FPF_MIDIOut`-style virtual controller plugin instead of an effect**: keeps the
-  generator restriction on `ChanNum` — defeats the whole point.
+  generator restriction on `ChanNum` - defeats the whole point.

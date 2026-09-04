@@ -9,7 +9,7 @@
 //   {"proto":1,"id":7,"op":"add_notes","mode":"merge",
 //    "notes":[{"key":60,"start":0.0,"length":1.0,"velocity":0.8}]}
 //
-// So this supports objects, arrays, numbers, strings, booleans and null — no
+// So this supports objects, arrays, numbers, strings, booleans and null - no
 // nested arrays-of-arrays, no unicode escapes beyond passthrough. Anything it
 // cannot represent is reported as a parse failure rather than silently ignored,
 // because a half-read command would write the wrong notes.

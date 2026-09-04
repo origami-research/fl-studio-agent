@@ -4,7 +4,7 @@ project(fl_mcp_native CXX)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-# The FL Studio SDK is proprietary — its headers carry an Image-Line copyright
+# The FL Studio SDK is proprietary - its headers carry an Image-Line copyright
 # with no redistribution grant, so it is NOT vendored in this repo. Fetch it
 # with scripts/fetch_sdk.sh, or point FL_SDK_DIR at your own copy.
 set(FL_SDK_DIR "${CMAKE_CURRENT_SOURCE_DIR}/sdk" CACHE PATH "FL Studio SDK directory")
@@ -69,7 +69,7 @@ set_target_properties(fl_sdk PROPERTIES
 
 # The SDK predates 64-bit macOS: __stdcall is meaningless here and NULL is
 # redefined. Both are harmless but noisy, and they are Image-Line's code to fix,
-# not ours — silence them so real warnings in our own code stay visible.
+# not ours - silence them so real warnings in our own code stay visible.
 target_compile_options(fl_sdk PUBLIC
     -Wno-ignored-attributes
     -Wno-macro-redefined

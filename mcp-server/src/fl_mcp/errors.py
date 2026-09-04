@@ -149,7 +149,7 @@ def unknown_target(kind: str, name: str | int, candidates: list[str]) -> ToolErr
         "unknown_target",
         f"No {kind} {name!r}.",
         f"Available: {listed or '(none)'}. "
-        f"{kind.capitalize()}s are fixed by the template — pick one or ask the "
+        f"{kind.capitalize()}s are fixed by the template - pick one or ask the "
         "user to add it.",
         candidates=candidates,
     )
@@ -177,7 +177,7 @@ _UNSAFE_MARKER = "operation unsafe at current time"
 
 def is_operation_unsafe(detail: str) -> bool:
     """Whether an FL error string is the mid-cycle scripting-thread-safety guard
-    (docs/14), rather than a real API failure — worth a plain retry, not a bug report."""
+    (docs/14), rather than a real API failure - worth a plain retry, not a bug report."""
     return _UNSAFE_MARKER in detail.lower()
 
 
@@ -196,7 +196,7 @@ def stale_handle(kind: str, name: str | int) -> ToolError:
         "stale_handle",
         f"This {kind} handle for {name!r} was resolved before the project layout changed "
         "(reload, undo, or a structure signal from FL) and can no longer be trusted.",
-        f"Get a fresh handle — call fl.track({name!r}) again — before retrying this cell.",
+        f"Get a fresh handle - call fl.track({name!r}) again - before retrying this cell.",
         retryable=True,
     )
 
@@ -205,6 +205,6 @@ def unsupported_in_live_session(action: str) -> ToolError:
     return ToolError(
         "unsupported_in_live_session",
         f"{action} is not possible while FL Studio is running with a live session.",
-        "This requires the template project convention (docs/07) — set it up at "
+        "This requires the template project convention (docs/07) - set it up at "
         "project-creation time, not during a live session.",
     )

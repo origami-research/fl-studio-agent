@@ -1,8 +1,8 @@
-"""Composition helpers — pure math, no FL round trip (docs/11 kernel surface).
+"""Composition helpers - pure math, no FL round trip (docs/11 kernel surface).
 
 ``chord``/``scale`` return MIDI note numbers; ``drums``/``transpose``/
 ``quantize`` work on ``schemas.Note`` lists so they compose directly with
-``Track.write`` in kernel.py. Never mutate an input ``Note`` — callers may
+``Track.write`` in kernel.py. Never mutate an input ``Note`` - callers may
 still hold the original list (e.g. to write it somewhere else too).
 """
 
@@ -58,7 +58,7 @@ def scale(root: str | int, mode: str = "major", octaves: int = 1) -> list[int]:
 def drums(pattern: str, key: str | int = "C1", step_beats: float = 0.25, velocity: float = 0.8) -> list[schemas.Note]:
     """A step string like "x---x---x---x---" into one Note per non-rest step.
 
-    Any character other than space, '-', or '.' counts as a hit — so "x" and
+    Any character other than space, '-', or '.' counts as a hit - so "x" and
     "X" both work, and accents can later be encoded as different hit chars
     without changing this parser.
     """

@@ -2,7 +2,7 @@
 // dispatcher ids automated code must never call blind, and why.
 //
 // Lineage: Spike 1.5 dispatcher probe (v1 ledger, recovered from git history)
-// -> native/probe/src/probe_safety.h (made load-bearing for the probe's
+// -> git 2ad0d74: native/probe/src/probe_safety.h (made load-bearing for the probe's
 // sweeps) -> here, native/abi/, when the probe's passes were folded into the
 // Bridge as wp_* discovery ops and native/probe/ was deleted (docs/26 Phase
 // B1/C3). The live-confirmed fatals 94/99 were paid for exactly once
@@ -78,7 +78,7 @@ inline constexpr int kDocumentedMaxId = 87;
 // entire handled surface: every id from 110 up takes the default branch,
 // returning zero and touching nothing. Unhandled ids INSIDE the range (same
 // default): 39 (FHD_GetTimeMul), 62, 63, 64, 102.
-// See native/probe/PROBE_FINDINGS.md, "FL 2026's dispatcher surface".
+// See native/probe/PROBE_FINDINGS.md, "FL 2026's dispatcher surface"; source deleted.
 #ifdef FLMCP_PROFILE_GENERATED
 inline constexpr int kHandledMaxId = fl_profile::kHandledMaxId;
 #else

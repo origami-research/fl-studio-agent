@@ -104,7 +104,7 @@ def action_trace(profile: CapabilityProfile) -> PluginActionTrace:
         provenance=(
             "docs/33-capability-acquisition-model.md: live host-call discovery pipeline",
             "native/abi/fl_dispatch_ledger.h: no blind dispatcher calls",
-            "native/probe/PROBE_VERDICT_2026-08-30.md: fatal-id evidence",
+            "native/abi/fl_dispatch_ledger.h: fatal-id evidence",
         ),
         expectations=(
             TraceExpectation(

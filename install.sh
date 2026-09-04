@@ -1,22 +1,22 @@
 #!/usr/bin/env bash
 # One-command installer for FL Studio MCP (macOS first; Windows tracked, not
-# yet implemented — see docs/08-roadmap.md).
+# yet implemented - see docs/08-roadmap.md).
 #
-# A thin wrapper around fl_mcp.install.install_all() + fl_mcp's fl_doctor —
+# A thin wrapper around fl_mcp.install.install_all() + fl_mcp's fl_doctor -
 # all the real logic lives in Python (mcp-server/src/fl_mcp/install.py,
 # session.py's FLSession.doctor()) so this script and the `fl_doctor` MCP
 # tool never drift apart. No native plugin build step here: the native
 # Bridge plugin (native/) isn't ready (docs/12/15) and isn't part of this
 # installer. No template project step either: that's deferred until a
-# licensed FL Studio install is available (product decision, this merge) —
+# licensed FL Studio install is available (product decision, this merge) -
 # reported below as its own PENDING line, never PASS/WARN/FAIL. No PyPI
 # packaging step: distribution is a separate, not-yet-scoped fix item
-# (docs/15 fix item 7) — this always installs from the repo checkout.
+# (docs/15 fix item 7) - this always installs from the repo checkout.
 #
 # Steps, each independent and safe to re-run:
 #   1. Controller + piano-roll scripts + MIDI port assignment (reg.xml)
 #   2. Register the MCP server with Claude Code
-#   3. fl_doctor — plain-language status of every plane
+#   3. fl_doctor - plain-language status of every plane
 #
 # A step's failure doesn't abort the others; the summary at the end lists
 # PASS/WARN/FAIL per step. Nothing here needs sudo.
@@ -66,21 +66,21 @@ pending() {
 
 if [ "$(uname -s)" != "Darwin" ]; then
     echo "install.sh currently supports macOS only."
-    echo "Windows: virtual-port setup differs (docs/03) and isn't wired up here yet —"
+    echo "Windows: virtual-port setup differs (docs/03) and isn't wired up here yet -"
     echo "tracked in docs/08-roadmap.md. Manual setup: see mcp-server/README.md."
     exit 1
 fi
 
-echo "FL Studio MCP — installer"
+echo "FL Studio MCP - installer"
 echo "Repo: $REPO_ROOT"
 
 # ---------------------------------------------------------------------------
-# Step 1 — controller + piano-roll scripts + MIDI port assignment
+# Step 1 - controller + piano-roll scripts + MIDI port assignment
 # ---------------------------------------------------------------------------
 step "1/3  Controller + piano-roll scripts + MIDI assignment"
 
 if ! command -v uv >/dev/null 2>&1; then
-    fail "uv not found — install it first (https://docs.astral.sh/uv/), then re-run this script."
+    fail "uv not found - install it first (https://docs.astral.sh/uv/), then re-run this script."
 else
     echo "  Syncing mcp-server's Python environment (uv sync)..."
     if (cd "$MCP_DIR" && uv sync) >/tmp/flmcp_uv_sync.log 2>&1; then
@@ -90,17 +90,17 @@ else
         if [ "$INSTALL_RC" -eq 0 ]; then
             pass "Controller script, piano-roll script, and MIDI assignment installed"
         else
-            fail "fl_mcp.install reported a failure — see output above. Common cause: FL Studio has" \
+            fail "fl_mcp.install reported a failure - see output above. Common cause: FL Studio has" \
                  "never been run on this machine (its Settings folder doesn't exist yet). Run FL" \
                  "Studio once, then retry."
         fi
     else
-        fail "uv sync failed — see /tmp/flmcp_uv_sync.log"
+        fail "uv sync failed - see /tmp/flmcp_uv_sync.log"
     fi
 fi
 
 # ---------------------------------------------------------------------------
-# Step 2 — register with Claude Code
+# Step 2 - register with Claude Code
 # ---------------------------------------------------------------------------
 step "2/3  Register the MCP server with Claude Code"
 
@@ -113,11 +113,11 @@ if command -v claude >/dev/null 2>&1; then
         if claude mcp add fl-studio -- "${MCP_REGISTER_CMD[@]}" >/tmp/flmcp_claude_add.log 2>&1; then
             pass "Registered with Claude Code as 'fl-studio'"
         else
-            fail "claude mcp add failed — see /tmp/flmcp_claude_add.log"
+            fail "claude mcp add failed - see /tmp/flmcp_claude_add.log"
         fi
     fi
 else
-    warn "claude CLI not found — register manually. Paste into your MCP client's config:"
+    warn "claude CLI not found - register manually. Paste into your MCP client's config:"
     cat <<JSON
         {
           "mcpServers": {
@@ -130,11 +130,11 @@ else
 JSON
 fi
 
-pending "Template project (flmcp-template.flp) — deferred until a licensed FL Studio install is" \
+pending "Template project (flmcp-template.flp) - deferred until a licensed FL Studio install is" \
         "available on this machine. Not a failure; nothing to do here yet (docs/07)."
 
 # ---------------------------------------------------------------------------
-# Step 3 — fl_doctor
+# Step 3 - fl_doctor
 # ---------------------------------------------------------------------------
 step "3/3  fl_doctor"
 
@@ -162,13 +162,13 @@ finally:
     if session.control is not None:
         session.control.close()
 " 2>/tmp/flmcp_doctor.log; then
-        pass "fl_doctor ran (see plane status above — the control plane shows 'not connected' until" \
+        pass "fl_doctor ran (see plane status above - the control plane shows 'not connected' until" \
              "you start the fl-studio MCP server, which opens the ports; see docs/14 on ordering)"
     else
-        fail "fl_doctor did not run — see /tmp/flmcp_doctor.log"
+        fail "fl_doctor did not run - see /tmp/flmcp_doctor.log"
     fi
 else
-    warn "Skipped — mcp-server's virtualenv isn't set up (see step 1)"
+    warn "Skipped - mcp-server's virtualenv isn't set up (see step 1)"
 fi
 
 # ---------------------------------------------------------------------------

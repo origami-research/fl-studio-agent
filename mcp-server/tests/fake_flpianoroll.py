@@ -5,7 +5,7 @@ exercise the real .pyscript in tests: Note property defaults, score.PPQ,
 addNote/clearNotes/noteCount, and Utils.ShowMessage.
 
 This verifies our executor's logic (unit conversion, spool handling, error
-paths). It cannot verify FL's own behavior — that needs the manual smoke test
+paths). It cannot verify FL's own behavior - that needs the manual smoke test
 in docs/10.
 """
 

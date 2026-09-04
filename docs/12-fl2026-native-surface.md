@@ -71,7 +71,7 @@ Net tracked-tree delta: roughly -2,700 to -2,900 LOC.
 | Offline render | CLI render on saved copies | designed, unbuilt (M4) |
 | Headless operation | FL requires GUI + license | out of scope by design |
 
-## 4. The single gating probe — RUN 2026-08-26, VERDICT IN
+## 4. The single gating probe - RUN 2026-08-26, VERDICT IN
 
 Live result (full data: `fl-scripts/controller/probe/PROBE_REPORT.json`):
 
@@ -100,7 +100,7 @@ Until the probe passes, NOTHING is deleted.
 Harness: `fl-scripts/controller/probe/host_probe.py`, extended with the note-write step.
 Prerequisite: the controller script assigned to the FLMCP virtual MIDI input in FL's MIDI settings (one-time, scriptable once Accessibility is granted).
 
-## 4b. Interim note path — VERIFIED LIVE 2026-08-26
+## 4b. Interim note path - VERIFIED LIVE 2026-08-26
 
 With `ilmcp` unreachable, the interim note plane was built and demonstrated end to end the same day:
 a model-written beat (kick, hats, snare, clap on four channels of the 808 demo project) landed in FL's piano roll and played back, driven entirely from the pipeline.

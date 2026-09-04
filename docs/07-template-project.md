@@ -1,4 +1,4 @@
-# 07 — The Template Project
+# 07 - The Template Project
 
 > **PARTIALLY SUPERSEDED (2026-08-26):** FL 2026's `ilmcp.addEffect` / `ilmcp.addChannel` make plugin loading and instrument creation programmatic.
 > The template's remaining job is the pattern bank only (pattern creation still has no API).
@@ -6,12 +6,12 @@
 
 Two things are impossible in a live session, from any surface (01):
 
-1. **Loading a new plugin** — the picker is human-only.
-2. **Creating a new pattern** — no API/dispatcher call exists.
+1. **Loading a new plugin** - the picker is human-only.
+2. **Creating a new pattern** - no API/dispatcher call exists.
 
 The template project converts both from runtime failures into setup-time conventions.
-This mirrors how producers actually work — most open a personal template, not an empty
-project — so the constraint costs almost nothing in practice and improves model
+This mirrors how producers actually work - most open a personal template, not an empty
+project - so the constraint costs almost nothing in practice and improves model
 behavior (a fixed instrument palette beats an agent guessing VST paths).
 
 ## Contents of `FLMCP-Template.flp`
@@ -20,7 +20,7 @@ behavior (a fixed instrument palette beats an agent guessing VST paths).
 
 | # | Name | Instrument | Role |
 |---|---|---|---|
-| 0–3 | `Kick`, `Snare`, `Clap`, `Hat` | Stock one-shots (FPC or sampler channels) | Drums — step-seq friendly |
+| 0–3 | `Kick`, `Snare`, `Clap`, `Hat` | Stock one-shots (FPC or sampler channels) | Drums - step-seq friendly |
 | 4 | `Perc` | Sampler | Auxiliary percussion |
 | 5 | `808` | Stock 3xOsc/FLEX preset | Sub bass |
 | 6 | `Bass` | FLEX or user's synth | Melodic bass |
@@ -30,7 +30,7 @@ behavior (a fixed instrument palette beats an agent guessing VST paths).
 | 10–15 | `User1`–`User6` | empty sampler channels | User loads anything; model can `load_sample` into them |
 
 Stock-plugin-only in the shipped template (everyone has them). Users are encouraged to
-save their own variant with their VSTs — the manifest (below) is regenerated, nothing
+save their own variant with their VSTs - the manifest (below) is regenerated, nothing
 else changes.
 
 ### Patterns
@@ -48,7 +48,7 @@ renders the arrangement. This is a template invariant, not a render-time mutatio
 
 - Named inserts: `Drums`, `Bass`, `Music`, `FX`, and a utility insert named `MCP`.
 - Channels pre-routed to their group inserts.
-- **`FL MCP Bridge` pre-loaded on the `MCP` insert** — the single most error-prone
+- **`FL MCP Bridge` pre-loaded on the `MCP` insert** - the single most error-prone
   install step, eliminated.
 - Basic send chain (reverb/delay on sends) so `set_plugin_param` has something
   expressive to grab immediately.
@@ -56,7 +56,7 @@ renders the arrangement. This is a template invariant, not a render-time mutatio
 ### Controller script
 
 Enabling `device_FLMCP.py` in MIDI settings is per-FL-install (not per-project), so the
-template can't carry it — the installer + `fl_doctor` own that step.
+template can't carry it - the installer + `fl_doctor` own that step.
 
 ## The manifest
 
@@ -79,7 +79,7 @@ project via `sync_from_project`:
 Purpose: gives the server (and through it, the model) name→index resolution and a
 curated map of *musically meaningful* parameters per instrument, without a live
 round trip. Live state always wins on conflict (`state.snapshot` cross-check at
-startup; mismatches surface in `fl_doctor` as "project drifted from manifest —
+startup; mismatches surface in `fl_doctor` as "project drifted from manifest -
 regenerate?").
 
 ## Custom templates
@@ -87,7 +87,7 @@ regenerate?").
 `fl_doctor` treats "template" as: any project + matching manifest. Users make their
 own: open their project, load Bridge on an insert, run the `generate_manifest` server
 command (PyFLP parse of the saved file → manifest skeleton → user labels `kind` and
-`notable_params`). Power users get their whole VST rack under model control this way —
+`notable_params`). Power users get their whole VST rack under model control this way -
 loading happened at human time, control happens at model time.
 
 ## Distribution

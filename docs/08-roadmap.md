@@ -1,11 +1,11 @@
-# 08 — Roadmap, Spikes, and Open Questions
+# 08 - Roadmap, Spikes, and Open Questions
 
 Ordering principle: **retire the riskiest unknown first.** The entire project stands on
 one unverified behavior (cross-channel `FHD_AddNotesToPR` from an effect). If Spike 1
 fails, we redesign before writing anything else; everything after it is known
 engineering.
 
-## Spike 1.5 — dispatcher probe (runs before or parallel with Spike 1)
+## Spike 1.5 - dispatcher probe (runs before or parallel with Spike 1)
 
 Bridge-plugin mode that sweeps undocumented host-dispatcher message IDs 0-255 on a
 scratch project, hunting for note/selection **getters**. Full spec in
@@ -19,7 +19,7 @@ the shadow-score machinery shrinks to a cache. Worst case: a few days and certai
 
 **Exit criteria:** written getter-exists / getter-does-not-exist verdict.
 
-## Spike 1 — the load-bearing unknown (native plugin)
+## Spike 1 - the load-bearing unknown (native plugin)
 
 Minimal effect plugin, no spool, no protocol: hardcoded to write a C-major chord via
 `FHD_AddNotesToPR` a few seconds after load (from Idle). Then a parameter sweep,
@@ -44,7 +44,7 @@ recording results into 03/04:
 **Exit criteria:** chord lands on an arbitrary channel+pattern on both platforms, with
 a written decision on targeting strategy (explicit vs select-then-write).
 
-## Spike 2 — spool loop (still no MCP)
+## Spike 2 - spool loop (still no MCP)
 
 Bridge plugin + spool directory + `add_notes`/`ping` ops; driven by `echo` and shell
 scripts.
@@ -56,7 +56,7 @@ scripts.
       responses, FL stays alive
 - [ ] Idempotent replay of duplicate ids
 
-## Spike 3 — control plane echo (controller script)
+## Spike 3 - control plane echo (controller script)
 
 `device_FLMCP.py` + a 50-line host-side probe script (no MCP yet).
 
@@ -67,7 +67,7 @@ scripts.
 - [ ] `hello` payload complete: FL version, PPQ (`general.getRecPPQ` naming), tempo
 - [ ] Dispatch: `transport.start/stop`, `mixer.setTrackVolume`, `channels.selectOneChannel`,
       `plugins.getParamValue/setParamValue` round trips
-- [ ] Tempo set via `processRECEvent(REC_Tempo, …)` — stable?
+- [ ] Tempo set via `processRECEvent(REC_Tempo, …)` - stable?
 - [ ] Ctrl+S emulation for save (`sync_from_project` dependency)
 - [ ] Throughput/latency: ops per second sustained without FL UI jank; frame-size cap
       empirically checked
@@ -75,20 +75,20 @@ scripts.
 
 ## Milestones
 
-**M1 — vertical slice.** MCP server with exactly four tools: `fl_doctor`,
+**M1 - vertical slice.** MCP server with exactly four tools: `fl_doctor`,
 `write_notes`, `play`, `stop`. A model writes a beat you can watch land. This is the
 demo that proves the product.
 
-**M2 — control-plane breadth.** Full tool catalog from 06 except render/sync. Shadow
+**M2 - control-plane breadth.** Full tool catalog from 06 except render/sync. Shadow
 score with persistence. Composition helper tools.
 
-**M3 — template + sound design.** Template `.flp` + manifest + name resolution +
+**M3 - template + sound design.** Template `.flp` + manifest + name resolution +
 `list/set_plugin_param` with per-plugin param-name caching. `load_sample`.
 
-**M4 — ground truth + render.** `sync_from_project` (save → PyFLP → shadow rebuild),
+**M4 - ground truth + render.** `sync_from_project` (save → PyFLP → shadow rebuild),
 `generate_manifest`, `render_project` via `FL.exe /R` on saved copies.
 
-**M5 — packaging.** Installers (plugin binaries, script, template, port setup),
+**M5 - packaging.** Installers (plugin binaries, script, template, port setup),
 macOS signing/notarization, first-run walkthrough, `fl_doctor` polish. Public release.
 
 **Later / explicitly deferred:** MIDI-direct plugin transport (replace spool if
@@ -98,7 +98,7 @@ sessions, the private-product offline pipeline (PyFLP compose + CLI render at sc
 ## Open-questions ledger
 
 Every [ASSUMED]/[REPORTED] item in these docs, in one place. Each gets resolved by a
-spike and its doc updated — this table is the checklist.
+spike and its doc updated - this table is the checklist.
 
 | # | Question | Doc | Spike |
 |---|---|---|---|
@@ -116,7 +116,7 @@ spike and its doc updated — this table is the checklist.
 | 12 | `processRECEvent` tempo-set stability | 05 | 3 |
 | 13 | Ctrl+S emulation for save | 05/06 | 3 |
 | 14 | SysEx frame-size cap across drivers | 03 | 3 |
-| 15 | FL version floor (piano roll scripting isn't needed — what's our true min?) | 00 | 1–3 |
+| 15 | FL version floor (piano roll scripting isn't needed - what's our true min?) | 00 | 1–3 |
 
 ## Testing philosophy
 
@@ -126,7 +126,7 @@ spike and its doc updated — this table is the checklist.
   harness implementing both protocol endpoints), so CI needs no FL license. A small
   manual smoke checklist covers real-FL behavior per release.
 - The Bridge plugin gets a standalone host shim for unit-testing command execution
-  logic (dispatcher mocked) — the only untestable-in-CI line is the dispatcher call
+  logic (dispatcher mocked) - the only untestable-in-CI line is the dispatcher call
   itself.
 
 ## Open questions added 2026-08-24 (from spec 11 workshop)

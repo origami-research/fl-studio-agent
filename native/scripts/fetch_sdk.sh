@@ -3,7 +3,7 @@
 #
 # The SDK is proprietary: its headers carry "FL Studio generator/effect plugins
 # SDK (99-21)" with an Image-Line copyright and no redistribution grant, and no
-# LICENSE file ships with it. So it cannot live in this repo — every developer
+# LICENSE file ships with it. So it cannot live in this repo - every developer
 # fetches their own copy.
 #
 # Source of record is https://www.image-line.com/developers (login required).

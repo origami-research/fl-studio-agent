@@ -7,7 +7,7 @@ dist/
 build/
 .lavish/
 
-# FL Studio SDK — proprietary Image-Line code, fetched not vendored
+# FL Studio SDK - proprietary Image-Line code, fetched not vendored
 native/sdk/
 native/build/
 

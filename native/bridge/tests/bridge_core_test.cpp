@@ -6,7 +6,7 @@
 // Built with ASan+UBSan (see the bridge_core_test target in
 // native/CMakeLists.txt).
 //
-// Hand-rolled asserts, no test framework — dependency-free convention.
+// Hand-rolled asserts, no test framework - dependency-free convention.
 
 #include <sys/stat.h>
 #include <unistd.h>

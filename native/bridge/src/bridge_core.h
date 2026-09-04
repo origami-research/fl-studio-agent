@@ -1,4 +1,4 @@
-// Bridge core — the host-independent half of the FL MCP Bridge plugin.
+// Bridge core - the host-independent half of the FL MCP Bridge plugin.
 //
 // Everything here is pure logic over a spool directory and a TFruityPlugHost
 // pointer: reading the v2 sequenced spool (commands/queue.json + one file per
@@ -12,8 +12,8 @@
 // The spool protocol is docs/03 / mcp-server/src/fl_mcp/spool.py (proto 2),
 // shared with the piano roll .pyscript so either consumer applies a command
 // exactly once via the shared ledger. The Bridge serves the same commands
-// over TWO carriers — this file spool and the localhost UDP transport
-// (bridge_udp.*, docs/22) — through ONE executor (ExecuteCommand) and that
+// over TWO carriers - this file spool and the localhost UDP transport
+// (bridge_udp.*, docs/22) - through ONE executor (ExecuteCommand) and that
 // one ledger; only delivery and disposal differ per carrier.
 #pragma once
 

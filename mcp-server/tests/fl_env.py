@@ -1,14 +1,14 @@
 """Emulate FL Studio's embedded Python environment for piano roll scripts.
 
 The fake `flpianoroll` module covers the *API*. This module covers the
-*sandbox* — and the sandbox is where every real-world failure has come from.
+*sandbox* - and the sandbox is where every real-world failure has come from.
 
 Observed behavior of FL Studio 2025's embedded interpreter, each learned by
 watching a real script fail:
 
 1. `open()` succeeds only inside FL's own data tree. Elsewhere it raises
    `SystemError: <class '_io.FileIO'> returned NULL without setting an
-   exception` — even though `os.path.exists()` returns True for the same path.
+   exception` - even though `os.path.exists()` returns True for the same path.
 2. `os.remove()` is blocked outright:
    `SystemError: <built-in function remove> returned NULL without setting an
    exception`. `os.replace`/`os.rename`/`os.makedirs` are assumed blocked too.
@@ -82,7 +82,7 @@ def run_pyscript(script_path: Path, allowed_roots: list[Path]) -> types.ModuleTy
 
     The restrictions are installed into `sys.modules` and `builtins` rather than
     the script's namespace, because the script's own `import os` would otherwise
-    rebind straight back to the unrestricted module — which is exactly what FL
+    rebind straight back to the unrestricted module - which is exactly what FL
     does not let happen.
 
     Top-level code runs first; then `apply()` is called with no arguments, as FL

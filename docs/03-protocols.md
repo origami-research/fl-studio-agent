@@ -1,4 +1,4 @@
-# 03 — Wire Protocols
+# 03 - Wire Protocols
 
 Two protocols, one per in-FL endpoint. Both are versioned, request/response,
 correlation-ID'd, and designed to be debuggable by a human with a text editor and a
@@ -12,24 +12,24 @@ MIDI monitor.
 
 Two virtual MIDI loopback ports:
 
-- **`FLMCP Req`** — server → FL. Attached to the controller script in FL's MIDI
+- **`FLMCP Req`** - server → FL. Attached to the controller script in FL's MIDI
   *input* settings (assign a port number, enable the script as controller type).
-- **`FLMCP Res`** — FL → server. Assigned in FL's MIDI *output* settings; the script
+- **`FLMCP Res`** - FL → server. Assigned in FL's MIDI *output* settings; the script
   sends via `device.midiOutSysex` (exact function name validated in Spike 3).
 
 Port creation: on macOS the server creates both as CoreMIDI virtual ports at startup
-(python-rtmidi supports this) [VERIFIED — Flapi does exactly this]. On Windows, virtual
-ports cannot be created by an unprivileged normal API — the installer sets up
+(python-rtmidi supports this) [VERIFIED - Flapi does exactly this]. On Windows, virtual
+ports cannot be created by an unprivileged normal API - the installer sets up
 **loopMIDI** ports, or on Win11+ uses **Windows MIDI Services** command-line loopback
-endpoints [REPORTED — BeatSage]. Install tooling handles this; the protocol is
+endpoints [REPORTED - BeatSage]. Install tooling handles this; the protocol is
 identical either way.
 
 ### The 7-bit problem
 
-Every byte between SysEx start `F0` and end `F7` **must be ≤ 0x7F** — MIDI data bytes
-are 7-bit [VERIFIED — MIDI spec]. Arbitrary payloads must be encoded. v1 uses
+Every byte between SysEx start `F0` and end `F7` **must be ≤ 0x7F** - MIDI data bytes
+are 7-bit [VERIFIED - MIDI spec]. Arbitrary payloads must be encoded. v1 uses
 **base64** of a UTF-8 JSON payload: ~33% overhead but human-decodable and
-implementable identically in embedded Python 3.9 (`base64`, `json` — stdlib
+implementable identically in embedded Python 3.9 (`base64`, `json` - stdlib
 availability inside FL is [ASSUMED], validated in Spike 3; fallback is a hand-rolled
 7-in-8 packer, ~14% overhead).
 
@@ -42,7 +42,7 @@ F0 7D 4D 43 <ver> <type> <payload: base64 bytes as 7-bit ASCII> F7
 │  │  │  │   └─ protocol version, 0x01
 │  │  └──┴─ "MC" magic, distinguishes our traffic from anything else on the port
 └──└─ SysEx start + manufacturer ID 0x7D (educational/prototyping, non-commercial
-      reserved ID — correct for v1; register or switch to a proper extended ID
+      reserved ID - correct for v1; register or switch to a proper extended ID
       before any commercial release)
 ```
 
@@ -59,12 +59,12 @@ Response:
 { "id": 421, "ok": false, "err": "TypeError: ...", "trace": "..." }
 ```
 
-- `id` — monotonically increasing per session; correlates request/response.
+- `id` - monotonically increasing per session; correlates request/response.
   Responses may arrive out of order (some ops complete on a later `OnIdle`).
-- `op` — namespaced as `<module>.<function>` mirroring the FL Python API 1:1
+- `op` - namespaced as `<module>.<function>` mirroring the FL Python API 1:1
   (`transport.start`, `plugins.setParamValue`, …) plus a small set of composite ops
   (`state.snapshot`, `ping`, `hello`). Keeping the wire ops 1:1 with the documented API
-  means the protocol needs no redesign when we expose more surface — only the MCP
+  means the protocol needs no redesign when we expose more surface - only the MCP
   tool layer (06) curates.
 - **Chunking**: SysEx messages should stay small (drivers vary; we cap frames at 512
   bytes). Larger payloads are split into `0x04` chunk frames:
@@ -94,12 +94,12 @@ Response:
 └── session.json  # {proto_ver, server_pid, started_at, heartbeat_at}
 ```
 
-- **Spool root**: a fixed per-user location — macOS
+- **Spool root**: a fixed per-user location - macOS
   `~/Library/Application Support/FLMCP/spool/`, Windows `%LOCALAPPDATA%\FLMCP\spool\`.
   The plugin also checks `FHD_GetPath` FL data dirs for a `flmcp_spool_override` file
   redirecting elsewhere (for tests). Plugin discovers the newest `session.json` with a
   fresh heartbeat.
-- **Atomicity**: writers create `*.tmp` then `rename()` — readers never see partial
+- **Atomicity**: writers create `*.tmp` then `rename()` - readers never see partial
   JSON. [Standard technique; rename is atomic on same filesystem on both platforms.]
 - **Ordering**: zero-padded sequence filenames; plugin processes in lexical order, at
   most N (default 4) per Idle tick.
@@ -109,7 +109,7 @@ Response:
 
 ### Command schemas
 
-`add_notes` — the core operation:
+`add_notes` - the core operation:
 ```json
 {
   "id": 17, "op": "add_notes",
@@ -131,9 +131,9 @@ Response:
 }
 ```
 
-Notes on units: `TNoteParams` positions/lengths are **PPQ ticks** [VERIFIED — header
+Notes on units: `TNoteParams` positions/lengths are **PPQ ticks** [VERIFIED - header
 comment]. FL's project PPQ is queryable (default 96; `general.getRecPPQ()`
-[ASSUMED — validated Spike 3]) and reported in the control-plane `hello`, so the
+[ASSUMED - validated Spike 3]) and reported in the control-plane `hello`, so the
 **server** owns beats→ticks conversion; the spool speaks ticks only. Exact runtime
 semantics of `Vol/Pan/Pitch` scaling are confirmed empirically in Spike 1 and the
 findings recorded here.
@@ -143,11 +143,11 @@ Other v1 ops:
 | op | Dispatcher | Notes |
 |---|---|---|
 | `add_notes` | `FHD_AddNotesToPR` | flags=NPF_EmptyFirst gives clear-and-write |
-| `clear_notes` | `FHD_AddNotesToPR` with `Count=0, NPF_EmptyFirst` | [ASSUMED count=0 legal; else 1 dummy note + delete strategy — Spike 1] |
+| `clear_notes` | `FHD_AddNotesToPR` with `Count=0, NPF_EmptyFirst` | [ASSUMED count=0 legal; else 1 dummy note + delete strategy - Spike 1] |
 | `preview_note_on` / `preview_note_off` | `FHD_NoteOn`/`FHD_NoteOff` | audible preview, no writing |
 | `load_sample` | `FHD_LoadInChannel` | absolute path in payload |
 | `load_audio_clip` | `FHD_LoadAudioClip` | drops at playlist selection |
-| `ping` | — | plugin liveness + version report |
+| `ping` | - | plugin liveness + version report |
 
 Response:
 ```json
@@ -159,7 +159,7 @@ Response:
 
 - Single server instance per session (enforced via `session.json` pid + heartbeat).
 - Commands are idempotency-keyed by `id`; the plugin records the last K processed ids
-  and answers duplicates from memory without re-executing — safe retries.
+  and answers duplicates from memory without re-executing - safe retries.
 - The plugin is single-threaded with respect to the spool (all on Idle), so no locking
   is needed on the FL side.
 
@@ -171,7 +171,7 @@ Some tools need both planes in order (e.g. select channel via control plane, the
 write via note plane if explicit `ChanNum` turns out unsupported). The **MCP server**
 is the only orchestrator; neither in-FL component knows the other exists. Sequencing
 rule: a cross-plane tool call completes plane 1, awaits its response, then issues
-plane 2 — no speculative parallelism inside one tool call, ever. Simplicity beats
+plane 2 - no speculative parallelism inside one tool call, ever. Simplicity beats
 latency here; both planes are sub-50 ms.
 
 ### Amendment (spec 11 supersedes)

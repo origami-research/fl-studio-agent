@@ -44,10 +44,10 @@ and an observed dispatcher id is never callable evidence.
 
 | Pair | Baseline state | One FL action | Required FL readback |
 |---|---|---|---|
-| **E2 — second native effect** | Empty/default project; Master insert selected; Master slot 1 empty | Add **Fruity Reeverb 2** at Master slot 1, leaving its default state untouched | Master slot 1 visibly names Fruity Reeverb 2 after reopen; its slot remains Master/1 after resave |
-| **I1 — native instrument** | Empty/default project; no extra channel added after baseline save | Add **FL Keys** as one channel, leaving its default state untouched | Channel rack visibly contains one FL Keys channel after reopen; its channel identity/state survives resave |
-| **V1 — third-party VST** | Empty/default project; no extra channel added after baseline save | Add one preselected, installed third-party VST once, leaving its default state untouched | Channel rack visibly contains that recorded VST identity after reopen; FL can load it and its carried state survives resave |
-| **P1 — preset load** | A single existing **3x Osc** channel in default state; record the exact source channel identity before baseline save | Load the shipped **Bell.fst** preset through FL's preset UI once | The same channel still identifies as 3x Osc and the captured FL UI shows the loaded Bell state after reopen; that state survives resave |
+| **E2 - second native effect** | Empty/default project; Master insert selected; Master slot 1 empty | Add **Fruity Reeverb 2** at Master slot 1, leaving its default state untouched | Master slot 1 visibly names Fruity Reeverb 2 after reopen; its slot remains Master/1 after resave |
+| **I1 - native instrument** | Empty/default project; no extra channel added after baseline save | Add **FL Keys** as one channel, leaving its default state untouched | Channel rack visibly contains one FL Keys channel after reopen; its channel identity/state survives resave |
+| **V1 - third-party VST** | Empty/default project; no extra channel added after baseline save | Add one preselected, installed third-party VST once, leaving its default state untouched | Channel rack visibly contains that recorded VST identity after reopen; FL can load it and its carried state survives resave |
+| **P1 - preset load** | A single existing **3x Osc** channel in default state; record the exact source channel identity before baseline save | Load the shipped **Bell.fst** preset through FL's preset UI once | The same channel still identifies as 3x Osc and the captured FL UI shows the loaded Bell state after reopen; that state survives resave |
 
 `E2` intentionally changes plugin identity while holding the existing effect
 case's class (stock native effect) constant.  `I1` changes from an insert-slot

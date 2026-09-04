@@ -1,4 +1,4 @@
-// FL MCP Bridge — the production note-writing plugin. Removes the human from
+// FL MCP Bridge - the production note-writing plugin. Removes the human from
 // the loop: it consumes the same spool the piano roll .pyscript reads and
 // applies note edits to the live FL session on its own, silently, with no
 // editor and no user trigger.
@@ -15,7 +15,7 @@
 //     header) and the 20 classic virtuals in SDK order, with NO virtual
 //     destructor anywhere.
 //   * 64 vtable slots. FL 2026's real TFruityPlug has grown well past the
-//     public header's 20 virtuals — its loader host-calls extended slots
+//     public header's 20 virtuals - its loader host-calls extended slots
 //     (observed live: 26, 27, 30, 32; the RE found call sites for 25/26/31).
 //     A 22-slot vtable let those calls run off the end into adjacent RTTI data
 //     and branch there (the run-11 EBusError at typeinfo+0). Slots 20..63 are
@@ -131,7 +131,7 @@ void LogExtSlot(int slot, intptr_t a, intptr_t b, intptr_t c) {
 }
 
 // The extended tick (FL 2026 slot 27) fires often; polling the filesystem on
-// every one is wasteful. Poll every Nth tick — still sub-second responsiveness.
+// every one is wasteful. Poll every Nth tick - still sub-second responsiveness.
 constexpr int kPollEveryNTicks = 3;
 
 // Bounded work per pump: a UDP burst must never turn one GUI-thread pump into
@@ -370,8 +370,8 @@ char gShortName[] = "MCPBR";
 // assigned at runtime rather than in this static initializer.
 TFruityPlugInfo gPlugInfo = {
     CurrentSDKVersion,
-    nullptr,  // LongName  — set in InitPlugInfo()
-    nullptr,  // ShortName — set in InitPlugInfo()
+    nullptr,  // LongName  - set in InitPlugInfo()
+    nullptr,  // ShortName - set in InitPlugInfo()
     FPF_Type_Effect,  // effect (not generator): it lives on a mixer insert and
                       // owns no channel, so every write names TNotesParams.ChanNum
     0,  // NumParams
@@ -483,7 +483,7 @@ class Bridge {
   void Tick();
 
   // Non-virtual, private: only DestroyObject (`delete this`) destroys the
-  // object, exactly the SDK contract — and non-virtual keeps dtor slots out of
+  // object, exactly the SDK contract - and non-virtual keeps dtor slots out of
   // the vtable entirely.
   ~Bridge() = default;
 
@@ -678,7 +678,7 @@ int _stdcall Bridge::OutputVoice_ProcessEvent(TOutVoiceHandle handle, intptr_t e
 }
 void _stdcall Bridge::OutputVoice_Kill(TVoiceHandle handle) { (void)handle; }
 
-// intptr_t tag (not int — an int param truncates FL's real tag on this build).
+// intptr_t tag (not int - an int param truncates FL's real tag on this build).
 // Returns void*: FL treats the result as an opaque object pointer + vtable.
 #if defined(_WIN32)
 #define FLMCP_EXPORT __declspec(dllexport)
@@ -693,7 +693,7 @@ CreatePlugInstance(TFruityPlugHost *host, TPluginTag tag) {
 
 // Second export in Image-Line's own two-export surface. Per the run-11
 // post-mortem this export is the gate FL 2026 uses to take the extended-slot
-// path — which the Bridge WANTS, since slot 27 (the tick) is its autonomous
+// path - which the Bridge WANTS, since slot 27 (the tick) is its autonomous
 // entry point.
 extern "C" FLMCP_EXPORT void _stdcall SetExternalAppHandle(intptr_t handle) {
   (void)handle;

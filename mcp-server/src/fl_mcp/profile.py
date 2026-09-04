@@ -333,15 +333,15 @@ def profile_to_dict(profile: CapabilityProfile) -> dict:
 
 _FALLBACK_FACTS = {
     # fact name -> (value summary, where the constant lives today)
-    "dispatcher.handled_max_id": ("109", "native/probe/src/probe_safety.h kHandledMaxId"),
-    "dispatcher.unsafe": ("ids 94 (crashes), 99 (hangs)", "native/probe/src/probe_safety.h kLedger"),
+    "dispatcher.handled_max_id": ("109", "native/abi/fl_dispatch_ledger.h kHandledMaxId"),
+    "dispatcher.unsafe": ("ids 94 (crashes), 99 (hangs)", "native/abi/fl_dispatch_ledger.h kLedger"),
     "dispatcher.vmt_first_method_offset": ("200", "native/abi/fl_host_abi.h kFpcVmtHeaderBytes"),
     "structs.TNoteParams/TNotesParams": ("32/52 bytes, Vol=Single@12", "native/bridge/src/bridge_core.cpp static_asserts"),
     "ppq.default": ("96", "native/bridge/src/bridge_core.h kDefaultPPQ"),
     "flp.event_size_overrides": ("{172: 1}", "flpkit _EVENT_SIZE_OVERRIDES"),
     "flp.playlist_stride": ("88", "flpkit stride detector's FL 2026 answer"),
     "flp.note_flags_default": ("0x4000", "flpkit NOTE_FLAGS_DEFAULT"),
-    "fst": ("11.5.5, 52-byte wrapper", "native/probe/make_fst.py"),
+    "fst": ("11.5.5, 52-byte wrapper", "git 2ad0d74: native/probe/make_fst.py"),
     "spool_roots": ("Piano roll scripts[/FLMCP]", "fl_mcp/fl/paths.py SPOOL_SUBDIRS"),
     "capabilities+tick": ("probe verdicts of 2026-08-30", "native/probe/PROBE_VERDICT_2026-08-30.md"),
 }

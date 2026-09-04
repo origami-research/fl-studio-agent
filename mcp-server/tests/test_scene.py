@@ -1,6 +1,6 @@
 """Tests for the scene summary.
 
-The load-bearing property is not that key inference is clever — it is that it is
+The load-bearing property is not that key inference is clever - it is that it is
 *honest*. A confidently wrong key would silently steer every subsequent note
 choice, which is worse than reporting nothing. So most of these assert on the
 confidence label, not just the key.
@@ -77,7 +77,7 @@ def test_two_notes_do_not_produce_high_confidence():
 def test_root_motion_takes_the_lowest_note_per_bar():
     rows = [
         FakeRow(midi=50, start_beat=0),   # D, bar 0
-        FakeRow(midi=62, start_beat=2),   # higher D, same bar — ignored
+        FakeRow(midi=62, start_beat=2),   # higher D, same bar - ignored
         FakeRow(midi=48, start_beat=4),   # C, bar 1
         FakeRow(midi=55, start_beat=8),   # G, bar 2
     ]
@@ -125,8 +125,8 @@ def test_summary_groups_by_channel_and_names_them(fake_notes):
 def test_bass_register_gets_root_motion_and_lead_does_not(fake_notes):
     fake_notes(
         [
-            FakeRow(midi=40, channel=1, start_beat=0),   # E1 — bass register
-            FakeRow(midi=72, channel=2, start_beat=0),   # C5 — well above it
+            FakeRow(midi=40, channel=1, start_beat=0),   # E1 - bass register
+            FakeRow(midi=72, channel=2, start_beat=0),   # C5 - well above it
         ]
     )
     out = scene.summarize("ignored.flp", {1: "Bass", 2: "Lead"})
@@ -156,7 +156,7 @@ def test_summary_is_far_cheaper_than_the_raw_notes(fake_notes):
                         f'"start_beat":{r.start_beat},"length_beats":{r.length_beats}}}')
                     for r in rows)
     assert len(out["summary"]) * 10 < raw_chars, (
-        f"summary {len(out['summary'])} chars vs raw {raw_chars} — "
+        f"summary {len(out['summary'])} chars vs raw {raw_chars} - "
         "expected at least a 10x reduction"
     )
 

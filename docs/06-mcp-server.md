@@ -1,4 +1,4 @@
-# 06 — The MCP Server
+# 06 - The MCP Server
 
 The external process. Owns all orchestration, all musical abstraction, and the tool
 surface the model sees. Python 3.11+, official `mcp` SDK, `python-rtmidi` (or `mido`
@@ -7,7 +7,7 @@ over rtmidi) for MIDI, `watchdog` for spool watching, `pyflp` for resync.
 ## Design stance
 
 **The tools speak music, the planes speak plumbing.** The model should say
-"write these notes on Bass at pattern 3, bar 2" — not compute PPQ ticks or channel
+"write these notes on Bass at pattern 3, bar 2" - not compute PPQ ticks or channel
 indices. Conversions the server owns:
 
 - **Time**: tools accept beats (floats) and bar:beat positions; server converts to PPQ
@@ -32,12 +32,12 @@ Grouped as the model will perceive them. Every tool returns rich, actionable err
 ### Notes (note plane)
 | Tool | Signature |
 |---|---|
-| `write_notes` | `(pattern, channel, notes: [{start_beat, length_beats, key, velocity?, pan?, color?}], mode: "merge"\|"replace")` — `replace` uses `NPF_EmptyFirst` semantics per Spike 1 findings |
+| `write_notes` | `(pattern, channel, notes: [{start_beat, length_beats, key, velocity?, pan?, color?}], mode: "merge"\|"replace")` - `replace` uses `NPF_EmptyFirst` semantics per Spike 1 findings |
 | `clear_notes` | `(pattern, channel)` |
 | `get_notes` | `(pattern, channel?)` → from **shadow score**, flagged `source: "shadow"` with staleness caveat, or `source: "project"` right after a sync |
 | `preview_notes` | `(channel, notes, tempo_synced: bool)` → audible preview via `FHD_NoteOn/Off` scheduling, writes nothing |
 
-### Composition helpers (server-side pure functions — no FL round trip)
+### Composition helpers (server-side pure functions - no FL round trip)
 | Tool | Purpose |
 |---|---|
 | `chord_to_notes` | `("Am7", start_beat, length, voicing?)` → note arrays the model can pass to `write_notes`; keeps music theory out of wire round trips |
@@ -59,7 +59,7 @@ Grouped as the model will perceive them. Every tool returns rich, actionable err
 ### Sound design
 | Tool | Notes |
 |---|---|
-| `list_plugin_params` | `(target)` → paginated `{idx, name, value}`; VSTs can have thousands — server caches the name table per plugin identity |
+| `list_plugin_params` | `(target)` → paginated `{idx, name, value}`; VSTs can have thousands - server caches the name table per plugin identity |
 | `get_plugin_param` / `set_plugin_param` | by param name (resolved) or index; values normalized 0..1 |
 | `set_plugin_preset` | next/prev/index navigation via `plugins` module |
 
@@ -68,11 +68,11 @@ Grouped as the model will perceive them. Every tool returns rich, actionable err
 |---|---|
 | `render_project` | `(format: wav\|mp3\|flac, out_path?)` → saves a **copy** of the project (via sync save + file copy), spawns `FL.exe /R` on the copy, returns artifact path. Requires configured FL executable path. Marked slow (seconds–minutes). |
 
-Deliberately **absent**: `load_plugin`, `create_pattern`, `add_channel` — impossible
+Deliberately **absent**: `load_plugin`, `create_pattern`, `add_channel` - impossible
 live (01). The tool descriptions for adjacent tools mention the template convention so
 the model learns the boundary instead of flailing: e.g. `write_notes` errors on an
 unknown channel with *"No channel 'Piano'. Available: Kick, Snare, Hat, Bass, Lead,
-Pad, Keys… (channels are fixed by the template — pick one or ask the user to load an
+Pad, Keys… (channels are fixed by the template - pick one or ask the user to load an
 instrument)"*.
 
 ## Shadow score
@@ -110,7 +110,7 @@ Categories: `control_plane_unavailable`, `note_plane_unavailable`, `unknown_targ
 
 ## Security & trust boundaries
 
-- The server executes **no arbitrary code in FL** — the script dispatch is
+- The server executes **no arbitrary code in FL** - the script dispatch is
   whitelisted (05); the plugin executes a fixed op set (04).
 - Filesystem: spool dir + project saves + render outputs only; sample loading takes
   absolute paths but the tool schema documents that it reads user files (hosts can

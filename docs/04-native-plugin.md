@@ -1,4 +1,4 @@
-# 04 — The Bridge Plugin (native C++ effect)
+# 04 - The Bridge Plugin (native C++ effect)
 
 > **SUPERSEDED (2026-08-26):** FL 2026's native `ilmcp.runPRScript` replaces this plugin as the note-write path.
 > See [12-fl2026-native-surface.md](12-fl2026-native-surface.md).
@@ -11,15 +11,15 @@ here, which is why Spike 1 builds this first.
 ## Identity & registration
 
 - **Name**: "FL MCP Bridge". Version reported in every spool response.
-- **Type**: `FPF_Type_Effect` (`= FPF_NewVoiceParams`) — *not* a generator. This is the
+- **Type**: `FPF_Type_Effect` (`= FPF_NewVoiceParams`) - *not* a generator. This is the
   entire trick: effects get `ChanNum` retargeting on `FHD_AddNotesToPR`
   (see 01). [Header VERIFIED / behavior Spike 1]
 - **Audio**: pass-through. `Eff_Render` copies input to output untouched. We do **not**
-  set `FPF_NoProcess` initially — an effect that opts out of processing may interact
+  set `FPF_NoProcess` initially - an effect that opts out of processing may interact
   oddly with hosting; a memcpy is free. [Revisit after Spike 1.]
 - **Editor**: minimal or none at first. If FL requires an editor window, show a static
   status panel (connection state, session id, last command). No knobs, no parameters
-  in v1 — parameters invite automation writes we'd have to handle.
+  in v1 - parameters invite automation writes we'd have to handle.
 - **Idle**: on init, `Dispatcher(FHD_WantIdle, 0, 2)` → idle callback **always**, even
   with editor closed. [VERIFIED header: "2 for always enabled"]
 - **Placement**: any mixer insert; template project (07) pre-loads it on a dedicated
@@ -31,10 +31,10 @@ Native FL plugins are discovered from FL's plugin directories, not the VST paths
 
 - Windows: `<FL install>\Plugins\Fruity\Effects\FL MCP Bridge\FL MCP Bridge_x64.dll`
 - macOS: `/Applications/FL Studio 2025.app/.../Plugins/Fruity/Effects/...` bundle
-  layout [ASSUMED — exact per-version paths and whether a user-writable location
+  layout [ASSUMED - exact per-version paths and whether a user-writable location
   exists confirmed during Spike 1; the installer owns this knowledge]
 - **The folder matters semantically**: installing under `Effects` vs `Generators` is
-  part of what makes FL treat the plugin as an effect. [REPORTED — BeatSage relocation
+  part of what makes FL treat the plugin as an effect. [REPORTED - BeatSage relocation
   detail]
 
 macOS additionally requires the dylib/bundle be **code-signed and notarized** for
@@ -61,7 +61,7 @@ server-side chunking bug; the plugin still completes it but logs a warning via
 ## Executing `add_notes`
 
 ```c
-// Variable-length, byte-packed allocation — TNoteParams is #pragma pack(1)
+// Variable-length, byte-packed allocation - TNoteParams is #pragma pack(1)
 size_t bytes = offsetof(TNotesParams, NoteParams) + count * sizeof(TNoteParams);
 PNotesParams p = (PNotesParams)calloc(1, bytes);
 p->Target  = 1;                    // piano roll
@@ -86,12 +86,12 @@ PlugHost->Dispatcher(HostTag, FHD_SetDirty, 0, 0);
 free(p);
 ```
 
-Alignment traps: the struct is `#pragma pack(1)` with `short` members — **never** cast
+Alignment traps: the struct is `#pragma pack(1)` with `short` members - **never** cast
 arrays; always fill fields through the packed struct. `offsetof` for the header size
 (not `sizeof(TNotesParams) - sizeof(TNoteParams)`, which double-counts padding
 assumptions).
 
-## Channel & pattern targeting — the decision tree
+## Channel & pattern targeting - the decision tree
 
 Spike 1 answers, in order:
 
@@ -109,7 +109,7 @@ Spike 1 answers, in order:
    notes in it? Determines whether `clear_notes` is channel-safe.
 
 The protocol (03) already carries explicit `pattern`/`channel` fields, so whichever
-branch wins, the wire format doesn't change — only the server's orchestration does.
+branch wins, the wire format doesn't change - only the server's orchestration does.
 
 ## Error containment
 
@@ -128,7 +128,7 @@ branch wins, the wire format doesn't change — only the server's orchestration 
   repo; if redistribution is disallowed, the build fetches the SDK from the official
   source as a setup step.** [OPEN]
 - Toolchains: MSVC x64 (Windows), clang universal binary arm64+x86_64 (macOS).
-- One external dep at most (a JSON parser — `nlohmann/json` single header, or a
+- One external dep at most (a JSON parser - `nlohmann/json` single header, or a
   hand-rolled subset; the schema is tiny and flat, so hand-rolled is acceptable to
   keep the binary dependency-free).
 - CI builds both platforms from day one; artifacts are exactly what the installer
@@ -136,7 +136,7 @@ branch wins, the wire format doesn't change — only the server's orchestration 
 
 ## What this plugin deliberately does NOT do
 
-- No MIDI I/O, no parameters, no state saved into the project beyond FL defaults —
+- No MIDI I/O, no parameters, no state saved into the project beyond FL defaults -
   a project that contains the Bridge but is opened on a machine without it must load
   cleanly with just a "plugin missing" placeholder.
 - No file writes outside the spool. No network. (Keeps the trust story auditable: the

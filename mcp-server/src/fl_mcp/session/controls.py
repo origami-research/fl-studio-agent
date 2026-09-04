@@ -75,7 +75,7 @@ def save_project(session: FLSession) -> None:
 def _render_saved_project(project: Path) -> Path:
     """Run FL's blocking macOS project renderer.
 
-    ASSUMED-live-verify: FL's bundle executable accepts ``-R <project.flp>``
+    Live-verified (#169): FL's bundle executable accepts ``-R <project.flp>``
     and writes ``<project>.wav`` beside it. Keep this process boundary small so
     its command spelling is straightforward to verify and adjust live.
     """
