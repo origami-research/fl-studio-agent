@@ -53,9 +53,7 @@ SNAPSHOT_PAYLOAD = {
 def test_snapshot_live_uses_one_composite_round_trip(monkeypatch):
     """Addendum A5: state.snapshot works in v2 (Lane W fixed chunk routing);
     the session must NOT read the file when the live plane answers."""
-    monkeypatch.setattr(
-        flp, "read", lambda path: pytest.fail("live snapshot must not touch the file")
-    )
+    monkeypatch.setattr(flp, "read", lambda path: pytest.fail("live snapshot must not touch the file"))
     control = FakeControl(hello=HELLO, handlers={"state.snapshot": lambda args: SNAPSHOT_PAYLOAD})
     session, _ = make_session(control=control, project=Path("/tmp/agent.flp"))
 
@@ -111,6 +109,34 @@ def test_doctor_all_degraded_names_a_fix_per_plane(tmp_path, monkeypatch):
     assert report.note_plane.fix
     assert report.project_file.connected is False
     assert "make_agent_project" in report.project_file.fix
+
+
+def test_doctor_reports_probe_failures_instead_of_raising(tmp_path):
+    """Doctor remains usable when the control wire and project file are both broken."""
+
+    class ExplodingControl:
+        @property
+        def dropped_frames(self):
+            raise RuntimeError("control link exploded")
+
+        def await_hello(self, timeout=5.0):
+            raise RuntimeError("control link exploded")
+
+        def send_request(self, *args, **kwargs):
+            raise RuntimeError("control link exploded")
+
+        def close(self):
+            raise RuntimeError("control link exploded")
+
+    session, _ = make_session(control=ExplodingControl(), project=tmp_path / "missing.flp")  # type: ignore[arg-type]
+
+    report = session.doctor()
+
+    assert report.status == "degraded"
+    assert report.control_plane.connected is False
+    assert "control link exploded" in report.control_plane.fix
+    assert report.project_file.connected is False
+    assert "does not exist" in report.project_file.detail
 
 
 def test_doctor_all_connected(tmp_path, monkeypatch):
@@ -181,7 +207,7 @@ def test_doctor_reports_a_dead_session_bridge_pid(tmp_path, monkeypatch):
 
     assert report.control_plane.fl_pid == 4321
     assert report.control_plane.fl_pid_alive is False
-
+    assert report.status != "ok", "a dead FL pid must never report an ok session"
 
 def test_doctor_silent_wire_fix_names_the_dialog_not_a_restart(tmp_path, monkeypatch):
     """Ports self-heal now (hot-plug, docs/21 A12), so 'restart FL' is no longer

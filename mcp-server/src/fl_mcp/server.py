@@ -12,6 +12,7 @@ from __future__ import annotations
 import ast
 import base64
 import contextlib
+import functools
 import io
 import logging
 import os
@@ -69,6 +70,30 @@ async def lifespan(server: Any) -> Any:
             session.control.close()
 
 
+def _tool_boundary(fn: Any) -> Any:
+    """Keep every failure at the MCP boundary structurally parseable."""
+
+    @functools.wraps(fn)
+    def wrapped(*args: Any, **kwargs: Any) -> Any:
+        try:
+            return fn(*args, **kwargs)
+        except ToolError as exc:
+            return _tool_error_response(_tool_error_result(exc))
+        except Exception as exc:
+            log.exception("unexpected exception executing tool %s", fn.__name__)
+            return _tool_error_response(
+                ToolErrorResult(
+                    error="internal_error",
+                    message=str(exc),
+                    fix="Report this; the engine kept running.",
+                    retryable=False,
+                )
+            )
+
+    return wrapped
+
+
+@_tool_boundary
 def run(code: str, ctx: Context) -> RunResult:
     """Execute Python against the live FL Studio session. The namespace holds
     ``fl`` (the SDK), ``theory``, ``Note``, and ``AutomationPoint``. A trailing
@@ -120,9 +145,7 @@ def run(code: str, ctx: Context) -> RunResult:
     try:
         tree = ast.parse(code, mode="exec")
     except SyntaxError as exc:
-        return RunResult(
-            stdout="", traceback="".join(traceback.format_exception_only(exc))
-        )
+        return RunResult(stdout="", traceback="".join(traceback.format_exception_only(exc)))
 
     # REPL semantics: a trailing expression is evaluated and repr'd, so
     # `fl.tempo` answers like Python instead of printing nothing.
@@ -141,11 +164,10 @@ def run(code: str, ctx: Context) -> RunResult:
             stdout=stdout.getvalue(),
             traceback="".join(traceback.format_exception(type(exc), exc, frames)),
         )
-    return RunResult(
-        stdout=stdout.getvalue(), result=None if result is None else repr(result)
-    )
+    return RunResult(stdout=stdout.getvalue(), result=None if result is None else repr(result))
 
 
+@_tool_boundary
 def get_notes(pattern: int, channel: int | str, ctx: Context) -> GetNotesResult:
     """MCP tool. Read-only view of a target's notes with provenance and
     size-aware compression (full list when small, summary when large).
@@ -191,6 +213,7 @@ def get_notes(pattern: int, channel: int | str, ctx: Context) -> GetNotesResult:
     return GetNotesResult.model_validate(result)
 
 
+@_tool_boundary
 def fl_doctor(ctx: Context) -> DoctorReport:
     """MCP tool. Return the typed session diagnostic report."""
     session = ctx.request_context.lifespan_context["session"]
@@ -204,6 +227,7 @@ RENDER_WAV_BASE64_MAX_BYTES = 12 * 1024 * 1024
 _LAST_RENDER_KEY = "last_render"
 
 
+@_tool_boundary
 def render(ctx: Context) -> RenderResult:
     """Render the live session to a WAV for listening. Returns {"path",
     "wavBase64"} (base64 of the WAV, omitted with a note when the file
@@ -221,10 +245,13 @@ def render(ctx: Context) -> RenderResult:
     if len(data) <= RENDER_WAV_BASE64_MAX_BYTES:
         result["wavBase64"] = base64.b64encode(data).decode("ascii")
     else:
-        result["note"] = f"WAV is {len(data)} bytes (> {RENDER_WAV_BASE64_MAX_BYTES}); read it from path instead."
+        result["note"] = (
+            f"WAV is {len(data)} bytes (> {RENDER_WAV_BASE64_MAX_BYTES}); read it from path instead."
+        )
     return RenderResult.model_validate(result)
 
 
+@_tool_boundary
 def analyze(ctx: Context, wav: str | None = None) -> AudioAnalysis:
     """Measure a rendered WAV: bpm, key, integrated LUFS, true peak, and
     spectral balance. ``wav`` defaults to the most recent render (rendering
@@ -249,6 +276,7 @@ def analyze(ctx: Context, wav: str | None = None) -> AudioAnalysis:
         )
 
 
+@_tool_boundary
 def get_scene(ctx: Context, detail: str = "summary", channel: int | None = None) -> GetSceneResult:
     """Read what is currently in the project - key, tempo, and what each channel has.
 
@@ -282,7 +310,9 @@ def get_scene(ctx: Context, detail: str = "summary", channel: int | None = None)
         )
 
     if detail == "notes":
-        return GetSceneResult.from_notes(SceneNotesResult.model_validate({"notes": scene.notes_detail(project, channel)}))
+        return GetSceneResult.from_notes(
+            SceneNotesResult.model_validate({"notes": scene.notes_detail(project, channel)})
+        )
     if detail != "summary":
         return _tool_error_response(
             ToolErrorResult(
@@ -295,7 +325,9 @@ def get_scene(ctx: Context, detail: str = "summary", channel: int | None = None)
 
     proj = flp.read(project)
     names = {c.index: c.name for c in proj.channels}
-    return GetSceneResult.from_summary(SceneSummary.model_validate(scene.summarize(project, names, tempo=proj.tempo)))
+    return GetSceneResult.from_summary(
+        SceneSummary.model_validate(scene.summarize(project, names, tempo=proj.tempo))
+    )
 
 
 def tool_definitions() -> tuple[Any, ...]:

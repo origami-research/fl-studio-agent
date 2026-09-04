@@ -55,9 +55,7 @@ def snapshot(session: FLSession) -> SessionState:
         try:
             return SessionState.from_wire(resp.ret)
         except (KeyError, TypeError, ValueError) as exc:
-            raise errors.fl_api_error(
-                "state.snapshot", f"malformed snapshot payload ({exc!r})"
-            ) from exc
+            raise errors.fl_api_error("state.snapshot", f"malformed snapshot payload ({exc!r})") from exc
 
     if session.project is not None:
         project = flp.read(session.project)
@@ -89,117 +87,151 @@ def snapshot(session: FLSession) -> SessionState:
 def doctor(session: FLSession) -> DoctorReport:
     """Typed report - control plane, note plane, project file - with a
     concrete ``fix`` string per degraded plane."""
-    fl_pid = bridge_pid(session.session_spool_root) if session.session_spool_root else None
-    fl_pid_alive = pid_alive(fl_pid) if session.session_spool_root else None
+
+    def failed_probe(plane: str, exc: Exception) -> PlaneStatus:
+        detail = f"{plane} probe failed: {exc}"
+        return PlaneStatus(
+            connected=False,
+            detail=detail,
+            fix=f"{detail}. Restore that component, then run fl_doctor again.",
+        )
+
+    try:
+        fl_pid = bridge_pid(session.session_spool_root) if session.session_spool_root else None
+    except Exception as exc:  # noqa: BLE001 - doctor must report failed probes
+        fl_pid = None
+        liveness_error: Exception | None = exc
+    else:
+        liveness_error = None
+    try:
+        fl_pid_alive = pid_alive(fl_pid) if session.session_spool_root else None
+    except Exception as exc:  # noqa: BLE001 - doctor must report failed probes
+        fl_pid_alive = None
+        liveness_error = liveness_error or exc
     liveness = {"fl_pid": fl_pid, "fl_pid_alive": fl_pid_alive}
-    if session.control is None:
-        control_plane = PlaneStatus(
-            connected=False,
-            detail="no MIDI control wire: python-rtmidi is missing or the virtual "
-            "ports could not be opened",
-            fix="Install python-rtmidi (`uv pip install python-rtmidi`) and restart "
-            "the MCP server.",
-            **liveness,
-        )
-    else:
-        # Captured BEFORE the probe: the hello probe may recycle a silent
-        # wire, and the old wire's dropped-frame count is the diagnostic.
-        dropped = session.control.dropped_frames
-        hello = session._ensure_hello()
-        if hello is not None:
-            stale_controller = not controller_protocol_matches(hello.script_ver)
-            control_plane = PlaneStatus(
-                connected=True,
-                detail=(
-                    f"installed controller is stale vs this server "
-                    f"(controller {hello.script_ver}, expected {CONTROLLER_PROTOCOL_VERSION}); "
-                    if stale_controller
-                    else ""
-                )
-                + f"controller script {hello.script_ver} on FL {hello.fl_ver}, "
-                f"ppq {hello.ppq}, dropped_frames={dropped}",
-                fix=(
-                    "installed controller is stale vs this server - run fl-mcp-install and restart FL"
-                    if stale_controller
-                    else None
-                ),
-                **liveness,
-            )
-        elif dropped:
-            control_plane = PlaneStatus(
-                connected=False,
-                detail=f"ports are open and frames ARRIVE but {dropped} were dropped "
-                "as malformed - a codec mismatch, not a missing connection",
-                fix="Reinstall the controller script so its embedded codec matches "
-                "the server (`python -m fl_mcp.fl.install`), then restart FL Studio.",
-                **liveness,
-            )
-        elif fl_process_running():
-            control_plane = PlaneStatus(
-                connected=False,
-                detail="FL Studio is running but the controller script has not said hello",
-                fix="Close any dialog in FL (its welcome screen blocks the controller), and "
-                "confirm the FLMCP controller script is assigned in FL's MIDI settings "
-                "(`python -m fl_mcp.fl.install`). Ports self-heal; launch order does not matter.",
-                **liveness,
-            )
-        else:
-            control_plane = PlaneStatus(
-                connected=False,
-                detail="ports are open; FL Studio is not running",
-                fix="Launch FL Studio - the FLMCP controller script connects at startup.",
-                **liveness,
-            )
 
-    scripts_dir = piano_roll_scripts_dir()
-    script_installed = scripts_dir is not None and (scripts_dir / PYSCRIPT_NAME).is_file()
-    if not spool_roots():
-        note_plane = PlaneStatus(
-            connected=False,
-            detail="FL Studio's settings folder was not found, so there is no spool",
-            fix="Install FL Studio (or run it once) so "
-            "~/Documents/Image-Line/FL Studio/Settings exists.",
-        )
-    elif not script_installed:
-        note_plane = PlaneStatus(
-            connected=False,
-            detail=f"the '{PYSCRIPT_NAME}' piano-roll script is not installed",
-            fix="Run `python -m fl_mcp.fl.install`, then restart FL Studio.",
-        )
-    else:
-        note_plane = PlaneStatus(
-            connected=True,
-            detail=f"spool at {spool_roots()[0]} (the bridge lane routes automatically "
-            "when its heartbeat proves it live and the selected channel matches; "
-            "otherwise targeted notes apply via the project file)",
-        )
+    try:
+        control_plane = _control_plane_status(session, liveness)
+        if liveness_error is not None:
+            control_plane = failed_probe("bridge PID liveness", liveness_error)
+    except Exception as exc:  # noqa: BLE001 - doctor must report failed probes
+        control_plane = failed_probe("control plane", exc)
 
-    if session.project is None:
-        project_file = PlaneStatus(
-            connected=False,
-            detail="no agent project configured (project-write backend unavailable)",
-            fix="Run `python -m fl_mcp.make_agent_project`, or set FLMCP_AGENT_PROJECT "
-            "to a .flp the agent may rewrite.",
-        )
-    elif not session.project.is_file():
-        project_file = PlaneStatus(
-            connected=False,
-            detail=f"configured project file does not exist: {session.project}",
-            fix="Create it (`python -m fl_mcp.make_agent_project`) or point "
-            "FLMCP_AGENT_PROJECT at a real .flp.",
-        )
-    else:
-        project_file = PlaneStatus(connected=True, detail=str(session.project))
+    try:
+        note_plane = _note_plane_status()
+    except Exception as exc:  # noqa: BLE001 - doctor must report failed probes
+        note_plane = failed_probe("note plane", exc)
 
-    all_connected = (
-        control_plane.connected
-        and note_plane.connected
-        and project_file.connected
-        and (fl_pid_alive is not False)
-    )
+    try:
+        project_file = _project_file_status(session)
+    except Exception as exc:  # noqa: BLE001 - doctor must report failed probes
+        project_file = failed_probe("project file", exc)
+
+    all_connected = control_plane.connected and note_plane.connected and project_file.connected and (fl_pid_alive is not False)
     return DoctorReport(
         status="ok" if all_connected else "degraded",
         control_plane=control_plane,
         note_plane=note_plane,
         project_file=project_file,
     )
+
+
+def _control_plane_status(session: FLSession, liveness: dict[str, int | bool | None]) -> PlaneStatus:
+    if session.control is None:
+        return PlaneStatus(
+            connected=False,
+            detail="no MIDI control wire: python-rtmidi is missing or the virtual ports could not be opened",
+            fix="Install python-rtmidi (`uv pip install python-rtmidi`) and restart the MCP server.",
+            **liveness,
+        )
+    # Captured BEFORE the probe: the hello probe may recycle a silent wire,
+    # and the old wire's dropped-frame count is the diagnostic.
+    dropped = session.control.dropped_frames
+    hello = session._ensure_hello()
+    if hello is not None:
+        stale_controller = not controller_protocol_matches(hello.script_ver)
+        return PlaneStatus(
+            connected=True,
+            detail=(
+                f"installed controller is stale vs this server "
+                f"(controller {hello.script_ver}, expected {CONTROLLER_PROTOCOL_VERSION}); "
+                if stale_controller
+                else ""
+            )
+            + f"controller script {hello.script_ver} on FL {hello.fl_ver}, "
+            f"ppq {hello.ppq}, dropped_frames={dropped}",
+            fix=(
+                "installed controller is stale vs this server - run fl-mcp-install and restart FL"
+                if stale_controller
+                else None
+            ),
+            **liveness,
+        )
+    if dropped:
+        return PlaneStatus(
+            connected=False,
+            detail=f"ports are open and frames ARRIVE but {dropped} were dropped "
+            "as malformed - a codec mismatch, not a missing connection",
+            fix="Reinstall the controller script so its embedded codec matches "
+            "the server (`python -m fl_mcp.fl.install`), then restart FL Studio.",
+            **liveness,
+        )
+    if fl_process_running():
+        return PlaneStatus(
+            connected=False,
+            detail="FL Studio is running but the controller script has not said hello",
+            fix="Close any dialog in FL (its welcome screen blocks the controller), and "
+            "confirm the FLMCP controller script is assigned in FL's MIDI settings "
+            "(`python -m fl_mcp.fl.install`). Ports self-heal; launch order does not matter.",
+            **liveness,
+        )
+    return PlaneStatus(
+        connected=False,
+        detail="ports are open; FL Studio is not running",
+        fix="Launch FL Studio - the FLMCP controller script connects at startup.",
+        **liveness,
+    )
+
+
+def _note_plane_status() -> PlaneStatus:
+    scripts_dir = piano_roll_scripts_dir()
+    script_installed = scripts_dir is not None and (scripts_dir / PYSCRIPT_NAME).is_file()
+    roots = spool_roots()
+    if not roots:
+        return PlaneStatus(
+            connected=False,
+            detail="FL Studio's settings folder was not found, so there is no spool",
+            fix="Install FL Studio (or run it once) so ~/Documents/Image-Line/FL Studio/Settings exists.",
+        )
+    if not script_installed:
+        return PlaneStatus(
+            connected=False,
+            detail=f"the '{PYSCRIPT_NAME}' piano-roll script is not installed",
+            fix="Run `python -m fl_mcp.fl.install`, then restart FL Studio.",
+        )
+    return PlaneStatus(
+        connected=True,
+        detail=f"spool at {roots[0]} (the bridge lane routes automatically "
+        "when its heartbeat proves it live and the selected channel matches; "
+        "otherwise targeted notes apply via the project file)",
+    )
+
+
+def _project_file_status(session: FLSession) -> PlaneStatus:
+    if session.project is None:
+        return PlaneStatus(
+            connected=False,
+            detail="no agent project configured (project-write backend unavailable)",
+            fix="Run `python -m fl_mcp.make_agent_project`, or set FLMCP_AGENT_PROJECT "
+            "to a .flp the agent may rewrite.",
+        )
+    if not session.project.is_file():
+        return PlaneStatus(
+            connected=False,
+            detail=f"configured project file does not exist: {session.project}",
+            fix="Create it (`python -m fl_mcp.make_agent_project`) or point "
+            "FLMCP_AGENT_PROJECT at a real .flp.",
+        )
+    with session.project.open("rb") as project_file:
+        project_file.read(1)
+    return PlaneStatus(connected=True, detail=str(session.project))

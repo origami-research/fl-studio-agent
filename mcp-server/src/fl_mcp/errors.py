@@ -20,6 +20,7 @@ ErrorCategory = Literal[
     "control_plane_busy",
     "note_plane_unavailable",
     "invalid_argument",
+    "internal_error",
     "unknown_target",
     "fl_api_error",
     "unsupported_in_live_session",
