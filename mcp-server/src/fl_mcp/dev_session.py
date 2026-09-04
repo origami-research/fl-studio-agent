@@ -20,7 +20,6 @@ from typing import Any
 
 from fl_mcp import sdk
 from fl_mcp.contract import ENV_AGENT_PROJECT, ENV_SPOOL_ROOT
-from fl_mcp.core.carriers.broker_client import BrokerControl
 from fl_mcp.core.carriers.udp import PORT_FILE, BridgeEndpoint, discover
 from fl_mcp.fl.process import fl_kill_pid, launch_fl
 from fl_mcp.template import template_path
@@ -43,10 +42,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     endpoint: BridgeEndpoint | None = None
     _prepare(spool, marker, token)
     try:
-        # Ports before FL: the broker owns the MIDI ports, so it must exist before
-        # FL boots (FL binds ports that exist at launch; hot-plug is best effort).
-        with contextlib.suppress(Exception):
-            BrokerControl(spool).send_request("ping", timeout=1.0)
+        # FL first, ports second. Measured 2026-09-04 on the dev Mac: when the
+        # broker's virtual ports already exist at FL launch the wire stays silent
+        # even after recycles, while ports that appear after FL is up are bound by
+        # hot-plug and hello answers at once (this is also the arena's order:
+        # FL boots, then fl-mcp connects). So the broker is started by the first
+        # session request below, never before launch_fl.
         launch_fl(project, spool_root=spool)
         endpoint = _wait_for_bridge(spool)
         _wait_for_hello(spool)
