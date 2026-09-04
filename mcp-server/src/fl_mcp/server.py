@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import ast
 import base64
+import builtins
 import contextlib
 import functools
 import io
@@ -38,7 +39,7 @@ from fl_mcp.contract import (
     ToolErrorResult,
     build_version,
 )
-from fl_mcp.errors import ToolError
+from fl_mcp.errors import ToolError, restricted_namespace
 
 from . import flp, scene, sdk
 from .schemas import AutomationPoint, DoctorReport, Note, Target
@@ -52,6 +53,140 @@ LOG_LEVEL_ENV = "FL_MCP_LOG"
 # should not have to page through 4000 notes to learn the shape of a part.
 GET_NOTES_FULL_LIST_MAX = 200
 GET_NOTES_SAMPLE_SIZE = 20
+
+_RUN_STDLIB_MODULES = frozenset(
+    {
+        "math",
+        "random",
+        "itertools",
+        "functools",
+        "statistics",
+        "json",
+        "re",
+        "dataclasses",
+        "typing",
+        "collections",
+    }
+)
+# Named so the refusal names the offender: getattr/type/vars/dir would let a
+# string reach the dunder attributes the AST guard refuses syntactically.
+_RUN_REFUSED_BUILTINS = frozenset(
+    {
+        "open",
+        "exec",
+        "eval",
+        "compile",
+        "__import__",
+        "globals",
+        "locals",
+        "input",
+        "breakpoint",
+        "getattr",
+        "setattr",
+        "delattr",
+        "vars",
+        "dir",
+        "type",
+        "object",
+        "super",
+        "help",
+        "memoryview",
+    }
+)
+_RUN_BUILTINS = {
+    name: getattr(builtins, name)
+    for name in (
+        # values, containers, iteration
+        "abs",
+        "all",
+        "any",
+        "bool",
+        "callable",
+        "chr",
+        "dict",
+        "divmod",
+        "enumerate",
+        "filter",
+        "float",
+        "format",
+        "frozenset",
+        "hash",
+        "hex",
+        "int",
+        "isinstance",
+        "issubclass",
+        "iter",
+        "len",
+        "list",
+        "map",
+        "max",
+        "min",
+        "next",
+        "ord",
+        "pow",
+        "print",
+        "range",
+        "repr",
+        "reversed",
+        "round",
+        "set",
+        "slice",
+        "sorted",
+        "str",
+        "sum",
+        "tuple",
+        "zip",
+        # exceptions, so ordinary try/except music code does not NameError
+        "Exception",
+        "ArithmeticError",
+        "AssertionError",
+        "AttributeError",
+        "IndexError",
+        "KeyError",
+        "LookupError",
+        "NameError",
+        "RuntimeError",
+        "StopIteration",
+        "TypeError",
+        "ValueError",
+        "ZeroDivisionError",
+    )
+}
+
+
+def _run_import(
+    name: str, globals: Any = None, locals: Any = None, fromlist: Any = (), level: int = 0
+) -> Any:
+    """The import hook used only by producer code in ``run``."""
+    root = name.split(".", 1)[0]
+    if level or root not in _RUN_STDLIB_MODULES:
+        raise restricted_namespace(f"import {name!r}")
+    return builtins.__import__(name, globals, locals, fromlist, level)
+
+
+class _RunNamespaceGuard(ast.NodeVisitor):
+    """Reject source that can escape the deliberately small producer namespace."""
+
+    def visit_Import(self, node: ast.Import) -> None:
+        for alias in node.names:
+            self._check_import(alias.name)
+
+    def visit_ImportFrom(self, node: ast.ImportFrom) -> None:
+        self._check_import(node.module or ".", node.level)
+
+    def visit_Name(self, node: ast.Name) -> None:
+        if node.id in _RUN_REFUSED_BUILTINS or node.id == "__builtins__":
+            raise restricted_namespace(f"builtin {node.id!r}")
+
+    def visit_Attribute(self, node: ast.Attribute) -> None:
+        if node.attr.startswith("__"):
+            raise restricted_namespace(f"attribute {node.attr!r}")
+        self.generic_visit(node)
+
+    @staticmethod
+    def _check_import(name: str, level: int = 0) -> None:
+        if level or name.split(".", 1)[0] not in _RUN_STDLIB_MODULES:
+            raise restricted_namespace(f"import {name!r}")
 
 
 @contextlib.asynccontextmanager
@@ -96,9 +231,11 @@ def _tool_boundary(fn: Any) -> Any:
 @_tool_boundary
 def run(code: str, ctx: Context) -> RunResult:
     """Execute Python against the live FL Studio session. The namespace holds
-    ``fl`` (the SDK), ``theory``, ``Note``, and ``AutomationPoint``. A trailing
-    expression is repr'd like a REPL. Returns {"stdout", "result"} or, on any
-    error, {"stdout", "traceback"} - read the traceback and fix the call.
+    ``fl`` (the SDK), ``theory``, ``Note``, ``AutomationPoint``, and the allowlisted modules ``math``,
+    ``random``, ``itertools``, ``functools``, ``statistics``, ``json``, ``re``,
+    ``dataclasses``, ``typing``, and ``collections``. A trailing expression is
+    repr'd like a REPL. Returns {"stdout", "result"} or, on any error,
+    {"stdout", "traceback"} - read the traceback and fix the call.
 
     The full working surface (no introspection needed):
     - fl.set_tempo(140.0) -> confirmed BPM; fl.tempo reads it back.
@@ -109,10 +246,11 @@ def run(code: str, ctx: Context) -> RunResult:
       confirmed_notes; Track.notes() -> confirmed state; Track.clear().
     - Note(key=60 or "C4"/"F#3", start=0.0, length=1.0, velocity=0.8, pan=0.5)
       with start/length in beats from pattern start.
-    - Track.set_automation([AutomationPoint(position=0.0, value=0.5,
-      tension=0.0)]) - position in beats, value normalized 0..1.
     - Track.set_channel_levels(volume=0.9, pan=-0.15, pitch=0) - project-file
       channel levels; volume 0..1, pan -1..1, pitch whole semitones -48..48.
+    - Track.set_automation([AutomationPoint(position=0.0, value=0.5,
+      tension=0.0)]) - position in beats, value normalized 0..1 (file lane;
+      unavailable in session mode).
     - Track.params(query="cutoff") / Track.set_param("cutoff", 0.55) - live
       generator plugin parameters, values normalized 0..1.
     - fl.add_effect(0, "Fruity Parametric EQ 2") -> tuple[Effect, ...] -
@@ -134,9 +272,8 @@ def run(code: str, ctx: Context) -> RunResult:
     ``unconfirmed_write=True`` and ``confirmed_notes=None``.
     """
     # Engineering notes (not part of the model-facing description above):
-    # ``Note``/``AutomationPoint`` are in the namespace because ``Track.write``
-    # takes ``list[Note]`` and ``Track.set_automation`` takes
-    # ``list[AutomationPoint]`` - without them writes are inexpressible.
+    # ``Note`` is in the namespace because ``Track.write`` takes ``list[Note]``;
+    # without it the primary write path is inexpressible.
     # ``theory.drums`` returns v2 ``schemas.Note`` and composes directly with
     # ``Track.write`` (an earlier claim here that v2 rejects it was refuted by
     # direct construction+write on 2026-09-01).
@@ -146,6 +283,7 @@ def run(code: str, ctx: Context) -> RunResult:
         "theory": theory,
         "Note": Note,
         "AutomationPoint": AutomationPoint,
+        "__builtins__": {**_RUN_BUILTINS, "__import__": _run_import},
     }
     try:
         tree = ast.parse(code, mode="exec")
@@ -157,6 +295,10 @@ def run(code: str, ctx: Context) -> RunResult:
     last_expr: ast.Expression | None = None
     if tree.body and isinstance(tree.body[-1], ast.Expr):
         last_expr = ast.Expression(tree.body.pop().value)
+
+    _RunNamespaceGuard().visit(tree)
+    if last_expr is not None:
+        _RunNamespaceGuard().visit(last_expr)
 
     stdout = io.StringIO()
     try:

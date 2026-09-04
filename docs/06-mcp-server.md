@@ -96,7 +96,8 @@ Tool errors are structured and always name the fix:
 ```
 
 Categories: `control_plane_unavailable`, `note_plane_unavailable`, `unknown_target`
-(with candidates), `fl_api_error` (verbatim from script), `unsupported_in_live_session`
+(with candidates), `fl_api_error` (verbatim from script), `restricted_namespace`
+(producer code attempted a filesystem, process, or introspection escape), `unsupported_in_live_session`
 (the two walls, with template guidance), `render_failed`.
 
 ## Startup sequence

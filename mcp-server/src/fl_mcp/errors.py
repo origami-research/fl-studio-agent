@@ -23,6 +23,7 @@ ErrorCategory = Literal[
     "internal_error",
     "unknown_target",
     "fl_api_error",
+    "restricted_namespace",
     "unsupported_in_live_session",
     "render_failed",
     "stale_handle",
@@ -172,6 +173,15 @@ def invalid_argument(call: str, detail: str) -> ToolError:
         "invalid_argument",
         f"{call} received invalid arguments: {detail}",
         "Fix the argument type or range before retrying.",
+    )
+
+
+def restricted_namespace(offender: str) -> ToolError:
+    """Code outside run's music-only namespace is refused before execution."""
+    return ToolError(
+        "restricted_namespace",
+        f"{offender} is unavailable in run's music-only namespace; use this tool's SDK cheatsheet for supported music code.",
+        "Use fl, theory, Note, or an allowlisted standard-library module.",
     )
 
 

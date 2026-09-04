@@ -64,9 +64,7 @@ class _FakeSession:
 
 def _ctx(fl: Any = None, session: Any = None) -> Any:
     """A stub Context: same lifespan-context shape the real lifespan yields."""
-    return SimpleNamespace(
-        request_context=SimpleNamespace(lifespan_context={"fl": fl, "session": session})
-    )
+    return SimpleNamespace(request_context=SimpleNamespace(lifespan_context={"fl": fl, "session": session}))
 
 
 # -- run ----------------------------------------------------------------------
@@ -89,8 +87,8 @@ def test_run_namespace_holds_fl_and_theory():
     fl = SimpleNamespace(tempo=120.5)
     result = server.run("fl.tempo", _ctx(fl=fl))
     assert result.result == "120.5"
-    result = server.run("theory.__name__", _ctx())
-    assert result.result == "'fl_mcp.theory'"
+    result = server.run("theory.chord('C4')", _ctx())
+    assert result.result == "[60, 64, 67]"
 
 
 def test_run_error_reads_like_python_with_no_server_frames():
@@ -108,9 +106,9 @@ def test_run_syntax_error_is_a_traceback_not_a_crash():
     assert "SyntaxError" in result.traceback
 
 
-def test_run_survives_sys_exit():
-    result = server.run("import sys\nsys.exit(3)", _ctx())
-    assert "SystemExit" in result.traceback
+def test_run_allows_music_code_stdlib_imports():
+    result = server.run("import math\nmath.sqrt(9)", _ctx())
+    assert result.result == "3.0"
 
 
 def test_run_assignment_only_yields_none_result():
@@ -119,10 +117,32 @@ def test_run_assignment_only_yields_none_result():
     assert result.result is None
 
 
-def test_run_exposes_automation_point():
-    result = server.run("AutomationPoint(position=1, value=0.5)", _ctx())
+def test_run_refuses_non_music_imports_builtins_and_attribute_walking():
+    for code, offender in (
+        ("import os", "import 'os'"),
+        ("import inspect", "import 'inspect'"),
+        ("import pathlib", "import 'pathlib'"),
+        ("open('notes.txt')", "builtin 'open'"),
+        ("exec('pass')", "builtin 'exec'"),
+        ("eval('1 + 1')", "builtin 'eval'"),
+        ("compile('1', '<fl>', 'eval')", "builtin 'compile'"),
+        ("__import__('os')", "builtin '__import__'"),
+        ("globals()", "builtin 'globals'"),
+        ("input()", "builtin 'input'"),
+        ("breakpoint()", "builtin 'breakpoint'"),
+        ("fl.__class__", "attribute '__class__'"),
+        ("().__class__.__mro__", "attribute '__mro__'"),
+        ("object.__subclasses__()", "attribute '__subclasses__'"),
+        ("(lambda: None).__globals__", "attribute '__globals__'"),
+        ("__builtins__", "builtin '__builtins__'"),
+    ):
+        response = server.run(code, _ctx(fl=object()))
 
-    assert result.result == "AutomationPoint(position=1.0, value=0.5, tension=0.0)"
+        assert isinstance(response, CallToolResult)
+        payload = json.loads(response.content[0].text)
+        assert payload["error"] == "restricted_namespace"
+        assert offender in payload["message"]
+        assert "SDK cheatsheet" in payload["message"]
 
 
 # -- get_notes ----------------------------------------------------------------
@@ -357,3 +377,30 @@ def test_analyze_renders_fresh_when_nothing_was_rendered_yet():
     metrics = server.analyze(_ctx(fl=fl))
     assert metrics.bpm == 140.0
     assert len(fl.analyzed) == 1
+
+
+def test_run_namespace_keeps_ordinary_python_and_automation_points():
+    """Exceptions, isinstance/map, and AutomationPoint stay usable inside the guard."""
+    code = (
+        "try:\n"
+        "    int('x')\n"
+        "except ValueError:\n"
+        "    pass\n"
+        "pts = list(map(lambda v: AutomationPoint(position=float(v), value=0.5, tension=0.0), range(2)))\n"
+        "print(isinstance(pts[0], AutomationPoint), len(pts))\n"
+    )
+    result = server.run(code, _ctx())
+    assert result.stdout.strip() == "True 2", result
+
+
+def test_run_refuses_getattr_and_type_as_dunder_side_doors():
+    for src, offender in (
+        ("getattr(fl, '__class__')", "builtin 'getattr'"),
+        ("type(fl)", "builtin 'type'"),
+        ("vars(fl)", "builtin 'vars'"),
+    ):
+        response = server.run(src, _ctx(fl=object()))
+        assert isinstance(response, CallToolResult), src
+        payload = json.loads(response.content[0].text)
+        assert payload["error"] == "restricted_namespace"
+        assert offender in payload["message"]
