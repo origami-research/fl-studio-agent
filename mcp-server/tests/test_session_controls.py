@@ -6,6 +6,8 @@ refusal is retryable - never a fallthrough (addenda A6/A11).
 
 from __future__ import annotations
 
+import subprocess
+
 import pytest
 from session_fakes import HELLO, FakeControl, make_session
 
@@ -75,6 +77,22 @@ def test_render_wav_raises_when_cli_wav_is_missing_or_empty(monkeypatch, tmp_pat
     def render(command, check, timeout):
         if wav is not None:
             project.with_suffix(".wav").write_bytes(wav)
+
+    monkeypatch.setattr("fl_mcp.session.controls.subprocess.run", render)
+    control = FakeControl(hello=HELLO, handlers={"ctl.save": lambda args: None})
+    session, _ = make_session(control=control, project=project)
+
+    with pytest.raises(errors.ToolError) as excinfo:
+        session.render_wav(tmp_path / "mix.wav")
+    assert excinfo.value.category == "render_failed"
+
+
+def test_render_wav_maps_a_subprocess_timeout_to_render_failed(monkeypatch, tmp_path):
+    project = tmp_path / "live.flp"
+    project.write_bytes(b"FLhd")
+
+    def render(command, check, timeout):
+        raise subprocess.TimeoutExpired(command, timeout)
 
     monkeypatch.setattr("fl_mcp.session.controls.subprocess.run", render)
     control = FakeControl(hello=HELLO, handlers={"ctl.save": lambda args: None})

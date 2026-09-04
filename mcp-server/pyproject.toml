@@ -51,7 +51,6 @@ ignore = ["TRY003", "PLC0415", "E501"]  # E402 retired: fl/ quarantine fixed the
 # Tests may catch broadly / suppress deliberately. RUF059: unpacking a fixture
 # tuple (`session, bridge, control = wired`) and using a subset is idiomatic.
 "tests/**" = ["BLE", "TRY", "SIM105", "RUF059"]
-
 [tool.pytest.ini_options]
 testpaths = ["tests", "../fl-scripts/controller/tests"]
 markers = ["e2e: requires a deliberate live FL Studio session"]
