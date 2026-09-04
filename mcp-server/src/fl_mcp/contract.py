@@ -7,10 +7,10 @@ import json
 import subprocess
 from collections.abc import Callable
 from pathlib import Path
-from typing import Annotated, Any, Literal
+from typing import Any, Literal
 
 from mcp.server.mcpserver.tools.base import Tool
-from pydantic import BaseModel, Field, RootModel, model_validator
+from pydantic import BaseModel, Field, model_validator
 
 from fl_mcp import __version__
 from fl_mcp.schemas import Note, Target
@@ -97,8 +97,38 @@ class SceneNotesResult(BaseModel):
     notes: list[SceneNote]
 
 
-class GetSceneResult(RootModel[Annotated[SceneSummary | SceneNotesResult, Field(union_mode="left_to_right")]]):
-    pass
+class GetSceneResult(BaseModel):
+    """One object for both detail modes.
+
+    MCP requires every tool's output schema to be an object, so a root-level
+    union (summary | notes) is not expressible: the SDK rejected its own
+    tools/list result and no client could list tools. detail="summary" fills
+    the summary fields; detail="notes" fills ``notes``.
+    """
+
+    tempo: float | None = None
+    key: str | None = None
+    key_confidence: str | None = None
+    note_count: int | None = None
+    playlist: dict[str, Any] | None = None
+    automations: list[dict[str, Any]] | None = None
+    channels: list[dict[str, Any]] | None = None
+    summary: str | None = None
+    notes: list[SceneNote] | None = None
+
+    @model_validator(mode="after")
+    def _summary_or_notes(self) -> GetSceneResult:
+        if (self.notes is None) == (self.summary is None):
+            raise ValueError("get_scene result requires exactly one of summary or notes")
+        return self
+
+    @classmethod
+    def from_summary(cls, summary: SceneSummary) -> GetSceneResult:
+        return cls(**summary.model_dump())
+
+    @classmethod
+    def from_notes(cls, notes: SceneNotesResult) -> GetSceneResult:
+        return cls(notes=notes.notes)
 
 
 class RenderResult(BaseModel):

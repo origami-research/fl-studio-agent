@@ -83,3 +83,28 @@ def test_tool_error_reaches_an_mcp_client_as_parseable_is_error(monkeypatch):
         }
 
     anyio.run(call)
+
+
+def test_tools_list_validates_through_the_mcp_layer_and_every_output_schema_is_an_object(monkeypatch):
+    """The SDK validates its own tools/list result; a root-level union schema made
+    that fail (INTERNAL_ERROR "Handler returned an invalid result"), so no client
+    could list tools. Drive tools/list through a real client to guard it."""
+
+    @contextlib.asynccontextmanager
+    async def fake_lifespan(_mcp_server):
+        yield {}
+
+    monkeypatch.setattr(server, "lifespan", fake_lifespan)
+
+    async def call():
+        async with InMemoryTransport(create_server()) as (read, write), ClientSession(read, write) as client:
+            await client.initialize()
+            return await client.list_tools()
+
+    listed = anyio.run(call)
+    tools = {tool.name: tool.model_dump(by_alias=True) for tool in listed.tools}
+    assert set(tools) == {"run", "get_notes", "get_scene", "render", "analyze", "fl_doctor"}
+    for name, tool in tools.items():
+        schema = tool["outputSchema"]
+        assert schema.get("type") == "object", f"{name}: output schema must be an object, got {schema.get('type')!r}"
+        assert "properties" in schema, f"{name}: output schema has no properties"

@@ -453,110 +453,133 @@
             ],
             "title": "SceneNote",
             "type": "object"
+          }
+        },
+        "description": "One object for both detail modes.\n\nMCP requires every tool's output schema to be an object, so a root-level\nunion (summary | notes) is not expressible: the SDK rejected its own\ntools/list result and no client could list tools. detail=\"summary\" fills\nthe summary fields; detail=\"notes\" fills ``notes``.",
+        "properties": {
+          "automations": {
+            "anyOf": [
+              {
+                "items": {
+                  "additionalProperties": true,
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Automations"
           },
-          "SceneNotesResult": {
-            "properties": {
-              "notes": {
+          "channels": {
+            "anyOf": [
+              {
+                "items": {
+                  "additionalProperties": true,
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Channels"
+          },
+          "key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Key"
+          },
+          "key_confidence": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Key Confidence"
+          },
+          "note_count": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Note Count"
+          },
+          "notes": {
+            "anyOf": [
+              {
                 "items": {
                   "$ref": "#/$defs/SceneNote"
                 },
-                "title": "Notes",
                 "type": "array"
+              },
+              {
+                "type": "null"
               }
-            },
-            "required": [
-              "notes"
             ],
-            "title": "SceneNotesResult",
-            "type": "object"
+            "default": null,
+            "title": "Notes"
           },
-          "SceneSummary": {
-            "properties": {
-              "automations": {
-                "items": {
-                  "additionalProperties": true,
-                  "type": "object"
-                },
-                "title": "Automations",
-                "type": "array"
-              },
-              "channels": {
-                "items": {
-                  "additionalProperties": true,
-                  "type": "object"
-                },
-                "title": "Channels",
-                "type": "array"
-              },
-              "key": {
-                "anyOf": [
-                  {
-                    "type": "string"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ],
-                "title": "Key"
-              },
-              "key_confidence": {
-                "anyOf": [
-                  {
-                    "type": "string"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ],
-                "default": null,
-                "title": "Key Confidence"
-              },
-              "note_count": {
-                "title": "Note Count",
-                "type": "integer"
-              },
-              "playlist": {
+          "playlist": {
+            "anyOf": [
+              {
                 "additionalProperties": true,
-                "title": "Playlist",
                 "type": "object"
               },
-              "summary": {
-                "title": "Summary",
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Playlist"
+          },
+          "summary": {
+            "anyOf": [
+              {
                 "type": "string"
               },
-              "tempo": {
-                "anyOf": [
-                  {
-                    "type": "number"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ],
-                "title": "Tempo"
+              {
+                "type": "null"
               }
-            },
-            "required": [
-              "tempo",
-              "key",
-              "note_count",
-              "playlist",
-              "channels",
-              "summary"
             ],
-            "title": "SceneSummary",
-            "type": "object"
+            "default": null,
+            "title": "Summary"
+          },
+          "tempo": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Tempo"
           }
         },
-        "anyOf": [
-          {
-            "$ref": "#/$defs/SceneSummary"
-          },
-          {
-            "$ref": "#/$defs/SceneNotesResult"
-          }
-        ],
-        "title": "GetSceneResult"
+        "title": "GetSceneResult",
+        "type": "object"
       }
     },
     {

@@ -282,7 +282,7 @@ def get_scene(ctx: Context, detail: str = "summary", channel: int | None = None)
         )
 
     if detail == "notes":
-        return GetSceneResult(SceneNotesResult.model_validate({"notes": scene.notes_detail(project, channel)}))
+        return GetSceneResult.from_notes(SceneNotesResult.model_validate({"notes": scene.notes_detail(project, channel)}))
     if detail != "summary":
         return _tool_error_response(
             ToolErrorResult(
@@ -295,7 +295,7 @@ def get_scene(ctx: Context, detail: str = "summary", channel: int | None = None)
 
     proj = flp.read(project)
     names = {c.index: c.name for c in proj.channels}
-    return GetSceneResult(SceneSummary.model_validate(scene.summarize(project, names, tempo=proj.tempo)))
+    return GetSceneResult.from_summary(SceneSummary.model_validate(scene.summarize(project, names, tempo=proj.tempo)))
 
 
 def tool_definitions() -> tuple[Any, ...]:
