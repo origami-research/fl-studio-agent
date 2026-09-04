@@ -217,9 +217,11 @@ def test_drain_with_no_events_file_is_quiet(tmp_path: Path) -> None:
 # --- poll: lazy poll-and-diff for score edits ---------------------------------
 
 
-def flp_note(key: int, *, pattern: int = 1, channel: int = 0, position: int = 0) -> FlpNote:
+def flp_note(
+    key: int, *, pattern: int = 1, channel: int = 0, position: int = 0, velocity: int = 100
+) -> FlpNote:
     return FlpNote(
-        position=position, length=96, key=key, channel=channel, velocity=100, pan=64, pattern=pattern
+        position=position, length=96, key=key, channel=channel, velocity=velocity, pan=64, pattern=pattern
     )
 
 
@@ -262,6 +264,16 @@ def test_first_poll_seeds_silently_then_diffs_user_saves(score_env) -> None:
     delta = action.detail["delta"]
     assert [n.key for n in delta.added] == [64] and not delta.removed and not delta.moved
     assert delta.added[0] == Note(key=64, start=1.0, length=1.0, velocity=100 / 127, pan=0.5)
+
+
+def test_poll_clamps_fl_raw_velocity_128(score_env) -> None:
+    """FL's 128 byte value must not make a project checkpoint unreadable."""
+    observer, save, _state, _clock = score_env
+    save([])
+    observer.poll()
+    save([flp_note(60, velocity=128)])
+
+    assert observer.poll()[0].detail["delta"].added[0].velocity == 1.0
 
 
 def test_poll_reports_each_touched_target_separately(score_env) -> None:

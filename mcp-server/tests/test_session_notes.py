@@ -226,6 +226,26 @@ def test_read_notes_falls_back_to_file_and_marks_ground_truth(monkeypatch, tmp_p
     assert store.ground_truths == [(TARGET, notes)]
 
 
+def test_read_notes_clamps_fl_raw_velocity_128(monkeypatch, tmp_path):
+    """FL's 128 byte value decodes to the SDK's full-scale unit value."""
+    project = tmp_path / "agent.flp"
+    monkeypatch.setattr(
+        flp,
+        "read",
+        lambda path: flp.FlpProject(ppq=96, tempo=None, channels=(), notes=()),
+    )
+    monkeypatch.setattr(
+        flp,
+        "notes_at",
+        lambda path, pattern, channel: [
+            flp.FlpNote(position=0, length=96, key=60, channel=0, velocity=128, pan=64)
+        ],
+    )
+    session, _store = make_session(project=project)
+
+    assert session.read_notes(TARGET)[0].velocity == 1.0
+
+
 def test_read_notes_with_no_source_raises():
     session, _ = make_session()
     with pytest.raises(NotePlaneUnavailable):

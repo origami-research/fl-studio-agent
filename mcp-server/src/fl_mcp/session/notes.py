@@ -135,7 +135,8 @@ class FileLane:
                 key=n.key,
                 start=n.position / ppq,
                 length=n.length / ppq,
-                velocity=n.velocity / 127,
+                # FL stores 0..128; this SDK exposes 0..1, where 127 is full.
+                velocity=min(n.velocity / 127, 1.0),
                 pan=n.pan / 128,
             )
             for n in flp.notes_at(session.project, target.pattern, target.channel)

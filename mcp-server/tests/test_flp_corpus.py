@@ -63,6 +63,12 @@ def _corpus() -> list[Path]:
 CORPUS = _corpus()
 
 
+@requires_fl
+def test_fl_authored_corpus_contains_the_velocity_128_read_shape() -> None:
+    """Keep the FL-authored byte value behind the SDK's read-side clamp."""
+    assert any(note.velocity == 128 for path in CORPUS for note in flp.read(path).notes)
+
+
 def _oracle_parse(path: Path):
     """pyflp through the compat shim; None when the oracle itself fails."""
     try:
