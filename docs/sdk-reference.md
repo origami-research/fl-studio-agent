@@ -103,6 +103,10 @@ confirmed WAV path. The macOS `-R <project.flp>` invocation and its adjacent
 `<project>.wav` output are **ASSUMED-live-verify**. It raises if saving fails,
 FL cannot render, or no non-empty WAV appears.
 
+A render takes about a minute and produces the real mix, so render once when the
+pass is done; the harness listens back after you say you are done; use
+`get_notes`/`get_scene` (cheap, live) to check work instead.
+
 ```python
 wav = fl.render("/tmp/mix.wav")
 ```

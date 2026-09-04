@@ -106,11 +106,20 @@ def test_render_wav_maps_a_subprocess_timeout_to_render_failed(monkeypatch, tmp_
 
 
 def test_save_project_uses_the_control_lane():
-    control = FakeControl(hello=HELLO, handlers={"ctl.save": lambda args: 8})
+    """Regression: liveness work must not leave ctl.save an expired timeout."""
+    seen_timeouts: list[float] = []
+
+    class TimeoutRecordingControl(FakeControl):
+        def send_request(self, op, args=None, kwargs=None, timeout=2.0):
+            seen_timeouts.append(timeout)
+            return super().send_request(op, args, kwargs, timeout)
+
+    control = TimeoutRecordingControl(hello=HELLO, handlers={"ctl.save": lambda args: 8})
     session, _ = make_session(control=control)
 
     assert session.save_project() is None
     assert ("ctl.save", []) in control.calls
+    assert seen_timeouts[-1] == controls.LIVE_SET_TIMEOUT_SECONDS
 
 
 def test_save_project_retries_a_busy_control_wire(monkeypatch):
@@ -137,6 +146,7 @@ def test_save_project_requires_control_plane():
     with pytest.raises(errors.ToolError) as excinfo:
         session.save_project()
     assert excinfo.value.category == "control_plane_unavailable"
+    assert f"within {controls.LIVE_SET_TIMEOUT_SECONDS:g}s" in excinfo.value.message
 
 
 def test_set_tempo_live_unconfirmed_raises():

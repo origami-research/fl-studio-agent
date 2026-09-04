@@ -259,6 +259,9 @@ def run(code: str, ctx: Context) -> RunResult:
       project-file only; proven only for empty Master slot 0.
     - fl.render("out.wav") -> Path; fl.analyze(wav) -> bpm/key/LUFS/spectral
       balance; fl.read_wav(path) -> (samples, sample_rate).
+      A render takes about a minute and produces the real mix, so render once
+      when the pass is done; the harness listens back after you say you are
+      done; use get_notes/get_scene (cheap, live) to check work instead.
     - fl.snapshot() -> tempo + channels.
     - Session mode (FLMCP_SPOOL_ROOT set, including a match) never reboots FL.
       Use notes through the Bridge and tempo, params, or levels through the control
@@ -380,8 +383,10 @@ _LAST_RENDER_KEY = "last_render"
 def render(ctx: Context) -> RenderResult:
     """Render the live session to a WAV for listening. Returns {"path",
     "wavBase64"} (base64 of the WAV, omitted with a note when the file
-    exceeds the size cap). Requires the live FL link; render takes seconds.
-    Call analyze afterwards for measurements."""
+    exceeds the size cap). A render takes about a minute and produces the real
+    mix, so render once when the pass is done; the harness listens back after
+    you say you are done; use get_notes/get_scene (cheap, live) to check work
+    instead. Call analyze afterwards for measurements."""
     fl = ctx.request_context.lifespan_context["fl"]
     output = Path(tempfile.mkdtemp(prefix="flmcp-render-")) / "render.wav"
     try:

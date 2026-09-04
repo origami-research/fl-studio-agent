@@ -59,7 +59,11 @@ def save_project(session: FLSession) -> None:
     surfaced - success is by-effect; a refusal raises below.
     """
     if session._ensure_hello() is None or session.control is None:
-        raise errors.control_plane_unavailable("ctl.save", 0.0)
+        # A failed liveness probe does not shrink the save's documented
+        # budget.  In session mode that probe crosses the broker first; using
+        # 0 here made the resulting ctl.save error claim an expired request
+        # even though no save request had received a zero-second timeout.
+        raise errors.control_plane_unavailable("ctl.save", LIVE_SET_TIMEOUT_SECONDS)
     for attempt in range(SAVE_BUSY_RETRIES + 1):
         try:
             response = session.control.send_request("ctl.save", timeout=LIVE_SET_TIMEOUT_SECONDS)
