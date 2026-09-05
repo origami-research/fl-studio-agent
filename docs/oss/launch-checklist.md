@@ -33,3 +33,7 @@ checkouts use the pinned Git source only through the `private` extra.
 7. Create the new public repository only after verification passes, then push
    the reviewed refs, create the approved tag, and publish the built package to
    PyPI. Keep the original repository private.
+
+## Approvals
+
+- 2026-09-05: the owner approved the public allowlist, the MIT license, and the history removal set (orchestrator chat, "all approved"). Step 1 is complete. The rewrite still runs only on a fresh mirror, after the freeze window the owner names, and publication needs the target repository name.
