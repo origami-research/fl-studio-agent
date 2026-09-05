@@ -1,0 +1,16 @@
+# Reviewed public extraction boundary. Paths ending in / include descendants.
+.github/
+CONTRIBUTING.md
+LICENSE
+README.md
+RUNBOOK_E2E.md
+SETUP.md
+contracts/
+docs/
+fl-scripts/
+install.sh
+mcp-server/
+native/CMakeLists.txt
+native/bridge/
+pyproject.toml
+scripts/gate.sh

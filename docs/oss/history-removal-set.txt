@@ -1,0 +1,6 @@
+# Required historical removals. Paths ending in / include descendants.
+.lavish/
+docs/32-repo-split.md
+docs/research/improvement-plan-2026-09-01.md
+docs/research/insights-2026-09-01.md
+native/control/fpsdk/
