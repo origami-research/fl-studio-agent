@@ -297,3 +297,56 @@ This plan does not port the measured macOS Free Pascal dispatcher ABI to Windows
 The first Windows production milestone is the spool-backed Bridge with verified DLL load, heartbeat, ping, targeted note write, FL readback, saved-copy render, and analyzed audio artifact.
 
 A feature is portable only when its core has no platform import and its platform-specific boundary has a concrete test or recorded `VERIFY-ON-WINDOWS` evidence.
+
+## One-box Windows provisioning runbook
+
+This is deliberately written before a Windows box is available. It is an
+operator runbook, not evidence that the dependencies or FL settings have been
+validated on Windows.
+
+Use **loopMIDI** for the durable `FLMCP Req` and `FLMCP Res` ports. It remains
+the Windows MIDI carrier because the engine opens named existing ports rather
+than pretending that CoreMIDI virtual-port creation exists on Windows.
+
+Use **VB-CABLE** for audio. Unlike RDP redirected audio, its `CABLE Input
+(VB-Audio Virtual Cable)` playback endpoint survives disconnects. The script
+makes it the Windows default playback endpoint; FL Studio ASIO's default-output
+mode then selects it at launch.
+
+On an elevated Windows PowerShell prompt, after installing FL once, checking
+out this repository, and building or downloading the matching Bridge DLL:
+
+```powershell
+scripts\windows\provision.ps1 -RepoRoot C:\src\fl-studio-mcp
+```
+
+The first invocation starts loopMIDI and stops with the two port names to add.
+That application has no supported noninteractive port-creation API. Create
+those two persistent ports once, leave loopMIDI running, and rerun the command.
+The second pass is idempotent: it installs loopMIDI and VB-CABLE if absent,
+copies the controller and DLL into FL's fixed locations, writes only the
+FLMCP MIDI keys in `Settings\reg.xml`, makes VB-CABLE the default playback
+device, and records the exact DLL/FL build in `bridge_installed_for.txt`.
+
+Run acceptance with:
+
+```powershell
+scripts\windows\accept.ps1 -RepoRoot C:\src\fl-studio-mcp
+```
+
+It uses `fl-mcp-dev-session`, which obtains `fl-mcp-template`, launches FL
+with a new `FLMCP_SPOOL_ROOT`, waits for `bridge_udp.json` and controller hello,
+then asks the engine for `fl_doctor`. It requires doctor success plus
+`abi=ok` and a positive `render_rate`; its normal cleanup kills only the bridge
+PID published in that session's port file.
+
+### Still unverified without a Windows box
+
+- Chocolatey package names and their installer behavior on the target image.
+- loopMIDI's first-run port creation and port visibility to FL and python-rtmidi.
+- VB-CABLE endpoint spelling, default-device selection, and FL Studio ASIO's
+  persistence through RDP disconnect/reconnect.
+- The Windows `reg.xml` MIDI shape and whether FL accepts the generated keys.
+- FL version metadata parsing, DLL discovery/load, Bridge ABI handshake,
+  heartbeat, controller hello, and positive audio render rate.
+- `fl-mcp-dev-session` teardown behavior against a real Windows FL process.
