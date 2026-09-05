@@ -25,6 +25,11 @@ The server derives its expected controller protocol version from the exact contr
 `fl-mcp-install` deploys. If `fl_doctor` reports a stale controller, run `fl-mcp-install` and
 restart FL Studio; the warning is advisory so compatible minor mismatches can still operate.
 
+Open FL Studio first, then start the Claude session. Its MIDI ports appear while FL is running,
+which FL binds through hot-plug. `fl-mcp-install` edits `reg.xml` only while FL is closed; it
+keeps the canonical FLMCP entries, removes duplicate numbered virtual-port entries, and writes
+`reg.xml.bak` before any change.
+
 The agent project is the **only** project the agent modifies; your own work is never touched, and a backup is written before every change.
 
 ## 3. (Live features) install the Bridge plugin

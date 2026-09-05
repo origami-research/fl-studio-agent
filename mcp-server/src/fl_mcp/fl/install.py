@@ -21,6 +21,7 @@ from pathlib import Path
 from fl_mcp.controller_version import controller_script_bytes
 
 from .paths import fl_settings_dirs, piano_roll_scripts_dir
+from .process import fl_process_running
 
 SCRIPT_FILENAME = "MCP Write Notes.pyscript"
 CONTROLLER_FILENAME = "device_FLMCP.py"
@@ -101,6 +102,15 @@ def _set_int_value(data: str, key_name: str, value_name: str, new_value: int) ->
     return data, bool(n)
 
 
+def _remove_numbered_port_keys(data: str, port_name: str) -> tuple[str, int]:
+    """Remove FL's duplicate virtual-port registry entries, never a real device."""
+    pattern = (
+        r'\s*<Key Name="' + re.escape(port_name) + r' #\d+">'
+        r'(?:(?!</Key>).)*?</Key>'
+    )
+    return re.subn(pattern, "", data, flags=re.DOTALL)
+
+
 def configure_midi() -> str:
     """Write the FLMCP controller assignment into FL's reg.xml (FL closed).
 
@@ -112,6 +122,8 @@ def configure_midi() -> str:
     outside the FLMCP keys - returns WARN so the installer can fall back to a
     one-time manual assignment.
     """
+    if fl_process_running():
+        return "WARN FL Studio is running; close it before changing its MIDI registry"
     reg_xml = reg_xml_path()
     if not reg_xml.is_file():
         return f"WARN reg.xml not found at {reg_xml}; assign the controller once in FL's MIDI settings"
@@ -133,7 +145,9 @@ def configure_midi() -> str:
         f'                </Key>'
     )
 
-    changed = False
+    data, removed_inputs = _remove_numbered_port_keys(data, REQ_PORT_NAME)
+    data, removed_outputs = _remove_numbered_port_keys(data, RES_PORT_NAME)
+    changed = bool(removed_inputs or removed_outputs)
     enabled_missing = False
 
     # --- input key ---
@@ -167,11 +181,12 @@ def configure_midi() -> str:
         changed = True
 
     if changed:
+        shutil.copy2(reg_xml, reg_xml.with_name(f"{reg_xml.name}.bak"))
         reg_xml.write_text(data, encoding="utf-8")
         if enabled_missing:
             return (f"WARN ports assigned, but {REQ_PORT_NAME} has no Enabled value to set; "
                     "check the controller is enabled in FL's MIDI settings")
-        return f"OK controller assigned to {REQ_PORT_NAME}/{RES_PORT_NAME} port {CONTROL_PORT} (reg.xml)"
+        return f"OK controller assigned to {REQ_PORT_NAME}/{RES_PORT_NAME} port {CONTROL_PORT} (reg.xml; backup written)"
     return "OK controller assignment already present"
 
 
@@ -196,8 +211,7 @@ def main() -> None:
         print(f"  [{status.split(' ', 1)[0]}] {step}: {status.split(' ', 1)[1] if ' ' in status else ''}")
     if any(v.startswith("FAIL") for v in results.values()):
         raise SystemExit(1)
-    print("\nDone. Start your Claude session (opens the MIDI ports), then open FL Studio.")
-    print("Ports must exist before FL launches; if FL is already open, restart it once.")
+    print("\nDone. Open FL Studio first, then start your Claude session so the MIDI ports hot-plug.")
 
 
 if __name__ == "__main__":

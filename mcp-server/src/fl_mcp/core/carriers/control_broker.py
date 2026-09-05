@@ -22,15 +22,17 @@ any number of sessions can try to start a broker; the machine ends with one.
 from __future__ import annotations
 
 import contextlib
+import hashlib
 import json
 import logging
 import os
 import socket
 import threading
+import time
 from pathlib import Path
 from typing import Any, Callable
 
-from fl_mcp.core.carriers.wire import ControlUnavailable, MidiControl
+from fl_mcp.core.carriers.wire import WIRE_PROTOCOL_VERSION, ControlUnavailable, MidiControl
 from fl_mcp.errors import ToolError
 from fl_mcp.fl.paths import app_data_root
 
@@ -38,6 +40,14 @@ log = logging.getLogger(__name__)
 
 SOCKET_NAME = "control-broker.sock"
 MAX_CLIENT_TIMEOUT_SECONDS = 60.0
+IDLE_TIMEOUT_SECONDS = 5 * 60.0
+
+
+def broker_version() -> str:
+    """Identity of the broker code and the wire protocol it serves."""
+    source = Path(__file__).read_bytes()
+    digest = hashlib.sha256(source + f"\0{WIRE_PROTOCOL_VERSION}".encode()).hexdigest()
+    return f"{WIRE_PROTOCOL_VERSION}:{digest[:16]}"
 
 
 def default_socket_path() -> Path:
@@ -70,6 +80,10 @@ class ControlBroker:
         self._socket_path = socket_path
         self._wire = wire_factory()
         self._server: socket.socket | None = None
+        self._shutdown = threading.Event()
+        self._last_client_at = 0.0
+        self._client_count = 0
+        self._client_lock = threading.Lock()
 
     def bind(self) -> bool:
         """Claim the socket. False (not an error) if another broker already
@@ -92,23 +106,56 @@ class ControlBroker:
                 server.close()
                 return False
         server.listen(16)
+        server.settimeout(1.0)
         self._server = server
+        self._last_client_at = time.monotonic()
         return True
 
     def serve_forever(self) -> None:
         assert self._server is not None, "call bind() first"
         log.info("control broker serving at %s", self._socket_path)
-        while True:
-            conn, _ = self._server.accept()
+        while not self._shutdown.is_set():
+            try:
+                conn, _ = self._server.accept()
+            except socket.timeout:
+                with self._client_lock:
+                    idle = self._client_count == 0 and time.monotonic() - self._last_client_at >= IDLE_TIMEOUT_SECONDS
+                if idle:
+                    log.info("control broker idle for %ss; exiting", IDLE_TIMEOUT_SECONDS)
+                    break
+                continue
+            except OSError:
+                break
+            with self._client_lock:
+                self._client_count += 1
             threading.Thread(target=self._serve_client, args=(conn,), daemon=True).start()
+        self.close()
+
+    def close(self) -> None:
+        if self._server is not None:
+            with contextlib.suppress(OSError):
+                self._server.close()
+            self._server = None
+        with contextlib.suppress(FileNotFoundError):
+            self._socket_path.unlink()
 
     def _serve_client(self, conn: socket.socket) -> None:
-        with conn, conn.makefile("r") as reader:
-            for line in reader:
-                line = line.strip()
-                if not line:
-                    continue
-                conn.sendall((json.dumps(self._handle(line)) + "\n").encode())
+        try:
+            with conn, conn.makefile("r") as reader:
+                for line in reader:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    envelope = self._handle(line)
+                    conn.sendall((json.dumps(envelope) + "\n").encode())
+                    if envelope.get("kind") == "broker_version_mismatch":
+                        self._shutdown.set()
+                        return
+        finally:
+            with self._client_lock:
+                self._client_count -= 1
+                if self._client_count == 0:
+                    self._last_client_at = time.monotonic()
 
     def _handle(self, line: str) -> dict[str, Any]:
         """Relay one round trip, preserving the wire's raise-vs-return contract:
@@ -118,6 +165,11 @@ class ControlBroker:
         same typed failure - a busy wire must not look like a dead one."""
         try:
             req = json.loads(line)
+            if req.get("kind") == "broker_hello":
+                client_version = req.get("version")
+                if client_version == broker_version():
+                    return {"kind": "broker_hello", "version": broker_version()}
+                return {"kind": "broker_version_mismatch", "version": broker_version()}
             timeout = float(req.get("timeout", 2.0))
             if not 0 < timeout <= MAX_CLIENT_TIMEOUT_SECONDS:
                 return _error_envelope(_timeout_limit_error(timeout))

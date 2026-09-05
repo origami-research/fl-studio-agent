@@ -1,4 +1,4 @@
-"""One-command live FL SDK session for development and verification."""
+"""One-command live FL SDK session: FL starts first, then MIDI ports hot-plug."""
 
 from __future__ import annotations
 

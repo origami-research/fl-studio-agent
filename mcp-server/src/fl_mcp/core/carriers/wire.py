@@ -10,7 +10,8 @@ NO module-level singleton: MidiControl wraps a process-unique resource
 traffic), and uniqueness is owned by the ONE caller that constructs it -
 ``session.create_session()`` in production, the e2e fixture in tests.
 
-Ordering rule (docs/14): the ports must exist BEFORE FL Studio launches.
+Ordering rule: FL Studio starts first, then these ports hot-plug into the
+running host.
 
 This plane has its own consumer and its own id space (the controller script
 correlates in memory; there is no on-disk ledger), so it satisfies the
@@ -46,6 +47,10 @@ log = logging.getLogger(__name__)
 
 REQ_PORT_NAME = "FLMCP Req"  # server -> FL (FL sees it as a MIDI input source)
 RES_PORT_NAME = "FLMCP Res"  # FL -> server (FL sees it as a MIDI output dest)
+# Bump only when the MIDI framing or request/response semantics change.  The
+# broker includes it in its identity so a resident process cannot keep serving
+# a client built for a different wire.
+WIRE_PROTOCOL_VERSION = 1
 
 RESPONSE_POLL_SECONDS = 0.005
 EVENT_BUFFER_SIZE = 256

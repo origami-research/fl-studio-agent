@@ -9,6 +9,7 @@ concurrent clients sharing one wire.
 from __future__ import annotations
 
 import json
+import socket
 import tempfile
 import threading
 from pathlib import Path
@@ -17,7 +18,12 @@ from unittest.mock import Mock
 import pytest
 
 from fl_mcp.core.carriers.broker_client import BrokerControl
-from fl_mcp.core.carriers.control_broker import MAX_CLIENT_TIMEOUT_SECONDS, ControlBroker
+from fl_mcp.core.carriers.control_broker import (
+    IDLE_TIMEOUT_SECONDS,
+    MAX_CLIENT_TIMEOUT_SECONDS,
+    ControlBroker,
+    broker_version,
+)
 from fl_mcp.errors import ToolError
 from fl_mcp.schemas import ControlResponse
 
@@ -147,13 +153,93 @@ def test_broker_client_starts_the_broker_only_once(monkeypatch, tmp_path):
     control = BrokerControl(session_with_pid(tmp_path, 5), socket_path=tmp_path / "missing.sock")
     spawn = Mock()
     monkeypatch.setattr("fl_mcp.core.carriers.broker_client.subprocess.Popen", spawn)
-    monkeypatch.setattr(control, "_try_connect", lambda: None)
-    ticks = iter((0.0, 11.0, 0.0, 11.0))
-    monkeypatch.setattr("fl_mcp.core.carriers.broker_client.time.monotonic", lambda: next(ticks))
-    monkeypatch.setattr("fl_mcp.core.carriers.broker_client.time.sleep", lambda seconds: None)
 
-    for _ in range(2):
-        with pytest.raises(ToolError, match="within 10s"):
-            control._connect()
+    control._start_broker()
+    control._start_broker()
 
     assert spawn.call_count == 1
+
+
+class FakeReader:
+    def __init__(self, lines: list[str]) -> None:
+        self._lines = iter(lines)
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_args):
+        return False
+
+    def __iter__(self):
+        return self
+
+    def __next__(self) -> str:
+        return next(self._lines)
+
+    def readline(self) -> str:
+        return next(self._lines, "")
+
+
+class FakeSocket:
+    """Small socket seam: prove broker lifecycle without a kernel socket."""
+
+    def __init__(self, lines: list[str] | None = None) -> None:
+        self.sent: list[dict] = []
+        self.reader = FakeReader(lines or [])
+        self.closed = False
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_args):
+        self.closed = True
+        return False
+
+    def makefile(self, _mode: str):
+        return self.reader
+
+    def sendall(self, data: bytes) -> None:
+        self.sent.append(json.loads(data))
+
+    def settimeout(self, _seconds: float) -> None:
+        pass
+
+    def close(self) -> None:
+        self.closed = True
+
+
+def test_version_handshake_with_fake_socket_retires_a_stale_broker(tmp_path):
+    broker = ControlBroker(tmp_path / "broker.sock", wire_factory=FakeWire)
+    broker._client_count = 1  # serve_forever increments before handing a socket to its thread.
+    conn = FakeSocket([json.dumps({"kind": "broker_hello", "version": "stale"}) + "\n"])
+
+    broker._serve_client(conn)  # the client tells the stale owner to retire
+
+    assert conn.sent == [{"kind": "broker_version_mismatch", "version": broker_version()}]
+    assert broker._shutdown.is_set()
+
+
+def test_client_version_handshake_rejects_a_stale_fake_socket(tmp_path):
+    conn = FakeSocket([json.dumps({"kind": "broker_version_mismatch", "version": "stale"}) + "\n"])
+
+    assert BrokerControl(session_with_pid(tmp_path, 1))._matches_broker_version(conn) is False
+    assert conn.sent == [{"kind": "broker_hello", "version": broker_version()}]
+
+
+def test_idle_broker_exits_with_fake_listening_socket(monkeypatch, tmp_path):
+    class IdleServer:
+        def accept(self):
+            raise socket.timeout
+
+        def close(self):
+            self.closed = True
+
+    server = IdleServer()
+    broker = ControlBroker(tmp_path / "broker.sock", wire_factory=FakeWire)
+    broker._server = server
+    broker._last_client_at = 0.0
+    monkeypatch.setattr("fl_mcp.core.carriers.control_broker.time.monotonic", lambda: IDLE_TIMEOUT_SECONDS)
+
+    broker.serve_forever()
+
+    assert server.closed is True

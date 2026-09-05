@@ -52,6 +52,40 @@ def test_idempotent_and_no_dup(reg):
     assert text.count('<Key Name="FLMCP Res">') == 1
 
 
+def test_removes_numbered_virtual_port_duplicates_and_keeps_canonical_assignment(reg):
+    reg.write_text(
+        FRESH.replace(
+            '<Key Name="MIDI input">',
+            '''<Key Name="MIDI input">
+                <Key Name="FLMCP Req #2"><Value Name="Port" Type="2">9</Value></Key>
+                <Key Name="FLMCP Req #9"><Value Name="Port" Type="2">8</Value></Key>''',
+        ).replace(
+            '<Key Name="MIDI output">',
+            '''<Key Name="MIDI output">
+                <Key Name="FLMCP Res #2"><Value Name="Port" Type="2">9</Value></Key>''',
+        ),
+        encoding="utf-8",
+    )
+    before = reg.read_text(encoding="utf-8")
+
+    status = install.configure_midi()
+    text = reg.read_text(encoding="utf-8")
+
+    assert status.startswith("OK")
+    assert "FLMCP Req #" not in text and "FLMCP Res #" not in text
+    assert text.count('<Key Name="FLMCP Req">') == 1
+    assert text.count('<Key Name="FLMCP Res">') == 1
+    assert reg.with_name("reg.xml.bak").read_text(encoding="utf-8") == before
+
+
+def test_running_fl_leaves_its_registry_untouched(reg, monkeypatch):
+    reg.write_text(FRESH, encoding="utf-8")
+    monkeypatch.setattr(install, "fl_process_running", lambda: True)
+
+    assert install.configure_midi().startswith("WARN FL Studio is running")
+    assert reg.read_text(encoding="utf-8") == FRESH
+
+
 def test_normalizes_both_ports(reg):
     reg.write_text(FRESH, encoding="utf-8")
     install.configure_midi()

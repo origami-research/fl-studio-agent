@@ -191,8 +191,8 @@ class _RunNamespaceGuard(ast.NodeVisitor):
 
 @contextlib.asynccontextmanager
 async def lifespan(server: Any) -> Any:
-    """Async context manager: build the session (MIDI ports open BEFORE FL
-    launches - docs/14 ordering), yield {"fl": sdk.connect(session)}, close
+    """Async context manager: build the session after FL launches so MIDI ports
+    hot-plug into the running host, yield {"fl": sdk.connect(session)}, close
     the transport on shutdown."""
     session = create_session()
     fl = sdk.connect(session)

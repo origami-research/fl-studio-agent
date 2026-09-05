@@ -18,11 +18,11 @@ import json
 import socket
 import subprocess
 import sys
-import time
 from pathlib import Path
+from time import monotonic, sleep
 
 from fl_mcp.contract import BRIDGE_PORT_FILE
-from fl_mcp.core.carriers.control_broker import default_socket_path
+from fl_mcp.core.carriers.control_broker import broker_version, default_socket_path
 from fl_mcp.errors import ToolError, control_plane_unavailable
 from fl_mcp.schemas import ControlResponse, HelloEvent
 
@@ -103,23 +103,19 @@ class BrokerControl:
 
     def _connect(self) -> socket.socket:
         """Connect to the broker, auto-starting it once if absent."""
-        if (conn := self._try_connect()) is not None:
-            return conn
-        if not self._broker_spawned:
-            # The bind race is resolved broker-side (first wins), so another
-            # client may launch the process that eventually answers us.
-            self._broker_spawned = True
-            subprocess.Popen(
-                [sys.executable, "-m", "fl_mcp.control_broker"],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                start_new_session=True,
-            )
-        deadline = time.monotonic() + _BROKER_START_TIMEOUT
-        while time.monotonic() < deadline:
+        deadline = monotonic() + _BROKER_START_TIMEOUT
+        while monotonic() < deadline:
             if (conn := self._try_connect()) is not None:
-                return conn
-            time.sleep(0.1)
+                if self._matches_broker_version(conn):
+                    return conn
+                conn.close()
+                # The stale broker received our mismatch response and exits.
+                # Its socket must disappear before this interpreter can win it.
+            elif not self._broker_spawned:
+                # The bind race is resolved broker-side (first wins), so another
+                # client may launch the process that eventually answers us.
+                self._start_broker()
+            sleep(0.1)
         raise ToolError(
             "control_plane_unavailable",
             f"The control broker did not come up at {self._socket_path} within "
@@ -127,6 +123,29 @@ class BrokerControl:
             "Check that fl-mcp-control-broker can start (python-rtmidi installed).",
             retryable=True,
         )
+
+    def _start_broker(self) -> None:
+        if self._broker_spawned:
+            return
+        self._broker_spawned = True
+        subprocess.Popen(
+            [sys.executable, "-m", "fl_mcp.control_broker"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            start_new_session=True,
+        )
+
+    @staticmethod
+    def _matches_broker_version(conn: socket.socket) -> bool:
+        """Ask a resident broker to retire itself when its code is stale."""
+        try:
+            conn.sendall((json.dumps({"kind": "broker_hello", "version": broker_version()}) + "\n").encode())
+            conn.settimeout(1.0)
+            reply = conn.makefile("r").readline()
+            envelope = json.loads(reply)
+        except (OSError, ValueError):
+            return False
+        return envelope == {"kind": "broker_hello", "version": broker_version()}
 
     def _try_connect(self) -> socket.socket | None:
         conn = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
