@@ -44,9 +44,9 @@ Capability acquisition is governed by the [capability acquisition model](33-capa
 | Channel lifecycle (add/del/reorder) | NONE | T3 | file RE or controller API |
 | Piano-roll transforms (quantize/arp/strum) | NONE | T3 | we write raw notes; FL's tools via piano-roll scripting API (documented) |
 | Markers / time & key sig / groove | NONE | T3 | file RE; some via controller API (documented) |
-| Stem export / MIDI export | NONE | T3 | render is full-mix only (-R); stems need per-track routing or CLI flags (unknown) |
+| Stem export / MIDI export | NONE | T3 | render is full-mix only; stems need per-track routing or CLI flags (unknown) |
 | Live project save | live (wire) | T2 | live-verified (#164, #167): `FPT_Save` persists live state, and the saved `.flp` is reparsed to confirm the resulting project state. |
-| Full-mix render | save then CLI render (`-R`) | T3 | live-verified (#169): `fl.render(path)` saves the live project, invokes FL's CLI on that `.flp`, and accepts only a non-empty WAV. |
+| Full-mix render | live Bridge capture | T3 | live-verified 2026-09-04: 16 written notes yielded 347711 stereo frames at 44100 Hz (7.88 s, -18.4 LUFS, -2.3 dBFS) and `render_wav` took about 9 s, versus about 64 s for CLI export. `fl.render(path)` saves live state, arms the Master Bridge, plays once, and records exact frames. It needs FL audio output, the same box requirement as RDP audio. Missing Bridge, capture stalls, drops, silence, or a mismatched WAV fail loudly. `fl.export_offline(path)` is separately requested, boots a second FL, and takes about a minute. |
 | Render analysis (BPM/key/loudness/peak/spectrum) | local WAV | T2 | `fl.analyze(path)` is deterministic Python measurement, no model or FL session required. |
 | Scene analysis (key/digest) | file | T2 | covered (get_scene) |
 | Undo / redo control | undo via wire | T3 | redo + file-lane revert unbuilt (store content-addresses writes) |

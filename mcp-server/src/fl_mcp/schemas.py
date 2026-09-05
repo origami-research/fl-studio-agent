@@ -207,6 +207,15 @@ class PingArgs(BaseModel):
     pass
 
 
+class CaptureStartArgs(BaseModel):
+    seconds: float = Field(gt=0, le=600)
+    sample_rate_hint: int | None = Field(default=None, ge=8_000, le=192_000)
+
+
+class CaptureStopArgs(BaseModel):
+    pass
+
+
 # -- discovery passes (native bridge_discover.cpp dispatches wp_* by op) ------
 
 
@@ -236,6 +245,8 @@ SpoolOp = Literal[
     "add_notes",
     "clear_notes",
     "ping",
+    "capture_start",
+    "capture_stop",
     "wp_getters",
     "wp_timing",
     "wp_target",
@@ -246,6 +257,8 @@ OP_ARGS: dict[str, type[BaseModel]] = {
     "add_notes": AddNotesArgs,
     "clear_notes": ClearNotesArgs,
     "ping": PingArgs,
+    "capture_start": CaptureStartArgs,
+    "capture_stop": CaptureStopArgs,
     "wp_getters": WpGettersArgs,
     "wp_timing": WpTimingArgs,
     "wp_target": WpTargetArgs,
@@ -270,6 +283,11 @@ class SpoolResponse(BaseModel):
     # The wp_* ops ack a JSON evidence object; Pass.fold reads it (docs/30
     # Surface 4). None for ops that ack without evidence (add_notes, ping).
     result: dict[str, Any] | None = None
+    path: str | None = None
+    frames_written: int | None = None
+    frames_requested: int | None = None
+    drop_count: int | None = None
+    sample_rate: int | None = None
 
 
 # -- control wire (server <-> controller script over SysEx) ------------------

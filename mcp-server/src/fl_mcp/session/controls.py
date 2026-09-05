@@ -17,7 +17,7 @@ from numbers import Real
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from fl_mcp import errors, flp
+from fl_mcp import audio, errors, flp
 from fl_mcp.contract import ENV_AGENT_PROJECT, ENV_SPOOL_ROOT
 from fl_mcp.errors import NotePlaneUnavailable, WriteRejected
 from fl_mcp.fl.paths import fl_app
@@ -43,6 +43,7 @@ PLUGIN_PARAM_TOLERANCE = 0.02
 SAVE_BUSY_RETRIES = 2
 SAVE_BUSY_RETRY_SECONDS = 0.25
 RENDER_TIMEOUT_SECONDS = 300.0
+RENDER_TAIL_SECONDS = 0.5
 
 # FL's plugins.* convention for "the channel's own generator, not a mixer
 # effect slot" (the slot argument every call here passes).
@@ -120,11 +121,88 @@ def _render_env() -> dict[str, str]:
     return env
 
 
-def render_wav(session: FLSession, output: Path) -> Path:
-    """Save live state, render that .flp with FL's CLI, and confirm the WAV.
+def _render_span_seconds(project: Path) -> float:
+    """One arrangement pass plus a short decay tail, from saved authoritative state."""
+    parsed = flp.read(project)
+    end_ticks = max((item.position + item.length for item in parsed.playlist), default=parsed.ppq * 16)
+    beats = end_ticks / parsed.ppq
+    return beats * 60.0 / parsed.tempo + RENDER_TAIL_SECONDS
 
-    This intentionally blocks at the subprocess boundary and is not an
-    ears-loop primitive.
+
+def _live_render(session: FLSession, output: Path, seconds: float) -> Path:
+    """Play the saved arrangement once while the master Bridge records it."""
+    started = session.transport.send("capture_start", seconds=seconds)
+    response_timeout = min(10.0, max(2.0, seconds / 2.0 + 2.0))
+    start = session.transport.await_response(started, timeout=response_timeout)
+    if not start.ok:
+        raise errors.ToolError("render_failed", start.err or "Bridge refused capture_start",
+                               "Check the Bridge heartbeat and retry.", retryable=True)
+    try:
+        # Position is a controller operation, so it remains on the control wire
+        # rather than reaching from the Bridge into FL on a mixer callback.
+        if session.control is None:
+            raise errors.control_plane_unavailable("transport.setSongPos", 0.0)
+        positioned = session.control.send_request("transport.setSongPos", args=[0], timeout=LIVE_SET_TIMEOUT_SECONDS)
+        if not positioned.ok:
+            raise errors.ToolError("render_failed", positioned.err or "FL refused loop start",
+                                   "Wait for FL to settle, then retry.", retryable=True)
+        session.link.command("transport.start")
+        # The Bridge ends recording at its requested frame count. This is only
+        # the bounded transport wait before we ask it to finalize the WAV.
+        time.sleep(seconds + 1.0)
+    finally:
+        try:
+            session.link.command("transport.stop")
+        finally:
+            stopped_cmd = session.transport.send("capture_stop")
+            stopped = session.transport.await_response(stopped_cmd, timeout=response_timeout)
+    if not stopped.ok or not stopped.path or stopped.frames_written is None:
+        raise errors.ToolError("render_failed", stopped.err or "Bridge wrote no audio frames",
+                               "Confirm FL audio output and retry.", retryable=True)
+    captured = Path(stopped.path)
+    if not captured.is_file() or captured.stat().st_size <= 44:
+        raise errors.ToolError("render_failed", "Bridge capture WAV is missing or empty",
+                               "Check the spool root is writable and retry.", retryable=True)
+    expected_frames = start.frames_requested
+    if (
+        start.sample_rate is None
+        or expected_frames is None
+        or stopped.sample_rate != start.sample_rate
+        or stopped.drop_count
+        or abs(stopped.frames_written - expected_frames) > expected_frames * 0.01
+    ):
+        raise errors.ToolError(
+            "render_failed",
+            "Bridge capture did not verify: "
+            f"requested={expected_frames}, written={stopped.frames_written}, rate={stopped.sample_rate}, "
+            f"drops={stopped.drop_count}",
+            "Confirm the Bridge is last on Master and FL audio is running, then retry.",
+            retryable=True,
+        )
+    try:
+        samples, rate = audio._read_wav(captured)
+        measured = audio.analyze_wav(captured)
+    except (OSError, ValueError) as exc:
+        raise errors.ToolError("render_failed", f"Bridge WAV could not be read: {exc}",
+                               "Retry the capture after checking the spool disk.", retryable=True) from exc
+    if rate != start.sample_rate or abs(len(samples) - expected_frames) > expected_frames * 0.01 or measured.integrated_lufs <= -60:
+        raise errors.ToolError(
+            "render_failed",
+            f"Bridge WAV did not verify: frames={len(samples)}/{expected_frames}, rate={rate}/{start.sample_rate}, "
+            f"lufs={measured.integrated_lufs:.1f}",
+            "Confirm FL audio output and Master Bridge routing, then retry.",
+            retryable=True,
+        )
+    output.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(captured, output)
+    return output
+
+
+def render_wav(session: FLSession, output: Path) -> Path:
+    """Play the loop once and record the live mix, about the loop's length.
+
+    The Bridge and FL audio output device are required. It fails loudly when
+    that live path is unavailable rather than masking it with an offline export.
     """
     if session.project is None:
         raise errors.ToolError(
@@ -132,6 +210,24 @@ def render_wav(session: FLSession, output: Path) -> Path:
             "Cannot render without a configured saved FL project.",
             "Configure an existing .flp project, then retry.",
         )
+    output = output.expanduser().resolve()
+    project = session.project.expanduser().resolve()
+    save_project(session)
+    if not session.caps.bridge_live:
+        raise errors.ToolError(
+            "render_failed",
+            "Bridge is not live; render needs the Master-insert Bridge and FL audio output.",
+            "Start FL with an audio output device and confirm bridge_heartbeat.txt, then retry.",
+            retryable=True,
+        )
+    return _live_render(session, output, _render_span_seconds(project))
+
+
+def export_offline(session: FLSession, output: Path) -> Path:
+    """Boot a second FL and export with -R, for offline deliverables only."""
+    if session.project is None:
+        raise errors.ToolError("render_failed", "Cannot export without a configured saved FL project.",
+                               "Configure an existing .flp project, then retry.")
     output = output.expanduser().resolve()
     project = session.project.expanduser().resolve()
     save_project(session)

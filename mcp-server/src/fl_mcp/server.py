@@ -381,12 +381,10 @@ _LAST_RENDER_KEY = "last_render"
 
 @_tool_boundary
 def render(ctx: Context) -> RenderResult:
-    """Render the live session to a WAV for listening. Returns {"path",
+    """Play the loop once and record the live mix to a WAV for listening. Returns {"path",
     "wavBase64"} (base64 of the WAV, omitted with a note when the file
-    exceeds the size cap). A render takes about a minute and produces the real
-    mix, so render once when the pass is done; the harness listens back after
-    you say you are done; use get_notes/get_scene (cheap, live) to check work
-    instead. Call analyze afterwards for measurements."""
+    exceeds the size cap). A render takes about the loop's length.
+    Call analyze afterwards for measurements."""
     fl = ctx.request_context.lifespan_context["fl"]
     output = Path(tempfile.mkdtemp(prefix="flmcp-render-")) / "render.wav"
     try:

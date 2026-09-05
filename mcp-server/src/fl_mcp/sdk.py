@@ -160,8 +160,15 @@ class FL:
         return self._session.add_effect(args.insert_index, args.plugin_name)
 
     def render(self, output: str | Path) -> Path:
-        """Export the current live project to ``output`` and return the confirmed WAV path."""
+        """Play the loop once and record the live mix to ``output``.
+
+        This takes about the loop's length and requires FL's audio output.
+        """
         return self._session.render_wav(Path(output))
+
+    def export_offline(self, output: str | Path) -> Path:
+        """Boot a second FL and export, about a minute, for offline deliverables."""
+        return self._session.export_offline(Path(output))
 
     def save(self) -> None:
         """Save the live project to its .flp (live-verified 2026-09-02)."""

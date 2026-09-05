@@ -48,8 +48,9 @@ renders the arrangement. This is a template invariant, not a render-time mutatio
 
 - Named inserts: `Drums`, `Bass`, `Music`, `FX`, and a utility insert named `MCP`.
 - Channels pre-routed to their group inserts.
-- **`FL MCP Bridge` pre-loaded on the `MCP` insert** - the single most error-prone
-  install step, eliminated.
+- **`FL MCP Bridge` is pre-loaded as the last effect on the Master insert.** A Bridge
+  effect hears only its own insert, and render records its `Eff_Render` input.
+  Rendering also needs FL's audio output device, the same box dependency as RDP audio.
 - Basic send chain (reverb/delay on sends) so `set_plugin_param` has something
   expressive to grab immediately.
 

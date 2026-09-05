@@ -588,7 +588,7 @@
       }
     },
     {
-      "description": "Render the live session to a WAV for listening. Returns {\"path\",\n\"wavBase64\"} (base64 of the WAV, omitted with a note when the file\nexceeds the size cap). A render takes about a minute and produces the real\nmix, so render once when the pass is done; the harness listens back after\nyou say you are done; use get_notes/get_scene (cheap, live) to check work\ninstead. Call analyze afterwards for measurements.",
+      "description": "Play the loop once and record the live mix to a WAV for listening. Returns {\"path\",\n\"wavBase64\"} (base64 of the WAV, omitted with a note when the file\nexceeds the size cap). A render takes about the loop's length.\nCall analyze afterwards for measurements.",
       "inputSchema": {
         "properties": {},
         "title": "renderArguments",

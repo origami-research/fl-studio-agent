@@ -21,6 +21,7 @@
 #include <vector>
 
 #include "bridge_core.h"
+#include "bridge_capture.h"
 #include "bridge_discover.h"
 #include "fl_dispatch_ledger.h"
 #include "fl_host_abi.h"
@@ -77,6 +78,18 @@ std::string ZeroPadded(int id) {
 
 std::string CmdPath(const std::string &root, int id) { return root + "/commands/" + ZeroPadded(id); }
 
+class FakeCapture final : public bridge_core::CaptureControl {
+ public:
+  bridge_core::CaptureReceipt Start(double seconds, int sample_rate_hint, const std::string &, int) override {
+    started_seconds = seconds;
+    started_rate = sample_rate_hint;
+    return {true, "/tmp/capture.wav", 0, 0, 0, 48000, ""};
+  }
+  bridge_core::CaptureReceipt Stop() override { return {true, "/tmp/capture.wav", 12, 12, 0, 48000, ""}; }
+  double started_seconds = 0;
+  int started_rate = 0;
+};
+
 // Little-endian writers for the byte-exact TNotesParams expectation. FL 2026
 // runs on x86_64 and arm64, both little-endian, so the record RTTI's offsets
 // plus these are the whole wire form.
@@ -116,11 +129,80 @@ void WriteQueue(const std::string &root, const std::vector<int> &ids) {
 
 }  // namespace
 
+// The block that completes a capture is normally partial (the transport does
+// not stop on a block boundary). Its unwanted tail must not count as a ring
+// overrun: live run probe 2026-09-04 reported "capture ring overrun" with
+// frames_written == frames_requested for exactly this reason.
+static void TestCaptureFinalPartialBlockIsNotADrop() {
+  bridge_capture::Capture capture;
+  capture.SetSampleRate(48000);
+  const std::string root = "/tmp/bridge_capture_test_root";
+  mkdir(root.c_str(), 0755);
+  // 16384 frames minimum ring; request exactly 20000 frames.
+  const auto start = capture.Start(20000.0 / 48000.0, 48000, root, 7);
+  CHECK(start.ok);
+  capture.SetPlaying(true);
+  std::vector<float> block(512 * 2, 0.25f);
+  std::uint64_t pushed = 0;
+  while (pushed < 20000 + 512 * 3) {  // three full blocks beyond completion
+    capture.Push(block.data(), 512);
+    pushed += 512;
+  }
+  const auto stop = capture.Stop();
+  CHECK(stop.frames_written == 20000);
+  CHECK(stop.drop_count == 0);
+  CHECK(stop.ok);
+}
+
 int main() {
+  TestCaptureFinalPartialBlockIsNotADrop();
   char home_tmpl[] = "/tmp/bridge_core_test_XXXXXX";
   char *home = mkdtemp(home_tmpl);
   CHECK(home != nullptr);
   if (home == nullptr) return 1;
+
+  // Capture commands use the same claimed-once spool executor and carry the
+  // artifact receipt the engine needs, without involving a mixer callback.
+  {
+    FakeCapture capture;
+    bridge_core::ExecResult start = bridge_core::ExecuteCommand(
+        nullptr, 0, {}, bridge_core::kDefaultPPQ,
+        "{\"proto\":2,\"id\":701,\"op\":\"capture_start\",\"args\":{\"seconds\":1.5,\"sample_rate_hint\":48000}}",
+        nullptr, &capture);
+    CHECK(!start.outcome.ok);  // roots are mandatory for an artifact path
+    bridge_core::ExecResult rooted_start = bridge_core::ExecuteCommand(
+        nullptr, 0, {home}, bridge_core::kDefaultPPQ,
+        "{\"proto\":2,\"id\":703,\"op\":\"capture_start\",\"args\":{\"seconds\":1.5,\"sample_rate_hint\":48000}}",
+        nullptr, &capture);
+    CHECK(rooted_start.outcome.ok);
+    CHECK(capture.started_seconds == 1.5);
+    CHECK(capture.started_rate == 48000);
+    bridge_core::ExecResult stop = bridge_core::ExecuteCommand(
+        nullptr, 0, {home}, bridge_core::kDefaultPPQ,
+        "{\"proto\":2,\"id\":702,\"op\":\"capture_stop\",\"args\":{}}", nullptr, &capture);
+    CHECK(stop.outcome.ok);
+    CHECK(Contains(stop.ack_json, "\"path\": \"/tmp/capture.wav\""));
+    CHECK(Contains(stop.ack_json, "\"frames_written\": 12"));
+  }
+
+  // Audio callback contract: the SPSC ring accepts interleaved stereo frames
+  // without involving FL, and the writer produces a valid float WAV receipt.
+  {
+    bridge_capture::Capture capture;
+    bridge_core::CaptureReceipt started = capture.Start(2.0 / 48000.0, 48000, home, 700);
+    CHECK(started.ok);
+    capture.SetPlaying(true);
+    float samples[] = {0.25f, -0.25f, 0.5f, -0.5f};
+    capture.Push(samples, 2);
+    // FL can deliver the next block after the exact target is accepted. It is
+    // outside this render by definition, not a ring overrun.
+    capture.Push(samples, 2);
+    bridge_core::CaptureReceipt stopped = capture.Stop();
+    CHECK(stopped.ok);
+    CHECK(stopped.frames_written == 2);
+    CHECK(stopped.drop_count == 0);
+    CHECK(ReadFile(stopped.path).size() == 44 + sizeof(samples) / 2);
+  }
 
   std::vector<std::string> roots = bridge_core::SpoolRoots(home);
   CHECK(roots.size() == 2);

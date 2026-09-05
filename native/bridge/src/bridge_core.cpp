@@ -112,7 +112,8 @@ bool Contains(const std::vector<int> &ids, int id) {
 // SpoolResponse.op is a closed literal in schemas.py; an unexpected string
 // would fail the server's validation, so anything else is reported as op-less.
 bool IsKnownOp(const std::string &op) {
-  return op == "add_notes" || op == "clear_notes" || op == "ping";
+  return op == "add_notes" || op == "clear_notes" || op == "ping" ||
+         op == "capture_start" || op == "capture_stop";
 }
 
 HostCallTrace g_host_call_trace = nullptr;
@@ -150,6 +151,8 @@ std::string FormatHeartbeat(const HeartbeatState &s) {
   out += std::string("abi=") + s.abi + "\n";
   out += "render_blocks=" + std::to_string(s.render_blocks) + "\n";
   out += "render_rate=" + std::to_string(s.render_rate) + "\n";
+  out += "capture=" + std::to_string(s.capture) + "\n";
+  out += "capture_frames=" + std::to_string(s.capture_frames) + "\n";
   return out;
 }
 
@@ -432,7 +435,8 @@ int RecordConsumed(const std::vector<std::string> &roots, int id) {
 
 ExecResult ExecuteCommand(TFruityPlugHost *host, std::intptr_t host_tag,
                           const std::vector<std::string> &roots, int ppq_default,
-                          const std::string &payload_json, ResultCache *cache) {
+                          const std::string &payload_json, ResultCache *cache,
+                          CaptureControl *capture) {
   ExecResult result;
   PollOutcome &outcome = result.outcome;
 
@@ -494,6 +498,7 @@ ExecResult ExecuteCommand(TFruityPlugHost *host, std::intptr_t host_tag,
   RecordConsumed(roots, id);
 
   std::string summary;
+  CaptureReceipt capture_receipt;
   std::string discover_result;  // wp_* ops embed their pass output here
   const int proto = command.Int("proto", 0);
   if (proto != kProtoVersion) {
@@ -502,6 +507,29 @@ ExecResult ExecuteCommand(TFruityPlugHost *host, std::intptr_t host_tag,
   } else if (op == "ping") {
     outcome.ok = true;
     summary = "pong";
+  } else if (op == "capture_start") {
+    if (capture == nullptr || roots.empty()) {
+      outcome.error = "live audio capture is unavailable";
+    } else {
+      const minijson::Value *args = command.Get("args");
+      const double seconds = args != nullptr ? args->Num("seconds", 0.0) : 0.0;
+      const int hint = args != nullptr ? args->Int("sample_rate_hint", 0) : 0;
+      if (seconds <= 0.0) outcome.error = "capture_start requires positive seconds";
+      else {
+        capture_receipt = capture->Start(seconds, hint, roots.front(), id);
+        outcome.ok = capture_receipt.ok;
+        outcome.error = capture_receipt.error;
+        summary = outcome.ok ? "capture started" : "capture did not start";
+      }
+    }
+  } else if (op == "capture_stop") {
+    if (capture == nullptr) outcome.error = "live audio capture is unavailable";
+    else {
+      capture_receipt = capture->Stop();
+      outcome.ok = capture_receipt.ok;
+      outcome.error = capture_receipt.error;
+      summary = outcome.ok ? "capture stopped" : "capture did not stop";
+    }
   } else if (bridge_discover::IsDiscoverOp(op)) {
     // Discovery rides the ONE executor: claimed-once like any command (the
     // RecordConsumed above already ran, so a discover call that crashes FL
@@ -571,6 +599,13 @@ ExecResult ExecuteCommand(TFruityPlugHost *host, std::intptr_t host_tag,
   // verbatim (not escaped) so fl_mcp.discover reads structured data, not a
   // stringified blob. Only wp_* ops set it.
   if (!discover_result.empty()) json += ", \"result\": " + discover_result;
+  if (op == "capture_start" || op == "capture_stop") {
+    if (!capture_receipt.path.empty()) json += ", \"path\": \"" + minijson::Escape(capture_receipt.path) + "\"";
+    json += ", \"frames_written\": " + std::to_string(capture_receipt.frames_written);
+    json += ", \"frames_requested\": " + std::to_string(capture_receipt.frames_requested);
+    json += ", \"drop_count\": " + std::to_string(capture_receipt.drop_count);
+    json += ", \"sample_rate\": " + std::to_string(capture_receipt.sample_rate);
+  }
   if (!summary.empty()) json += ", \"summary\": \"" + minijson::Escape(summary) + "\"";
   json += "}";
   result.ack_json = json;
@@ -585,7 +620,7 @@ ExecResult ExecuteCommand(TFruityPlugHost *host, std::intptr_t host_tag,
 
 PollOutcome PollOnce(TFruityPlugHost *host, std::intptr_t host_tag,
                      const std::vector<std::string> &roots, int ppq_default,
-                     ResultCache *cache) {
+                     ResultCache *cache, CaptureControl *capture) {
   // Lowest fresh id first: the server allocates ids in send order, and the
   // pyscript applies in the same order, so both consumers agree on sequencing.
   std::vector<int> pending = QueueIds(roots);
@@ -607,7 +642,7 @@ PollOutcome PollOnce(TFruityPlugHost *host, std::intptr_t host_tag,
 
   // The one executor; disposal (the per-id tombstone) happens inside via
   // RecordConsumed, and the response lands in responses/<id>.json.
-  return ExecuteCommand(host, host_tag, roots, ppq_default, text, cache).outcome;
+  return ExecuteCommand(host, host_tag, roots, ppq_default, text, cache, capture).outcome;
 }
 
 }  // namespace bridge_core

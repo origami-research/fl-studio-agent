@@ -60,6 +60,7 @@
 
 #include "bridge_core.h"
 #include "bridge_abi.h"
+#include "bridge_capture.h"
 #include "fl_host_abi.h"
 #include "bridge_events.h"
 #include "bridge_gui.h"
@@ -243,6 +244,7 @@ struct TickState : std::enable_shared_from_this<TickState> {
   std::atomic<long long> render_blocks{0};
   std::atomic<long long> last_heartbeat_render_blocks{0};
   std::atomic<long long> last_heartbeat_ns{0};
+  bridge_capture::Capture capture;
 
   // Called from the tick, on whatever thread FL ticks us on. Never touches the
   // host. At most one pump is in flight, so a GUI thread that stalls can only
@@ -288,6 +290,8 @@ void WriteHeartbeat(TickState &state, long long tick) {
   hb.render_rate = previous_ns > 0 && now_ns > previous_ns
                        ? (blocks - previous_blocks) * 1000000000LL / (now_ns - previous_ns)
                        : 0;
+  hb.capture = state.capture.active() ? 1 : 0;
+  hb.capture_frames = static_cast<long long>(state.capture.frames_written());
   WriteSmall("bridge_heartbeat.txt", bridge_core::FormatHeartbeat(hb).c_str());
 }
 
@@ -357,12 +361,12 @@ void TickState::Pump() {
     if (udp != nullptr) {
       for (bridge_core::InboundDatagram &datagram : udp->queue().Drain(kMaxUdpCommandsPerPump)) {
         bridge_core::ExecResult result = bridge_core::ExecuteCommand(
-            host, host_tag, gSpoolRoots, bridge_core::kDefaultPPQ, datagram.payload, &cache);
+            host, host_tag, gSpoolRoots, bridge_core::kDefaultPPQ, datagram.payload, &cache, &capture);
         udp->SendAck(datagram.reply_to, result.ack_json);
         Count(result.outcome);
       }
     }
-    Count(bridge_core::PollOnce(host, host_tag, gSpoolRoots, bridge_core::kDefaultPPQ, &cache));
+    Count(bridge_core::PollOnce(host, host_tag, gSpoolRoots, bridge_core::kDefaultPPQ, &cache, &capture));
     // Drain forwarded FL events after the command drain (same thread discipline
     // as the transport: the ring is the only cross-thread surface, the write is
     // GUI-thread only). A null log means the roots never resolved; events then
@@ -665,6 +669,8 @@ intptr_t _stdcall Bridge::Dispatcher(intptr_t id, intptr_t index, intptr_t value
   // A new project invalidates the tracked current pattern: FL's selection is
   // whatever the loaded project had, which our writes have not set yet.
   if (id == FPD_ProjLoaded) state_->current_pattern.store(-1);
+  if (id == FPD_SetSampleRate) state_->capture.SetSampleRate(static_cast<int>(value));
+  if (id == FPD_SetPlaying) state_->capture.SetPlaying(value != 0);
   return id == FPD_UseIncreasedMIDIResolution ? 1 : 0;
 }
 void _stdcall Bridge::Idle_Public() {
@@ -699,6 +705,9 @@ int _stdcall Bridge::ProcessParam(int index, int value, int rec_flags) {
 }
 void _stdcall Bridge::Eff_Render(PWAV32FS source, PWAV32FS dest, int length) {
   ++state_->render_blocks;
+  // The SDK's WAV32FS is two consecutive float samples. Push is bounded SPSC
+  // storage only; the writer thread owns the WAV and all blocking work.
+  state_->capture.Push(reinterpret_cast<const float *>(source), length);
   if (source != dest && length > 0) memcpy(dest, source, sizeof(TWAV32FS) * (size_t)length);
 }
 void _stdcall Bridge::Gen_Render(PWAV32FS dest, int &length) {

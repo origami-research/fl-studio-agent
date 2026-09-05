@@ -91,6 +91,9 @@ class FakeSession(FLSession):
         output.write_bytes(b"RIFF....WAVE")
         return output
 
+    def export_offline(self, output: Path) -> Path:
+        return self.render_wav(output)
+
     def save_project(self) -> int | None:
         if self.control is None:
             from fl_mcp import errors

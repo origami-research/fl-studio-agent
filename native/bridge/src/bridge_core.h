@@ -55,6 +55,26 @@ constexpr int kDefaultPPQ = 96;
 constexpr int kMaxConsumedIds = 64;   // ledger ring size
 constexpr int kMaxNotesPerCommand = 5000;  // schemas.AddNotesArgs max_length
 
+struct CaptureReceipt {
+  bool ok = false;
+  std::string path;
+  std::uint64_t frames_written = 0;
+  std::uint64_t frames_requested = 0;
+  std::uint64_t drop_count = 0;
+  int sample_rate = 0;
+  std::string error;
+};
+
+// The ABI shell owns audio capture because only it receives Eff_Render. The
+// spool executor owns its command protocol, through this narrow seam.
+class CaptureControl {
+ public:
+  virtual ~CaptureControl() = default;
+  virtual CaptureReceipt Start(double seconds, int sample_rate_hint, const std::string &root,
+                               int command_id) = 0;
+  virtual CaptureReceipt Stop() = 0;
+};
+
 // The spool roots the Bridge reads/writes, most-preferred first. Mirrors
 // mcp-server/src/fl_mcp/flpaths.py SPOOL_SUBDIRS: FL grants writes under
 // "Piano roll scripts" recursively but not elsewhere in Settings.
@@ -156,6 +176,8 @@ struct HeartbeatState {
   const char *abi = "probing";
   long long render_blocks = 0;
   long long render_rate = 0;
+  int capture = 0;
+  long long capture_frames = 0;
 };
 
 // The heartbeat text, newline-terminated key=value lines. The key set and
@@ -246,7 +268,8 @@ struct ExecResult {
 // consumed ack, and never re-execute.
 ExecResult ExecuteCommand(TFruityPlugHost *host, std::intptr_t host_tag,
                           const std::vector<std::string> &roots, int ppq_default,
-                          const std::string &payload_json, ResultCache *cache);
+                          const std::string &payload_json, ResultCache *cache,
+                          CaptureControl *capture = nullptr);
 
 // The file-spool carrier: consume the lowest-id fresh command listed in any
 // root's commands/queue.json (not in the ledger, file readable and not a
@@ -257,7 +280,7 @@ ExecResult ExecuteCommand(TFruityPlugHost *host, std::intptr_t host_tag,
 // be null only in tests that pass a mock; a real null host yields ok=false.
 PollOutcome PollOnce(TFruityPlugHost *host, std::intptr_t host_tag,
                      const std::vector<std::string> &roots, int ppq_default,
-                     ResultCache *cache = nullptr);
+                     ResultCache *cache = nullptr, CaptureControl *capture = nullptr);
 
 // --- spool primitives, exposed for tests -------------------------------------
 std::vector<int> QueueIds(const std::vector<std::string> &roots);  // sorted, deduped

@@ -8,9 +8,10 @@ from __future__ import annotations
 
 import subprocess
 import tempfile
+from types import SimpleNamespace
 
 import pytest
-from session_fakes import HELLO, FakeControl, make_session
+from session_fakes import HELLO, FakeControl, FakeSpool, make_session
 
 from fl_mcp import errors, flp
 from fl_mcp.schemas import AutomationPoint, ControlResponse, PluginParamModel, PluginParamSpec
@@ -45,7 +46,7 @@ def test_set_tempo_live_returns_the_readback_not_the_request():
     assert ("mixer.setCurrentTempo", [130.0, 1]) in control.calls
 
 
-def test_render_wav_saves_then_subprocesses_the_resolved_fl_path(monkeypatch, tmp_path):
+def test_export_offline_saves_then_subprocesses_the_resolved_fl_path(monkeypatch, tmp_path):
     project = tmp_path / "live.flp"
     output = tmp_path / "mix.wav"
     project.write_bytes(b"FLhd")
@@ -64,15 +65,65 @@ def test_render_wav_saves_then_subprocesses_the_resolved_fl_path(monkeypatch, tm
     control = FakeControl(hello=HELLO, handlers={"ctl.save": lambda args: events.append("save")})
     session, _ = make_session(control=control, project=project)
 
-    assert session.render_wav(output) == output.resolve()
+    assert session.export_offline(output) == output.resolve()
     assert events == ["save", "render"]
     assert control.calls[-1] == ("ctl.save", [])
     assert commands == [[str(app / "Contents/MacOS/OsxFL"), "-R", str(project.resolve())]]
     assert output.read_bytes() == b"RIFF....WAVE"
 
 
+def test_render_wav_refuses_when_the_live_bridge_is_unavailable(tmp_path):
+    project = tmp_path / "live.flp"
+    output = tmp_path / "mix.wav"
+    project.write_bytes(b"FLhd")
+
+    control = FakeControl(hello=HELLO, handlers={"ctl.save": lambda args: None})
+    session, _ = make_session(control=control, project=project)
+
+    with pytest.raises(errors.ToolError, match="Bridge is not live"):
+        session.render_wav(output)
+
+
+def test_live_render_verification_failure_is_a_tool_error_not_a_type_error(monkeypatch, tmp_path):
+    """A failed capture must preserve its render_failed category and recovery hint."""
+    captured = tmp_path / "capture.wav"
+    captured.write_bytes(b"RIFF" + b"\0" * 44)
+    transport = FakeSpool()
+    # FakeSpool needs spool-shaped receipts; isolate the only behavior this
+    # test is proving instead of coupling it to transport internals.
+    from fl_mcp.schemas import SpoolResponse
+
+    transport.responses = {
+        "capture_start": SpoolResponse(
+            id=1, ok=True, path=str(captured), frames_requested=100, sample_rate=44100
+        ),
+        "capture_stop": SpoolResponse(
+            id=2, ok=True, path=str(captured), frames_written=100, frames_requested=100,
+            sample_rate=44100, drop_count=1
+        ),
+    }
+    control = FakeControl(
+        hello=HELLO,
+        handlers={
+            "ctl.save": lambda args: None,
+            "transport.setSongPos": lambda args: None,
+            "transport.start": lambda args: None,
+            "transport.stop": lambda args: None,
+        },
+    )
+    session, _ = make_session(control=control, transport=transport, project=tmp_path / "live.flp")
+    session.project.write_bytes(b"FLhd")
+    monkeypatch.setattr(FLSession, "caps", property(lambda self: SimpleNamespace(bridge_live=True)))
+    monkeypatch.setattr(controls, "_render_span_seconds", lambda project: 0.0)
+    monkeypatch.setattr(controls.time, "sleep", lambda seconds: None)
+
+    with pytest.raises(errors.ToolError) as excinfo:
+        session.render_wav(tmp_path / "mix.wav")
+    assert excinfo.value.category == "render_failed"
+
+
 @pytest.mark.parametrize("wav", [None, b""])
-def test_render_wav_raises_when_cli_wav_is_missing_or_empty(monkeypatch, tmp_path, wav):
+def test_export_offline_raises_when_cli_wav_is_missing_or_empty(monkeypatch, tmp_path, wav):
     project = tmp_path / "live.flp"
     project.write_bytes(b"FLhd")
 
@@ -85,11 +136,11 @@ def test_render_wav_raises_when_cli_wav_is_missing_or_empty(monkeypatch, tmp_pat
     session, _ = make_session(control=control, project=project)
 
     with pytest.raises(errors.ToolError) as excinfo:
-        session.render_wav(tmp_path / "mix.wav")
+        session.export_offline(tmp_path / "mix.wav")
     assert excinfo.value.category == "render_failed"
 
 
-def test_render_wav_maps_a_subprocess_timeout_to_render_failed(monkeypatch, tmp_path):
+def test_export_offline_maps_a_subprocess_timeout_to_render_failed(monkeypatch, tmp_path):
     project = tmp_path / "live.flp"
     project.write_bytes(b"FLhd")
 
@@ -101,7 +152,7 @@ def test_render_wav_maps_a_subprocess_timeout_to_render_failed(monkeypatch, tmp_
     session, _ = make_session(control=control, project=project)
 
     with pytest.raises(errors.ToolError) as excinfo:
-        session.render_wav(tmp_path / "mix.wav")
+        session.export_offline(tmp_path / "mix.wav")
     assert excinfo.value.category == "render_failed"
 
 
@@ -689,7 +740,7 @@ def test_render_child_never_inherits_the_live_session_identity(monkeypatch, tmp_
     session, _ = make_session(control=control, project=project)
 
     with pytest.raises(errors.ToolError):
-        session.render_wav(tmp_path / "mix.wav")
+        session.export_offline(tmp_path / "mix.wav")
 
     env = seen["env"]
     assert isinstance(env, dict)

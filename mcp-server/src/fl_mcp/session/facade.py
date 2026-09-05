@@ -250,6 +250,10 @@ class FLSession:
         with self._write_guard("render_wav"):
             return controls.render_wav(self, output)
 
+    def export_offline(self, output: Path) -> Path:
+        with self._write_guard("export_offline"):
+            return controls.export_offline(self, output)
+
     def save_project(self) -> int | None:
         with self._write_guard("save_project"):
             return controls.save_project(self)

@@ -88,6 +88,7 @@ add_library(bridge SHARED
     bridge/src/bridge.cpp
     bridge/src/bridge_abi.cpp
     bridge/src/bridge_core.cpp
+    bridge/src/bridge_capture.cpp
     bridge/src/bridge_events.cpp
     bridge/src/bridge_gui.cpp
     ${BRIDGE_PLATFORM_SOURCES}
@@ -114,6 +115,7 @@ endif()
 add_executable(bridge_core_test
     bridge/tests/bridge_core_test.cpp
     bridge/src/bridge_core.cpp
+    bridge/src/bridge_capture.cpp
     bridge/src/bridge_discover.cpp
     abi/fl_pascal.cpp
 )
