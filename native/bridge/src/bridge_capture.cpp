@@ -4,7 +4,11 @@
 #include <cstdio>
 #include <cstring>
 #include <chrono>
+#if defined(_WIN32)
+#include <direct.h>
+#else
 #include <sys/stat.h>
+#endif
 
 namespace bridge_capture {
 namespace {
@@ -41,7 +45,11 @@ bridge_core::CaptureReceipt Capture::Start(double seconds, int sample_rate_hint,
   ring_.assign(static_cast<size_t>(frames * 2), 0.0f);
   write_ = read_ = dropped_ = frames_written_ = 0;
   const std::string captures = root + "/captures";
+#if defined(_WIN32)
+  _mkdir(captures.c_str());
+#else
   mkdir(captures.c_str(), 0755);
+#endif
   path_ = captures + "/capture-" + std::to_string(command_id) + ".wav";
   file_ = fopen(path_.c_str(), "wb+");
   if (file_ == nullptr) {

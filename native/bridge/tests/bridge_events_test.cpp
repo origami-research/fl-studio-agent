@@ -4,13 +4,12 @@
 // one thread drains) is exercised for out-of-bounds and use-after-free. No FL
 // in the loop. Hand-rolled asserts, dependency-free convention.
 
-#include <sys/stat.h>
-#include <unistd.h>
-
 #include <atomic>
+#include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <filesystem>
 #include <fstream>
 #include <sstream>
 #include <string>
@@ -42,9 +41,18 @@ std::string ReadFile(const std::string &path) {
 bool Contains(const std::string &h, const std::string &n) { return h.find(n) != std::string::npos; }
 
 long FileSize(const std::string &path) {
-  struct stat st;
-  if (stat(path.c_str(), &st) != 0) return -1;
-  return static_cast<long>(st.st_size);
+  std::error_code error;
+  const auto size = std::filesystem::file_size(path, error);
+  return error ? -1 : static_cast<long>(size);
+}
+
+std::string TempDir(const char *name) {
+  std::error_code error;
+  const auto path = std::filesystem::temp_directory_path(error) /
+      (std::string(name) + "_" + std::to_string(
+          std::chrono::steady_clock::now().time_since_epoch().count()));
+  if (error || !std::filesystem::create_directory(path, error)) return {};
+  return path.string();
 }
 
 int CountLines(const std::string &s) {
@@ -158,10 +166,10 @@ int main() {
 
   // --- 5. EventLog appends, and truncates only an oversized file --------------
   {
-    char tmpl[] = "/tmp/bridge_events_test_XXXXXX";
-    char *dir = mkdtemp(tmpl);
-    CHECK(dir != nullptr);
-    std::string path = std::string(dir) + "/bridge_events.jsonl";
+    const std::string dir = TempDir("bridge_events_test");
+    CHECK(!dir.empty());
+    if (dir.empty()) return 1;
+    std::string path = dir + "/bridge_events.jsonl";
 
     std::vector<BridgeEvent> batch;
     for (int i = 0; i < 3; ++i) {

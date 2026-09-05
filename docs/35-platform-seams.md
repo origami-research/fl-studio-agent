@@ -15,6 +15,28 @@ The engine stays one Python codebase with an OS-neutral core and one runtime-sel
 
 The native Bridge stays one CMake source tree and emits a macOS dylib or Windows DLL from platform-specific source leaves.
 
+## Windows build
+
+The `native-windows` GitHub Actions job builds the DLL on `windows-latest`.
+It fetches the proprietary SDK into ignored `native/sdk` with the same
+`native/scripts/fetch_sdk.sh` used locally, builds with the Visual Studio 2022
+x64 generator, runs the spool/mock-host tests and the Windows FPC-layout ABI
+check, then uploads `FL MCP Bridge_x64.dll` as an artifact. The current mirror
+is public, so the job needs no repository secret. Never commit `native/sdk`.
+
+From a PowerShell prompt on Windows, run:
+
+```powershell
+bash native/scripts/fetch_sdk.sh
+cmake -S native -B native/build-windows -G "Visual Studio 17 2022" -A x64
+cmake --build native/build-windows --config Release --target bridge bridge_core_test bridge_abi_test bridge_events_test bridge_gui_test
+ctest --test-dir native/build-windows -C Release --output-on-failure
+Get-Item 'native/build-windows/Release/FL MCP Bridge_x64.dll'
+```
+
+`bridge_abi_check` uses the FPC-shaped mock on Windows. The Mach-O vtable
+reader remains a macOS check because it reads Mach-O symbol layout.
+
 No feature code may select an OS, construct a platform socket, invoke an FL executable, or enumerate processes after this boundary exists.
 
 The five Python seams are MIDI wire creation, broker endpoint, render command, FL discovery, and process sweep. Native GUI-thread marshalling is the corresponding bridge seam.

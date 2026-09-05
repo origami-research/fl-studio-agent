@@ -8,13 +8,12 @@
 //
 // Hand-rolled asserts, no test framework - dependency-free convention.
 
-#include <sys/stat.h>
-#include <unistd.h>
-
+#include <chrono>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <filesystem>
 #include <fstream>
 #include <sstream>
 #include <string>
@@ -44,14 +43,18 @@ int g_failures = 0;
   } while (0)
 
 bool MakeDirs(const std::string &path) {
-  std::string partial;
-  for (size_t i = 0; i <= path.size(); ++i) {
-    if (i == path.size() || path[i] == '/') {
-      if (!partial.empty() && mkdir(partial.c_str(), 0755) != 0 && errno != EEXIST) return false;
-    }
-    if (i < path.size()) partial.push_back(path[i]);
-  }
-  return true;
+  std::error_code error;
+  std::filesystem::create_directories(path, error);
+  return !error;
+}
+
+std::string TempDir(const char *name) {
+  std::error_code error;
+  const auto path = std::filesystem::temp_directory_path(error) /
+      (std::string(name) + "_" + std::to_string(
+          std::chrono::steady_clock::now().time_since_epoch().count()));
+  if (error || !std::filesystem::create_directory(path, error)) return {};
+  return path.string();
 }
 
 void WriteFile(const std::string &path, const std::string &text) {
@@ -136,8 +139,9 @@ void WriteQueue(const std::string &root, const std::vector<int> &ids) {
 static void TestCaptureFinalPartialBlockIsNotADrop() {
   bridge_capture::Capture capture;
   capture.SetSampleRate(48000);
-  const std::string root = "/tmp/bridge_capture_test_root";
-  mkdir(root.c_str(), 0755);
+  const std::string root = TempDir("bridge_capture_test_root");
+  CHECK(!root.empty());
+  if (root.empty()) return;
   // 16384 frames minimum ring; request exactly 20000 frames.
   const auto start = capture.Start(20000.0 / 48000.0, 48000, root, 7);
   CHECK(start.ok);
@@ -156,10 +160,9 @@ static void TestCaptureFinalPartialBlockIsNotADrop() {
 
 int main() {
   TestCaptureFinalPartialBlockIsNotADrop();
-  char home_tmpl[] = "/tmp/bridge_core_test_XXXXXX";
-  char *home = mkdtemp(home_tmpl);
-  CHECK(home != nullptr);
-  if (home == nullptr) return 1;
+  const std::string home = TempDir("bridge_core_test");
+  CHECK(!home.empty());
+  if (home.empty()) return 1;
 
   // Capture commands use the same claimed-once spool executor and carry the
   // artifact receipt the engine needs, without involving a mixer callback.
@@ -204,10 +207,10 @@ int main() {
     CHECK(ReadFile(stopped.path).size() == 44 + sizeof(samples) / 2);
   }
 
-  std::vector<std::string> roots = bridge_core::SpoolRoots(home);
+  std::vector<std::string> roots = bridge_core::SpoolRoots(home.c_str());
   CHECK(roots.size() == 2);
   CHECK(Contains(roots[0], "Piano roll scripts/FLMCP"));
-  std::vector<std::string> isolated = bridge_core::SpoolRoots(home, "/tmp/flmcp-session-a");
+  std::vector<std::string> isolated = bridge_core::SpoolRoots(home.c_str(), "/tmp/flmcp-session-a");
   CHECK(isolated.size() == 1);
   CHECK(isolated[0] == "/tmp/flmcp-session-a");
   const std::string preferred = roots[0];

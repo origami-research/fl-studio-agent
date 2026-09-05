@@ -37,17 +37,20 @@ endif()
 # small OS edge. Windows starts with the proven spool carrier and rejects the
 # macOS-only exploratory dispatcher passes rather than guessing at their ABI.
 set(BRIDGE_PLATFORM_SOURCES)
+set(BRIDGE_DISCOVER_TEST_SOURCES)
 if(WIN32)
     list(APPEND BRIDGE_PLATFORM_SOURCES
         bridge/src/bridge_discover_windows.cpp
         bridge/src/bridge_udp_windows.cpp
     )
+    list(APPEND BRIDGE_DISCOVER_TEST_SOURCES bridge/src/bridge_discover_windows.cpp)
 else()
     list(APPEND BRIDGE_PLATFORM_SOURCES
         bridge/src/bridge_discover.cpp
         bridge/src/bridge_udp.cpp
         abi/fl_pascal.cpp
     )
+    list(APPEND BRIDGE_DISCOVER_TEST_SOURCES bridge/src/bridge_discover.cpp abi/fl_pascal.cpp)
 endif()
 
 add_library(fl_sdk STATIC
@@ -71,9 +74,9 @@ set_target_properties(fl_sdk PROPERTIES
 # redefined. Both are harmless but noisy, and they are Image-Line's code to fix,
 # not ours - silence them so real warnings in our own code stay visible.
 target_compile_options(fl_sdk PUBLIC
-    -Wno-ignored-attributes
-    -Wno-macro-redefined
-    -Wno-deprecated-declarations
+    $<$<NOT:$<CXX_COMPILER_ID:MSVC>>:-Wno-ignored-attributes>
+    $<$<NOT:$<CXX_COMPILER_ID:MSVC>>:-Wno-macro-redefined>
+    $<$<NOT:$<CXX_COMPILER_ID:MSVC>>:-Wno-deprecated-declarations>
 )
 
 
@@ -116,23 +119,27 @@ add_executable(bridge_core_test
     bridge/tests/bridge_core_test.cpp
     bridge/src/bridge_core.cpp
     bridge/src/bridge_capture.cpp
-    bridge/src/bridge_discover.cpp
-    abi/fl_pascal.cpp
+    ${BRIDGE_DISCOVER_TEST_SOURCES}
 )
 target_include_directories(bridge_core_test PRIVATE "${FL_SDK_DIR}" "${FL_ABI_DIR}" "${FL_GENERATED_DIR}" bridge/src)
 target_compile_options(bridge_core_test PRIVATE
-    -fsanitize=address,undefined -g
-    -Wno-ignored-attributes
+    $<$<NOT:$<CXX_COMPILER_ID:MSVC>>:-fsanitize=address,undefined>
+    $<$<NOT:$<CXX_COMPILER_ID:MSVC>>:-g>
+    $<$<NOT:$<CXX_COMPILER_ID:MSVC>>:-Wno-ignored-attributes>
 )
-target_link_options(bridge_core_test PRIVATE -fsanitize=address,undefined)
+target_link_options(bridge_core_test PRIVATE $<$<NOT:$<CXX_COMPILER_ID:MSVC>>:-fsanitize=address,undefined>)
 
 add_executable(bridge_abi_test
     bridge/tests/bridge_abi_test.cpp
     bridge/src/bridge_abi.cpp
 )
 target_include_directories(bridge_abi_test PRIVATE "${FL_SDK_DIR}" "${FL_ABI_DIR}" bridge/src bridge/tests)
-target_compile_options(bridge_abi_test PRIVATE -fsanitize=address,undefined -g -Wno-ignored-attributes)
-target_link_options(bridge_abi_test PRIVATE -fsanitize=address,undefined)
+target_compile_options(bridge_abi_test PRIVATE
+    $<$<NOT:$<CXX_COMPILER_ID:MSVC>>:-fsanitize=address,undefined>
+    $<$<NOT:$<CXX_COMPILER_ID:MSVC>>:-g>
+    $<$<NOT:$<CXX_COMPILER_ID:MSVC>>:-Wno-ignored-attributes>
+)
+target_link_options(bridge_abi_test PRIVATE $<$<NOT:$<CXX_COMPILER_ID:MSVC>>:-fsanitize=address,undefined>)
 
 # Event forwarding + heartbeat format unit test: the lock-free ring under a
 # producer/consumer race, the pinned JSONL schema, the log's truncation cap,
@@ -142,15 +149,15 @@ add_executable(bridge_events_test
     bridge/tests/bridge_events_test.cpp
     bridge/src/bridge_events.cpp
     bridge/src/bridge_core.cpp
-    bridge/src/bridge_discover.cpp
-    abi/fl_pascal.cpp
+    ${BRIDGE_DISCOVER_TEST_SOURCES}
 )
 target_include_directories(bridge_events_test PRIVATE "${FL_SDK_DIR}" "${FL_ABI_DIR}" "${FL_GENERATED_DIR}" bridge/src)
 target_compile_options(bridge_events_test PRIVATE
-    -fsanitize=address,undefined -g
-    -Wno-ignored-attributes
+    $<$<NOT:$<CXX_COMPILER_ID:MSVC>>:-fsanitize=address,undefined>
+    $<$<NOT:$<CXX_COMPILER_ID:MSVC>>:-g>
+    $<$<NOT:$<CXX_COMPILER_ID:MSVC>>:-Wno-ignored-attributes>
 )
-target_link_options(bridge_events_test PRIVATE -fsanitize=address,undefined)
+target_link_options(bridge_events_test PRIVATE $<$<NOT:$<CXX_COMPILER_ID:MSVC>>:-fsanitize=address,undefined>)
 
 # GUI-thread marshal test: the property the FHD_AddNotesToPR deadlock fix rests
 # on - work handed over from a worker thread runs on the MAIN thread, and only
@@ -162,10 +169,11 @@ add_executable(bridge_gui_test
 )
 target_include_directories(bridge_gui_test PRIVATE "${FL_SDK_DIR}" "${FL_ABI_DIR}" bridge/src)
 target_compile_options(bridge_gui_test PRIVATE
-    -fsanitize=address,undefined -g
-    -Wno-ignored-attributes
+    $<$<NOT:$<CXX_COMPILER_ID:MSVC>>:-fsanitize=address,undefined>
+    $<$<NOT:$<CXX_COMPILER_ID:MSVC>>:-g>
+    $<$<NOT:$<CXX_COMPILER_ID:MSVC>>:-Wno-ignored-attributes>
 )
-target_link_options(bridge_gui_test PRIVATE -fsanitize=address,undefined)
+target_link_options(bridge_gui_test PRIVATE $<$<NOT:$<CXX_COMPILER_ID:MSVC>>:-fsanitize=address,undefined>)
 if(APPLE)
     target_link_libraries(bridge_gui_test PRIVATE "-framework CoreFoundation")
 endif()
@@ -173,6 +181,7 @@ endif()
 # UDP transport test: queue discipline, executor equivalence across carriers,
 # datagram auth/parse failures, real-socket round trip, bounded shutdown.
 # ASan+UBSan like bridge_core_test.
+if(NOT WIN32)
 add_executable(bridge_udp_test
     bridge/tests/bridge_udp_test.cpp
     bridge/src/bridge_core.cpp
@@ -186,6 +195,7 @@ target_compile_options(bridge_udp_test PRIVATE
     -Wno-ignored-attributes
 )
 target_link_options(bridge_udp_test PRIVATE -fsanitize=address,undefined)
+endif()
 
 enable_testing()
 
@@ -193,7 +203,9 @@ add_test(NAME bridge_core_test COMMAND bridge_core_test)
 add_test(NAME bridge_abi_test COMMAND bridge_abi_test)
 add_test(NAME bridge_events_test COMMAND bridge_events_test)
 add_test(NAME bridge_gui_test COMMAND bridge_gui_test)
-add_test(NAME bridge_udp_test COMMAND bridge_udp_test)
+if(NOT WIN32)
+    add_test(NAME bridge_udp_test COMMAND bridge_udp_test)
+endif()
 
 # ABI invariant check: the load-bearing property the data static_asserts do NOT
 # cover is the vtable slot count. Assert each plugin dylib has exactly 64 vtable
@@ -207,6 +219,10 @@ if(APPLE)
                 25=DestroyObject 26=Dispatcher 27=Idle_Public
                 28=SaveRestoreState 29=GetName 30=ProcessEvent
                 31=ProcessParam 32=Eff_Render)
+elseif(WIN32)
+    # Mach-O vtable scraping is macOS-only. This is the same FPC-shaped mock
+    # ABI check, compiled with Windows pointer layout and executed under MSVC.
+    add_test(NAME bridge_abi_check COMMAND bridge_abi_test)
 endif()
 
 # Differential-test shim: same PollOnce + mock host, driven by the Python suite
@@ -217,10 +233,11 @@ endif()
 add_executable(bridge_spool_cli
     bridge/tools/bridge_spool_cli.cpp
     bridge/src/bridge_core.cpp
-    bridge/src/bridge_discover.cpp
-    abi/fl_pascal.cpp
+    ${BRIDGE_DISCOVER_TEST_SOURCES}
 )
 target_include_directories(bridge_spool_cli PRIVATE "${FL_SDK_DIR}" "${FL_ABI_DIR}" "${FL_GENERATED_DIR}" bridge/src bridge/tests)
 target_compile_options(bridge_spool_cli PRIVATE
-    -Wno-ignored-attributes -Wno-macro-redefined -Wno-deprecated-declarations
+    $<$<NOT:$<CXX_COMPILER_ID:MSVC>>:-Wno-ignored-attributes>
+    $<$<NOT:$<CXX_COMPILER_ID:MSVC>>:-Wno-macro-redefined>
+    $<$<NOT:$<CXX_COMPILER_ID:MSVC>>:-Wno-deprecated-declarations>
 )
