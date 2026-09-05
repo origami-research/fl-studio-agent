@@ -53,6 +53,7 @@ Status tags: **current** describes the shipped system, **research** records evid
 - [33-capability-acquisition-model.md](33-capability-acquisition-model.md) - **current** evidence ladder.
 - [34-per-session-control.md](34-per-session-control.md) - **current** broker control lane.
 - [oss-history-rewrite-plan.md](oss-history-rewrite-plan.md) - reviewable history-rewrite plan for a future public mirror (research).
+- [37-oss-launch-decision.md](37-oss-launch-decision.md) - owner decision 2026-09-05: Bridge open, MIT, existing open-core boundary; what is still unauthorized
 - [36-engine-contract.md](36-engine-contract.md) - generated MCP tool, error, and environment contract.
 - [26-master-plan.md](26-master-plan.md) - **superseded** pointer to the current canon.
 - [sdk-reference.md](sdk-reference.md) - **current** SDK reference.
