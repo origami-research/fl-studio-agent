@@ -182,6 +182,7 @@ class DoctorReport(BaseModel):
     control_plane: PlaneStatus
     note_plane: PlaneStatus
     project_file: PlaneStatus
+    run_refusals: int = 0
 
 
 # -- spool wire (server <-> code inside FL) ----------------------------------

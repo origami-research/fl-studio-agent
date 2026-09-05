@@ -809,6 +809,11 @@
           "project_file": {
             "$ref": "#/$defs/PlaneStatus"
           },
+          "run_refusals": {
+            "default": 0,
+            "title": "Run Refusals",
+            "type": "integer"
+          },
           "status": {
             "enum": [
               "ok",

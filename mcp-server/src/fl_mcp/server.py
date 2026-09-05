@@ -81,6 +81,7 @@ _RUN_REFUSED_BUILTINS = frozenset(
         "locals",
         "input",
         "breakpoint",
+        "dir",
         "getattr",
         "setattr",
         "delattr",
@@ -103,7 +104,6 @@ _RUN_BUILTINS = {
         "callable",
         "chr",
         "dict",
-        "dir",
         "divmod",
         "enumerate",
         "filter",
@@ -201,6 +201,7 @@ async def lifespan(server: Any) -> Any:
     try:
         yield {"fl": fl, "session": session}
     finally:
+        log.info("run session closed with %d refusals", session.run_refusals)
         if session.control is not None:
             session.control.close()
 
@@ -301,9 +302,13 @@ def run(code: str, ctx: Context) -> RunResult:
     if tree.body and isinstance(tree.body[-1], ast.Expr):
         last_expr = ast.Expression(tree.body.pop().value)
 
-    _RunNamespaceGuard().visit(tree)
-    if last_expr is not None:
-        _RunNamespaceGuard().visit(last_expr)
+    try:
+        _RunNamespaceGuard().visit(tree)
+        if last_expr is not None:
+            _RunNamespaceGuard().visit(last_expr)
+    except ToolError:
+        ctx.request_context.lifespan_context["session"].record_run_refusal()
+        raise
 
     stdout = io.StringIO()
     try:

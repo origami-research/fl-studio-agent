@@ -32,7 +32,8 @@ claude mcp add fl-studio -- /absolute/path/to/mcp-server/.venv/bin/python -m fl_
 The server exposes `run`, `get_notes`, `get_scene`, `render`, `analyze`, and
 `fl_doctor`. The `run` tool docstring is the SDK cheatsheet: it documents
 `fl`, `theory`, `Note`, the small music-code standard-library allowlist, and each
-supported operation.
+supported operation. It also reports `run_refusals`, the number of refused
+non-music operations in the current server session.
 
 Use `uv run fl-mcp-dev-session --no-repl` for a disposable live smoke session.
 Run `../scripts/gate.sh` for the repository gate; [../docs/gate.md](../docs/gate.md)

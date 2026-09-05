@@ -15,6 +15,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
+import anyio
 from mcp.types import CallToolResult
 
 from fl_mcp import __version__, server
@@ -46,6 +47,10 @@ class _FakeSession:
         self.store = _FakeStore(ref)
         self.read_targets: list[Target] = []
         self.control = None
+        self.run_refusals = 0
+
+    def record_run_refusal(self) -> None:
+        self.run_refusals += 1
 
     def read_notes(self, target: Target) -> list[Note]:
         if self._error is not None:
@@ -59,11 +64,13 @@ class _FakeSession:
             control_plane=PlaneStatus(connected=False, detail="no hello", fix="open FL"),
             note_plane=PlaneStatus(connected=True),
             project_file=PlaneStatus(connected=True),
+            run_refusals=self.run_refusals,
         )
 
 
 def _ctx(fl: Any = None, session: Any = None) -> Any:
     """A stub Context: same lifespan-context shape the real lifespan yields."""
+    session = _FakeSession() if session is None else session
     return SimpleNamespace(request_context=SimpleNamespace(lifespan_context={"fl": fl, "session": session}))
 
 
@@ -117,11 +124,40 @@ def test_run_assignment_only_yields_none_result():
     assert result.result is None
 
 
-def test_run_refuses_non_music_imports_builtins_and_attribute_walking():
+def test_run_refusals_steer_introspection_and_are_counted():
+    for code, offender in (
+        ("import inspect", "import 'inspect'"),
+        ("dir(fl)", "builtin 'dir'"),
+        ("help(fl)", "builtin 'help'"),
+        ("getattr(fl, 'track')", "builtin 'getattr'"),
+        ("type(fl)", "builtin 'type'"),
+        ("fl.__dict__", "attribute '__dict__'"),
+    ):
+        session = _FakeSession()
+        response = server.run(code, _ctx(fl=object(), session=session))
+
+        assert isinstance(response, CallToolResult)
+        payload = json.loads(response.content[0].text)
+        assert payload["error"] == "restricted_namespace"
+        assert offender in payload["message"]
+        assert payload["message"].endswith("get_scene instead.")
+        assert len(payload["message"].replace("...", "").split()) < 30
+        assert server.fl_doctor(_ctx(session=session)).run_refusals == 1
+
+
+def test_run_refusal_counter_accumulates_per_session():
+    session = _FakeSession()
+
+    server.run("dir(fl)", _ctx(fl=object(), session=session))
+    server.run("open('notes.txt')", _ctx(fl=object(), session=session))
+
+    assert server.fl_doctor(_ctx(session=session)).run_refusals == 2
+
+
+def test_run_refusals_steer_filesystem_network_and_exec_attempts():
     for code, offender in (
         ("import os", "import 'os'"),
-        ("import inspect", "import 'inspect'"),
-        ("import pathlib", "import 'pathlib'"),
+        ("import socket", "import 'socket'"),
         ("open('notes.txt')", "builtin 'open'"),
         ("exec('pass')", "builtin 'exec'"),
         ("eval('1 + 1')", "builtin 'eval'"),
@@ -142,7 +178,9 @@ def test_run_refuses_non_music_imports_builtins_and_attribute_walking():
         payload = json.loads(response.content[0].text)
         assert payload["error"] == "restricted_namespace"
         assert offender in payload["message"]
-        assert "SDK cheatsheet" in payload["message"]
+        assert "this session has no filesystem" in payload["message"]
+        assert "fl.track(name).write([...])" in payload["message"]
+        assert len(payload["message"].replace("...", "").split()) < 30
 
 
 # -- get_notes ----------------------------------------------------------------
@@ -222,6 +260,24 @@ def test_fl_doctor_returns_the_typed_report():
     result = server.fl_doctor(_ctx(session=session))
     assert result == session.doctor()
     assert result.control_plane.fix == "open FL"
+
+
+def test_lifespan_logs_run_refusals_once_at_close(monkeypatch, caplog):
+    session = _FakeSession()
+    session.run_refusals = 2
+    monkeypatch.setattr(server, "create_session", lambda: session)
+    monkeypatch.setattr(server.sdk, "connect", lambda _: object())
+
+    async def start_and_stop() -> None:
+        async with server.lifespan(None):
+            pass
+
+    with caplog.at_level(logging.INFO, logger=server.__name__):
+        anyio.run(start_and_stop)
+
+    assert [record.getMessage() for record in caplog.records] == [
+        "run session closed with 2 refusals"
+    ]
 
 
 # -- main / logging -----------------------------------------------------------
@@ -391,25 +447,3 @@ def test_run_namespace_keeps_ordinary_python_and_automation_points():
     )
     result = server.run(code, _ctx())
     assert result.stdout.strip() == "True 2", result
-
-
-def test_run_refuses_getattr_and_type_as_dunder_side_doors():
-    for src, offender in (
-        ("getattr(fl, '__class__')", "builtin 'getattr'"),
-        ("type(fl)", "builtin 'type'"),
-        ("vars(fl)", "builtin 'vars'"),
-    ):
-        response = server.run(src, _ctx(fl=object()))
-        assert isinstance(response, CallToolResult), src
-        payload = json.loads(response.content[0].text)
-        assert payload["error"] == "restricted_namespace"
-        assert offender in payload["message"]
-
-
-def test_run_allows_dir_for_discovery_without_opening_dunder_access():
-    """dir(fl) is how a model discovers the SDK; names are strings, and getattr stays refused."""
-    result = server.run(
-        "names = dir(fl)\nprint(isinstance(names, list), 'track' in names)",
-        _ctx(fl=SimpleNamespace(track=lambda *_: None)),
-    )
-    assert result.stdout.strip() == "True True", result

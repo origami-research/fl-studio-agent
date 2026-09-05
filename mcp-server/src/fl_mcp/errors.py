@@ -179,9 +179,20 @@ def invalid_argument(call: str, detail: str) -> ToolError:
 
 def restricted_namespace(offender: str) -> ToolError:
     """Code outside run's music-only namespace is refused before execution."""
+    introspection = ("dir", "help", "inspect", "type", "__dict__", "getattr")
+    if any(name in offender for name in introspection):
+        message = (
+            f"{offender} is unavailable; use fl.channels, fl.track(...).params(), get_notes, "
+            "or get_scene instead."
+        )
+    else:
+        message = (
+            f"{offender} is unavailable: this session has no filesystem; write music with "
+            "fl.track(name).write([...]) instead."
+        )
     return ToolError(
         "restricted_namespace",
-        f"{offender} is unavailable in run's music-only namespace; use this tool's SDK cheatsheet for supported music code.",
+        message,
         "Use fl, theory, Note, or an allowlisted standard-library module.",
     )
 

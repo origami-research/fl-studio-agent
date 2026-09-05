@@ -168,6 +168,7 @@ class FLSession:
         if not self._profile_supported:
             log.warning("%s", self._profile_gate_detail)
         self._write_lock = threading.Lock()
+        self._run_refusals = 0
         # Development-mode file-edit batching: file-lane ops write the .flp
         # but defer the FL reload so N edits cost ONE reboot, not N. Session
         # mode refuses this lane before a file mutation because FL has no
@@ -175,6 +176,15 @@ class FLSession:
         self._reload_batch_depth = 0
         self._reload_pending = False
         self._file_write_prepared = False
+
+    @property
+    def run_refusals(self) -> int:
+        with self._write_lock:
+            return self._run_refusals
+
+    def record_run_refusal(self) -> None:
+        with self._write_lock:
+            self._run_refusals += 1
 
     @property
     def control(self) -> ControlCarrier | None:
