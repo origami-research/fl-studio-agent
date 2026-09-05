@@ -255,7 +255,6 @@ name = "fl-studio-mcp"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
-    { name = "flpkit" },
     { name = "mcp" },
     { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },
     { name = "numpy", version = "2.5.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
@@ -263,8 +262,14 @@ dependencies = [
     { name = "watchdog" },
 ]
 
+[package.optional-dependencies]
+private = [
+    { name = "flpkit" },
+]
+
 [package.dev-dependencies]
 dev = [
+    { name = "flpkit" },
     { name = "pyflp" },
     { name = "pytest" },
     { name = "python-rtmidi" },
@@ -272,15 +277,17 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "flpkit", git = "https://github.com/clarkipeng/flpkit?rev=v0.8.0" },
+    { name = "flpkit", marker = "extra == 'private'", git = "https://github.com/clarkipeng/flpkit?tag=v0.8.0" },
     { name = "mcp", specifier = ">=2.0.0" },
     { name = "numpy", specifier = ">=2.0.0" },
     { name = "python-rtmidi", specifier = ">=1.5.0" },
     { name = "watchdog", specifier = ">=6.0.0" },
 ]
+provides-extras = ["private"]
 
 [package.metadata.requires-dev]
 dev = [
+    { name = "flpkit", git = "https://github.com/clarkipeng/flpkit?tag=v0.8.0" },
     { name = "pyflp", specifier = ">=2.0" },
     { name = "pytest", specifier = ">=8.0" },
     { name = "python-rtmidi", specifier = ">=1.5" },
@@ -289,7 +296,7 @@ dev = [
 [[package]]
 name = "flpkit"
 version = "0.8.0"
-source = { git = "https://github.com/clarkipeng/flpkit?rev=v0.8.0#905c8706ca67d33d8555939b3c29f197508bab6d" }
+source = { git = "https://github.com/clarkipeng/flpkit?tag=v0.8.0#905c8706ca67d33d8555939b3c29f197508bab6d" }
 
 [[package]]
 name = "h11"

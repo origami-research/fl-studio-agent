@@ -28,7 +28,9 @@ from collections import deque
 from collections.abc import Callable
 from typing import Any
 
-from flmcp_codec import (
+from pydantic import ValidationError
+
+from fl_mcp._codec import (
     TYPE_CHUNK,
     TYPE_REQUEST,
     TYPE_RESPONSE,
@@ -37,8 +39,6 @@ from flmcp_codec import (
     decode_frame,
     encode_message,
 )
-from pydantic import ValidationError
-
 from fl_mcp.errors import ToolError, control_plane_busy, control_plane_unavailable
 from fl_mcp.schemas import ControlRequest, ControlResponse, HelloEvent
 

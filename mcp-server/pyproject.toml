@@ -2,14 +2,40 @@
 name = "fl-studio-mcp"
 version = "0.1.0"
 description = "MCP server for controlling FL Studio's piano roll"
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
 requires-python = ">=3.11"
 dependencies = [
     "mcp>=2.0.0",
     "python-rtmidi>=1.5.0",
     "watchdog>=6.0.0",
     "numpy>=2.0.0",
-    "flpkit @ git+https://github.com/clarkipeng/flpkit@v0.8.0",
 ]
+keywords = ["fl-studio", "mcp", "music-production", "piano-roll"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Artistic Software",
+]
+authors = [{ name = "Origami Research" }]
+maintainers = [{ name = "Origami Research" }]
+
+[project.urls]
+Repository = "https://github.com/origami-research/fl-studio-mcp"
+Documentation = "https://github.com/origami-research/fl-studio-mcp/tree/main/docs"
+
+[project.optional-dependencies]
+# flpkit 0.8.0 is private until its independent PyPI release. uv resolves this
+# extra from the pinned source below in a private checkout; it is not a public
+# package dependency.
+private = ["flpkit==0.8.0"]
 
 [project.scripts]
 fl-mcp = "fl_mcp.server:main"
@@ -19,10 +45,6 @@ fl-mcp-install = "fl_mcp.fl.install:main"
 fl-mcp-control-broker = "fl_mcp.control_broker:main"
 fl-mcp-template = "fl_mcp.template:main"
 
-[tool.hatch.metadata]
-# flpkit is our own extracted library, consumed straight from its repo
-allow-direct-references = true
-
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
@@ -30,12 +52,18 @@ build-backend = "hatchling.build"
 [tool.hatch.build.targets.wheel]
 packages = ["src/fl_mcp"]
 artifacts = ["src/fl_mcp/assets/session-template.flp"]
+dev-mode-dirs = ["src", "../fl-scripts/controller"]
 
-[tool.hatch.build.targets.wheel.force-include]
-"../fl-scripts/controller/device_FLMCP.py" = "fl_mcp/_controller/device_FLMCP.py"
+[tool.hatch.build.targets.sdist.force-include]
+"../LICENSE" = "LICENSE"
+"../fl-scripts/controller/device_FLMCP.py" = "src/fl_mcp/_controller/device_FLMCP.py"
+"../fl-scripts/controller/flmcp_codec.py" = "src/fl_mcp/_codec.py"
+
+[tool.uv.sources]
+flpkit = { git = "https://github.com/clarkipeng/flpkit", tag = "v0.8.0" }
 
 [dependency-groups]
-dev = ["pytest>=8.0", "pyflp>=2.0", "python-rtmidi>=1.5"]
+dev = ["pytest>=8.0", "pyflp>=2.0", "python-rtmidi>=1.5", "flpkit==0.8.0"]
 
 [tool.ruff]
 line-length = 110

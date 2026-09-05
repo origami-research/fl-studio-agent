@@ -11,9 +11,12 @@ development:
 
 ```bash
 cd mcp-server
-uv venv
-uv pip install -e . -e ..
+uv sync --extra private
 ```
+
+The `private` extra pins the unreleased `flpkit` source for internal work. A
+public installation requires the released `flpkit` package described in the
+OSS launch checklist.
 
 Install the FL-side components with `uv run fl-mcp-install`. The native Bridge
 is optional for file-lane work and required for live host operations.
