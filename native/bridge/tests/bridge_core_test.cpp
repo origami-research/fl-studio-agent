@@ -652,6 +652,15 @@ int main() {
     CHECK(!fl_dispatch::IsBeyondDispatcher(109));
   }
 
+  // The Windows build deliberately compiles a discovery stub. Its pure helpers
+  // remain link-compatible, but no wp_* command is accepted or dispatched.
+#if defined(_WIN32)
+  {
+    CHECK(!bridge_discover::IsDiscoverOp("wp_sweep"));
+    CHECK(bridge_discover::Getters().empty());
+    CHECK(bridge_discover::TargetStepKey(0) == 84);
+  }
+#else
   // --- 16. wp_sweep rides the executor: claimed once, ledger-skipped ----------
   // The probe's blind sweep, folded into the Bridge as a discovery op. It skips
   // the documented range and every ledger fatal by construction, dispatches only
@@ -756,6 +765,7 @@ int main() {
     // 88..109 minus 94, 99, 106 (ledger) and now 95 (quarantined) -> 18 host calls.
     CHECK(host.calls.size() == 18);
   }
+#endif
 
   if (g_failures == 0) {
     printf("bridge_core_test: all checks passed\n");

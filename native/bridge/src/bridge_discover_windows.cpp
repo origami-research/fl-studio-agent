@@ -5,6 +5,16 @@
 
 namespace bridge_discover {
 
+const std::vector<GetterSpec> &Getters() {
+  // The getter table is part of the macOS discovery contract. Keep its Windows
+  // stub empty so callers cannot turn a link-compatible helper into a live
+  // dispatcher pass.
+  static const std::vector<GetterSpec> kNoGetters;
+  return kNoGetters;
+}
+
+int TargetStepKey(int step) { return 84 + step; }
+
 bool IsDiscoverOp(const std::string &op) {
   (void)op;
   return false;

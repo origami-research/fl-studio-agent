@@ -213,7 +213,7 @@ int main() {
     std::atomic<int> remaining{kProducers};
     std::vector<std::thread> producers;
     for (int p = 0; p < kProducers; ++p) {
-      producers.emplace_back([&ring, &go, &remaining, p] {
+      producers.emplace_back([&ring, &go, &remaining, p, kPerProducer] {
         while (!go.load()) {
         }
         for (int i = 0; i < kPerProducer; ++i) {

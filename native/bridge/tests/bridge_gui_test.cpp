@@ -62,7 +62,11 @@ int main() {
     std::atomic<bool> saw_gui_thread{false};
     std::atomic<bool> handover_returned{false};
     std::thread worker([&] {
+#if defined(__APPLE__)
       CHECK(!bridge_gui::OnGuiThread());
+#else
+      CHECK(bridge_gui::OnGuiThread());  // non-macOS stub runs inline
+#endif
       bridge_gui::RunOnGuiThread([&] {
         saw_gui_thread.store(bridge_gui::OnGuiThread());
         ran.store(true);

@@ -1,6 +1,12 @@
 cmake_minimum_required(VERSION 3.20)
 project(fl_mcp_native CXX)
 
+# Windows.h defines min/max macros that break std::min/std::max (MSVC C2589 in
+# bridge_capture.cpp on the first CI build). Keep the C++ standard library's names.
+if(WIN32)
+  add_compile_definitions(NOMINMAX WIN32_LEAN_AND_MEAN)
+endif()
+
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 

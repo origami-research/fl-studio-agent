@@ -37,6 +37,12 @@ Get-Item 'native/build-windows/Release/FL MCP Bridge_x64.dll'
 `bridge_abi_check` uses the FPC-shaped mock on Windows. The Mach-O vtable
 reader remains a macOS check because it reads Mach-O symbol layout.
 
+Windows builds `bridge_discover_windows.cpp`, a documented discovery stub.
+`wp_getters`, `wp_timing`, `wp_target`, and `wp_sweep` are unavailable and
+make no dispatcher calls. The stub provides an empty getter table and the
+portable target-key helper so the shared mock-host test links; the mmap-backed
+capture and the measured Free Pascal/Mach-O discovery path remain macOS-only.
+
 No feature code may select an OS, construct a platform socket, invoke an FL executable, or enumerate processes after this boundary exists.
 
 The five Python seams are MIDI wire creation, broker endpoint, render command, FL discovery, and process sweep. Native GUI-thread marshalling is the corresponding bridge seam.
