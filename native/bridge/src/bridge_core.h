@@ -27,10 +27,10 @@
 
 // The SDK types (TFruityPlugHost, TNotesParams, ...) are anonymous-struct
 // typedefs, so they cannot be forward-declared; include the header directly.
-#include "fp_plugclass.h"
+#include FL_MCP_PLUGIN_API_HEADER
 
 // L2's generated capability profile (gen_layout output): version-specific
-// constants + the struct-assert wall. Included here AFTER fp_plugclass.h so a
+// constants + the struct-assert wall. Included here after the SDK API so a
 // TU that defines FLMCP_ASSERT_STRUCTS before including this header gets the
 // asserts materialized against the SDK types. Absent (pre-integration), the
 // fallback constants below stand in and the tree builds in isolation.

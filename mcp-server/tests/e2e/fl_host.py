@@ -21,7 +21,11 @@ import time
 from pathlib import Path
 
 import pytest
-from harness import flctl
+
+try:
+    from harness import flctl
+except ModuleNotFoundError:
+    flctl = None
 
 from fl_mcp.core.carriers import wire
 from fl_mcp.fl.paths import fl_app
@@ -38,6 +42,8 @@ class FLHost:
     """Owns the MIDI ports and the FL process for one live-test module."""
 
     def __init__(self) -> None:
+        if flctl is None:
+            pytest.skip("live-FL e2e needs the private harness")
         self.ctl = wire.MidiControl()  # ports must exist before FL launches
         self.hello: dict | None = None
         if flctl.is_running():

@@ -10,7 +10,7 @@ The file spool survives deliberately - it is the only path FL's sandboxed pyscri
 
 ## 1. Threading: what is legal off the host's callback threads
 
-**The FL SDK's own contract** (`fp_plugclass.h`, fetched SDK, comment block above `TFruityPlug`):
+**The FL SDK's own contract** (the licensed SDK's plugin API header, comment block above `TFruityPlug`):
 
 - Every plugin entry point is annotated `(G)` GUI thread, `(M)` mixer thread, `(GM)` both, or `(S)` MIDI-sync thread; `Dispatcher` is `(GM)`, `Idle_Public` and `DestroyObject` are `(G)`.
 - `(M)` calls arrive inside the plugin lock, and the header warns: "don't call back to the host while inside a LockPlugin / UnlockPlugin block".

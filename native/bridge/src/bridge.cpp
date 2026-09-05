@@ -65,7 +65,7 @@
 #include "bridge_events.h"
 #include "bridge_gui.h"
 #include "bridge_udp.h"
-#include "fp_plugclass.h"
+#include FL_MCP_PLUGIN_API_HEADER
 
 #if defined(__APPLE__)
 #include <mach-o/dyld.h>
@@ -558,7 +558,7 @@ Bridge::Bridge(TPluginTag tag, TFruityPlugHost *host) {
       return;
     }
     // The tick is Idle_Public, and FL delivers it only while the plugin's UI is
-    // visible unless the plugin asks for "always" (fp_plugclass.h: FHD_WantIdle,
+    // visible unless the plugin asks for "always" (licensed SDK FHD_WantIdle,
     // Value 2). This plugin has no UI, so a project saved with its wrapper
     // window closed never ticked at all: live runs 1-8 on 2026-09-04 showed
     // tick=0 for whole matches, unlocked, focused, App Nap disabled. The

@@ -195,7 +195,7 @@ void GuardedBuffer::HexEncode(char *out, std::size_t out_size) const {
 
 const std::vector<GetterSpec> &Getters() {
   using Call = GetterSpec::Call;
-  // GT_Beats=0, GT_Ticks=4 (fp_plugclass.h). Sampling both formats from one id
+  // GT_Beats=0, GT_Ticks=4 (licensed SDK declaration). Sampling both formats from one id
   // at one instant yields ticks/beat == the project PPQ.
   static const std::vector<GetterSpec> kGetters = {
       {FHD_GetTimeMul, "FHD_GetTimeMul", Call::kIndexOnly, 0,

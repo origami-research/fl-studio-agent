@@ -17,7 +17,7 @@ On a supported Windows Server 2022 build host:
 3. Install CMake (`choco install cmake --installargs 'ADD_CMAKE_TO_PATH=System'`).
 4. Download the FL Studio plugin SDK from Image-Line's developer portal and
    extract its headers and `.cpp` files into a private directory, for example
-   `C:\\FLSDK`. It must contain `fp_plugclass.h`, `fp_plugclass.cpp`,
+   `C:\\FLSDK`. It must contain the SDK plugin API header, its implementation,
    `fp_cplug.cpp`, and `fp_extra.cpp`.
 5. Clone this repository. Keep the SDK outside the checkout, or use the
    ignored `native\\sdk` directory.

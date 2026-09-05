@@ -23,7 +23,7 @@
 
 #include "bridge_core.h"
 #include "bridge_udp.h"
-#include "fp_plugclass.h"
+#include FL_MCP_PLUGIN_API_HEADER
 #include "mock_host.h"
 
 namespace {

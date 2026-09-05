@@ -28,7 +28,7 @@ from typing import Any
 
 import flpkit as flp
 import pytest
-from tools.fuzz import gen_clips, gen_levels, gen_notes, gen_points, gen_tempo
+from fuzz import gen_clips, gen_levels, gen_notes, gen_points, gen_tempo
 
 from e2e.matrix import MATRIX, _pattern_ids, requires_fl_data
 

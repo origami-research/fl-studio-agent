@@ -16,7 +16,7 @@ license, and force-push window before any command in this document is run.
 
 ## Review the removal set
 
-The minimum removal set is `docs/32-repo-split.md`, all `.lavish/` artifacts,
+The minimum removal set is `docs/32-repo-split.md`, all editor-review artifacts,
 and the removed strategy reports under `docs/research/`. Expand it with every
 path found by the final private-content review. Prefer an allowlisted public
 extraction if that review identifies ambiguous material.
@@ -36,7 +36,7 @@ Use a reviewed path file to avoid a shell glob changing the scope:
 
 ```text
 docs/32-repo-split.md
-.lavish/
+<review-artifact-directory>/
 docs/research/improvement-plan-2026-09-01.md
 docs/research/insights-2026-09-01.md
 ```

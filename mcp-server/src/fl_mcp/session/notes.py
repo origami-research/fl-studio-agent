@@ -171,7 +171,7 @@ class FileLane:
 class BridgeLane:
     """Live targeted notes via the native Bridge plugin, which consumes the
     same v2 spool as the pyscript but is not target-blind: as an effect it can
-    set PatNum on FHD_AddNotesToPR (fp_plugclass.h; PROBE_VERDICT Q2)."""
+    set PatNum on FHD_AddNotesToPR (licensed SDK declaration; PROBE_VERDICT Q2)."""
 
     name: Literal["bridge"] = "bridge"
 

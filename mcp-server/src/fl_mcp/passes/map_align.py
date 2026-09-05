@@ -33,7 +33,7 @@ from dataclasses import dataclass
 from fl_mcp.core.discovery import Command, Response
 from fl_mcp.profile import CapabilityProfile
 
-# The SDK's documented dispatcher command map (fp_plugclass.h FHD_*). Its KEYS
+# The SDK's documented dispatcher command map (the plugin API's FHD_* constants). Its KEYS
 # are the documented id range - the boundary this build is aligned against; its
 # VALUES label findings in the report. The twin of native/abi's
 # fl_dispatch_ledger.h kDocumentedMaxId=87: the SDK documents ids 0..87, so any

@@ -46,18 +46,18 @@ projects abuse. We keep it in mind only as a possible manual escape hatch for us
 
 ## Surface 3: Native Plugin SDK (C++/Delphi) - the key surface
 
-In-process plugins built against `fp_plugclass.h` get a two-way **dispatcher** channel
+In-process plugins built against the licensed SDK plugin API get a two-way **dispatcher** channel
 to the host. The plugin calls `PlugHost->Dispatcher(HostTag, FHD_xxx, Index, Value)`.
 
 ### The note-writing call [VERIFIED - verbatim from headers]
 
 ```c
-// fp_plugclass.h:730
+// Licensed SDK dispatcher declaration
 const int FHD_AddNotesToPR = 17;  // add a note to the piano roll, PNotesParams in Value
 ```
 
 ```c
-// fp_plugclass.h - packed, variable-length
+// Licensed SDK plugin API - packed, variable-length
 #pragma pack(push, 1)
 typedef struct {
     int   Position;  // in PPQ
@@ -99,7 +99,7 @@ that pins a generator to its own channel doesn't apply. Register as
 folder, and `ChanNum` retargets. [Header semantics VERIFIED; actual cross-channel
 write REPORTED by BeatSage; reproduction is **Spike 1**]
 
-### Other dispatcher calls we will use [VERIFIED - all from fp_plugclass.h]
+### Other dispatcher calls we will use [VERIFIED - all from the licensed SDK]
 
 | Constant | # | Use in our design |
 |---|---|---|

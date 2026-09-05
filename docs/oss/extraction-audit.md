@@ -86,11 +86,11 @@ Result: 0 secrets found, with those four paths retained for the final scanner
 review.
 
 The path-name sweep found `.github/workflows/secret-scan.yml` and no historical
-`.env`, key, credential, or token file. It found six historical `.lavish/`
+`.env`, key, credential, or token file. It found six historical editor-review
 artifacts, all covered by the removal glob.
 
 **The proprietary FL SDK did enter history.** `native/control/fpsdk/src/cxx/`
-contains `fp_def.h`, `fp_plugclass.h`, and `fp_plugclass.cpp`; their headers say
+contains the SDK's core definitions, plugin API header, and plugin API implementation; their headers say
 "FL Studio generator/effect plugins SDK". The SDK filename set was obtained
 from `native/scripts/fetch_sdk.sh`'s source and checked across every reachable
 revision. `native/control/fpsdk/` is therefore in the removal set.

@@ -24,7 +24,11 @@ import wave
 
 import flpkit as flp
 import pytest
-from harness import flctl
+
+try:
+    from harness import flctl
+except ModuleNotFoundError:
+    flctl = None
 
 from e2e.matrix import run_file_cycle, selected
 from fl_mcp.audio import analyze_wav
@@ -39,6 +43,8 @@ RENDER_TIMEOUT = 240.0
 
 @pytest.fixture()
 def render_gate():
+    if flctl is None:
+        pytest.skip("live-FL e2e needs the private harness")
     if not os.environ.get("FL_E2E"):
         pytest.skip("live-FL e2e disabled; set FL_E2E=1 to run")
     if not fl_app().exists():

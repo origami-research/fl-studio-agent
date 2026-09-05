@@ -34,7 +34,7 @@
 #include <string>
 #include <vector>
 
-#include "fp_plugclass.h"
+#include FL_MCP_PLUGIN_API_HEADER
 #include "minijson.h"
 
 namespace bridge_discover {

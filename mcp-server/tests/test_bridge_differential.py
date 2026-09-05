@@ -25,7 +25,7 @@ import pytest
 from fl_mcp.core.carriers.spool import SpoolCarrier, read_json
 from fl_mcp.core.transport import Transport
 
-NPF_EMPTY_FIRST = 1  # fp_plugclass.h
+NPF_EMPTY_FIRST = 1  # licensed SDK note-parameter flags
 
 CLI = Path(
     os.environ.get(

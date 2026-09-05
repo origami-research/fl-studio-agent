@@ -50,7 +50,7 @@ TK_RECORD = 0x0D
 TK_ARRAY = 0x0C
 
 # RTTI carries no field names; these are the SDK's declaration-order labels
-# (native/sdk/fp_plugclass.h), applied positionally. A record whose scraped
+# (the licensed SDK's plugin API header), applied positionally. A record whose scraped
 # field COUNT disagrees gets positional names instead - which makes the golden
 # test fail loudly naming the extra/missing field, exactly the alarm we want.
 KNOWN_FIELD_NAMES: dict[str, tuple[str, ...]] = {

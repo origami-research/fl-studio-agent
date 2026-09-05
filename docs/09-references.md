@@ -2,12 +2,12 @@
 
 ## Primary sources (specs, headers, official docs)
 
-- **FL Plugin SDK headers** - `fp_plugclass.h`, `fp_def.h`, `fp_cplug.h`, and bundled
+- **FL Plugin SDK headers** - the licensed developer download and bundled
   `SDK_documentation/` (obtained via the CMake template repo below). The authoritative
   source for `FHD_*` dispatcher constants, `TNoteParams`/`TNotesParams`, `NPF_*` and
   `FPF_*` flags. Key lines cited in these docs: `FHD_AddNotesToPR = 17`
-  (`fp_plugclass.h:730`), `TNotesParams.ChanNum` comment, `FHD_WantIdle = 13`
-  ("2 for always enabled"), `FPF_Type_Effect` (`fp_plugclass.h:532`).
+  (its dispatcher section), `TNotesParams.ChanNum` comment, `FHD_WantIdle = 13`
+  ("2 for always enabled"), `FPF_Type_Effect` (its plugin-type section).
 - [FL Studio manual - MIDI Scripting (Python)](https://www.image-line.com/fl-studio-learning/fl-studio-online-manual/html/midi_scripting.htm)
 - [FL Studio manual - Piano roll Scripting API](https://www.image-line.com/fl-studio-learning/fl-studio-online-manual/html/pianoroll_scripting_api.htm)
 - [FL Studio manual - Exporting Audio & MIDI (command-line flags)](https://www.image-line.com/fl-studio-learning/fl-studio-online-manual/html/fformats_save_export.htm)

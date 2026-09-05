@@ -2,7 +2,7 @@
 // FL's own record RTTI by the scraper) replaces the hand-written wall below.
 // This TU materializes it: FLMCP_ASSERT_STRUCTS must be defined before the
 // first include of fl_profile_generated.h, which bridge_core.h performs right
-// after fp_plugclass.h.
+// after the SDK plugin API header.
 #if __has_include("fl_profile_generated.h")
 #define FLMCP_ASSERT_STRUCTS 1
 #endif
@@ -22,7 +22,7 @@
 
 #include "bridge_discover.h"
 #include "fl_host_abi.h"
-#include "fp_plugclass.h"
+#include FL_MCP_PLUGIN_API_HEADER
 
 namespace bridge_core {
 

@@ -24,12 +24,15 @@ checkouts use the pinned Git source only through the `private` extra.
    path and private-content term. Run `gitleaks git --redact --no-banner` in
    the rewritten mirror. Rotate any credential finding before publication.
 6. Make a clean checkout from the rewritten mirror. Run the documented tests,
-   artifact review, license review, `scripts/check-release.sh`, and a
+   artifact review, license review, and a
    second-reviewer allowlist comparison. The release check builds both
    artifacts, rebuilds a wheel from the sdist alone, installs that wheel in a
    fresh venv, and runs the contract and import smoke tests. Confirm no private
    refs, reflogs, bundles, pull-request patches, or release archives are
-   published.
+   published. The public mirror verifier skips this artifact check until the
+   separately released `flpkit` dependency is available. A licensed developer
+   may run native tests after supplying their SDK with
+   `cmake -S native -B native/build -DFL_SDK_DIR=/path/to/licensed-sdk`.
 7. Create the new public repository only after verification passes, then push
    the reviewed refs, create the approved tag, and publish the built package to
    PyPI. Keep the original repository private.

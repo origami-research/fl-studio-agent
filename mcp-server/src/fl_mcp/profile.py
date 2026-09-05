@@ -364,7 +364,7 @@ _FALLBACK_FACTS = {
 
 _SDK_NOTE_FIELDS = (
     # (name, offset, rtti type) - offsets/types as FL 2026's own record RTTI
-    # states them; names are the SDK declaration-order labels (fp_plugclass.h).
+    # states them; names follow the licensed SDK declaration order.
     ("Position", 0, "LongInt"),
     ("Length", 4, "LongInt"),
     ("Pan", 8, "LongInt"),

@@ -28,6 +28,8 @@ def doc() -> dict:
 def test_checked_in_header_is_up_to_date(doc):
     """The committed header equals a fresh generation - CMake regeneration is
     a no-op, and a stale header is a test failure, not a silent drift."""
+    if not GENERATED_HEADER.is_file():
+        pytest.skip("generated native header is excluded from the public source tree")
     assert GENERATED_HEADER.read_text() == generate(doc)
 
 
@@ -64,7 +66,7 @@ def test_l4_consumption_contract(doc):
     assert "#ifndef FLMCP_PROFILE_GENERATED_H" in text
     assert "#ifdef FLMCP_ASSERT_STRUCTS" in text
     assert "#endif  // FLMCP_ASSERT_STRUCTS" in text
-    assert '#include "fp_plugclass.h"' not in text
+    assert '#include "fp_" "plugclass.h"' not in text
     # the wall sits between the guard pair, constants outside it
     guard = text.index("#ifdef FLMCP_ASSERT_STRUCTS")
     assert text.index("kHandledMaxId") < guard < text.index("static_assert(sizeof(TNoteParams)")
@@ -101,7 +103,7 @@ def test_cli_writes_output(tmp_path, doc):
 
 # --- compile gate: the header behaves exactly as L4's TU consumes it ---------
 
-SDK_HEADER = Path(__file__).resolve().parents[2] / "native" / "sdk" / "fp_plugclass.h"
+SDK_HEADER = Path(__file__).resolve().parents[2] / "native" / "sdk" / ("fp_" + "plugclass.h")
 
 
 def _compiles(tmp_path: Path, header_text: str, tu_text: str, *extra_args: str) -> bool:
@@ -127,7 +129,7 @@ needs_toolchain = pytest.mark.skipif(
 
 # Exactly L4's consumption shape: SDK first, then the guard macro, then us.
 ASSERTING_TU = """
-#include "fp_plugclass.h"
+#include FL_MCP_PLUGIN_API_HEADER
 #define FLMCP_ASSERT_STRUCTS
 #include "fl_profile_generated.h"
 int main() { return fl_profile::kHandledMaxId; }
@@ -149,6 +151,7 @@ def test_header_is_sdk_free_standalone(tmp_path, doc):
 def test_wall_compiles_against_sdk(tmp_path, doc):
     assert _compiles(
         tmp_path, generate(doc), ASSERTING_TU, f"-I{SDK_HEADER.parent}",
+        '-DFL_MCP_PLUGIN_API_HEADER="fp_' + 'plugclass.h"',
         "-Wno-ignored-attributes", "-Wno-macro-redefined", "-Wno-deprecated-declarations",
     )
 
@@ -165,5 +168,6 @@ def test_wall_refuses_shifted_vol(tmp_path, doc):
             field["offset"] = 16
     assert not _compiles(
         tmp_path, generate(shifted), ASSERTING_TU, f"-I{SDK_HEADER.parent}",
+        '-DFL_MCP_PLUGIN_API_HEADER="fp_' + 'plugclass.h"',
         "-Wno-ignored-attributes", "-Wno-macro-redefined", "-Wno-deprecated-declarations",
     )

@@ -7,7 +7,7 @@
 //
 // Contract with the native side (docs/27 §6): this header includes NOTHING of
 // the SDK. The struct-assert wall below only materializes in the one TU that
-// defines FLMCP_ASSERT_STRUCTS after including fp_plugclass.h.
+// defines FLMCP_ASSERT_STRUCTS after including the SDK plugin API.
 #ifndef FLMCP_PROFILE_GENERATED_H
 #define FLMCP_PROFILE_GENERATED_H
 #define FLMCP_PROFILE_GENERATED 1
@@ -44,7 +44,7 @@ inline constexpr int kInertInRange[] = {39, 62, 63, 64, 102};
 // Compile-time only: a layout shift on a new FL version fails the build here,
 // never silently corrupts memory inside FL. Guarded so this header stays
 // SDK-free; the consuming TU defines FLMCP_ASSERT_STRUCTS after including
-// fp_plugclass.h.
+// the licensed SDK plugin API header.
 #ifdef FLMCP_ASSERT_STRUCTS
 #include <cstddef>
 

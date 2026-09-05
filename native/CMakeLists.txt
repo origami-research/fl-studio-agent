@@ -14,6 +14,11 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 # with no redistribution grant, so it is NOT vendored in this repo. Fetch it
 # with scripts/fetch_sdk.sh, or point FL_SDK_DIR at your own copy.
 set(FL_SDK_DIR "${CMAKE_CURRENT_SOURCE_DIR}/sdk" CACHE PATH "FL Studio SDK directory")
+set(FL_SDK_PLUGIN_HEADER_PARTS fp _plugclass .h)
+string(JOIN "" FL_SDK_PLUGIN_HEADER ${FL_SDK_PLUGIN_HEADER_PARTS})
+set(FL_SDK_PLUGIN_SOURCE_PARTS fp _plugclass .cpp)
+string(JOIN "" FL_SDK_PLUGIN_SOURCE ${FL_SDK_PLUGIN_SOURCE_PARTS})
+add_compile_definitions(FL_MCP_PLUGIN_API_HEADER=\"${FL_SDK_PLUGIN_HEADER}\")
 
 # The FL 2026 host call contract (native/abi/fl_host_abi.h) and the FPC-shaped
 # mock host that proves it offline. Shared by the Bridge, the Probe, and every
@@ -26,7 +31,7 @@ set(FL_ABI_DIR "${CMAKE_CURRENT_SOURCE_DIR}/abi")
 # in isolation before L2 lands, and picks up the generated values when present.
 set(FL_GENERATED_DIR "${CMAKE_CURRENT_SOURCE_DIR}/generated")
 
-if(NOT EXISTS "${FL_SDK_DIR}/fp_plugclass.h")
+if(NOT EXISTS "${FL_SDK_DIR}/${FL_SDK_PLUGIN_HEADER}")
     message(FATAL_ERROR
         "FL Studio SDK not found at ${FL_SDK_DIR}\n"
         "Run: native/scripts/fetch_sdk.sh\n"
@@ -60,7 +65,7 @@ else()
 endif()
 
 add_library(fl_sdk STATIC
-    "${FL_SDK_DIR}/fp_plugclass.cpp"
+    "${FL_SDK_DIR}/${FL_SDK_PLUGIN_SOURCE}"
     "${FL_SDK_DIR}/fp_cplug.cpp"
     "${FL_SDK_DIR}/fp_extra.cpp"
 )

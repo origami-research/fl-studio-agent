@@ -16,7 +16,7 @@
 #include <vector>
 
 #include "fl_host_mock.h"
-#include "fp_plugclass.h"
+#include FL_MCP_PLUGIN_API_HEADER
 
 namespace bridge_mock {
 

@@ -32,8 +32,8 @@ from pathlib import Path
 
 import flpkit as flp
 import pytest
+from flp_compat import parse
 from flpkit import FlpError
-from harness.flp_compat import parse
 
 from fl_mcp.fl.paths import fl_app
 

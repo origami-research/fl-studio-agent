@@ -2,7 +2,7 @@
 
 From a fresh clone to "ask an agent for notes, they appear in FL Studio".
 
-**Requirements:** macOS, FL Studio 2026, Python 3.11+, and [uv](https://docs.astral.sh/uv/) (`curl -LsSf https://astral.sh/uv/install.sh | sh`). The current Windows and RDP product decision lives in the private-product repository. The file-based features (compose/arrange/analyze `.flp` files) need no FL running; the live features (write into a running FL, live synth params, observe) need FL open with the Bridge plugin.
+**Requirements:** macOS, FL Studio 2026, Python 3.11+, and [uv](https://docs.astral.sh/uv/) (`curl -LsSf https://astral.sh/uv/install.sh | sh`). The file-based features (compose/arrange/analyze `.flp` files) need no FL running; the live features (write into a running FL, live synth params, observe) need FL open with the Bridge plugin.
 
 ---
 
@@ -53,4 +53,4 @@ Compose (notes to any pattern), shape the sound (live synth params), read/unders
 
 ## Honest notes
 - It drives **your** FL on **your** machine; live operations take over screen focus and restart FL around file writes.
-- It runs local code that opens FL - a dev setup, not a hosted product. The Windows and RDP product decision lives in private-product.
+- It runs local code that opens FL - a dev setup, not a hosted product. Hosted and remote use need separate licensing and product validation.

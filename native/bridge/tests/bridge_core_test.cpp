@@ -24,7 +24,7 @@
 #include "bridge_discover.h"
 #include "fl_dispatch_ledger.h"
 #include "fl_host_abi.h"
-#include "fp_plugclass.h"
+#include FL_MCP_PLUGIN_API_HEADER
 #include "mock_host.h"
 
 namespace {

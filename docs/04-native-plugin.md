@@ -122,7 +122,7 @@ branch wins, the wire format doesn't change - only the server's orchestration do
 
 ## Build
 
-- Base: the official FL SDK headers (`fp_plugclass.h`, `fp_def.h`, `fp_cplug.h`) via
+- Base: the official FL SDK headers, obtained separately by a licensed developer, via
   the [CMake template](https://github.com/Barsay/FL-Studio-SDK-CMake-Template)
   structure. **Check Image-Line's SDK license before vendoring headers into a public
   repo; if redistribution is disallowed, the build fetches the SDK from the official

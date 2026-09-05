@@ -195,7 +195,7 @@ Keep one `bridge` target named `FL MCP Bridge_x64` with no prefix, producing `.d
 
 Keep the portable spool executor, command ledger, note conversion, JSON protocol, and SDK headers common to both artifacts.
 
-Keep macOS Free Pascal dispatcher discovery, Mach-O scraper evidence, and live UDP disabled on Windows until independently proven there, as `bridge_discover_windows.cpp` and `bridge_udp_windows.cpp` already do. This supersedes private-product research that says to preserve UDP: Windows is spool-first.
+Keep macOS Free Pascal dispatcher discovery, Mach-O scraper evidence, and live UDP disabled on Windows until independently proven there, as `bridge_discover_windows.cpp` and `bridge_udp_windows.cpp` already do. Windows is spool-first.
 
 Replace direct POSIX includes in portable bridge and test sources with a small filesystem and temporary-directory adapter, so the core and its unit tests compile under MSVC.
 

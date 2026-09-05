@@ -49,7 +49,7 @@ The FL Studio **native plugin SDK** (C++/Delphi) gives in-process plugins a
 host-dispatcher channel with permissions the Python API doesn't have. One of them:
 
 ```c
-// fp_plugclass.h:730
+// Licensed SDK dispatcher declaration
 const int FHD_AddNotesToPR = 17;   // add a note to the piano roll, PNotesParams in Value
 ```
 
@@ -96,7 +96,7 @@ well-trodden Python-API-over-SysEx path.
   and `FHD_ShowPicker` only open the picker UI for a human. [VERIFIED] Covered by the
   template project (07).
 - **Creating new patterns.** No dispatcher or API call exists. [VERIFIED - no such
-  constant in `fp_plugclass.h`; none in the Python API] Covered by the template
+  constant in the licensed SDK declaration; none in the Python API] Covered by the template
   project's pre-created pattern bank.
 - **Headless / server-side operation.** FL requires an interactive GUI session. This
   engine is deliberately designed for live, user-visible creative workflows; offline
