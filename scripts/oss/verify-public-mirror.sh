@@ -2,7 +2,15 @@
 set -euo pipefail
 
 repo_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
-mirror=${1:-"$HOME/Documents/Code/fl-studio-mcp-public.git"}
+mirror="$HOME/Documents/Code/fl-studio-mcp-public.git"
+while (($#)); do
+  case "$1" in
+    --mirror) mirror="$2"; shift 2 ;;
+    --mirror=*) mirror="${1#--mirror=}"; shift ;;
+    -*) echo "unknown argument: $1" >&2; exit 2 ;;
+    *) mirror="$1"; shift ;;
+  esac
+done
 report_file=${OSS_VERIFICATION_REPORT:-}
 removal_file="$repo_dir/docs/oss/history-removal-set.txt"
 terms_file="$repo_dir/docs/oss/private-terms.txt"
@@ -110,15 +118,19 @@ else
   record_skip "native build and ctest need the licensed FL Studio SDK. Configure with: cmake -S native -B native/build -DFL_SDK_DIR=/path/to/licensed-sdk"
 fi
 
-if bash scripts/check-release.sh >/dev/null 2>&1; then echo "PASS: release artifact check (scripts/check-release.sh)"; PASSED=$((PASSED+1)); else record_failure "release artifact check (scripts/check-release.sh)"; fi
+if (cd "$checkout" && bash scripts/check-release.sh >/dev/null 2>&1); then
+  echo "PASS: release artifact check (scripts/check-release.sh)"
+else
+  record_failure "release artifact check (scripts/check-release.sh)"
+fi
 
-check_count=7
+check_count=8
 status=PASS
 if ((${#failures[@]})); then
   status=FAIL
 fi
 report=$(cat <<EOF
-# Public mirror verification - 2026-09-05
+# Public mirror verification - $(date -u +%Y-%m-%d)
 
 Status: $status
 
