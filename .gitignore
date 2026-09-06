@@ -17,3 +17,5 @@ fl-scripts/controller/probe/*.log
 
 # fetched .flp corpus (third-party test inputs, not vendored)
 mcp-server/tests/corpus/data/
+.env
+.env.*

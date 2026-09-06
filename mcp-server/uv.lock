@@ -255,16 +255,12 @@ name = "fl-studio-mcp"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
+    { name = "flpkit" },
     { name = "mcp" },
     { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },
     { name = "numpy", version = "2.5.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
     { name = "python-rtmidi" },
     { name = "watchdog" },
-]
-
-[package.optional-dependencies]
-private = [
-    { name = "flpkit" },
 ]
 
 [package.dev-dependencies]
@@ -277,17 +273,16 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "flpkit", marker = "extra == 'private'", git = "https://github.com/clarkipeng/flpkit?tag=v0.8.0" },
+    { name = "flpkit", specifier = "==0.8.1" },
     { name = "mcp", specifier = ">=2.0.0" },
     { name = "numpy", specifier = ">=2.0.0" },
     { name = "python-rtmidi", specifier = ">=1.5.0" },
     { name = "watchdog", specifier = ">=6.0.0" },
 ]
-provides-extras = ["private"]
 
 [package.metadata.requires-dev]
 dev = [
-    { name = "flpkit", git = "https://github.com/clarkipeng/flpkit?tag=v0.8.0" },
+    { name = "flpkit", specifier = "==0.8.1" },
     { name = "pyflp", specifier = ">=2.0" },
     { name = "pytest", specifier = ">=8.0" },
     { name = "python-rtmidi", specifier = ">=1.5" },
@@ -295,8 +290,12 @@ dev = [
 
 [[package]]
 name = "flpkit"
-version = "0.8.0"
-source = { git = "https://github.com/clarkipeng/flpkit?tag=v0.8.0#905c8706ca67d33d8555939b3c29f197508bab6d" }
+version = "0.8.1"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/96/11/27fffbe30ac12c761a180e3abfde4a6c829d24760587c6fd17cd5f336e5c/flpkit-0.8.1.tar.gz", hash = "sha256:276193f687c1524841277af1582eb8618fe6fd9776bb4c2918cb00faf97bee5a", size = 54970, upload-time = "2026-09-06T23:10:33.221Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/9d/d4/adb16ef12e6ccbe44d438798f63a9b3f30213e084aa2b35d2b0d6bfbe999/flpkit-0.8.1-py3-none-any.whl", hash = "sha256:97d65cf9540518b73266f64570379e75950f01cd5a24c0d8b288da3ba6fa4410", size = 34947, upload-time = "2026-09-06T23:10:31.991Z" },
+]
 
 [[package]]
 name = "h11"

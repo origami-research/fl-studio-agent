@@ -11,6 +11,7 @@ dependencies = [
     "python-rtmidi>=1.5.0",
     "watchdog>=6.0.0",
     "numpy>=2.0.0",
+    "flpkit==0.8.1",
 ]
 keywords = ["fl-studio", "mcp", "music-production", "piano-roll"]
 classifiers = [
@@ -32,10 +33,6 @@ Repository = "https://github.com/origami-research/fl-studio-mcp"
 Documentation = "https://github.com/origami-research/fl-studio-mcp/tree/main/docs"
 
 [project.optional-dependencies]
-# flpkit 0.8.0 is private until its independent PyPI release. uv resolves this
-# extra from the pinned source below in a private checkout; it is not a public
-# package dependency.
-private = ["flpkit==0.8.0"]
 
 [project.scripts]
 fl-mcp = "fl_mcp.server:main"
@@ -59,11 +56,9 @@ dev-mode-dirs = ["src", "../fl-scripts/controller"]
 "../fl-scripts/controller/device_FLMCP.py" = "src/fl_mcp/_controller/device_FLMCP.py"
 "../fl-scripts/controller/flmcp_codec.py" = "src/fl_mcp/_codec.py"
 
-[tool.uv.sources]
-flpkit = { git = "https://github.com/clarkipeng/flpkit", tag = "v0.8.0" }
 
 [dependency-groups]
-dev = ["pytest>=8.0", "pyflp>=2.0", "python-rtmidi>=1.5", "flpkit==0.8.0"]
+dev = ["pytest>=8.0", "pyflp>=2.0", "python-rtmidi>=1.5", "flpkit==0.8.1"]
 
 [tool.ruff]
 line-length = 110
