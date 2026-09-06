@@ -68,8 +68,10 @@ _RUN_STDLIB_MODULES = frozenset(
         "collections",
     }
 )
-# Named so the refusal names the offender: getattr/type/vars/dir would let a
+# Named so the refusal names the offender: getattr/type/vars would let a
 # string reach the dunder attributes the AST guard refuses syntactically.
+# dir() only returns names (it cannot reach an attribute), and producers use it
+# to discover the SDK (#198), so it stays available.
 _RUN_REFUSED_BUILTINS = frozenset(
     {
         "open",
@@ -81,7 +83,6 @@ _RUN_REFUSED_BUILTINS = frozenset(
         "locals",
         "input",
         "breakpoint",
-        "dir",
         "getattr",
         "setattr",
         "delattr",
@@ -97,6 +98,7 @@ _RUN_BUILTINS = {
     name: getattr(builtins, name)
     for name in (
         # values, containers, iteration
+        "dir",
         "abs",
         "all",
         "any",

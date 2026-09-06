@@ -127,7 +127,6 @@ def test_run_assignment_only_yields_none_result():
 def test_run_refusals_steer_introspection_and_are_counted():
     for code, offender in (
         ("import inspect", "import 'inspect'"),
-        ("dir(fl)", "builtin 'dir'"),
         ("help(fl)", "builtin 'help'"),
         ("getattr(fl, 'track')", "builtin 'getattr'"),
         ("type(fl)", "builtin 'type'"),
@@ -148,7 +147,7 @@ def test_run_refusals_steer_introspection_and_are_counted():
 def test_run_refusal_counter_accumulates_per_session():
     session = _FakeSession()
 
-    server.run("dir(fl)", _ctx(fl=object(), session=session))
+    server.run("help(fl)", _ctx(fl=object(), session=session))
     server.run("open('notes.txt')", _ctx(fl=object(), session=session))
 
     assert server.fl_doctor(_ctx(session=session)).run_refusals == 2
@@ -447,3 +446,23 @@ def test_run_namespace_keeps_ordinary_python_and_automation_points():
     )
     result = server.run(code, _ctx())
     assert result.stdout.strip() == "True 2", result
+
+
+def test_run_namespace_keeps_dir_for_sdk_discovery():
+    """dir() returns names only; producers rely on it to explore the SDK (#198).
+
+    PR #217 re-refused it by accident and a live producer hit the refusal
+    (run 18, 2026-09-06).  The refused and allowed sets must never overlap.
+    """
+    assert "dir" in server._RUN_BUILTINS
+    assert "dir" not in server._RUN_REFUSED_BUILTINS
+    assert not (set(server._RUN_BUILTINS) & server._RUN_REFUSED_BUILTINS)
+
+    class _Sdk:
+        track = None
+
+    session = _FakeSession()
+    result = server.run("dir(fl)", _ctx(fl=_Sdk(), session=session))
+    assert not isinstance(result, CallToolResult)
+    assert "track" in result.result
+    assert server.fl_doctor(_ctx(session=session)).run_refusals == 0
