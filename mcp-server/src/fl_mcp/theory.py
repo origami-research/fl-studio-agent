@@ -35,12 +35,27 @@ SCALE_INTERVALS: dict[str, list[int]] = {
 }
 
 
+def _root_midi(root: str | int) -> int:
+    """A chord or scale root may omit the octave ("F", "Bb"); octave 4 is implied.
+
+    The run cheatsheet documents theory.scale("E", "minor"); a producer that
+    wrote exactly that got NoteError (live run 17), so the documented form is
+    the accepted form. Explicit octaves and MIDI numbers keep their meaning.
+    """
+    if isinstance(root, str):
+        text = root.strip()
+        if text and not any(ch.isdigit() for ch in text):
+            text = f"{text}4"
+        return parse_key(text)
+    return parse_key(root)
+
+
 def chord(root: str | int, quality: str = "major") -> list[int]:
     """A chord's MIDI notes in root position, e.g. chord("C4", "maj7")."""
     intervals = CHORD_INTERVALS.get(quality)
     if intervals is None:
         raise NoteError(f"unknown chord quality {quality!r}: expected one of {sorted(CHORD_INTERVALS)}")
-    root_midi = parse_key(root)
+    root_midi = _root_midi(root)
     return [_bounded(root_midi + i) for i in intervals]
 
 
@@ -51,11 +66,13 @@ def scale(root: str | int, mode: str = "major", octaves: int = 1) -> list[int]:
         raise NoteError(f"unknown scale mode {mode!r}: expected one of {sorted(SCALE_INTERVALS)}")
     if octaves < 1:
         raise NoteError(f"scale: octaves must be >= 1, got {octaves}")
-    root_midi = parse_key(root)
+    root_midi = _root_midi(root)
     return [_bounded(root_midi + i + 12 * o) for o in range(octaves) for i in intervals]
 
 
-def drums(pattern: str, key: str | int = "C1", step_beats: float = 0.25, velocity: float = 0.8) -> list[schemas.Note]:
+def drums(
+    pattern: str, key: str | int = "C1", step_beats: float = 0.25, velocity: float = 0.8
+) -> list[schemas.Note]:
     """A step string like "x---x---x---x---" into one Note per non-rest step.
 
     Any character other than space, '-', or '.' counts as a hit - so "x" and

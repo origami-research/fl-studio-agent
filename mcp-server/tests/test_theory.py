@@ -103,3 +103,13 @@ def test_quantize_rejects_non_positive_grid():
 
     with pytest.raises(NoteError):
         theory.quantize([schemas.Note(key="C4", start=0, length=1)], grid=0)
+
+
+def test_scale_and_chord_accept_octaveless_roots_as_the_cheatsheet_promises():
+    from fl_mcp import theory
+
+    assert theory.scale("F", "minor") == theory.scale("F4", "minor")
+    assert theory.chord("Bb", "major") == theory.chord("Bb4", "major")
+    assert theory.scale("E", "minor")[0] == 64
+    # explicit octaves and MIDI numbers are unchanged
+    assert theory.chord(60, "minor")[0] == 60
