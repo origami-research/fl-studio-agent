@@ -27,7 +27,15 @@ while IFS= read -r p; do case "$p" in ''|'#'*) continue ;; esac; if git -C "$MIR
 echo "removal set: clean"
 if gh repo view "$REPO" >/dev/null 2>&1; then echo "refusing: $REPO already exists; choose a fresh name (never publish over an existing repository)"; exit 2; fi
 echo "creating public repository $REPO"
-gh repo create "$REPO" --public --description "Drive FL Studio from an agent: MCP engine, native Bridge plugin, controller script and the reverse-engineering knowledge behind them (MIT)" >/dev/null
+if gh repo view "$REPO" --json name >/dev/null 2>&1; then
+  # The owner may have created the repository by hand (org policy denies creation to this login).
+  # It must be EMPTY: publishing into a repository with history would rewrite someone's refs.
+  branches=$(gh api "repos/$REPO/branches" --jq 'length')
+  [ "$branches" = 0 ] || { echo "refusing: $REPO already has $branches branch(es); publication only targets an empty repository"; exit 2; }
+  echo "publishing into the existing empty repository $REPO"
+else
+  gh repo create "$REPO" --public --description "Drive FL Studio from an agent: MCP engine, native Bridge plugin, controller script and the reverse-engineering knowledge behind them (MIT)" >/dev/null
+fi
 git -C "$MIRROR" remote remove public 2>/dev/null || true
 git -C "$MIRROR" remote add public "https://github.com/$REPO.git"
 git -C "$MIRROR" push public "refs/heads/main:refs/heads/main"
