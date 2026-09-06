@@ -14,9 +14,14 @@ while [ $# -gt 0 ]; do case "$1" in
 [ "$APPROVED" = 1 ] || { echo "refusing: publication is one-way; pass --i-approve-publication after the owner's explicit go"; exit 2; }
 [ -d "$MIRROR" ] || { echo "refusing: no mirror at $MIRROR (run scripts/oss/build-public-mirror.sh first)"; exit 2; }
 HERE="$(cd "$(dirname "$0")/../.." && pwd)"
+# Verification is run HERE AND NOW against the mirror being published; a committed report from
+# an earlier day proves nothing about this mirror (2026-09-06: a stale PASS report nearly let a
+# mirror through whose fresh verification had just printed FAIL).
+echo "running verification against $MIRROR"
+if ! bash "$HERE/scripts/oss/verify-public-mirror.sh" --mirror "$MIRROR"; then echo "refusing: verification did not pass"; exit 2; fi
 REPORT="$(ls -t "$HERE"/docs/oss/verification-*.md 2>/dev/null | head -1)"
-[ -n "$REPORT" ] && grep -q "^Status: PASS" "$REPORT" || { echo "refusing: latest verification report is not PASS ($REPORT)"; exit 2; }
-echo "verification: $REPORT (PASS)"
+[ -n "$REPORT" ] && grep -q "^Status: PASS" "$REPORT" || { echo "refusing: verification report is not PASS ($REPORT)"; exit 2; }
+echo "verification: $REPORT (PASS, run in this invocation)"
 # The mirror must not contain any removal-set path in any reachable commit (belt and braces).
 while IFS= read -r p; do case "$p" in ''|'#'*) continue ;; esac; if git -C "$MIRROR" log --all --format=%H -- "$p" | grep -q .; then echo "refusing: removal-set path still reachable in the mirror: $p"; exit 2; fi; done < "$HERE/docs/oss/history-removal-set.txt"
 echo "removal set: clean"
