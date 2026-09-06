@@ -251,7 +251,7 @@ wheels = [
 ]
 
 [[package]]
-name = "fl-studio-mcp"
+name = "fl-studio-agent"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [

@@ -2,4 +2,4 @@
 
 from importlib.metadata import version
 
-__version__ = version("fl-studio-mcp")
+__version__ = version("fl-studio-agent")

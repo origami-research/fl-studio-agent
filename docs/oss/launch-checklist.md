@@ -14,3 +14,7 @@ flpkit 0.8.1 was published on 2026-09-06; the engine depends on the released pac
 ## Step 7, mechanised
 
 `scripts/oss/publish-public-mirror.sh --repo <owner/name> --tag v0.1.0 --i-approve-publication` creates the fresh public repository, pushes the verified mirror's `main` and the tag, and refuses when: the latest verification report is not PASS, any removal-set path is still reachable in the mirror, the target repository already exists, or the approval flag is missing. It never touches the private repository's refs. Publishing the engine to PyPI is done afterwards from the public repository (its own trusted-publishing workflow), never from the private one.
+
+## Package name
+
+The PyPI name `fl-studio-mcp` is owned by a third party (rosasynthesiz, 1.0.0, May 2026). The engine's distribution is `fl-studio-agent`, matching the public repository name; the import package stays `fl_mcp` and the `fl-mcp*` commands keep their names.

@@ -110,7 +110,7 @@ else
   record_skip "native build and ctest need the licensed FL Studio SDK. Configure with: cmake -S native -B native/build -DFL_SDK_DIR=/path/to/licensed-sdk"
 fi
 
-record_skip "release artifact check waits for the separately released flpkit dependency; see docs/oss/launch-checklist.md."
+if bash scripts/check-release.sh >/dev/null 2>&1; then echo "PASS: release artifact check (scripts/check-release.sh)"; PASSED=$((PASSED+1)); else record_failure "release artifact check (scripts/check-release.sh)"; fi
 
 check_count=7
 status=PASS
