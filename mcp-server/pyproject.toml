@@ -29,8 +29,8 @@ authors = [{ name = "Origami Research" }]
 maintainers = [{ name = "Origami Research" }]
 
 [project.urls]
-Repository = "https://github.com/origami-research/fl-studio-mcp"
-Documentation = "https://github.com/origami-research/fl-studio-mcp/tree/main/docs"
+Repository = "https://github.com/origami-research/fl-studio-agent"
+Documentation = "https://github.com/origami-research/fl-studio-agent/tree/main/docs"
 
 [project.optional-dependencies]
 

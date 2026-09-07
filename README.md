@@ -1,7 +1,8 @@
-# fl-studio-mcp
+# fl-studio-agent
 
-`fl-studio-mcp` is an MCP server for deterministic work in FL Studio. It uses
-three complementary lanes: `flpkit` edits project files, the native FL MCP
+`fl-studio-agent` is an agent runtime for FL Studio: a Python SDK, an MCP
+server that exposes it, and a native Bridge plugin. It uses three
+complementary lanes: `flpkit` edits project files, the native FL MCP
 Bridge performs live host operations, and the MIDI wire/control broker handles
 live controller operations.
 
