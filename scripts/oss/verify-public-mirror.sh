@@ -124,7 +124,13 @@ else
   record_failure "release artifact check (scripts/check-release.sh)"
 fi
 
-check_count=8
+# Commit messages are public too: no private term may survive in any message.
+message_hits=$(git -C "$mirror" log --all --format='%B' | grep -ciE '\barena\b|producer[ -]arena' || true)
+if [[ "$message_hits" != 0 ]]; then
+  record_failure "commit messages name the private product ($message_hits line(s) match arena)"
+fi
+
+check_count=9
 status=PASS
 if ((${#failures[@]})); then
   status=FAIL

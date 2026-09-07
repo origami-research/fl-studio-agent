@@ -45,7 +45,7 @@ if [[ -d "$destination" && $(git -C "$destination" rev-parse --is-bare-repositor
   exit 2
 fi
 
-for file in docs/oss/public-allowlist.txt docs/oss/history-removal-set.txt; do
+for file in docs/oss/public-allowlist.txt docs/oss/history-removal-set.txt docs/oss/message-replacements.txt; do
   [[ -s "$repo_dir/$file" ]] || { echo "missing $file" >&2; exit 2; }
 done
 
@@ -70,6 +70,7 @@ before_commits=$(git -C "$work_dir/source.git" rev-list --all --count)
 pushd "$work_dir/source.git" >/dev/null
 filter_repo --force --paths-from-file "$repo_dir/docs/oss/history-removal-set.txt" --invert-paths
 filter_repo --force --paths-from-file "$repo_dir/docs/oss/public-allowlist.txt"
+filter_repo --force --replace-message "$repo_dir/docs/oss/message-replacements.txt"
 popd >/dev/null
 
 after_commits=$(git -C "$work_dir/source.git" rev-list --all --count)
