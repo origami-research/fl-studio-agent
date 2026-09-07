@@ -122,6 +122,84 @@ def test_live_render_verification_failure_is_a_tool_error_not_a_type_error(monke
     assert excinfo.value.category == "render_failed"
 
 
+def _verified_live_render(monkeypatch, tmp_path, stop):
+    """Set up a verified capture so stop acknowledgement is the only variable."""
+    from fl_mcp.schemas import SpoolResponse
+
+    captured = tmp_path / "capture.wav"
+    captured.write_bytes(b"RIFF" + b"\0" * 45)
+    transport = FakeSpool(
+        responses={
+            "capture_start": SpoolResponse(
+                id=1, ok=True, path=str(captured), frames_requested=100, sample_rate=44100
+            ),
+            "capture_stop": SpoolResponse(
+                id=2, ok=True, path=str(captured), frames_written=100, sample_rate=44100
+            ),
+        }
+    )
+    control = FakeControl(
+        hello=HELLO,
+        handlers={
+            "transport.setSongPos": lambda args: None,
+            "transport.start": lambda args: None,
+            "transport.stop": stop,
+        },
+    )
+    session, _ = make_session(control=control, transport=transport, project=tmp_path / "live.flp")
+    session.project.write_bytes(b"FLhd")
+    monkeypatch.setattr(controls.time, "sleep", lambda seconds: None)
+    monkeypatch.setattr(controls.audio, "_read_wav", lambda path: ([0.1] * 100, 44100))
+    monkeypatch.setattr(controls.audio, "analyze_wav", lambda path: SimpleNamespace(integrated_lufs=-12.0))
+    return session, control
+
+
+def test_live_render_retries_an_unacknowledged_stop_after_capture(monkeypatch, tmp_path):
+    """Regression: a slow first stop acknowledgement cannot discard a verified WAV."""
+    stops = 0
+
+    def stop(args):
+        nonlocal stops
+        stops += 1
+        if stops == 1:
+            raise errors.control_plane_unavailable("transport.stop", 8.0)
+
+    session, control = _verified_live_render(monkeypatch, tmp_path, stop)
+
+    assert controls._live_render(session, tmp_path / "mix.wav", 0.0) == tmp_path / "mix.wav"
+    assert [op for op, _ in control.calls].count("transport.stop") == 2
+    assert [op for op, _ in session.transport.sent] == ["capture_start", "capture_stop"]
+
+
+def test_live_render_returns_verified_wav_when_stop_stays_unacknowledged(monkeypatch, tmp_path, caplog):
+    """A verified capture wins when FL does not answer either best-effort stop."""
+    session, control = _verified_live_render(
+        monkeypatch,
+        tmp_path,
+        lambda args: (_ for _ in ()).throw(errors.control_plane_unavailable("transport.stop", 8.0)),
+    )
+
+    assert controls._live_render(session, tmp_path / "mix.wav", 0.0) == tmp_path / "mix.wav"
+    assert [op for op, _ in control.calls].count("transport.stop") == 2
+    assert "FL may still be playing; the next transport command re-seats it" in caplog.text
+
+
+def test_live_render_reports_unacknowledged_stop_when_capture_fails(monkeypatch, tmp_path):
+    """Capture failure remains render_failed and retains the cleanup hazard."""
+    session, _ = _verified_live_render(
+        monkeypatch,
+        tmp_path,
+        lambda args: (_ for _ in ()).throw(errors.control_plane_unavailable("transport.stop", 8.0)),
+    )
+    session.transport.responses["capture_stop"] = SimpleNamespace(
+        ok=False, path=None, frames_written=None, err="Bridge wrote no audio frames"
+    )
+
+    with pytest.raises(errors.ToolError, match=r"transport\.stop was unacknowledged") as excinfo:
+        controls._live_render(session, tmp_path / "mix.wav", 0.0)
+    assert excinfo.value.category == "render_failed"
+
+
 @pytest.mark.parametrize("wav", [None, b""])
 def test_export_offline_raises_when_cli_wav_is_missing_or_empty(monkeypatch, tmp_path, wav):
     project = tmp_path / "live.flp"

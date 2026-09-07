@@ -6,6 +6,7 @@ landed - it never falls through to the file path (the v1 cascade bug).
 
 from __future__ import annotations
 
+import logging
 import os
 import re
 import shutil
@@ -44,6 +45,8 @@ SAVE_BUSY_RETRIES = 2
 SAVE_BUSY_RETRY_SECONDS = 0.25
 RENDER_TIMEOUT_SECONDS = 300.0
 RENDER_TAIL_SECONDS = 0.5
+
+log = logging.getLogger(__name__)
 
 # FL's plugins.* convention for "the channel's own generator, not a mixer
 # effect slot" (the slot argument every call here passes).
@@ -137,6 +140,7 @@ def _live_render(session: FLSession, output: Path, seconds: float) -> Path:
     if not start.ok:
         raise errors.ToolError("render_failed", start.err or "Bridge refused capture_start",
                                "Check the Bridge heartbeat and retry.", retryable=True)
+    stop_error: errors.ToolError | None = None
     try:
         # Position is a controller operation, so it remains on the control wire
         # rather than reaching from the Bridge into FL on a mixer callback.
@@ -153,15 +157,30 @@ def _live_render(session: FLSession, output: Path, seconds: float) -> Path:
     finally:
         try:
             session.link.command("transport.stop")
+        except errors.ToolError as exc:
+            stop_error = exc
         finally:
             stopped_cmd = session.transport.send("capture_stop")
             stopped = session.transport.await_response(stopped_cmd, timeout=response_timeout)
+        if stop_error is not None:
+            try:
+                session.link.command("transport.stop")
+            except errors.ToolError as exc:
+                stop_error = exc
+            else:
+                stop_error = None
+
+    stop_detail = (
+        f"; transport.stop was unacknowledged: {stop_error.message}"
+        if stop_error is not None and stop_error.category == "control_plane_unavailable"
+        else f"; transport.stop failed: {stop_error.message}" if stop_error is not None else ""
+    )
     if not stopped.ok or not stopped.path or stopped.frames_written is None:
-        raise errors.ToolError("render_failed", stopped.err or "Bridge wrote no audio frames",
+        raise errors.ToolError("render_failed", (stopped.err or "Bridge wrote no audio frames") + stop_detail,
                                "Confirm FL audio output and retry.", retryable=True)
     captured = Path(stopped.path)
     if not captured.is_file() or captured.stat().st_size <= 44:
-        raise errors.ToolError("render_failed", "Bridge capture WAV is missing or empty",
+        raise errors.ToolError("render_failed", "Bridge capture WAV is missing or empty" + stop_detail,
                                "Check the spool root is writable and retry.", retryable=True)
     expected_frames = start.frames_requested
     if (
@@ -175,7 +194,7 @@ def _live_render(session: FLSession, output: Path, seconds: float) -> Path:
             "render_failed",
             "Bridge capture did not verify: "
             f"requested={expected_frames}, written={stopped.frames_written}, rate={stopped.sample_rate}, "
-            f"drops={stopped.drop_count}",
+            f"drops={stopped.drop_count}{stop_detail}",
             "Confirm the Bridge is last on Master and FL audio is running, then retry.",
             retryable=True,
         )
@@ -183,15 +202,21 @@ def _live_render(session: FLSession, output: Path, seconds: float) -> Path:
         samples, rate = audio._read_wav(captured)
         measured = audio.analyze_wav(captured)
     except (OSError, ValueError) as exc:
-        raise errors.ToolError("render_failed", f"Bridge WAV could not be read: {exc}",
+        raise errors.ToolError("render_failed", f"Bridge WAV could not be read: {exc}{stop_detail}",
                                "Retry the capture after checking the spool disk.", retryable=True) from exc
     if rate != start.sample_rate or abs(len(samples) - expected_frames) > expected_frames * 0.01 or measured.integrated_lufs <= -60:
         raise errors.ToolError(
             "render_failed",
             f"Bridge WAV did not verify: frames={len(samples)}/{expected_frames}, rate={rate}/{start.sample_rate}, "
-            f"lufs={measured.integrated_lufs:.1f}",
+            f"lufs={measured.integrated_lufs:.1f}{stop_detail}",
             "Confirm FL audio output and Master Bridge routing, then retry.",
             retryable=True,
+        )
+    if stop_error is not None:
+        log.warning(
+            "transport.stop was unacknowledged after two attempts; FL may still be playing; "
+            "the next transport command re-seats it: %s",
+            stop_error.message,
         )
     output.parent.mkdir(parents=True, exist_ok=True)
     shutil.copyfile(captured, output)
