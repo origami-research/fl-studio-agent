@@ -41,6 +41,7 @@ fl-mcp-dev-session = "fl_mcp.dev_session:main"
 fl-mcp-install = "fl_mcp.fl.install:main"
 fl-mcp-control-broker = "fl_mcp.control_broker:main"
 fl-mcp-template = "fl_mcp.template:main"
+fl-mcp-listen = "fl_mcp.audio_stream:main"
 
 [build-system]
 requires = ["hatchling"]

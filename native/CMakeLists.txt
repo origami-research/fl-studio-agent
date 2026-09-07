@@ -122,6 +122,7 @@ if(APPLE)
     set_target_properties(bridge PROPERTIES SUFFIX ".dylib")
 elseif(WIN32)
     set_target_properties(bridge PROPERTIES SUFFIX ".dll")
+    target_link_libraries(bridge PRIVATE ws2_32)
 endif()
 
 # Bridge core unit test: drives PollOnce/BuildNotesParams and the wp_* discovery
@@ -139,6 +140,9 @@ target_compile_options(bridge_core_test PRIVATE
     $<$<NOT:$<CXX_COMPILER_ID:MSVC>>:-Wno-ignored-attributes>
 )
 target_link_options(bridge_core_test PRIVATE $<$<NOT:$<CXX_COMPILER_ID:MSVC>>:-fsanitize=address,undefined>)
+if(WIN32)
+    target_link_libraries(bridge_core_test PRIVATE ws2_32)
+endif()
 
 add_executable(bridge_abi_test
     bridge/tests/bridge_abi_test.cpp

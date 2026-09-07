@@ -17,6 +17,7 @@ from contextlib import contextmanager
 from pathlib import Path
 
 from fl_mcp import errors, flp
+from fl_mcp.audio_stream import AudioChunk, AudioEndpoint
 from fl_mcp.contract import ENV_AGENT_PROJECT, ENV_SPOOL_ROOT
 from fl_mcp.core.carriers import CarrierUnavailable
 from fl_mcp.core.carriers.broker_client import BrokerControl
@@ -263,6 +264,27 @@ class FLSession:
     def export_offline(self, output: Path) -> Path:
         with self._write_guard("export_offline"):
             return controls.export_offline(self, output)
+
+    @contextmanager
+    def audio_stream(self) -> Iterator[Iterator[AudioChunk]]:
+        """Yield live master-mix chunks; every gap remains visible in metadata."""
+        if self.session_spool_root is None:
+            raise errors.ToolError("audio_stream_unavailable", "Live streaming requires a session spool root.")
+        endpoint = AudioEndpoint(self.session_spool_root)
+        endpoint.start()
+        command = self.transport.send("stream_start", port=endpoint.udp_port)
+        response = self.transport.await_response(command, timeout=5)
+        if not response.ok:
+            endpoint.close()
+            raise errors.ToolError("audio_stream_unavailable", response.err or "Bridge refused stream_start", retryable=True)
+        try:
+            yield endpoint.chunks()
+        finally:
+            try:
+                command = self.transport.send("stream_stop")
+                self.transport.await_response(command, timeout=5)
+            finally:
+                endpoint.close()
 
     def save_project(self) -> int | None:
         with self._write_guard("save_project"):

@@ -73,6 +73,12 @@ class CaptureControl {
   virtual CaptureReceipt Start(double seconds, int sample_rate_hint, const std::string &root,
                                int command_id) = 0;
   virtual CaptureReceipt Stop() = 0;
+  virtual CaptureReceipt StreamStart(int port) = 0;
+  virtual CaptureReceipt StreamStop() = 0;
+  virtual bool streaming() const = 0;
+  virtual std::uint64_t stream_chunks_sent() const = 0;
+  virtual std::uint64_t stream_chunks_dropped() const = 0;
+  virtual int stream_sample_rate() const = 0;
 };
 
 // The spool roots the Bridge reads/writes, most-preferred first. Mirrors
@@ -178,6 +184,10 @@ struct HeartbeatState {
   long long render_rate = 0;
   int capture = 0;
   long long capture_frames = 0;
+  int streaming = 0;
+  long long stream_chunks_sent = 0;
+  long long stream_chunks_dropped = 0;
+  int stream_sample_rate = 0;
 };
 
 // The heartbeat text, newline-terminated key=value lines. The key set and

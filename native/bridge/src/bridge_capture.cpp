@@ -5,6 +5,15 @@
 #include <cstring>
 #include <chrono>
 #if defined(_WIN32)
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#else
+#include <arpa/inet.h>
+#include <netinet/in.h>
+#include <sys/socket.h>
+#include <unistd.h>
+#endif
+#if defined(_WIN32)
 #include <direct.h>
 #else
 #include <sys/stat.h>
@@ -19,7 +28,7 @@ void Put32(FILE *f, std::uint32_t value) { fwrite(&value, sizeof(value), 1, f); 
 void Put16(FILE *f, std::uint16_t value) { fwrite(&value, sizeof(value), 1, f); }
 }
 
-Capture::~Capture() { Stop(); }
+Capture::~Capture() { StreamStop(); Stop(); }
 
 std::uint64_t NowNanos() {
   return static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
@@ -90,7 +99,33 @@ bridge_core::CaptureReceipt Capture::Stop() {
   return receipt;
 }
 
+bridge_core::CaptureReceipt Capture::StreamStart(int port) {
+  std::lock_guard<std::mutex> lock(control_mu_);
+  if (streaming_.load()) return {false, "", 0, 0, 0, sample_rate_.load(), "a stream is already active"};
+  stream_ring_.assign(static_cast<size_t>(kStreamSlots * kStreamFrames * 2), 0);
+  stream_partial_.assign(static_cast<size_t>(kStreamFrames * 2), 0);
+  stream_write_ = stream_read_ = stream_sequence_ = stream_sent_ = stream_dropped_ = 0;
+  stream_partial_frames_ = 0;
+  stream_port_ = port;
+  stream_rate_ = sample_rate_.load();
+  stream_stopping_.store(false, std::memory_order_release);
+  streaming_.store(true, std::memory_order_release);
+  stream_writer_ = std::thread(&Capture::StreamWriter, this);
+  return {true, "", 0, 0, 0, stream_rate_.load(), ""};
+}
+
+bridge_core::CaptureReceipt Capture::StreamStop() {
+  std::lock_guard<std::mutex> lock(control_mu_);
+  const bool active = streaming_.exchange(false, std::memory_order_acq_rel);
+  stream_stopping_.store(true, std::memory_order_release);
+  if (stream_writer_.joinable()) stream_writer_.join();
+  bridge_core::CaptureReceipt receipt{active, "", stream_sent_.load(), 0, stream_dropped_.load(), stream_rate_.load(), ""};
+  if (!active) receipt.error = "no active stream";
+  return receipt;
+}
+
 void Capture::Push(const float *samples, int frames) {
+  StreamPush(samples, frames);
   if (!recording_.load(std::memory_order_acquire) || samples == nullptr || frames <= 0) return;
   const std::uint64_t capacity = ring_.size() / 2;
   std::uint64_t write = write_.load(std::memory_order_relaxed);
@@ -111,6 +146,70 @@ void Capture::Push(const float *samples, int frames) {
   last_block_nanos_.store(NowNanos(), std::memory_order_relaxed);
   if (accepted == remaining) recording_.store(false, std::memory_order_release);
   dropped_.fetch_add(wanted - accepted, std::memory_order_relaxed);
+}
+
+void Capture::StreamPush(const float *samples, int frames) {
+  if (!streaming_.load(std::memory_order_acquire) || samples == nullptr || frames <= 0) return;
+  int partial = stream_partial_frames_.load(std::memory_order_relaxed);
+  for (int source = 0; source < frames; ++source) {
+    const size_t at = static_cast<size_t>(partial * 2);
+    for (int channel = 0; channel < 2; ++channel) {
+      const float value = std::max(-1.0f, std::min(1.0f, samples[source * 2 + channel]));
+      stream_partial_[at + channel] = static_cast<std::int16_t>(value * 32767.0f);
+    }
+    ++partial;
+    if (partial != kStreamFrames) continue;
+    const std::uint64_t write = stream_write_.load(std::memory_order_relaxed);
+    const std::uint64_t read = stream_read_.load(std::memory_order_acquire);
+    if (write - read >= kStreamSlots) {
+      stream_dropped_.fetch_add(1, std::memory_order_relaxed);
+    } else {
+      const size_t target = static_cast<size_t>((write % kStreamSlots) * kStreamFrames * 2);
+      memcpy(stream_ring_.data() + target, stream_partial_.data(), kStreamFrames * 2 * sizeof(std::int16_t));
+      stream_write_.store(write + 1, std::memory_order_release);
+    }
+    partial = 0;
+  }
+  stream_partial_frames_.store(partial, std::memory_order_relaxed);
+}
+
+void Capture::StreamWriter() {
+#if defined(_WIN32)
+  WSADATA data;
+  if (WSAStartup(MAKEWORD(2, 2), &data) != 0) return;
+#endif
+  const int fd = static_cast<int>(socket(AF_INET, SOCK_DGRAM, 0));
+  if (fd < 0) { stream_dropped_.fetch_add(1); return; }
+  sockaddr_in destination{};
+  destination.sin_family = AF_INET;
+  destination.sin_port = htons(static_cast<unsigned short>(stream_port_.load()));
+  destination.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+  struct Header { char magic[4]; std::uint32_t sequence; std::uint32_t sample_rate; std::uint16_t channels; std::uint16_t frames; std::uint64_t drops; };
+  std::vector<unsigned char> packet(sizeof(Header) + kStreamFrames * 2 * sizeof(std::int16_t));
+  for (;;) {
+    const std::uint64_t read = stream_read_.load(std::memory_order_relaxed);
+    const std::uint64_t write = stream_write_.load(std::memory_order_acquire);
+    if (read == write) {
+      if (stream_stopping_.load(std::memory_order_acquire)) break;
+      std::this_thread::yield();
+      continue;
+    }
+    Header header{{'F', 'L', 'A', 'U'}, static_cast<std::uint32_t>(stream_sequence_.fetch_add(1)),
+                  static_cast<std::uint32_t>(stream_rate_.load()), 2, kStreamFrames, stream_dropped_.load()};
+    memcpy(packet.data(), &header, sizeof(header));
+    const size_t source = static_cast<size_t>((read % kStreamSlots) * kStreamFrames * 2);
+    memcpy(packet.data() + sizeof(header), stream_ring_.data() + source, kStreamFrames * 2 * sizeof(std::int16_t));
+    const int sent = static_cast<int>(sendto(fd, reinterpret_cast<const char *>(packet.data()), static_cast<int>(packet.size()), 0,
+        reinterpret_cast<const sockaddr *>(&destination), sizeof(destination)));
+    if (sent == static_cast<int>(packet.size())) stream_sent_.fetch_add(1, std::memory_order_relaxed);
+    else stream_dropped_.fetch_add(1, std::memory_order_relaxed);
+    stream_read_.store(read + 1, std::memory_order_release);
+  }
+#if defined(_WIN32)
+  closesocket(fd); WSACleanup();
+#else
+  close(fd);
+#endif
 }
 
 void Capture::Writer() {

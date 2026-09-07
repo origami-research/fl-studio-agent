@@ -113,7 +113,7 @@ bool Contains(const std::vector<int> &ids, int id) {
 // would fail the server's validation, so anything else is reported as op-less.
 bool IsKnownOp(const std::string &op) {
   return op == "add_notes" || op == "clear_notes" || op == "ping" ||
-         op == "capture_start" || op == "capture_stop";
+         op == "capture_start" || op == "capture_stop" || op == "stream_start" || op == "stream_stop";
 }
 
 HostCallTrace g_host_call_trace = nullptr;
@@ -153,6 +153,10 @@ std::string FormatHeartbeat(const HeartbeatState &s) {
   out += "render_rate=" + std::to_string(s.render_rate) + "\n";
   out += "capture=" + std::to_string(s.capture) + "\n";
   out += "capture_frames=" + std::to_string(s.capture_frames) + "\n";
+  out += "streaming=" + std::to_string(s.streaming) + "\n";
+  out += "stream_chunks_sent=" + std::to_string(s.stream_chunks_sent) + "\n";
+  out += "stream_chunks_dropped=" + std::to_string(s.stream_chunks_dropped) + "\n";
+  out += "stream_sample_rate=" + std::to_string(s.stream_sample_rate) + "\n";
   return out;
 }
 
@@ -530,6 +534,25 @@ ExecResult ExecuteCommand(TFruityPlugHost *host, std::intptr_t host_tag,
       outcome.error = capture_receipt.error;
       summary = outcome.ok ? "capture stopped" : "capture did not stop";
     }
+  } else if (op == "stream_start") {
+    const minijson::Value *args = command.Get("args");
+    const int port = args != nullptr ? args->Int("port", 0) : 0;
+    if (capture == nullptr) outcome.error = "live audio streaming is unavailable";
+    else if (port < 1 || port > 65535) outcome.error = "stream_start requires a UDP port";
+    else {
+      capture_receipt = capture->StreamStart(port);
+      outcome.ok = capture_receipt.ok;
+      outcome.error = capture_receipt.error;
+      summary = outcome.ok ? "stream started" : "stream did not start";
+    }
+  } else if (op == "stream_stop") {
+    if (capture == nullptr) outcome.error = "live audio streaming is unavailable";
+    else {
+      capture_receipt = capture->StreamStop();
+      outcome.ok = capture_receipt.ok;
+      outcome.error = capture_receipt.error;
+      summary = outcome.ok ? "stream stopped" : "stream did not stop";
+    }
   } else if (bridge_discover::IsDiscoverOp(op)) {
     // Discovery rides the ONE executor: claimed-once like any command (the
     // RecordConsumed above already ran, so a discover call that crashes FL
@@ -599,7 +622,7 @@ ExecResult ExecuteCommand(TFruityPlugHost *host, std::intptr_t host_tag,
   // verbatim (not escaped) so fl_mcp.discover reads structured data, not a
   // stringified blob. Only wp_* ops set it.
   if (!discover_result.empty()) json += ", \"result\": " + discover_result;
-  if (op == "capture_start" || op == "capture_stop") {
+  if (op == "capture_start" || op == "capture_stop" || op == "stream_start" || op == "stream_stop") {
     if (!capture_receipt.path.empty()) json += ", \"path\": \"" + minijson::Escape(capture_receipt.path) + "\"";
     json += ", \"frames_written\": " + std::to_string(capture_receipt.frames_written);
     json += ", \"frames_requested\": " + std::to_string(capture_receipt.frames_requested);

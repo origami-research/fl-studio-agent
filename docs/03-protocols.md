@@ -184,3 +184,24 @@ plane needs it. See docs/10 and docs/11.
 
 Also note: a file-spool control plane (replacing SysEx entirely) is an open
 question - see repo issue #8 and the addendum in docs/11.
+
+---
+
+## Protocol C: live master PCM stream
+
+`stream_start {"port": N}` tells the Bridge to send fixed 1024-frame,
+interleaved stereo signed-16-bit PCM chunks to `127.0.0.1:N`; `stream_stop`
+ends that stream. The mixer callback copies into a bounded SPSC ring only.
+A non-audio Bridge worker sends UDP packets, so disk, socket, and receiver
+backpressure cannot block or allocate on FL's mixer thread. UDP is used because
+the stream is local, latency-sensitive, and each packet has an explicit
+sequence number and cumulative drop count: a lost packet is reported, never
+silently joined to adjacent audio.
+
+Each packet is little-endian `FLAU`, sequence `u32`, sample rate `u32`,
+channels `u16`, frames `u16`, drops `u64`, followed by PCM. The engine writes
+`bridge_audio.json` beside `bridge_udp.json`; it contains its loopback TCP
+fanout endpoint. TCP clients receive the same header and PCM bytes.
+`fl-mcp-listen --port-file <spool>/bridge_audio.json --seconds 5 out.wav`
+records that endpoint. This transport is separate from command UDP and works
+on macOS and Windows through the same loopback socket API.

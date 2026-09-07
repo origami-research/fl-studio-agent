@@ -292,6 +292,10 @@ void WriteHeartbeat(TickState &state, long long tick) {
                        : 0;
   hb.capture = state.capture.active() ? 1 : 0;
   hb.capture_frames = static_cast<long long>(state.capture.frames_written());
+  hb.streaming = state.capture.streaming() ? 1 : 0;
+  hb.stream_chunks_sent = static_cast<long long>(state.capture.stream_chunks_sent());
+  hb.stream_chunks_dropped = static_cast<long long>(state.capture.stream_chunks_dropped());
+  hb.stream_sample_rate = state.capture.stream_sample_rate();
   WriteSmall("bridge_heartbeat.txt", bridge_core::FormatHeartbeat(hb).c_str());
 }
 

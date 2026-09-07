@@ -217,6 +217,16 @@ class CaptureStopArgs(BaseModel):
     pass
 
 
+class StreamStartArgs(BaseModel):
+    """Loopback UDP receiver owned by the engine for one live PCM stream."""
+
+    port: int = Field(ge=1, le=65535)
+
+
+class StreamStopArgs(BaseModel):
+    pass
+
+
 # -- discovery passes (native bridge_discover.cpp dispatches wp_* by op) ------
 
 
@@ -248,6 +258,8 @@ SpoolOp = Literal[
     "ping",
     "capture_start",
     "capture_stop",
+    "stream_start",
+    "stream_stop",
     "wp_getters",
     "wp_timing",
     "wp_target",
@@ -260,6 +272,8 @@ OP_ARGS: dict[str, type[BaseModel]] = {
     "ping": PingArgs,
     "capture_start": CaptureStartArgs,
     "capture_stop": CaptureStopArgs,
+    "stream_start": StreamStartArgs,
+    "stream_stop": StreamStopArgs,
     "wp_getters": WpGettersArgs,
     "wp_timing": WpTimingArgs,
     "wp_target": WpTargetArgs,

@@ -89,6 +89,12 @@ class FakeCapture final : public bridge_core::CaptureControl {
     return {true, "/tmp/capture.wav", 0, 0, 0, 48000, ""};
   }
   bridge_core::CaptureReceipt Stop() override { return {true, "/tmp/capture.wav", 12, 12, 0, 48000, ""}; }
+  bridge_core::CaptureReceipt StreamStart(int) override { return {true, "", 0, 0, 0, 48000, ""}; }
+  bridge_core::CaptureReceipt StreamStop() override { return {true, "", 0, 0, 0, 48000, ""}; }
+  bool streaming() const override { return false; }
+  std::uint64_t stream_chunks_sent() const override { return 0; }
+  std::uint64_t stream_chunks_dropped() const override { return 0; }
+  int stream_sample_rate() const override { return 48000; }
   double started_seconds = 0;
   int started_rate = 0;
 };
@@ -186,6 +192,14 @@ int main() {
     CHECK(stop.outcome.ok);
     CHECK(Contains(stop.ack_json, "\"path\": \"/tmp/capture.wav\""));
     CHECK(Contains(stop.ack_json, "\"frames_written\": 12"));
+    bridge_core::ExecResult stream_start = bridge_core::ExecuteCommand(
+        nullptr, 0, {home}, bridge_core::kDefaultPPQ,
+        "{\"proto\":2,\"id\":704,\"op\":\"stream_start\",\"args\":{\"port\":49152}}", nullptr, &capture);
+    CHECK(stream_start.outcome.ok);
+    bridge_core::ExecResult stream_stop = bridge_core::ExecuteCommand(
+        nullptr, 0, {home}, bridge_core::kDefaultPPQ,
+        "{\"proto\":2,\"id\":705,\"op\":\"stream_stop\",\"args\":{}}", nullptr, &capture);
+    CHECK(stream_stop.outcome.ok);
   }
 
   // Audio callback contract: the SPSC ring accepts interleaved stereo frames
@@ -205,6 +219,22 @@ int main() {
     CHECK(stopped.frames_written == 2);
     CHECK(stopped.drop_count == 0);
     CHECK(ReadFile(stopped.path).size() == 44 + sizeof(samples) / 2);
+  }
+
+  // The fake mixer can hand us arbitrarily many render blocks.  The fixed
+  // stream ring must turn each complete 1024-frame block into either one
+  // delivered chunk or one counted drop, including after its 64-slot wrap.
+  // No FL host call is involved in this test.
+  {
+    bridge_capture::Capture capture;
+    CHECK(capture.StreamStart(9).ok);  // UDP has no receiver in this unit test.
+    std::vector<float> block(1024 * 2, 0.25f);
+    constexpr int kChunks = 96;
+    for (int i = 0; i < kChunks; ++i) capture.Push(block.data(), 1024);
+    bridge_core::CaptureReceipt stopped = capture.StreamStop();
+    CHECK(stopped.ok);
+    CHECK(stopped.frames_written + stopped.drop_count == kChunks);
+    CHECK(stopped.frames_written > 0);
   }
 
   std::vector<std::string> roots = bridge_core::SpoolRoots(home.c_str());
