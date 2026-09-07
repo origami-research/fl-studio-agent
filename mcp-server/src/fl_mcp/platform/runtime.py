@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import json
+import subprocess
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
-from fl_mcp.core.carriers.wire import MidiControl
+from fl_mcp.core.carriers.wire import MidiControl, windows_midi_control
 from fl_mcp.fl import paths, process
 
 if TYPE_CHECKING:
@@ -105,7 +107,9 @@ class MacPlatform:
         return MidiControl
 
     def broker_endpoint(self) -> BrokerEndpoint:
-        raise NotImplementedError("Loopback-TCP broker endpoint is not wired into the macOS broker yet.")
+        from fl_mcp.core.carriers.control_broker import default_endpoint
+
+        return default_endpoint()
 
     def render_command(self, project: Path) -> Sequence[str]:
         executable = paths.fl_app() / "Contents" / "MacOS" / process.fl_executable_name()
@@ -122,19 +126,71 @@ class WindowsPlatform:
     """Windows adapter; helpers delegate now, fleet-only seams land later."""
 
     def control_factory(self) -> Callable[[], "ControlCarrier"]:
-        raise NotImplementedError("Windows MIDI requires provisioned loopMIDI ports and is not wired yet.")
+        return windows_midi_control
 
     def broker_endpoint(self) -> BrokerEndpoint:
-        raise NotImplementedError("Loopback-TCP broker endpoint is not wired into the Windows broker yet.")
+        from fl_mcp.core.carriers.control_broker import default_endpoint
+
+        return default_endpoint()
 
     def render_command(self, project: Path) -> Sequence[str]:
-        raise NotImplementedError("Windows CLI render argv is VERIFY-ON-WINDOWS and is not enabled yet.")
+        # VERIFY-ON-WINDOWS: FL64.exe CLI render and output naming on a fleet image.
+        return (str(paths.fl_app()), "/R", "/Ewav", f"/F{project.parent}", str(project))
 
     def fl_install(self) -> FLInstall:
         return _existing_install()
 
     def sweep_fl(self) -> ProcessSweep:
-        return _ExistingProcessSweep()
+        return _WindowsProcessSweep()
+
+
+class _WindowsProcessSweep:
+    """Windows ownership is exact FL64.exe plus the launched project marker."""
+
+    def __init__(self) -> None:
+        self._project: Path | None = None
+
+    def pids(self) -> list[int]:
+        if self._project is None:
+            return []
+        # VERIFY-ON-WINDOWS: Get-CimInstance availability and CommandLine access
+        # on the fleet account. The marker is never used without exact image name.
+        script = "Get-CimInstance Win32_Process -Filter \"Name='FL64.exe'\" | Select-Object ProcessId,CommandLine | ConvertTo-Json -Compress"
+        try:
+            result = subprocess.run(
+                ["powershell", "-NoProfile", "-Command", script], capture_output=True, text=True, timeout=3
+            )
+            rows = json.loads(result.stdout or "[]")
+        except (OSError, subprocess.SubprocessError, ValueError):
+            return []
+        if isinstance(rows, dict):
+            rows = [rows]
+        marker = str(self._project)
+        return [
+            int(row["ProcessId"])
+            for row in rows
+            if marker in str(row.get("CommandLine", "")) and str(row.get("ProcessId", "")).isdigit()
+        ]
+
+    def is_running(self) -> bool:
+        return bool(self.pids())
+
+    def kill(self) -> None:
+        for pid in self.pids():
+            self.kill_pid(pid)
+
+    def kill_pid(self, pid: int) -> bool:
+        if pid not in self.pids():
+            return False
+        try:
+            subprocess.run(["taskkill", "/PID", str(pid), "/F", "/T"], timeout=5)
+        except (OSError, subprocess.SubprocessError):
+            return False
+        return True
+
+    def launch(self, project: Path, *, spool_root: Path | None = None) -> int | None:
+        self._project = project
+        return process.launch_fl(project, spool_root=spool_root)
 
 
 class UnsupportedPlatform:

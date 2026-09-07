@@ -34,6 +34,12 @@ class _FakeMidiOut:
     def open_virtual_port(self, name):
         self.port_name = name
 
+    def get_ports(self):
+        return [wire.REQ_PORT_NAME]
+
+    def open_port(self, number, name=None):
+        self.port_name = self.get_ports()[number]
+
     def send_message(self, message):
         self.sent.append(bytes(message))
 
@@ -54,6 +60,12 @@ class _FakeMidiIn:
 
     def open_virtual_port(self, name):
         self.port_name = name
+
+    def get_ports(self):
+        return [wire.RES_PORT_NAME]
+
+    def open_port(self, number, name=None):
+        self.port_name = self.get_ports()[number]
 
     def close_port(self):
         pass
@@ -134,6 +146,17 @@ def test_ports_open_with_the_documented_names(rig):
     _control, midi_in, midi_out = rig
     assert midi_out.port_name == wire.REQ_PORT_NAME
     assert midi_in.port_name == wire.RES_PORT_NAME
+
+
+def test_windows_opens_provisioned_ports_by_exact_name(monkeypatch):
+    mod = _fake_rtmidi_module()
+    monkeypatch.setitem(sys.modules, "rtmidi", mod)
+    control = wire.windows_midi_control()
+    try:
+        assert mod.created["out"].port_name == wire.REQ_PORT_NAME
+        assert mod.created["in"].port_name == wire.RES_PORT_NAME
+    finally:
+        control.close()
 
 
 def test_missing_rtmidi_is_control_unavailable(monkeypatch):
@@ -259,7 +282,9 @@ def test_chunked_response_is_correlated_not_dropped(rig):
 
     sent = _last_sent_request(midi_out)
     big = "x" * 2000  # forces chunking (single frame would exceed the 512 cap)
-    frames = list(encode_message(TYPE_RESPONSE, {"id": sent["id"], "ok": True, "ret": big}, msg_id=sent["id"]))
+    frames = list(
+        encode_message(TYPE_RESPONSE, {"id": sent["id"], "ok": True, "ret": big}, msg_id=sent["id"])
+    )
     assert len(frames) > 1  # the premise: this response really is chunked
     for frame in frames:
         midi_in.deliver(frame)

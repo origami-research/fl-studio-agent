@@ -138,6 +138,7 @@ def make_session(
     session_spool_root: Path | None = None,
     profile: CapabilityProfileLike | None = None,
     plugin_param_models: tuple[PluginParamModel, ...] = (),
+    platform: Any | None = None,
 ) -> tuple[FLSession, FakeStore]:
     store = store or FakeStore()
     # The fakes implement exactly the surface FLSession consumes; the casts are
@@ -153,6 +154,7 @@ def make_session(
         control_factory=cast(Any, lambda: FakeControl(hello=None)),
         profile=profile,
         plugin_param_models=plugin_param_models,
+        platform=platform,
     )
     return session, store
 

@@ -1,16 +1,4 @@
-"""A session's control carrier: talk to the machine's one control broker.
-
-This is what fl-mcp uses for control in session mode. It implements the same
-ControlCarrier surface as the raw wire, so nothing upstream (the SDK, the MCP
-tools, the arena) changes - the wire simply lives in a shared broker instead
-of this process, and every request is addressed to this session's FL by the
-pid in its bridge port file.
-
-The broker is auto-started on first use: if the socket does not answer, spawn
-``fl-mcp-control-broker`` and wait for it. Startup is race-free by the broker's
-socket bind (first wins, others exit), so concurrent sessions cannot create two
-wires - the failure mode that measured 0/10.
-"""
+"""Client for the machine's authenticated loopback-TCP control broker."""
 
 from __future__ import annotations
 
@@ -22,146 +10,136 @@ from pathlib import Path
 from time import monotonic, sleep
 
 from fl_mcp.contract import BRIDGE_PORT_FILE
-from fl_mcp.core.carriers.control_broker import broker_version, default_socket_path
+from fl_mcp.core.carriers.control_broker import _read_endpoint, broker_version, default_endpoint
 from fl_mcp.errors import ToolError, control_plane_unavailable
+from fl_mcp.platform.runtime import BrokerEndpoint
 from fl_mcp.schemas import ControlResponse, HelloEvent
 
 _BROKER_START_TIMEOUT = 10.0
 
 
 class BrokerControl:
-    """ControlCarrier over the shared broker, pid-addressed per session."""
-
-    def __init__(self, session_spool_root: Path, socket_path: Path | None = None) -> None:
-        self._session_spool_root = session_spool_root
-        self._socket_path = socket_path or default_socket_path()
-        self._hello: HelloEvent | None = None
-        self._broker_spawned = False
-
-    # -- identity ---------------------------------------------------------------
+    def __init__(
+        self,
+        session_spool_root: Path,
+        endpoint: BrokerEndpoint | Path | None = None,
+        *,
+        socket_path: Path | None = None,
+    ) -> None:
+        endpoint = socket_path or endpoint
+        if isinstance(endpoint, Path):
+            endpoint = BrokerEndpoint("127.0.0.1", 0, "", endpoint)
+        self._session_spool_root, self._endpoint, self._hello, self._broker_spawned = (
+            session_spool_root,
+            endpoint or default_endpoint(),
+            None,
+            False,
+        )
 
     def target_pid(self) -> int | None:
-        """This session's FL pid from its bridge port file - re-read per call
-        because FL re-execs at boot and can relaunch mid-session."""
         try:
-            payload = json.loads((self._session_spool_root / BRIDGE_PORT_FILE).read_text())
+            pid = json.loads((self._session_spool_root / BRIDGE_PORT_FILE).read_text()).get("pid")
         except (OSError, ValueError):
             return None
-        pid = payload.get("pid")
         return pid if isinstance(pid, int) and pid > 0 else None
-
-    # -- the carrier contract ----------------------------------------------------
 
     def is_live(self) -> bool:
         return self._hello is not None
 
     def await_hello(self, timeout: float = 5.0) -> HelloEvent:
-        if self._hello is not None:
-            return self._hello
-        response = self.send_request("ctl.hello", timeout=timeout)
-        if not response.ok or not isinstance(response.ret, dict):
-            raise control_plane_unavailable("ctl.hello", timeout)
-        self._hello = HelloEvent.model_validate(response.ret)
+        if self._hello is None:
+            response = self.send_request("ctl.hello", timeout=timeout)
+            if not response.ok or not isinstance(response.ret, dict):
+                raise control_plane_unavailable("ctl.hello", timeout)
+            self._hello = HelloEvent.model_validate(response.ret)
         return self._hello
 
     def send_request(
-        self,
-        op: str,
-        args: list | None = None,
-        kwargs: dict | None = None,
-        timeout: float = 2.0,
+        self, op: str, args: list | None = None, kwargs: dict | None = None, timeout: float = 2.0
     ) -> ControlResponse:
         pid = self.target_pid()
         if pid is None:
             raise ToolError(
                 "control_plane_unavailable",
-                f"No response to {op!r}: this session's FL has not published its "
-                f"bridge port file under {self._session_spool_root}.",
-                "Wait for the session's FL to finish loading its project (the "
-                "bridge publishes bridge_udp.json), then retry.",
+                f"No response to {op!r}: this session's FL has not published its bridge port file under {self._session_spool_root}.",
+                "Wait for FL to finish loading its project, then retry.",
                 retryable=True,
             )
-        request = {"pid": pid, "op": op, "args": args or [], "kwargs": kwargs or {}, "timeout": timeout}
-        # The socket round trip may take as long as the wire op plus broker
-        # hop; give it headroom over the wire timeout.
         conn = self._connect()
         try:
-            conn.sendall((json.dumps(request) + "\n").encode())
-            conn.settimeout(timeout + 5.0)
+            conn.sendall(
+                (
+                    json.dumps(
+                        {"pid": pid, "op": op, "args": args or [], "kwargs": kwargs or {}, "timeout": timeout}
+                    )
+                    + "\n"
+                ).encode()
+            )
+            conn.settimeout(timeout + 5)
             payload = conn.makefile("r").readline()
         finally:
             conn.close()
         if not payload:
             raise control_plane_unavailable(op, timeout)
-        envelope = json.loads(payload)
-        # Mirror the wire's contract: a transport failure the broker relays is
-        # re-raised as the SAME typed error (so a busy wire stays 'busy', not
-        # mistaken for a dead one); an FL-level answer is returned.
-        if envelope.get("kind") == "error":
-            raise ToolError(envelope["category"], envelope["message"], envelope.get("fix", ""), retryable=envelope.get("retryable", True))
-        return ControlResponse.model_validate(envelope["response"])
+        data = json.loads(payload)
+        if data.get("kind") == "error":
+            raise ToolError(
+                data["category"], data["message"], data.get("fix", ""), retryable=data.get("retryable", True)
+            )
+        return ControlResponse.model_validate(data["response"])
 
     def _connect(self) -> socket.socket:
-        """Connect to the broker, auto-starting it once if absent."""
         deadline = monotonic() + _BROKER_START_TIMEOUT
         while monotonic() < deadline:
-            if (conn := self._try_connect()) is not None:
-                if self._matches_broker_version(conn):
-                    return conn
-                conn.close()
-                # The stale broker received our mismatch response and exits.
-                # Its socket must disappear before this interpreter can win it.
-            elif not self._broker_spawned:
-                # The bind race is resolved broker-side (first wins), so another
-                # client may launch the process that eventually answers us.
+            endpoint = _read_endpoint(self._endpoint.port_file) or (
+                self._endpoint if self._endpoint.port else None
+            )
+            if endpoint:
+                try:
+                    conn = socket.create_connection((endpoint.host, endpoint.port), timeout=0.5)
+                    conn.sendall(
+                        (json.dumps({"kind": "broker_auth", "token": endpoint.token}) + "\n").encode()
+                    )
+                    if json.loads(conn.makefile("r").readline()).get("ok") and self._matches_broker_version(
+                        conn
+                    ):
+                        return conn
+                    conn.close()
+                except (OSError, ValueError):
+                    pass
+            if not self._broker_spawned:
                 self._start_broker()
             sleep(0.1)
         raise ToolError(
             "control_plane_unavailable",
-            f"The control broker did not come up at {self._socket_path} within "
-            f"{_BROKER_START_TIMEOUT:g}s.",
-            "Check that fl-mcp-control-broker can start (python-rtmidi installed).",
+            f"The control broker did not come up from {self._endpoint.port_file} within {_BROKER_START_TIMEOUT:g}s.",
+            "Check that python-rtmidi and the configured MIDI ports are available.",
             retryable=True,
         )
 
     def _start_broker(self) -> None:
-        if self._broker_spawned:
-            return
-        self._broker_spawned = True
-        subprocess.Popen(
-            [sys.executable, "-m", "fl_mcp.control_broker"],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            start_new_session=True,
-        )
+        if not self._broker_spawned:
+            self._broker_spawned = True
+            subprocess.Popen(
+                [sys.executable, "-m", "fl_mcp.control_broker"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                start_new_session=True,
+            )
 
     @staticmethod
     def _matches_broker_version(conn: socket.socket) -> bool:
-        """Ask a resident broker to retire itself when its code is stale."""
+        conn.sendall((json.dumps({"kind": "broker_hello", "version": broker_version()}) + "\n").encode())
         try:
-            conn.sendall((json.dumps({"kind": "broker_hello", "version": broker_version()}) + "\n").encode())
-            conn.settimeout(1.0)
-            reply = conn.makefile("r").readline()
-            envelope = json.loads(reply)
-        except (OSError, ValueError):
+            data = json.loads(conn.makefile("r").readline())
+        except ValueError:
             return False
-        return envelope == {"kind": "broker_hello", "version": broker_version()}
+        return data == {"kind": "broker_hello", "version": broker_version()}
 
-    def _try_connect(self) -> socket.socket | None:
-        conn = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        try:
-            conn.connect(str(self._socket_path))
-        except OSError:
-            conn.close()
-            return None
-        return conn
+    def add_event_listener(self, _fn):
+        return None
 
-    # -- push surface: the broker relays round trips only ------------------------
-
-    def add_event_listener(self, fn) -> None:
-        """Push events are not relayed through the broker (bridge covers them)."""
-
-    def drain_events(self) -> list:
+    def drain_events(self) -> list[dict]:
         return []
 
     @property
@@ -169,4 +147,4 @@ class BrokerControl:
         return 0
 
     def close(self) -> None:
-        """Per-request connections are already closed; the broker persists."""
+        return None

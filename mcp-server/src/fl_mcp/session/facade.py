@@ -11,6 +11,7 @@ from __future__ import annotations
 import hashlib
 import logging
 import os
+import sys
 import threading
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
@@ -23,12 +24,13 @@ from fl_mcp.core.carriers import CarrierUnavailable
 from fl_mcp.core.carriers.broker_client import BrokerControl
 from fl_mcp.core.carriers.spool import SpoolCarrier
 from fl_mcp.core.carriers.udp import UdpCarrier
-from fl_mcp.core.carriers.wire import ControlUnavailable, MidiControl
+from fl_mcp.core.carriers.wire import ControlUnavailable
 from fl_mcp.core.transport import Transport
 from fl_mcp.errors import NotePlaneUnavailable
 from fl_mcp.fl.paths import primary_settings_dir
 from fl_mcp.observer import Observer
 from fl_mcp.ops import notes as ops_notes
+from fl_mcp.platform import Platform, platform_for
 from fl_mcp.plugin_models import load_bundled_param_models
 from fl_mcp.profile import profile_gate
 from fl_mcp.schemas import (
@@ -68,7 +70,9 @@ ENV_PROJECT = ENV_AGENT_PROJECT
 DEFAULT_PROJECT_NAME = "FLMCP Agent.flp"
 
 
-def create_session(*, plugin_param_models: tuple[PluginParamModel, ...] | None = None) -> FLSession:
+def create_session(
+    *, plugin_param_models: tuple[PluginParamModel, ...] | None = None, platform: Platform | None = None
+) -> FLSession:
     """THE factory, called once at the entry point (server lifespan or
     ``sdk.connect()``). Builds the wire (or None when python-rtmidi is missing
     or ports can't open - tools then degrade honestly), the spool, the store,
@@ -76,16 +80,18 @@ def create_session(*, plugin_param_models: tuple[PluginParamModel, ...] | None =
     # Session mode (FLMCP_SPOOL_ROOT set, e.g. an arena contestant) uses
     # BrokerControl: the machine-wide MIDI wire broadcasts pid-addressed
     # requests through one bind-wins broker.
+    platform = platform or platform_for(sys.platform)
     spool_override = os.environ.get(ENV_SPOOL_ROOT)
     control: ControlCarrier | None
     control_factory: Callable[[], ControlCarrier] | None = None
     if spool_override:
         session_root = Path(spool_override)
-        control = BrokerControl(session_root)
-        control_factory = lambda: BrokerControl(session_root)  # noqa: E731 - recycle = fresh carrier, same session
+        endpoint = platform.broker_endpoint()
+        control = BrokerControl(session_root, endpoint)
+        control_factory = lambda: BrokerControl(session_root, endpoint)  # noqa: E731 - recycle = fresh carrier, same session
     else:
         try:
-            control = MidiControl()
+            control = platform.control_factory()()
         except ControlUnavailable:
             log.exception("control wire unavailable; tools degrade to file/spool backends")
             control = None
@@ -95,9 +101,7 @@ def create_session(*, plugin_param_models: tuple[PluginParamModel, ...] | None =
         project: Path | None = Path(override).expanduser()
     else:
         settings = primary_settings_dir()
-        candidate = (
-            settings.parent / "Projects" / DEFAULT_PROJECT_NAME if settings is not None else None
-        )
+        candidate = settings.parent / "Projects" / DEFAULT_PROJECT_NAME if settings is not None else None
         project = candidate if candidate is not None and candidate.is_file() else None
 
     # Carrier by capability (docs/26 A4, now per CALL): one Transport over the
@@ -113,6 +117,7 @@ def create_session(*, plugin_param_models: tuple[PluginParamModel, ...] | None =
             load_bundled_param_models() if plugin_param_models is None else plugin_param_models
         ),
         session_spool_root=Path(spool_override) if spool_override else None,
+        platform=platform,
     )
     session.prewarm()  # a live bridge is used from the first write, not the second (#93)
     return session
@@ -153,6 +158,7 @@ class FLSession:
         profile: CapabilityProfileLike | None = None,
         plugin_param_models: tuple[PluginParamModel, ...] = (),
         session_spool_root: Path | None = None,
+        platform: Platform | None = None,
     ) -> None:
         self.link = ControlLink(control, factory=control_factory)
         self.plugin_param_models = plugin_param_models
@@ -165,6 +171,7 @@ class FLSession:
         self.bridge_lane = BridgeLane(self)
         self.observer = Observer(project=project)
         self.session_spool_root = session_spool_root
+        self.platform = platform or platform_for(sys.platform)
         self._profile_supported, self._profile_gate_detail = profile_gate()
         if not self._profile_supported:
             log.warning("%s", self._profile_gate_detail)
@@ -316,9 +323,7 @@ class FLSession:
             self._reload_fl()
             return confirmed
 
-    def set_automation(
-        self, channel: int, points: list[AutomationPoint]
-    ) -> AutomationReceipt:
+    def set_automation(self, channel: int, points: list[AutomationPoint]) -> AutomationReceipt:
         with self._write_guard("set_automation"):
             return controls.set_automation(self, channel, points)
 

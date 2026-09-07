@@ -6,6 +6,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+from carrier_fakes import control_platform
 from session_fakes import (
     HELLO,
     NOTES,
@@ -20,7 +21,6 @@ from fl_mcp import flp
 from fl_mcp.controller_version import CONTROLLER_PROTOCOL_VERSION
 from fl_mcp.schemas import ControlResponse
 from fl_mcp.session import FLSession, create_session
-from fl_mcp.session import facade as facade_mod
 from fl_mcp.session import lifecycle as lifecycle_mod
 from fl_mcp.session import link as link_mod
 
@@ -38,8 +38,7 @@ def test_create_session_is_the_factory(monkeypatch):
     (when open) hot-plug onto test ports and segfault rtmidi's C layer at
     teardown - the live-found cause of the FL-open suite crashes."""
     fake = FakeControl(hello=HELLO)
-    monkeypatch.setattr(facade_mod, "MidiControl", lambda: fake)
-    session = create_session()
+    session = create_session(platform=control_platform(fake))
     assert isinstance(session, FLSession)
     assert session.control is fake
     assert "/" not in session.store.project_key
@@ -189,9 +188,7 @@ def test_reload_reconnects_the_wire_fresh(monkeypatch, tmp_path):
 def test_settle_returns_once_snapshot_answers(monkeypatch):
     answers = iter([False, False, True])
     control = FakeControl(
-        handlers={"state.snapshot": lambda args: ControlResponse(
-            id=1, ok=next(answers), err=None
-        )},
+        handlers={"state.snapshot": lambda args: ControlResponse(id=1, ok=next(answers), err=None)},
     )
     session, _ = make_session(control=control)
     monkeypatch.setattr(link_mod, "SETTLE_POLL_SECONDS", 0.0)

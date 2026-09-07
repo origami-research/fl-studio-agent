@@ -25,6 +25,7 @@ from fl_mcp.core.carriers.control_broker import (
     broker_version,
 )
 from fl_mcp.errors import ToolError
+from fl_mcp.platform import BrokerEndpoint
 from fl_mcp.schemas import ControlResponse
 
 
@@ -43,8 +44,13 @@ class FakeWire:
             raise RuntimeError("wire exploded")
         if op == "busy":
             from fl_mcp.errors import control_plane_busy
+
             raise control_plane_busy(op, timeout)
-        ret = {"script_ver": "13", "fl_ver": "26.1.5", "ppq": 96} if op == "ctl.hello" else {"pid": pid, "op": op}
+        ret = (
+            {"script_ver": "13", "fl_ver": "26.1.5", "ppq": 96}
+            if op == "ctl.hello"
+            else {"pid": pid, "op": op}
+        )
         return ControlResponse(id=self._id, ok=True, ret=ret)
 
 
@@ -210,12 +216,21 @@ class FakeSocket:
 
 def test_version_handshake_with_fake_socket_retires_a_stale_broker(tmp_path):
     broker = ControlBroker(tmp_path / "broker.sock", wire_factory=FakeWire)
+    broker._endpoint = BrokerEndpoint("127.0.0.1", 1, "test-token", tmp_path / "broker.json")
     broker._client_count = 1  # serve_forever increments before handing a socket to its thread.
-    conn = FakeSocket([json.dumps({"kind": "broker_hello", "version": "stale"}) + "\n"])
+    conn = FakeSocket(
+        [
+            json.dumps({"kind": "broker_auth", "token": "test-token"}) + "\n",
+            json.dumps({"kind": "broker_hello", "version": "stale"}) + "\n",
+        ]
+    )
 
     broker._serve_client(conn)  # the client tells the stale owner to retire
 
-    assert conn.sent == [{"kind": "broker_version_mismatch", "version": broker_version()}]
+    assert conn.sent == [
+        {"kind": "broker_auth", "ok": True},
+        {"kind": "broker_version_mismatch", "version": broker_version()},
+    ]
     assert broker._shutdown.is_set()
 
 

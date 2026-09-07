@@ -84,11 +84,45 @@ def test_windows_platform_marker_runs_only_on_windows():
     assert isinstance(platform_for("win32"), WindowsPlatform)
 
 
-def test_no_production_module_imports_the_unconnected_platform_package():
-    source_root = Path(__file__).parents[1] / "src" / "fl_mcp"
-    offenders = [
-        path
-        for path in source_root.rglob("*.py")
-        if path.parent.name != "platform" and "fl_mcp.platform" in path.read_text()
-    ]
-    assert offenders == [], "platform imports would change behavior before a later seam step"
+def test_windows_render_command_is_documented_cli_argv(monkeypatch, tmp_path):
+    from fl_mcp.fl import paths
+
+    monkeypatch.setattr(paths.sys, "platform", "win32")
+    monkeypatch.setenv("FL_APP", r"C:\\FL Studio\\FL64.exe")
+    project = tmp_path / "song.flp"
+    assert WindowsPlatform().render_command(project) == (
+        r"C:\\FL Studio\\FL64.exe",
+        "/R",
+        "/Ewav",
+        f"/F{tmp_path}",
+        str(project),
+    )
+
+
+def test_windows_sweep_kills_only_the_project_marked_fl_tree(monkeypatch, tmp_path):
+    import subprocess
+
+    import fl_mcp.platform.runtime as runtime
+
+    project = tmp_path / "ours.flp"
+    calls: list[list[str]] = []
+
+    def run(args, **_kwargs):
+        calls.append(args)
+        if args[0] == "powershell":
+            return subprocess.CompletedProcess(
+                args,
+                0,
+                '[{"ProcessId":11,"CommandLine":"FL64.exe '
+                + str(project)
+                + '"},{"ProcessId":12,"CommandLine":"FL64.exe other.flp"}]',
+            )
+        return subprocess.CompletedProcess(args, 0, "")
+
+    monkeypatch.setattr(runtime.subprocess, "run", run)
+    monkeypatch.setattr(runtime.process, "launch_fl", lambda path, spool_root=None: 11)
+    sweep = WindowsPlatform().sweep_fl()
+    assert sweep.launch(project) == 11
+    sweep.kill()
+    assert ["taskkill", "/PID", "11", "/F", "/T"] in calls
+    assert ["taskkill", "/PID", "12", "/F", "/T"] not in calls

@@ -59,11 +59,14 @@ def test_export_offline_saves_then_subprocesses_the_resolved_fl_path(monkeypatch
         commands.append(command)
         project.with_suffix(".wav").write_bytes(b"RIFF....WAVE")
 
-    monkeypatch.setattr("fl_mcp.session.controls.fl_app", lambda: app)
-    monkeypatch.setattr("fl_mcp.session.controls.fl_executable_name", lambda: "OsxFL")
     monkeypatch.setattr("fl_mcp.session.controls.subprocess.run", render)
     control = FakeControl(hello=HELLO, handlers={"ctl.save": lambda args: events.append("save")})
-    session, _ = make_session(control=control, project=project)
+    platform = type(
+        "Mac",
+        (),
+        {"render_command": lambda _self, path: (str(app / "Contents/MacOS/OsxFL"), "-R", str(path))},
+    )()
+    session, _ = make_session(control=control, project=project, platform=platform)
 
     assert session.export_offline(output) == output.resolve()
     assert events == ["save", "render"]
@@ -98,8 +101,13 @@ def test_live_render_verification_failure_is_a_tool_error_not_a_type_error(monke
             id=1, ok=True, path=str(captured), frames_requested=100, sample_rate=44100
         ),
         "capture_stop": SpoolResponse(
-            id=2, ok=True, path=str(captured), frames_written=100, frames_requested=100,
-            sample_rate=44100, drop_count=1
+            id=2,
+            ok=True,
+            path=str(captured),
+            frames_written=100,
+            frames_requested=100,
+            sample_rate=44100,
+            drop_count=1,
         ),
     }
     control = FakeControl(

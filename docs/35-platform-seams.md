@@ -151,6 +151,7 @@ class Platform(Protocol):
 
 `FLInstall` returns the authoritative executable, settings directories, templates directory, data directory, native plugin directory, engine image when supported, and app-data root. `ProcessSweep` lists exact FL process identities, kills either all listed processes or one confirmed PID, reports whether FL is running, and launches a project. `Platform.render_command(project)` returns complete immutable argv and never runs it.
 
+`MacPlatform` delegates to the existing CoreMIDI factory, app-bundle resolver, plist executable lookup, exact `pgrep -x`, exact-PID signals, direct executable spawning, and `-R` renderer. `WindowsPlatform` opens provisioned loopMIDI names, uses the same authenticated loopback-TCP broker endpoint, resolves `FL64.exe`, scopes process teardown to its launched project marker, and emits the Windows CLI render argv. Unsupported platforms raise a typed, actionable error on use.
 
 Later, `create_session` receives an optional `platform: Platform | None = None`, resolves `platform_for(sys.platform)` once when absent, and injects the endpoint and control factory. `FLSession` stores no OS name. `FLMCP_SPOOL_ROOT` remains an OS-neutral routing decision.
 

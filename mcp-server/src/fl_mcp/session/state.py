@@ -147,7 +147,12 @@ def doctor(session: FLSession, *, clock: Callable[[], float] = time.time) -> Doc
     except Exception as exc:  # noqa: BLE001 - doctor must report failed probes
         project_file = failed_probe("project file", exc)
 
-    all_connected = control_plane.connected and note_plane.connected and project_file.connected and (fl_pid_alive is not False)
+    all_connected = (
+        control_plane.connected
+        and note_plane.connected
+        and project_file.connected
+        and (fl_pid_alive is not False)
+    )
     return DoctorReport(
         status="ok" if all_connected else "degraded",
         control_plane=control_plane,
@@ -159,10 +164,15 @@ def doctor(session: FLSession, *, clock: Callable[[], float] = time.time) -> Doc
 
 def _control_plane_status(session: FLSession, liveness: dict[str, int | bool | None]) -> PlaneStatus:
     if session.control is None:
+        windows = type(session.platform).__name__ == "WindowsPlatform"
         return PlaneStatus(
             connected=False,
-            detail="no MIDI control wire: python-rtmidi is missing or the virtual ports could not be opened",
-            fix="Install python-rtmidi (`uv pip install python-rtmidi`) and restart the MCP server.",
+            detail="no MIDI control wire: python-rtmidi is missing or the MIDI ports could not be opened",
+            fix=(
+                "Install loopMIDI, provision 'FLMCP Req' and 'FLMCP Res', then restart the MCP server."
+                if windows
+                else "Install python-rtmidi (`uv pip install python-rtmidi`) and restart the MCP server."
+            ),
             **liveness,
         )
     # Captured BEFORE the probe: the hello probe may recycle a silent wire,

@@ -21,8 +21,6 @@ from typing import TYPE_CHECKING
 from fl_mcp import audio, errors, flp
 from fl_mcp.contract import ENV_AGENT_PROJECT, ENV_SPOOL_ROOT
 from fl_mcp.errors import NotePlaneUnavailable, WriteRejected
-from fl_mcp.fl.paths import fl_app
-from fl_mcp.fl.process import fl_executable_name
 from fl_mcp.schemas import (
     AutomationPoint,
     AutomationReceipt,
@@ -83,17 +81,17 @@ def save_project(session: FLSession) -> None:
         raise errors.fl_api_error("ctl.save", detail)
 
 
-def _render_saved_project(project: Path) -> Path:
+def _render_saved_project(session: FLSession, project: Path) -> Path:
     """Run FL's blocking macOS project renderer.
 
     Live-verified (#169): FL's bundle executable accepts ``-R <project.flp>``
     and writes ``<project>.wav`` beside it. Keep this process boundary small so
     its command spelling is straightforward to verify and adjust live.
     """
-    executable = fl_app() / "Contents" / "MacOS" / fl_executable_name()
+    command = list(session.platform.render_command(project))
     try:
         subprocess.run(
-            [str(executable), "-R", str(project)],
+            command,
             check=True,
             timeout=RENDER_TIMEOUT_SECONDS,
             env=_render_env(),
@@ -138,18 +136,28 @@ def _live_render(session: FLSession, output: Path, seconds: float) -> Path:
     response_timeout = min(10.0, max(2.0, seconds / 2.0 + 2.0))
     start = session.transport.await_response(started, timeout=response_timeout)
     if not start.ok:
-        raise errors.ToolError("render_failed", start.err or "Bridge refused capture_start",
-                               "Check the Bridge heartbeat and retry.", retryable=True)
+        raise errors.ToolError(
+            "render_failed",
+            start.err or "Bridge refused capture_start",
+            "Check the Bridge heartbeat and retry.",
+            retryable=True,
+        )
     stop_error: errors.ToolError | None = None
     try:
         # Position is a controller operation, so it remains on the control wire
         # rather than reaching from the Bridge into FL on a mixer callback.
         if session.control is None:
             raise errors.control_plane_unavailable("transport.setSongPos", 0.0)
-        positioned = session.control.send_request("transport.setSongPos", args=[0], timeout=LIVE_SET_TIMEOUT_SECONDS)
+        positioned = session.control.send_request(
+            "transport.setSongPos", args=[0], timeout=LIVE_SET_TIMEOUT_SECONDS
+        )
         if not positioned.ok:
-            raise errors.ToolError("render_failed", positioned.err or "FL refused loop start",
-                                   "Wait for FL to settle, then retry.", retryable=True)
+            raise errors.ToolError(
+                "render_failed",
+                positioned.err or "FL refused loop start",
+                "Wait for FL to settle, then retry.",
+                retryable=True,
+            )
         session.link.command("transport.start")
         # The Bridge ends recording at its requested frame count. This is only
         # the bounded transport wait before we ask it to finalize the WAV.
@@ -173,15 +181,25 @@ def _live_render(session: FLSession, output: Path, seconds: float) -> Path:
     stop_detail = (
         f"; transport.stop was unacknowledged: {stop_error.message}"
         if stop_error is not None and stop_error.category == "control_plane_unavailable"
-        else f"; transport.stop failed: {stop_error.message}" if stop_error is not None else ""
+        else f"; transport.stop failed: {stop_error.message}"
+        if stop_error is not None
+        else ""
     )
     if not stopped.ok or not stopped.path or stopped.frames_written is None:
-        raise errors.ToolError("render_failed", (stopped.err or "Bridge wrote no audio frames") + stop_detail,
-                               "Confirm FL audio output and retry.", retryable=True)
+        raise errors.ToolError(
+            "render_failed",
+            (stopped.err or "Bridge wrote no audio frames") + stop_detail,
+            "Confirm FL audio output and retry.",
+            retryable=True,
+        )
     captured = Path(stopped.path)
     if not captured.is_file() or captured.stat().st_size <= 44:
-        raise errors.ToolError("render_failed", "Bridge capture WAV is missing or empty" + stop_detail,
-                               "Check the spool root is writable and retry.", retryable=True)
+        raise errors.ToolError(
+            "render_failed",
+            "Bridge capture WAV is missing or empty" + stop_detail,
+            "Check the spool root is writable and retry.",
+            retryable=True,
+        )
     expected_frames = start.frames_requested
     if (
         start.sample_rate is None
@@ -202,9 +220,17 @@ def _live_render(session: FLSession, output: Path, seconds: float) -> Path:
         samples, rate = audio._read_wav(captured)
         measured = audio.analyze_wav(captured)
     except (OSError, ValueError) as exc:
-        raise errors.ToolError("render_failed", f"Bridge WAV could not be read: {exc}{stop_detail}",
-                               "Retry the capture after checking the spool disk.", retryable=True) from exc
-    if rate != start.sample_rate or abs(len(samples) - expected_frames) > expected_frames * 0.01 or measured.integrated_lufs <= -60:
+        raise errors.ToolError(
+            "render_failed",
+            f"Bridge WAV could not be read: {exc}{stop_detail}",
+            "Retry the capture after checking the spool disk.",
+            retryable=True,
+        ) from exc
+    if (
+        rate != start.sample_rate
+        or abs(len(samples) - expected_frames) > expected_frames * 0.01
+        or measured.integrated_lufs <= -60
+    ):
         raise errors.ToolError(
             "render_failed",
             f"Bridge WAV did not verify: frames={len(samples)}/{expected_frames}, rate={rate}/{start.sample_rate}, "
@@ -251,12 +277,15 @@ def render_wav(session: FLSession, output: Path) -> Path:
 def export_offline(session: FLSession, output: Path) -> Path:
     """Boot a second FL and export with -R, for offline deliverables only."""
     if session.project is None:
-        raise errors.ToolError("render_failed", "Cannot export without a configured saved FL project.",
-                               "Configure an existing .flp project, then retry.")
+        raise errors.ToolError(
+            "render_failed",
+            "Cannot export without a configured saved FL project.",
+            "Configure an existing .flp project, then retry.",
+        )
     output = output.expanduser().resolve()
     project = session.project.expanduser().resolve()
     save_project(session)
-    rendered = _render_saved_project(project)
+    rendered = _render_saved_project(session, project)
     if not rendered.is_file() or rendered.stat().st_size == 0:
         raise errors.ToolError(
             "render_failed",

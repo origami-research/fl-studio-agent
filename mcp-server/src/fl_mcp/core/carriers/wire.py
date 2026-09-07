@@ -23,6 +23,7 @@ from __future__ import annotations
 import contextlib
 import itertools
 import logging
+import os
 import threading
 import time
 from collections import deque
@@ -66,7 +67,13 @@ class MidiControl:
     halves serialized - the single-writer FL model: a response is never
     mismatched to the wrong request."""
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        *,
+        use_virtual_ports: bool = True,
+        request_port: str = REQ_PORT_NAME,
+        response_port: str = RES_PORT_NAME,
+    ) -> None:
         # Resolved here, not at module top, so the substitution seam tests use
         # (a fake ``rtmidi`` in sys.modules) binds at construction time, and a
         # missing dependency surfaces as ControlUnavailable - the contract -
@@ -96,16 +103,23 @@ class MidiControl:
         self._in: Any = None
         try:
             self._out = rtmidi.MidiOut()
-            self._out.open_virtual_port(REQ_PORT_NAME)
+            if use_virtual_ports:
+                self._out.open_virtual_port(request_port)
+            else:
+                self._out.open_port(_port_number(self._out, request_port), request_port)
             self._in = rtmidi.MidiIn()
             self._in.ignore_types(sysex=False)  # rtmidi drops SysEx by default
             # rtmidi invokes the callback as fn(event, user_data); the frozen
             # _on_message takes the event alone, so the extra arg is shed here.
             self._in.set_callback(lambda event, _data=None: self._on_message(event))
-            self._in.open_virtual_port(RES_PORT_NAME)
+            if use_virtual_ports:
+                self._in.open_virtual_port(response_port)
+            else:
+                self._in.open_port(_port_number(self._in, response_port), response_port)
         except rtmidi.RtMidiError as exc:
             self.close()
-            raise ControlUnavailable(f"could not open the virtual MIDI ports: {exc}") from exc
+            kind = "virtual MIDI ports" if use_virtual_ports else "provisioned loopMIDI ports"
+            raise ControlUnavailable(f"could not open {kind}: {exc}") from exc
 
     # -- the Carrier contract ---------------------------------------------------
 
@@ -268,3 +282,25 @@ class MidiControl:
         if msg_id in self._pending:
             self._responses[msg_id] = response
         # else: orphan (the call already timed out and was abandoned) -> drop.
+
+
+def _port_number(port: Any, name: str) -> int:
+    names = list(port.get_ports())
+    try:
+        return names.index(name)
+    except ValueError as exc:
+        raise ControlUnavailable(
+            f"loopMIDI port {name!r} is missing. Install loopMIDI, provision the FLMCP Req and FLMCP Res ports, then retry fl_doctor. Available ports: {names or 'none'}."
+        ) from exc
+
+
+def windows_midi_control() -> MidiControl:
+    """Open the exact loopMIDI names from scripts/windows/provisioning.py.
+
+    VERIFY-ON-WINDOWS: verify the selected RtMidi backend lists these ports.
+    """
+    return MidiControl(
+        use_virtual_ports=False,
+        request_port=os.environ.get("FLMCP_MIDI_REQUEST_PORT", REQ_PORT_NAME),
+        response_port=os.environ.get("FLMCP_MIDI_RESPONSE_PORT", RES_PORT_NAME),
+    )
