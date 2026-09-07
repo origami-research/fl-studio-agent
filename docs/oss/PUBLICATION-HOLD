@@ -1,0 +1,3 @@
+Publication is on hold by owner decision (2026-09-07): "don't make public now, wait until we get the platform up and running".
+scripts/oss/publish-public-mirror.sh refuses while this file exists. Delete it in a reviewed commit when the owner lifts the hold.
+State at the hold: mirror verified PASS (9 checks), target repo origami-research/fl-studio-agent exists and is empty, PyPI name fl-studio-agent is free.

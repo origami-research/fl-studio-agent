@@ -12,6 +12,7 @@ while [ $# -gt 0 ]; do case "$1" in
   --i-approve-publication) APPROVED=1; shift ;; *) echo "unknown argument: $1"; exit 2 ;; esac; done
 [ -n "$REPO" ] && [ -n "$TAG" ] || { echo "usage: --repo owner/name --tag vX.Y.Z --i-approve-publication [--mirror PATH]"; exit 2; }
 [ "$APPROVED" = 1 ] || { echo "refusing: publication is one-way; pass --i-approve-publication after the owner's explicit go"; exit 2; }
+[ -e "$HERE/docs/oss/PUBLICATION-HOLD" ] && { echo "refusing: docs/oss/PUBLICATION-HOLD exists (owner hold, see the file); lift it in a reviewed commit first"; exit 2; }
 [ -d "$MIRROR" ] || { echo "refusing: no mirror at $MIRROR (run scripts/oss/build-public-mirror.sh first)"; exit 2; }
 HERE="$(cd "$(dirname "$0")/../.." && pwd)"
 # Verification is run HERE AND NOW against the mirror being published; a committed report from

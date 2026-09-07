@@ -18,3 +18,9 @@ flpkit 0.8.1 was published on 2026-09-06; the engine depends on the released pac
 ## Package name
 
 The PyPI name `fl-studio-mcp` is owned by a third party (rosasynthesiz, 1.0.0, May 2026). The engine's distribution is `fl-studio-agent`, matching the public repository name; the import package stays `fl_mcp` and the `fl-mcp*` commands keep their names.
+
+## Hold
+
+2026-09-07: the owner put publication on hold until the platform is up and running.
+`docs/oss/PUBLICATION-HOLD` enforces it in the publish script.
+Everything before the push is done: mirror verified PASS (9 checks), public name `fl-studio-agent`, empty target repository created by the owner, PyPI name free.
