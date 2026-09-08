@@ -197,6 +197,7 @@ async def lifespan(server: Any) -> Any:
     hot-plug into the running host, yield {"fl": sdk.connect(session)}, close
     the transport on shutdown."""
     session = create_session()
+    session.start_audio_stream_lifecycle()
     fl = sdk.connect(session)
     # "session" rides along because doctor() and provenance reads are session
     # surface, deliberately not exposed on the SDK object the model drives.
@@ -204,8 +205,7 @@ async def lifespan(server: Any) -> Any:
         yield {"fl": fl, "session": session}
     finally:
         log.info("run session closed with %d refusals", session.run_refusals)
-        if session.control is not None:
-            session.control.close()
+        session.close()
 
 
 def _tool_boundary(fn: Any) -> Any:

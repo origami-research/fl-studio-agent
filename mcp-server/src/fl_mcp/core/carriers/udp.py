@@ -98,6 +98,7 @@ class UdpCarrier:
         self._sock: socket.socket | None = None
         self._token = b""
         self._port = 0
+        self._pid: int | None = None
 
     def is_live(self) -> bool:
         """Live when the bridge published an endpoint AND answers one id-less
@@ -106,11 +107,18 @@ class UdpCarrier:
         thread cannot ack - both correctly fall back. A verified socket is
         then trusted until a send fails; freshness BETWEEN calls is the
         session breaker's job (heartbeat + ping gate, docs/27 §3)."""
-        if self._sock is not None:
-            return True
         endpoint = discover(self._roots)
         if endpoint is None:
+            self.close()
             return False
+        if self._sock is not None and (
+            endpoint.port != self._port
+            or endpoint.token.encode("ascii") != self._token
+            or endpoint.pid != self._pid
+        ):
+            self.close()
+        if self._sock is not None:
+            return True
         self._connect(endpoint)
         if self.ping(timeout=self._ping_timeout):
             return True
@@ -181,6 +189,7 @@ class UdpCarrier:
     def _connect(self, endpoint: BridgeEndpoint) -> None:
         self._token = endpoint.token.encode("ascii")
         self._port = endpoint.port
+        self._pid = endpoint.pid
         self._sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self._sock.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, _SOCKET_BUF_BYTES)
         self._sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, _SOCKET_BUF_BYTES)

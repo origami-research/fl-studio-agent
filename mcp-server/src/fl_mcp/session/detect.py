@@ -76,6 +76,10 @@ class Heartbeat:
     channel: int | None
     abi: str | None
     render_rate: int | None
+    streaming: int | None = None
+    stream_chunks_sent: int | None = None
+    stream_chunks_dropped: int | None = None
+    stream_sample_rate: int | None = None
 
 
 _NO_HEARTBEAT = Heartbeat(age=math.inf, at=None, proto=None, pattern=None, channel=None, abi=None, render_rate=None)
@@ -124,6 +128,10 @@ def read_heartbeat(path: Path, *, clock: Callable[[], float] = time.time) -> Hea
         channel=context("chan"),
         abi=abi,
         render_rate=fields.get("render_rate"),
+        streaming=fields.get("streaming"),
+        stream_chunks_sent=fields.get("stream_chunks_sent"),
+        stream_chunks_dropped=fields.get("stream_chunks_dropped"),
+        stream_sample_rate=fields.get("stream_sample_rate"),
     )
 
 

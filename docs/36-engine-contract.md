@@ -19,3 +19,12 @@ results, not an alternate successful output shape. The server returns an
 explicit MCP `CallToolResult` for these failures because the installed SDK
 otherwise prefixes raised exceptions. Consumers must check `isError` before
 decoding a tool result against its output schema.
+
+## Session audio relay
+
+The machine-readable contract is unchanged by the optional live audio relay.
+Arena sessions set `FLMCP_AUDIO_STREAM=1`; after the Bridge heartbeat is live,
+the session publishes `<FLMCP_SPOOL_ROOT>/bridge_audio.json` with loopback
+`host`, `port`, `proto`, and `sample_rate`. Consumers use that file with
+`fl-mcp-listen` and must tolerate replacement when the Bridge restarts. The
+file disappears when the session closes.

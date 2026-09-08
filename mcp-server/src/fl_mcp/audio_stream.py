@@ -73,13 +73,22 @@ class AudioEndpoint:
     def tcp_port(self) -> int:
         return int(self._tcp.getsockname()[1])
 
-    def start(self) -> None:
+    def start(self, *, publish: bool = True, sample_rate: int = 44_100) -> None:
+        """Start receiving. ``publish`` follows a successful Bridge start."""
         self.spool_root.mkdir(parents=True, exist_ok=True)
+        self._thread.start()
+        if publish:
+            self.publish(sample_rate)
+
+    def publish(self, sample_rate: int) -> None:
+        """Atomically publish the listener after the Bridge accepted its port."""
         path = self.spool_root / "bridge_audio.json"
         temporary = path.with_suffix(".tmp")
-        temporary.write_text(json.dumps({"host": "127.0.0.1", "port": self.tcp_port, "proto": 1}) + "\n")
+        temporary.write_text(
+            json.dumps({"host": "127.0.0.1", "port": self.tcp_port, "proto": 1, "sample_rate": sample_rate})
+            + "\n"
+        )
         temporary.replace(path)
-        self._thread.start()
 
     def close(self) -> None:
         self._stop.set()

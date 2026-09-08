@@ -28,6 +28,7 @@ from fl_mcp.core.carriers.wire import ControlUnavailable
 from fl_mcp.core.transport import Transport
 from fl_mcp.errors import NotePlaneUnavailable
 from fl_mcp.fl.paths import primary_settings_dir
+from fl_mcp.fl.process import bridge_pid
 from fl_mcp.observer import Observer
 from fl_mcp.ops import notes as ops_notes
 from fl_mcp.platform import Platform, platform_for
@@ -59,6 +60,7 @@ from .detect import (
     CapabilityProfileLike,
     detect,
     load_profile,
+    read_heartbeat,
 )
 from .link import ControlCarrier, ControlLink
 from .notes import BridgeLane, FileLane
@@ -68,6 +70,9 @@ log = logging.getLogger(__name__)
 # The project this session may rewrite (the project-write backend's target).
 ENV_PROJECT = ENV_AGENT_PROJECT
 DEFAULT_PROJECT_NAME = "FLMCP Agent.flp"
+ENV_AUDIO_STREAM = "FLMCP_AUDIO_STREAM"
+_AUDIO_STREAM_POLL_SECONDS = 0.1
+_AUDIO_STREAM_RESPONSE_TIMEOUT_SECONDS = 2.0
 
 
 def create_session(
@@ -184,6 +189,10 @@ class FLSession:
         self._reload_batch_depth = 0
         self._reload_pending = False
         self._file_write_prepared = False
+        self._audio_stream_stop = threading.Event()
+        self._audio_stream_thread: threading.Thread | None = None
+        self._audio_endpoint: AudioEndpoint | None = None
+        self._audio_bridge_pid: int | None = None
 
     @property
     def run_refusals(self) -> int:
@@ -223,6 +232,80 @@ class FLSession:
         caps = self.caps
         if caps.bridge_live:
             self.breaker.admit(caps.bridge_heartbeat_at)
+
+    def start_audio_stream_lifecycle(self) -> None:
+        """Publish session audio once a live Bridge is ready, when enabled."""
+        if os.environ.get(ENV_AUDIO_STREAM) != "1" or self.session_spool_root is None:
+            return
+        if self._audio_stream_thread is not None:
+            return
+        self._audio_stream_thread = threading.Thread(
+            target=self._run_audio_stream_lifecycle, name="fl-mcp-audio-lifecycle", daemon=True
+        )
+        self._audio_stream_thread.start()
+
+    def close(self) -> None:
+        """Stop session-owned services before closing the control connection."""
+        self._audio_stream_stop.set()
+        if self._audio_stream_thread is not None:
+            self._audio_stream_thread.join(timeout=_AUDIO_STREAM_RESPONSE_TIMEOUT_SECONDS + 1)
+        self._stop_audio_stream()
+        if self.control is not None:
+            self.control.close()
+
+    def _run_audio_stream_lifecycle(self) -> None:
+        while not self._audio_stream_stop.wait(_AUDIO_STREAM_POLL_SECONDS):
+            root = self.session_spool_root
+            if root is None:
+                return
+            heartbeat = read_heartbeat(root / "bridge_heartbeat.txt")
+            pid = bridge_pid(root)
+            if self._audio_endpoint is not None and pid != self._audio_bridge_pid:
+                self._stop_audio_stream(send_stop=False)
+            live = (
+                pid is not None and heartbeat.age <= 10.0 and heartbeat.proto == 2 and heartbeat.abi == "ok"
+            )
+            if not live:
+                continue
+            if self._audio_endpoint is None:
+                self._start_audio_stream(pid)
+
+    def _start_audio_stream(self, pid: int) -> None:
+        root = self.session_spool_root
+        if root is None:
+            return
+        endpoint = AudioEndpoint(root)
+        try:
+            endpoint.start(publish=False)
+            command = self.transport.send("stream_start", port=endpoint.udp_port)
+            response = self.transport.await_response(command, timeout=_AUDIO_STREAM_RESPONSE_TIMEOUT_SECONDS)
+            if not response.ok:
+                endpoint.close()
+                log.info("live audio stream start refused: %s", response.err or "Bridge refused stream_start")
+                return
+            if self._audio_stream_stop.is_set():
+                endpoint.close()
+                return
+            endpoint.publish(response.sample_rate or 44_100)
+            self._audio_endpoint = endpoint
+            self._audio_bridge_pid = pid
+            log.info("live audio stream published for Bridge pid %d", pid)
+        except Exception:
+            endpoint.close()
+            log.info("live audio stream start deferred", exc_info=True)
+
+    def _stop_audio_stream(self, *, send_stop: bool = True) -> None:
+        endpoint, self._audio_endpoint = self._audio_endpoint, None
+        self._audio_bridge_pid = None
+        if endpoint is None:
+            return
+        if send_stop:
+            try:
+                command = self.transport.send("stream_stop")
+                self.transport.await_response(command, timeout=_AUDIO_STREAM_RESPONSE_TIMEOUT_SECONDS)
+            except Exception:
+                log.info("live audio stream stop was not acknowledged", exc_info=True)
+        endpoint.close()
 
     @property
     def lanes(self) -> tuple[BridgeLane, FileLane]:
@@ -276,14 +359,19 @@ class FLSession:
     def audio_stream(self) -> Iterator[Iterator[AudioChunk]]:
         """Yield live master-mix chunks; every gap remains visible in metadata."""
         if self.session_spool_root is None:
-            raise errors.ToolError("audio_stream_unavailable", "Live streaming requires a session spool root.")
+            raise errors.ToolError(
+                "audio_stream_unavailable", "Live streaming requires a session spool root."
+            )
         endpoint = AudioEndpoint(self.session_spool_root)
-        endpoint.start()
+        endpoint.start(publish=False)
         command = self.transport.send("stream_start", port=endpoint.udp_port)
         response = self.transport.await_response(command, timeout=5)
         if not response.ok:
             endpoint.close()
-            raise errors.ToolError("audio_stream_unavailable", response.err or "Bridge refused stream_start", retryable=True)
+            raise errors.ToolError(
+                "audio_stream_unavailable", response.err or "Bridge refused stream_start", retryable=True
+            )
+        endpoint.publish(response.sample_rate or 44_100)
         try:
             yield endpoint.chunks()
         finally:

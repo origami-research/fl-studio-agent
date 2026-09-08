@@ -199,9 +199,14 @@ sequence number and cumulative drop count: a lost packet is reported, never
 silently joined to adjacent audio.
 
 Each packet is little-endian `FLAU`, sequence `u32`, sample rate `u32`,
-channels `u16`, frames `u16`, drops `u64`, followed by PCM. The engine writes
-`bridge_audio.json` beside `bridge_udp.json`; it contains its loopback TCP
-fanout endpoint. TCP clients receive the same header and PCM bytes.
+channels `u16`, frames `u16`, drops `u64`, followed by PCM. Set
+`FLMCP_AUDIO_STREAM=1` in a session to make the engine own the live stream for
+the session lifetime. Once a fresh Bridge heartbeat is present, it starts the
+stream and writes `bridge_audio.json` beside `bridge_udp.json`. The atomic file
+contains `host`, `port`, `proto`, and `sample_rate`; it is removed at session
+shutdown and is republished if the Bridge PID changes. TCP clients receive the
+same header and PCM bytes. The Bridge heartbeat reports `streaming`, sent
+chunks, and dropped chunks, which `fl_doctor` includes in its note-plane detail.
 `fl-mcp-listen --port-file <spool>/bridge_audio.json --seconds 5 out.wav`
 records that endpoint. This transport is separate from command UDP and works
 on macOS and Windows through the same loopback socket API.

@@ -29,6 +29,7 @@ class FakeBridge:
         drop_first: int = 0,
         ack_token: str | None = None,
         silent: bool = False,
+        pid: int = 1,
     ) -> None:
         self.token = token
         self.ack_token = ack_token if ack_token is not None else token
@@ -42,7 +43,7 @@ class FakeBridge:
         self._stop = threading.Event()
         root.mkdir(parents=True, exist_ok=True)
         (root / PORT_FILE).write_text(
-            json.dumps({"proto": 2, "transport": 1, "port": self.port, "token": token, "pid": 1})
+            json.dumps({"proto": 2, "transport": 1, "port": self.port, "token": token, "pid": pid})
         )
         self.roots = [root]
         self._thread = threading.Thread(target=self._serve, daemon=True)

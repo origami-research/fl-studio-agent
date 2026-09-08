@@ -48,9 +48,17 @@ class _FakeSession:
         self.read_targets: list[Target] = []
         self.control = None
         self.run_refusals = 0
+        self.audio_stream_started = False
+        self.closed = False
 
     def record_run_refusal(self) -> None:
         self.run_refusals += 1
+
+    def start_audio_stream_lifecycle(self) -> None:
+        self.audio_stream_started = True
+
+    def close(self) -> None:
+        self.closed = True
 
     def read_notes(self, target: Target) -> list[Note]:
         if self._error is not None:
@@ -277,6 +285,8 @@ def test_lifespan_logs_run_refusals_once_at_close(monkeypatch, caplog):
     assert [record.getMessage() for record in caplog.records] == [
         "run session closed with 2 refusals"
     ]
+    assert session.audio_stream_started
+    assert session.closed
 
 
 # -- main / logging -----------------------------------------------------------

@@ -272,12 +272,27 @@ def _note_plane_status(*, clock: Callable[[], float] = time.time) -> PlaneStatus
                     detail=detail,
                     fix=f"{detail} Select a persistent audio output device in FL Studio, then confirm render_rate is above zero.",
                 )
+            stream = _stream_detail(heartbeat)
+            if stream is not None:
+                return PlaneStatus(connected=True, detail=f"spool at {root}; {stream}")
     return PlaneStatus(
         connected=True,
         detail=f"spool at {roots[0]} (the bridge lane routes automatically "
         "when its heartbeat proves it live and the selected channel matches; "
         "otherwise targeted notes apply via the project file)",
     )
+
+
+def _stream_detail(heartbeat: object) -> str | None:
+    """Keep stream observability in doctor without changing its published shape."""
+    streaming = getattr(heartbeat, "streaming", None)
+    if streaming is None:
+        return None
+    chunks = getattr(heartbeat, "stream_chunks_sent", None)
+    drops = getattr(heartbeat, "stream_chunks_dropped", None)
+    rate = getattr(heartbeat, "stream_sample_rate", None)
+    state = "streaming" if streaming else "not streaming"
+    return f"live audio {state}; chunks={chunks or 0}, drops={drops or 0}, sample_rate={rate or 0}"
 
 
 def _project_file_status(session: FLSession) -> PlaneStatus:
