@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import threading
 import time
 from pathlib import Path
 
@@ -12,7 +13,8 @@ from session_fakes import make_session
 from fl_mcp.core.carriers.spool import SpoolCarrier
 from fl_mcp.core.carriers.udp import UdpCarrier
 from fl_mcp.core.transport import Transport
-from fl_mcp.schemas import PlaneStatus
+from fl_mcp.schemas import PlaneStatus, SpoolCommand, SpoolResponse
+from fl_mcp.session import detect as detect_mod
 from fl_mcp.session import state as state_mod
 from fl_mcp.session.detect import read_heartbeat
 
@@ -47,6 +49,7 @@ def test_session_lifecycle_publishes_and_removes_audio_endpoint(monkeypatch, tmp
     _write_heartbeat(root)
     session = _session(root)
     monkeypatch.setenv("FLMCP_AUDIO_STREAM", "1")
+    monkeypatch.setattr(detect_mod, "spool_roots", lambda: [root])
     try:
         session.start_audio_stream_lifecycle()
         port_file = root / "bridge_audio.json"
@@ -58,6 +61,81 @@ def test_session_lifecycle_publishes_and_removes_audio_endpoint(monkeypatch, tmp
         session.close()
         bridge.close()
     assert not (root / "bridge_audio.json").exists()
+
+
+def test_live_session_prewarm_and_audio_lifecycle_both_complete(monkeypatch, tmp_path) -> None:
+    """A session with the optional relay still completes its startup ping.
+
+    FakeBridge is the offline native-Bridge seam: it answers the same UDP
+    command frames as FL.  This covers the arena shape without launching FL.
+    """
+    root = tmp_path / "spool"
+    bridge = FakeBridge(root)
+    _write_heartbeat(root)
+    session = _session(root)
+    monkeypatch.setenv("FLMCP_AUDIO_STREAM", "1")
+    monkeypatch.setattr(detect_mod, "spool_roots", lambda: [root])
+    try:
+        session.prewarm()
+        session.start_audio_stream_lifecycle()
+        _wait_for(root / "bridge_audio.json")
+        assert [command["op"] for command in bridge.received if "id" in command] == ["ping", "stream_start"]
+    finally:
+        session.close()
+        bridge.close()
+
+
+class _BlockingStreamTransport:
+    """Makes an in-flight stream request observable without a real socket."""
+
+    def __init__(self) -> None:
+        self.stream_sent = threading.Event()
+        self.release_stream = threading.Event()
+        self.ping_sent = threading.Event()
+        self._next_id = 0
+
+    def send(self, op: str, **args) -> SpoolCommand:
+        self._next_id += 1
+        if op == "stream_start":
+            self.stream_sent.set()
+        if op == "ping":
+            self.ping_sent.set()
+        return SpoolCommand(id=self._next_id, op=op, args=args)
+
+    def await_response(self, command: SpoolCommand, timeout: float) -> SpoolResponse:
+        if command.op == "stream_start":
+            assert self.release_stream.wait(timeout)
+        return SpoolResponse(id=command.id, ok=True, op=command.op)
+
+
+def test_audio_lifecycle_does_not_interleave_a_session_transport_request(monkeypatch, tmp_path) -> None:
+    """The lifecycle cannot consume the response belonging to startup ping.
+
+    This failed before the session transport transaction existed: prewarm
+    sent ping while stream_start was awaiting its reply on the same transport.
+    """
+    root = tmp_path / "spool"
+    root.mkdir()
+    root.joinpath("bridge_udp.json").write_text('{"pid": 1}', encoding="utf-8")
+    _write_heartbeat(root)
+    transport = _BlockingStreamTransport()
+    session, _ = make_session(transport=transport, session_spool_root=root)
+    monkeypatch.setenv("FLMCP_AUDIO_STREAM", "1")
+    monkeypatch.setattr(detect_mod, "spool_roots", lambda: [root])
+    try:
+        session.start_audio_stream_lifecycle()
+        assert transport.stream_sent.wait(1)
+        prewarm = threading.Thread(target=session.prewarm)
+        prewarm.start()
+        time.sleep(0.05)
+        assert not transport.ping_sent.is_set()
+        transport.release_stream.set()
+        prewarm.join(timeout=1)
+        assert not prewarm.is_alive()
+        assert transport.ping_sent.is_set()
+    finally:
+        transport.release_stream.set()
+        session.close()
 
 
 def test_bridge_pid_change_restarts_and_republishes_audio_endpoint(monkeypatch, tmp_path) -> None:

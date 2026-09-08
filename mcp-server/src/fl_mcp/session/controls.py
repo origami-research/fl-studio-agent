@@ -132,9 +132,10 @@ def _render_span_seconds(project: Path) -> float:
 
 def _live_render(session: FLSession, output: Path, seconds: float) -> Path:
     """Play the saved arrangement once while the master Bridge records it."""
-    started = session.transport.send("capture_start", seconds=seconds)
     response_timeout = min(10.0, max(2.0, seconds / 2.0 + 2.0))
-    start = session.transport.await_response(started, timeout=response_timeout)
+    with session._transport_use():
+        started = session.transport.send("capture_start", seconds=seconds)
+        start = session.transport.await_response(started, timeout=response_timeout)
     if not start.ok:
         raise errors.ToolError(
             "render_failed",
@@ -168,8 +169,9 @@ def _live_render(session: FLSession, output: Path, seconds: float) -> Path:
         except errors.ToolError as exc:
             stop_error = exc
         finally:
-            stopped_cmd = session.transport.send("capture_stop")
-            stopped = session.transport.await_response(stopped_cmd, timeout=response_timeout)
+            with session._transport_use():
+                stopped_cmd = session.transport.send("capture_stop")
+                stopped = session.transport.await_response(stopped_cmd, timeout=response_timeout)
         if stop_error is not None:
             try:
                 session.link.command("transport.stop")

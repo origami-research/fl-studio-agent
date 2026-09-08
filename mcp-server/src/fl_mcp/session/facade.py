@@ -181,6 +181,11 @@ class FLSession:
         if not self._profile_supported:
             log.warning("%s", self._profile_gate_detail)
         self._write_lock = threading.Lock()
+        # A session has one Bridge transport.  Its staged send/await API must
+        # stay one transaction at this boundary: the optional audio worker is
+        # a second client of that transport, not an independent connection.
+        # This keeps a lifecycle ack from competing with prewarm or a tool.
+        self._transport_lock = threading.Lock()
         self._run_refusals = 0
         # Development-mode file-edit batching: file-lane ops write the .flp
         # but defer the FL reload so N edits cost ONE reboot, not N. Session
@@ -277,8 +282,9 @@ class FLSession:
         endpoint = AudioEndpoint(root)
         try:
             endpoint.start(publish=False)
-            command = self.transport.send("stream_start", port=endpoint.udp_port)
-            response = self.transport.await_response(command, timeout=_AUDIO_STREAM_RESPONSE_TIMEOUT_SECONDS)
+            with self._transport_use():
+                command = self.transport.send("stream_start", port=endpoint.udp_port)
+                response = self.transport.await_response(command, timeout=_AUDIO_STREAM_RESPONSE_TIMEOUT_SECONDS)
             if not response.ok:
                 endpoint.close()
                 log.info("live audio stream start refused: %s", response.err or "Bridge refused stream_start")
@@ -301,8 +307,9 @@ class FLSession:
             return
         if send_stop:
             try:
-                command = self.transport.send("stream_stop")
-                self.transport.await_response(command, timeout=_AUDIO_STREAM_RESPONSE_TIMEOUT_SECONDS)
+                with self._transport_use():
+                    command = self.transport.send("stream_stop")
+                    self.transport.await_response(command, timeout=_AUDIO_STREAM_RESPONSE_TIMEOUT_SECONDS)
             except Exception:
                 log.info("live audio stream stop was not acknowledged", exc_info=True)
         endpoint.close()
@@ -364,8 +371,9 @@ class FLSession:
             )
         endpoint = AudioEndpoint(self.session_spool_root)
         endpoint.start(publish=False)
-        command = self.transport.send("stream_start", port=endpoint.udp_port)
-        response = self.transport.await_response(command, timeout=5)
+        with self._transport_use():
+            command = self.transport.send("stream_start", port=endpoint.udp_port)
+            response = self.transport.await_response(command, timeout=5)
         if not response.ok:
             endpoint.close()
             raise errors.ToolError(
@@ -376,8 +384,9 @@ class FLSession:
             yield endpoint.chunks()
         finally:
             try:
-                command = self.transport.send("stream_stop")
-                self.transport.await_response(command, timeout=5)
+                with self._transport_use():
+                    command = self.transport.send("stream_stop")
+                    self.transport.await_response(command, timeout=5)
             finally:
                 endpoint.close()
 
@@ -525,10 +534,24 @@ class FLSession:
         """The breaker's gate: one stateless spool round trip proving the
         bridge's pumps run (a heartbeat alone cannot - R4 B2-7)."""
         try:
-            cmd = self.transport.send("ping")
-            return self.transport.await_response(cmd, timeout=BRIDGE_PING_TIMEOUT_SECONDS).ok
+            with self._transport_use():
+                cmd = self.transport.send("ping")
+                return self.transport.await_response(cmd, timeout=BRIDGE_PING_TIMEOUT_SECONDS).ok
         except (errors.ToolError, CarrierUnavailable):
             return False
+
+    @contextmanager
+    def _transport_use(self) -> Iterator[None]:
+        """Keep a session command's send and wait halves together.
+
+        Transport intentionally exposes staged calls for callers that need the
+        command id.  At the session boundary, however, a background lifecycle
+        and an MCP request share one Bridge, so neither may interleave those
+        halves.  The carrier still correlates by id; this lock also prevents
+        concurrent socket receive loops during startup.
+        """
+        with self._transport_lock:
+            yield
 
     @contextmanager
     def _write_guard(self, action: str) -> Iterator[None]:

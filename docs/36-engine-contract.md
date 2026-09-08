@@ -27,4 +27,6 @@ Arena sessions set `FLMCP_AUDIO_STREAM=1`; after the Bridge heartbeat is live,
 the session publishes `<FLMCP_SPOOL_ROOT>/bridge_audio.json` with loopback
 `host`, `port`, `proto`, and `sample_rate`. Consumers use that file with
 `fl-mcp-listen` and must tolerate replacement when the Bridge restarts. The
-file disappears when the session closes.
+file disappears when the session closes. The relay shares the session command
+transport, but its send-and-await exchange is serialized with prewarm and
+tool exchanges, so enabling it never races MCP initialization.

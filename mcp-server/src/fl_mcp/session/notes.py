@@ -260,18 +260,19 @@ class BridgeLane:
         command id. A refusal or timeout raises - never a maybe - and the
         breaker learns the outcome either way (docs/27 §3)."""
         session = self._session
-        cmd = session.transport.send(op, **args)
-        try:
-            resp = session.transport.await_response(cmd, timeout=BRIDGE_RESPONSE_TIMEOUT_SECONDS)
-        except errors.ToolError:
-            # An unacked command with FL gone is the hard-failure signature
-            # (the command may have been the trigger); a live FL that missed
-            # the window is soft - re-ping before the next bridge use.
-            if fl_process_running():
-                session.breaker.record_soft_failure()
-            else:
-                session.breaker.record_hard_failure(f"{op} command {cmd.id} unacked; FL not running")
-            raise
+        with session._transport_use():
+            cmd = session.transport.send(op, **args)
+            try:
+                resp = session.transport.await_response(cmd, timeout=BRIDGE_RESPONSE_TIMEOUT_SECONDS)
+            except errors.ToolError:
+                # An unacked command with FL gone is the hard-failure signature
+                # (the command may have been the trigger); a live FL that missed
+                # the window is soft - re-ping before the next bridge use.
+                if fl_process_running():
+                    session.breaker.record_soft_failure()
+                else:
+                    session.breaker.record_hard_failure(f"{op} command {cmd.id} unacked; FL not running")
+                raise
         if not resp.ok:
             session.breaker.record_soft_failure()
             raise WriteRejected(
