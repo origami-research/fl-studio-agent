@@ -73,6 +73,10 @@ DEFAULT_PROJECT_NAME = "FLMCP Agent.flp"
 ENV_AUDIO_STREAM = "FLMCP_AUDIO_STREAM"
 _AUDIO_STREAM_POLL_SECONDS = 0.1
 _AUDIO_STREAM_RESPONSE_TIMEOUT_SECONDS = 2.0
+# Rendering depends on saved, read-back project state. A write that is already
+# landing usually finishes quickly, so wait once rather than turning that
+# ordinary serialization into a failed render request.
+RENDER_IN_FLIGHT_WRITE_WAIT_SECONDS = 15.0
 
 
 def create_session(
@@ -186,6 +190,9 @@ class FLSession:
         # a second client of that transport, not an independent connection.
         # This keeps a lifecycle ack from competing with prewarm or a tool.
         self._transport_lock = threading.Lock()
+        self._write_state_lock = threading.Lock()
+        self._write_action: str | None = None
+        self._write_owner_thread: int | None = None
         self._run_refusals = 0
         # Development-mode file-edit batching: file-lane ops write the .flp
         # but defer the FL reload so N edits cost ONE reboot, not N. Session
@@ -201,11 +208,11 @@ class FLSession:
 
     @property
     def run_refusals(self) -> int:
-        with self._write_lock:
+        with self._write_state_lock:
             return self._run_refusals
 
     def record_run_refusal(self) -> None:
-        with self._write_lock:
+        with self._write_state_lock:
             self._run_refusals += 1
 
     @property
@@ -561,9 +568,36 @@ class FLSession:
                 f"Live operation '{action}' refused: {self._profile_gate_detail}",
                 "Run the capture command on this FL install, ship its reviewed profile, then retry.",
             )
+        owns_active_write = False
         if not self._write_lock.acquire(blocking=False):
-            raise errors.concurrent_write(action)
+            with self._write_state_lock:
+                if self._write_owner_thread == threading.get_ident():
+                    # render_wav saves through controls.save_project() while
+                    # holding this guard. Re-entering from that same request
+                    # is serialization, not a competing write.
+                    owns_active_write = True
+                remaining_action = self._write_action or "another FL MCP write"
+            if not owns_active_write and (
+                action != "render_wav"
+                or not self._write_lock.acquire(timeout=RENDER_IN_FLIGHT_WRITE_WAIT_SECONDS)
+            ):
+                if action == "render_wav":
+                    with self._write_state_lock:
+                        remaining_action = self._write_action or remaining_action
+                    raise errors.concurrent_write_wait_expired(
+                        action, remaining_action, RENDER_IN_FLIGHT_WRITE_WAIT_SECONDS
+                    )
+                raise errors.concurrent_write(action)
+        if owns_active_write:
+            yield
+            return
+        with self._write_state_lock:
+            self._write_action = action
+            self._write_owner_thread = threading.get_ident()
         try:
             yield
         finally:
+            with self._write_state_lock:
+                self._write_action = None
+                self._write_owner_thread = None
             self._write_lock.release()

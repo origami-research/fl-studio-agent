@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import subprocess
 import tempfile
+import threading
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -16,6 +18,7 @@ from session_fakes import HELLO, FakeControl, FakeSpool, make_session
 from fl_mcp import errors, flp
 from fl_mcp.schemas import AutomationPoint, ControlResponse, PluginParamModel, PluginParamSpec
 from fl_mcp.session import FLSession, NotePlaneUnavailable, WriteRejected, controls
+from fl_mcp.session import facade as facade_mod
 
 
 @pytest.fixture()
@@ -85,6 +88,79 @@ def test_render_wav_refuses_when_the_live_bridge_is_unavailable(tmp_path):
 
     with pytest.raises(errors.ToolError, match="Bridge is not live"):
         session.render_wav(output)
+
+
+def test_render_waits_for_an_in_flight_write_then_proceeds(monkeypatch, tmp_path):
+    """A render serializes behind the write whose saved state it needs."""
+    session, _ = make_session(project=tmp_path / "agent.flp")
+    started = threading.Event()
+    release = threading.Event()
+    finished = threading.Event()
+    entered_render = threading.Event()
+    rendered: list[Path] = []
+    render_errors: list[Exception] = []
+
+    def write() -> None:
+        with session._write_guard("write_notes"):
+            started.set()
+            assert release.wait(timeout=1)
+        finished.set()
+
+    worker = threading.Thread(target=write)
+    worker.start()
+    assert started.wait(timeout=1)
+    monkeypatch.setattr(controls, "render_wav", lambda _session, output: entered_render.set() or output)
+
+    def render() -> None:
+        try:
+            rendered.append(session.render_wav(tmp_path / "mix.wav"))
+        except Exception as exc:  # pragma: no cover - failure is asserted below
+            render_errors.append(exc)
+
+    renderer = threading.Thread(target=render)
+    renderer.start()
+    assert not entered_render.wait(timeout=0.05), "render ran before the active write finished"
+    release.set()
+    worker.join(timeout=1)
+    renderer.join(timeout=1)
+    assert finished.is_set()
+    assert not renderer.is_alive()
+    assert render_errors == []
+    assert rendered == [tmp_path / "mix.wav"]
+
+
+def test_render_refusal_after_bounded_wait_names_the_remaining_write(monkeypatch, tmp_path):
+    """A stuck write remains retryable without leaving render blocked forever."""
+    session, _ = make_session(project=tmp_path / "agent.flp")
+    started = threading.Event()
+    release = threading.Event()
+
+    def write() -> None:
+        with session._write_guard("write_notes"):
+            started.set()
+            assert release.wait(timeout=1)
+
+    worker = threading.Thread(target=write)
+    worker.start()
+    assert started.wait(timeout=1)
+    monkeypatch.setattr(facade_mod, "RENDER_IN_FLIGHT_WRITE_WAIT_SECONDS", 0.01)
+
+    with pytest.raises(errors.ConcurrentWrite) as excinfo:
+        session.render_wav(tmp_path / "mix.wav")
+
+    release.set()
+    worker.join(timeout=1)
+    assert excinfo.value.retryable is True
+    assert "write_notes" in excinfo.value.message
+    assert "Retry in 0.01 seconds" in excinfo.value.fix
+
+
+def test_render_guard_can_reenter_without_waiting_for_itself(tmp_path):
+    """Render's save path runs under the render guard, so same-request nesting must not deadlock."""
+    session, _ = make_session(project=tmp_path / "agent.flp")
+
+    with session._write_guard("render_wav"), session._write_guard("save_project"):
+        pass
 
 
 def test_live_render_verification_failure_is_a_tool_error_not_a_type_error(monkeypatch, tmp_path):

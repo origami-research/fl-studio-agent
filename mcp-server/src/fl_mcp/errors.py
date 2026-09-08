@@ -148,6 +148,15 @@ def concurrent_write(action: str) -> ToolError:
     )
 
 
+def concurrent_write_wait_expired(action: str, remaining_action: str, retry_seconds: float) -> ToolError:
+    """A render's bounded wait for the active write elapsed."""
+    return ConcurrentWrite(
+        f"{action} waited {retry_seconds:g}s for in-flight FL MCP write "
+        f"'{remaining_action}', which is still in progress.",
+        f"Retry in {retry_seconds:g} seconds after '{remaining_action}' finishes.",
+    )
+
+
 def unknown_target(kind: str, name: str | int, candidates: list[str]) -> ToolError:
     listed = ", ".join(candidates[:8]) + ("…" if len(candidates) > 8 else "")
     return ToolError(
