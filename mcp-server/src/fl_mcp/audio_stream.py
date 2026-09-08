@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 import json
 import queue
+import select
 import socket
 import struct
 import threading
@@ -54,6 +55,7 @@ class AudioEndpoint:
         self.spool_root = spool_root
         self._udp = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self._udp.bind(("127.0.0.1", 0))
+        self._udp.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 4 * 1024 * 1024)
         self._udp.settimeout(0.1)
         self._tcp = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self._tcp.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -107,16 +109,24 @@ class AudioEndpoint:
                 continue
 
     def _run(self) -> None:
+        # One select over both sockets: a blocking accept-with-timeout in front of
+        # recvfrom starved the UDP side (PCM packets arrive every ~23 ms, the accept
+        # waited up to 100 ms) and three quarters of the stream was lost (live run 27).
         while not self._stop.is_set():
-            try:
-                client, _ = self._tcp.accept()
-                client.setblocking(False)
-                self._clients.append(client)
-            except TimeoutError:
-                pass
+            readable, _, _ = select.select([self._tcp, self._udp], [], [], 0.1)
+            if self._tcp in readable:
+                try:
+                    client, _ = self._tcp.accept()
+                except OSError:
+                    pass
+                else:
+                    client.setblocking(False)
+                    self._clients.append(client)
+            if self._udp not in readable:
+                continue
             try:
                 packet, address = self._udp.recvfrom(65536)
-            except TimeoutError:
+            except OSError:
                 continue
             if address[0] != "127.0.0.1":
                 continue
