@@ -37,8 +37,12 @@ PING_CONFIRM_SECONDS = 1.0
 
 # Hot-plug self-heal (live-measured 2026-08-29: FL binds appearing ports in
 # ~2s): how long to wait for hello after recycling, and how often a silent,
-# unconfigured FL is allowed to cost that wait.
-RECYCLE_HELLO_WAIT_SECONDS = 8.0
+# unconfigured FL is allowed to cost that wait. A cold FL boot can take well
+# beyond the first controller request, so this is a startup deadline rather
+# than one request timeout.
+RECYCLE_HELLO_WAIT_SECONDS = 120.0
+RECYCLE_HELLO_RETRY_INITIAL_SECONDS = 1.0
+RECYCLE_HELLO_RETRY_MAX_SECONDS = 8.0
 RECYCLE_MIN_INTERVAL_SECONDS = 30.0
 
 # FL can stay "unsafe at current time" for a few seconds after a load; give the
@@ -136,13 +140,43 @@ class ControlLink:
             log.exception("port recycle failed; control plane stays down")
             self.control = None
             return None
-        try:
-            return self._check_controller_protocol(
-                self.control.await_hello(timeout=RECYCLE_HELLO_WAIT_SECONDS)
+        deadline = time.monotonic() + RECYCLE_HELLO_WAIT_SECONDS
+        retry_wait = RECYCLE_HELLO_RETRY_INITIAL_SECONDS
+        attempt = 0
+        last_error: errors.ToolError | None = None
+        while True:
+            attempt += 1
+            remaining = max(0.0, deadline - time.monotonic())
+            log.info(
+                "awaiting FL hello after port recycle (attempt %d, %.1fs remaining)",
+                attempt,
+                remaining,
             )
-        except errors.ToolError:
-            log.exception("port recycle completed but FL did not answer hello")
-            return None
+            try:
+                return self._check_controller_protocol(
+                    self.control.await_hello(timeout=min(retry_wait, remaining))
+                )
+            except errors.ToolError as exc:
+                last_error = exc
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                detail = last_error.message if last_error is not None else "no detail"
+                log.error(
+                    "port recycle completed but FL did not answer hello within %gs after %d attempts: %s",
+                    RECYCLE_HELLO_WAIT_SECONDS,
+                    attempt,
+                    detail,
+                )
+                return None
+            pause = min(retry_wait, remaining)
+            log.info(
+                "FL has not answered hello after port recycle (attempt %d); retrying in %.1fs: %s",
+                attempt,
+                pause,
+                last_error.message if last_error is not None else "no detail",
+            )
+            time.sleep(pause)
+            retry_wait = min(retry_wait * 2, RECYCLE_HELLO_RETRY_MAX_SECONDS)
 
     def reconnect(self) -> None:
         """Fresh ports after an FL relaunch we caused: the old wire died with

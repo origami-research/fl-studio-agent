@@ -7,8 +7,9 @@
   receipts on writes that all landed in one roll (dogfood, docs/21 A12).
 - **BridgeLane ("bridge")**: live targeted notes via the native Bridge plugin
   over the transport. Eligible per call from evidence only - its ``can_serve``
-  is the one-liner over ``core.router.bridge_provides``; it saves FL's live
-  state before parsing its receipt, never trusting a lagging file or echo.
+  is the one-liner over ``core.router.bridge_provides``; when a readable project
+  exists it saves FL's live state before parsing its receipt, never trusting a
+  lagging file or echo.
 
 Routing itself is ``core.router.route`` via ``fl_mcp.ops.notes`` - no note
 branch lives here. A lane failure RAISES; it never silently falls through - a
@@ -177,6 +178,7 @@ class BridgeLane:
 
     def __init__(self, session: FLSession) -> None:
         self._session = session
+        self._warned_missing_file_readback = False
 
     def can_serve(self, op: Operation, caps: Capabilities) -> bool:
         return op.kind in NOTE_KINDS and satisfied(op.requires, bridge_provides(op, caps))
@@ -289,10 +291,11 @@ class BridgeLane:
         (the project file), else the live hello's. None lets the consumer fall
         back (the bridge assumes 96 and flags it in its response summary)."""
         session = self._session
-        try:
-            return flp.read(session.project).ppq
-        except flp.FlpError:
-            log.exception("could not read ppq from %s; trying the live hello", session.project)
+        if session.project is not None and session.project.is_file():
+            try:
+                return flp.read(session.project).ppq
+            except flp.FlpError:
+                log.exception("could not read ppq from %s; trying the live hello", session.project)
         hello = session._ensure_hello()
         return hello.ppq if hello is not None else None
 
@@ -306,6 +309,14 @@ class BridgeLane:
         here is a missing measurement after an applied command, not a failed
         write, and must therefore produce an honest unconfirmed receipt.
         """
+        project = self._session.project
+        if project is None or not project.is_file():
+            if not self._warned_missing_file_readback:
+                self._warned_missing_file_readback = True
+                log.warning(
+                    "bridge commands are applied but receipts are unconfirmed: no readable project file is available for note readback"
+                )
+            return None
         try:
             controls.save_project(self._session)
             return _project_notes(self._session, target)

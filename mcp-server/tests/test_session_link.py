@@ -17,7 +17,7 @@ from session_fakes import (
     make_session,
 )
 
-from fl_mcp import flp
+from fl_mcp import errors, flp
 from fl_mcp.controller_version import CONTROLLER_PROTOCOL_VERSION
 from fl_mcp.schemas import ControlResponse
 from fl_mcp.session import FLSession, create_session
@@ -42,6 +42,15 @@ def test_create_session_is_the_factory(monkeypatch):
     assert isinstance(session, FLSession)
     assert session.control is fake
     assert "/" not in session.store.project_key
+
+
+def test_create_session_ignores_a_missing_project_override(monkeypatch, tmp_path):
+    missing = tmp_path / "not-created.flp"
+    monkeypatch.setenv("FLMCP_AGENT_PROJECT", str(missing))
+
+    session = create_session(platform=control_platform(FakeControl(hello=HELLO)))
+
+    assert session.project is None
 
 
 def test_project_key_is_a_single_safe_component():
@@ -130,6 +139,7 @@ def test_recycle_is_rate_limited(monkeypatch):
 
     session.link._control_factory = factory
     monkeypatch.setattr(link_mod, "fl_process_running", lambda: True)
+    monkeypatch.setattr(link_mod, "RECYCLE_HELLO_WAIT_SECONDS", 0.0)
 
     assert session._ensure_hello() is None
     assert session._ensure_hello() is None  # immediately again - inside the interval
@@ -142,11 +152,44 @@ def test_recycle_hello_failure_is_logged(monkeypatch, caplog):
     session, _ = make_session(control=silent)
     session.link._control_factory = lambda: FakeControl(hello=None)
     monkeypatch.setattr(link_mod, "fl_process_running", lambda: True)
+    monkeypatch.setattr(link_mod, "RECYCLE_HELLO_WAIT_SECONDS", 0.0)
 
     with caplog.at_level("ERROR"):
         assert session._ensure_hello() is None
 
     assert any("FL did not answer hello" in record.message for record in caplog.records)
+
+
+def test_recycle_retries_hello_until_fl_finishes_booting(monkeypatch, caplog):
+    """A cold FL boot must not leave a session disconnected after one hello race."""
+
+    class DelayedHello(FakeControl):
+        def __init__(self):
+            super().__init__(hello=HELLO)
+            self.attempts = 0
+            self.timeouts: list[float] = []
+
+        def await_hello(self, timeout=5.0):
+            self.attempts += 1
+            self.timeouts.append(timeout)
+            if self.attempts < 3:
+                raise errors.control_plane_unavailable("ctl.hello", timeout)
+            return HELLO
+
+    silent = FakeControl(hello=None)
+    delayed = DelayedHello()
+    session, _ = make_session(control=silent)
+    session.link._control_factory = lambda: delayed
+    monkeypatch.setattr(link_mod, "fl_process_running", lambda: True)
+    monkeypatch.setattr(link_mod.time, "sleep", lambda _seconds: None)
+
+    with caplog.at_level("INFO"):
+        assert session._ensure_hello() is HELLO
+
+    assert delayed.attempts == 3
+    assert delayed.timeouts == [1.0, 2.0, 4.0]
+    assert sum("awaiting FL hello after port recycle" in r.message for r in caplog.records) == 3
+    assert not any(r.levelname == "ERROR" for r in caplog.records)
 
 
 def test_sticky_hello_is_not_trusted_without_a_live_ping(monkeypatch):

@@ -450,6 +450,26 @@ def test_bridge_readback_failure_is_unconfirmed(monkeypatch, tmp_path, bridge_en
     assert receipt.delta.is_empty()
 
 
+def test_bridge_write_with_missing_project_is_unconfirmed_once(monkeypatch, tmp_path, bridge_env, no_reload, caplog):
+    """A launcher path can precede its .flp: Bridge writes still land, but no file is read."""
+    missing_project = tmp_path / "not-created.flp"
+    spool = FakeSpool(responses={"ping": PING_OK, "add_notes": BRIDGE_OK})
+    session, _ = make_session(
+        control=selected_channel_control(0), transport=spool, project=missing_project
+    )
+    monkeypatch.setattr(flp, "read", lambda *_args: pytest.fail("missing project must not be opened"))
+    monkeypatch.setattr(flp, "notes_at", lambda *_args: pytest.fail("missing project must not be opened"))
+
+    with caplog.at_level("WARNING"):
+        first = session.write_notes(TARGET, NOTES, "merge")
+        second = session.write_notes(TARGET, NOTES, "merge")
+
+    assert [first.confirmed_notes, second.confirmed_notes] == [None, None]
+    assert first.unconfirmed_write and second.unconfirmed_write
+    assert sum("receipts are unconfirmed" in r.message for r in caplog.records) == 1
+    assert not any(r.exc_info for r in caplog.records)
+
+
 def test_bridge_rewrite_saves_live_readback_for_replace_and_merge(
     monkeypatch, tmp_path, bridge_env, no_reload
 ):

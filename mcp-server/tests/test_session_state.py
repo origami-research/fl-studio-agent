@@ -291,6 +291,7 @@ def test_doctor_silent_wire_fix_names_the_dialog_not_a_restart(tmp_path, monkeyp
     # The probe recycles the silent wire (FL "running"); make_session's
     # factory hands back another silent fake, exactly like the old monolith.
     monkeypatch.setattr(link_mod, "fl_process_running", lambda: True)
+    monkeypatch.setattr(link_mod, "RECYCLE_HELLO_WAIT_SECONDS", 0.0)
     session, _ = make_session(control=FakeControl(hello=None))
 
     report = session.doctor()

@@ -107,7 +107,8 @@ def create_session(
 
     override = os.environ.get(ENV_PROJECT)
     if override:
-        project: Path | None = Path(override).expanduser()
+        candidate = Path(override).expanduser()
+        project = candidate if candidate.is_file() else None
     else:
         settings = primary_settings_dir()
         candidate = settings.parent / "Projects" / DEFAULT_PROJECT_NAME if settings is not None else None
@@ -330,10 +331,9 @@ class FLSession:
 
     def write_notes(self, target: Target, notes: list[Note], mode: NoteWriteMode) -> WriteReceipt:
         with self._write_guard("write_notes"):
-            if self.project is None:
+            if self.project is None and not self.caps.bridge_live:
                 raise NotePlaneUnavailable(
-                    "No backend can apply targeted notes: no project file is configured, "
-                    "and bridge writes require the project file for readback. "
+                    "No backend can apply targeted notes: no project file is configured and the Bridge is not live. "
                     "(The pyscript lane cannot target a channel - see write_notes.)"
                 )
             # The concurrency rule (docs/27 §5): never clobber a mid-edit user
@@ -344,10 +344,9 @@ class FLSession:
 
     def clear_notes(self, target: Target) -> WriteReceipt:
         with self._write_guard("clear_notes"):
-            if self.project is None:
+            if self.project is None and not self.caps.bridge_live:
                 raise NotePlaneUnavailable(
-                    "No backend can clear targeted notes: no project file is configured, "
-                    "and bridge clears require the project file for readback."
+                    "No backend can clear targeted notes: no project file is configured and the Bridge is not live."
                 )
             self.observer.guard_write(target)
             return ops_notes.clear_notes(self, target)
