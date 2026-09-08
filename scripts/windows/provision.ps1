@@ -8,6 +8,9 @@ param(
     [switch]$SkipPackageInstall
 )
 
+# Windows PowerShell 5.1 has no $IsWindows automatic variable (PowerShell 7 does).
+if (-not (Get-Variable -Name IsWindows -ErrorAction SilentlyContinue)) { $IsWindows = ($env:OS -eq 'Windows_NT') }
+
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
