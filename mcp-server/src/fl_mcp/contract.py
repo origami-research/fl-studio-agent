@@ -5,7 +5,8 @@ from __future__ import annotations
 import inspect
 import json
 import subprocess
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
+from enum import StrEnum
 from pathlib import Path
 from typing import Any, Literal
 
@@ -17,7 +18,30 @@ from fl_mcp.schemas import Note, Target
 
 ENV_SPOOL_ROOT = "FLMCP_SPOOL_ROOT"
 ENV_AGENT_PROJECT = "FLMCP_AGENT_PROJECT"
+ENV_FL_LICENSE = "FLMCP_FL_LICENSE"
 BRIDGE_PORT_FILE = "bridge_udp.json"
+
+
+class FLLicense(StrEnum):
+    """What the FL this engine drives can open.
+
+    A trial FL cannot reopen a project it saved, so under ``trial`` every path
+    that makes FL open a saved .flp (the file-lane reload, CLI export) is
+    refused before it changes anything. Unset means ``licensed``.
+    """
+
+    LICENSED = "licensed"
+    TRIAL = "trial"
+
+
+def fl_license_from_env(environ: Mapping[str, str]) -> FLLicense:
+    """Resolve ``FLMCP_FL_LICENSE`` once at the entry point; an unknown value is a setup error."""
+    value = environ.get(ENV_FL_LICENSE, FLLicense.LICENSED.value)
+    try:
+        return FLLicense(value)
+    except ValueError as exc:
+        allowed = ", ".join(member.value for member in FLLicense)
+        raise ValueError(f"{ENV_FL_LICENSE} must be one of {allowed}; got {value!r}") from exc
 
 
 class BridgePortFile(BaseModel):
@@ -135,10 +159,21 @@ class RenderResult(BaseModel):
     path: str
     wavBase64: str | None = None
     note: str | None = None
+    # False only on a trial FL whose pre-render save did not land; the capture
+    # still verified, and project_save_detail says why the save failed.
+    project_saved: bool = True
+    project_save_detail: str | None = None
 
 
 def build_version() -> str:
-    """Package version plus the checked-out revision when available."""
+    """Package version plus the checked-out revision when available.
+
+    A wheel built by scripts/build-wheel.sh already names its commit in its
+    ``+g<sha>`` local version; git is consulted only for unstamped checkouts,
+    never to relabel an installed build from whatever repository surrounds it.
+    """
+    if "+" in __version__:
+        return __version__
     try:
         parents = subprocess.check_output(
             ["git", "show", "-s", "--format=%P", "HEAD"],
@@ -171,6 +206,7 @@ def build_contract() -> dict[str, Any]:
         "env": {
             ENV_SPOOL_ROOT: ENV_SPOOL_ROOT,
             ENV_AGENT_PROJECT: ENV_AGENT_PROJECT,
+            ENV_FL_LICENSE: [member.value for member in FLLicense],
             "BRIDGE_PORT_FILE": BRIDGE_PORT_FILE,
             "bridge_port_file_schema": BridgePortFile.model_json_schema(),
         },

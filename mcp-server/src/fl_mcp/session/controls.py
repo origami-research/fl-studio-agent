@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from fl_mcp import audio, errors, flp
-from fl_mcp.contract import ENV_AGENT_PROJECT, ENV_SPOOL_ROOT
+from fl_mcp.contract import ENV_AGENT_PROJECT, ENV_SPOOL_ROOT, FLLicense
 from fl_mcp.errors import NotePlaneUnavailable, WriteRejected
 from fl_mcp.schemas import (
     AutomationPoint,
@@ -28,6 +28,7 @@ from fl_mcp.schemas import (
     PluginParam,
     PluginParamModel,
     PluginParamSpec,
+    RenderReceipt,
 )
 
 from .link import LIVE_READ_TIMEOUT_SECONDS, LIVE_SET_TIMEOUT_SECONDS
@@ -59,7 +60,12 @@ def save_project(session: FLSession) -> None:
     on-disk .flp reparse to 145 (was 130). FL's globalTransport return for
     FPT_Save is a non-flag internal int that varies per call, so it is NOT
     surfaced - success is by-effect; a refusal raises below.
+
+    Never under a trial license: live box 2026-10-05, the first trial save
+    opened FL's modal Buy dialog and every later controller call timed out.
     """
+    if session.fl_license is FLLicense.TRIAL:
+        raise errors.fl_trial_cannot_save("saving the project")
     if session._ensure_hello() is None or session.control is None:
         # A failed liveness probe does not shrink the save's documented
         # budget.  In session mode that probe crosses the broker first; using
@@ -251,7 +257,24 @@ def _live_render(session: FLSession, output: Path, seconds: float) -> Path:
     return output
 
 
-def render_wav(session: FLSession, output: Path) -> Path:
+def _save_before_render(session: FLSession) -> tuple[bool, str | None]:
+    """Save so the render length reflects the live arrangement.
+
+    Licensed: a failed save fails the render, as before. Trial: FL is never
+    asked to save (save_project), because its Buy dialog would freeze the very
+    transport the capture needs. The Bridge capture does not need the saved
+    file, so the render runs and the receipt says the project was not saved.
+    """
+    if session.fl_license is FLLicense.TRIAL:
+        return False, (
+            "not saved: a trial FL answers Save with a modal Buy dialog that freezes the controller. "
+            "The render length came from the last saved project file."
+        )
+    save_project(session)
+    return True, None
+
+
+def render_wav(session: FLSession, output: Path) -> RenderReceipt:
     """Play the loop once and record the live mix, about the loop's length.
 
     The Bridge and FL audio output device are required. It fails loudly when
@@ -265,7 +288,7 @@ def render_wav(session: FLSession, output: Path) -> Path:
         )
     output = output.expanduser().resolve()
     project = session.project.expanduser().resolve()
-    save_project(session)
+    saved, save_detail = _save_before_render(session)
     if not session.caps.bridge_live:
         raise errors.ToolError(
             "render_failed",
@@ -273,11 +296,14 @@ def render_wav(session: FLSession, output: Path) -> Path:
             "Start FL with an audio output device and confirm bridge_heartbeat.txt, then retry.",
             retryable=True,
         )
-    return _live_render(session, output, _render_span_seconds(project))
+    path = _live_render(session, output, _render_span_seconds(project))
+    return RenderReceipt(path=path, project_saved=saved, project_save_detail=save_detail)
 
 
 def export_offline(session: FLSession, output: Path) -> Path:
     """Boot a second FL and export with -R, for offline deliverables only."""
+    if session.fl_license is FLLicense.TRIAL:
+        raise errors.fl_trial_cannot_reopen("export_offline (a second FL rendering the saved .flp)")
     if session.project is None:
         raise errors.ToolError(
             "render_failed",

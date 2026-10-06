@@ -18,6 +18,7 @@ from typing import Any, NoReturn, cast
 
 from fl_mcp import errors
 from fl_mcp.clock import now
+from fl_mcp.contract import FLLicense
 from fl_mcp.controller_version import CONTROLLER_PROTOCOL_VERSION
 from fl_mcp.core.carriers.wire import MidiControl
 from fl_mcp.core.transport import Transport
@@ -170,6 +171,7 @@ def make_session(
     profile: CapabilityProfileLike | None = None,
     plugin_param_models: tuple[PluginParamModel, ...] = (),
     platform: FakePlatform | None = None,
+    fl_license: FLLicense = FLLicense.LICENSED,
 ) -> tuple[FLSession, FakeStore]:
     store = store or FakeStore()
     # The fakes implement exactly the surface FLSession consumes; the casts are
@@ -186,6 +188,7 @@ def make_session(
         profile=profile,
         plugin_param_models=plugin_param_models,
         platform=cast(Platform, platform or FakePlatform()),
+        fl_license=fl_license,
     )
     return session, store
 

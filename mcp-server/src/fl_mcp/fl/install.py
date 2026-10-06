@@ -1,27 +1,39 @@
-"""Install FL Studio MCP into FL's user settings, with no FL UI required.
+r"""Install FL Studio MCP into FL's user settings, with no FL UI required.
 
 Three file operations, all done with FL closed:
   1. the piano-roll note script  -> Settings/Piano roll scripts/
   2. the controller script        -> Settings/Hardware/FLMCP/
-  3. the MIDI controller assignment (input+output ports) -> reg.xml
+  3. the MIDI controller assignment (input+output ports) -> FL's registry:
+     reg.xml on macOS, HKCU\Software\Image-Line\FL Studio <N> on Windows
 
 FL only loads these from fixed locations under the user's Image-Line data
-folder, so they are copied there rather than referenced in place. The reg.xml
-edit is what removes the last manual step (assigning the controller in FL's
-MIDI settings); it was validated by hand on 2026-08-26 (docs/12/14) and is
-codified here.
+folder, so they are copied there rather than referenced in place. The
+assignment is what removes the last manual step (assigning the controller in
+FL's MIDI settings); it was validated by hand on 2026-08-26 on macOS (docs/12/14)
+and read back from a hand assignment on a live Windows box on 2026-10-05.
 """
 
 from __future__ import annotations
 
+import argparse
+import json
 import re
 import shutil
+import sys
+from collections.abc import Mapping
+from importlib.resources import files
 from pathlib import Path
+from typing import Literal, Protocol
+
+from pydantic import BaseModel
 
 from fl_mcp.controller_version import controller_script_bytes
 
 from .paths import fl_settings_dirs, piano_roll_scripts_dir
 from .process import fl_process_running
+
+if sys.platform == "win32":
+    import winreg
 
 SCRIPT_FILENAME = "MCP Write Notes.pyscript"
 CONTROLLER_FILENAME = "device_FLMCP.py"
@@ -29,22 +41,19 @@ CONTROLLER_SUBDIR = "FLMCP"  # under Settings/Hardware/
 
 
 def reg_xml_path() -> Path:
-    """FL's MIDI-assignment registry. A function, not an import-time constant:
-    binding Path.home() at import captured ambient config before a test (or an
-    unusual HOME) could redirect it."""
+    """FL's MIDI-assignment registry on macOS (FL's emulated registry file). A
+    function, not an import-time constant: binding Path.home() at import
+    captured ambient config before a test (or an unusual HOME) could redirect it.
+    FL for Windows has no reg.xml; it uses the real registry (configure_midi_registry).
+    """
     return Path.home() / "Library" / "Preferences" / "Image-Line" / "reg.xml"
 
-# The controller assignment reg.xml expects. ScriptFolder must match the
+# The controller assignment FL's registry expects. ScriptFolder must match the
 # controller script's `# name=` header (FL keys the device by that name).
 REQ_PORT_NAME = "FLMCP Req"
 RES_PORT_NAME = "FLMCP Res"
 SCRIPT_NAME = "FLMCP Bridge Script"
 CONTROL_PORT = 1  # any matching int; input and output must agree
-
-
-def _source_script() -> Path:
-    # repo layout: mcp-server/src/fl_mcp/fl/install.py -> <repo>/fl-scripts/piano-roll/
-    return Path(__file__).resolve().parents[4] / "fl-scripts" / "piano-roll" / SCRIPT_FILENAME
 
 
 def script_dir() -> Path | None:
@@ -60,10 +69,7 @@ def script_installed_path() -> Path | None:
 
 
 def install() -> Path:
-    source = _source_script()
-    if not source.is_file():
-        raise FileNotFoundError(f"script not found in repo: {source}")
-
+    """Copy the packaged piano-roll script into Settings/Piano roll scripts/."""
     target_dir = script_dir()
     if target_dir is None:
         searched = "\n  ".join(str(p) for p in fl_settings_dirs()) or "(none)"
@@ -72,7 +78,7 @@ def install() -> Path:
         )
 
     dest = target_dir / SCRIPT_FILENAME
-    shutil.copy2(source, dest)
+    dest.write_bytes(files("fl_mcp.fl_scripts").joinpath(SCRIPT_FILENAME).read_bytes())
     return dest
 
 
@@ -111,8 +117,94 @@ def _remove_numbered_port_keys(data: str, port_name: str) -> tuple[str, int]:
     return re.subn(pattern, "", data, flags=re.DOTALL)
 
 
+IMAGE_LINE_KEY = r"Software\Image-Line"
+_FL_SETTINGS_KEY = re.compile(r"FL Studio (\d+)")
+
+
+class FLRegistry(Protocol):
+    """The slice of HKEY_CURRENT_USER the Windows assignment touches."""
+
+    def subkeys(self, path: str) -> list[str]: ...
+    def values(self, path: str) -> dict[str, str]: ...
+    def set_values(self, path: str, values: Mapping[str, str]) -> None: ...
+
+
+class CurrentUserRegistry:
+    """FLRegistry over the real HKEY_CURRENT_USER (Windows only)."""
+
+    def subkeys(self, path: str) -> list[str]:
+        try:
+            key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, path)
+        except FileNotFoundError:
+            return []
+        names: list[str] = []
+        with key:
+            while True:
+                try:
+                    names.append(winreg.EnumKey(key, len(names)))
+                except OSError:  # ERROR_NO_MORE_ITEMS ends the enumeration
+                    return names
+
+    def values(self, path: str) -> dict[str, str]:
+        try:
+            key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, path)
+        except FileNotFoundError:
+            return {}
+        found: dict[str, str] = {}
+        with key:
+            while True:
+                try:
+                    name, data, _kind = winreg.EnumValue(key, len(found))
+                except OSError:  # ERROR_NO_MORE_ITEMS ends the enumeration
+                    return found
+                found[name] = str(data)
+
+    def set_values(self, path: str, values: Mapping[str, str]) -> None:
+        with winreg.CreateKeyEx(winreg.HKEY_CURRENT_USER, path, 0, winreg.KEY_SET_VALUE) as key:
+            for name, value in values.items():
+                winreg.SetValueEx(key, name, 0, winreg.REG_SZ, value)
+
+
+# loopMIDI ports are bidirectional, so FL also lists "FLMCP Req" as an output.
+# At startup FL links a scripted input to the same-named output when that
+# output has no port, and the script then replies into its own input instead
+# of "FLMCP Res" (live box 2026-10-05: no ctl.hello answer until this output
+# was parked on another port).
+PARKED_PORT = CONTROL_PORT + 1
+
+# What FL 2026 for Windows itself writes (REG_SZ, read back from a hand
+# assignment): the reg.xml fields, under <FL Studio N>\Devices.
+WINDOWS_ASSIGNMENT: dict[str, dict[str, str]] = {
+    rf"Devices\MIDI input\{REQ_PORT_NAME}": {
+        "Type": "-3", "ScriptFolder": SCRIPT_NAME, "IDString": "-", "Port": str(CONTROL_PORT), "Enabled": "1",
+    },
+    rf"Devices\MIDI output\{RES_PORT_NAME}": {"Port": str(CONTROL_PORT), "IDString": "-"},
+    rf"Devices\MIDI output\{REQ_PORT_NAME}": {"Port": str(PARKED_PORT), "IDString": "-"},
+}
+
+
+def configure_midi_registry(registry: FLRegistry) -> str:
+    """Write the FLMCP controller assignment into the newest ``FL Studio <N>``
+    settings key and read it back. FL reads it at startup and rewrites it on a
+    clean exit, so the caller closes FL first."""
+    versions = [(int(m.group(1)), name) for name in registry.subkeys(IMAGE_LINE_KEY)
+                if (m := _FL_SETTINGS_KEY.fullmatch(name))]
+    if not versions:
+        return (f"WARN no HKCU\\{IMAGE_LINE_KEY}\\FL Studio <N> key; start FL once as this user, "
+                "then rerun the install")
+    root = f"{IMAGE_LINE_KEY}\\{max(versions)[1]}"
+    for subkey, values in WINDOWS_ASSIGNMENT.items():
+        path = f"{root}\\{subkey}"
+        registry.set_values(path, values)
+        stored = registry.values(path)
+        if any(stored.get(name) != value for name, value in values.items()):
+            return f"FAIL HKCU\\{path} reads back {stored}, wrote {values}"
+    return f"OK controller assigned to {REQ_PORT_NAME}/{RES_PORT_NAME} port {CONTROL_PORT} (HKCU\\{root})"
+
+
 def configure_midi() -> str:
-    """Write the FLMCP controller assignment into FL's reg.xml (FL closed).
+    """Write the FLMCP controller assignment into FL's registry (FL closed):
+    reg.xml on macOS, configure_midi_registry on Windows.
 
     Idempotent. If the FLMCP input/output keys are absent, they are inserted
     into the MIDI input/output sections. If present, the input and output Port
@@ -124,6 +216,8 @@ def configure_midi() -> str:
     """
     if fl_process_running():
         return "WARN FL Studio is running; close it before changing its MIDI registry"
+    if sys.platform == "win32":
+        return configure_midi_registry(CurrentUserRegistry())
     reg_xml = reg_xml_path()
     if not reg_xml.is_file():
         return f"WARN reg.xml not found at {reg_xml}; assign the controller once in FL's MIDI settings"
@@ -190,28 +284,49 @@ def configure_midi() -> str:
     return "OK controller assignment already present"
 
 
-def install_all() -> dict[str, str]:
+class InstallStep(BaseModel):
+    """One install step's outcome; ``WARN`` means the step needs a human or FL restart."""
+
+    status: Literal["OK", "WARN", "FAIL"]
+    detail: str
+
+    @classmethod
+    def from_status(cls, text: str) -> InstallStep:
+        """Read a ``"<STATUS> <detail>"`` line from configure_midi()."""
+        status, _, detail = text.partition(" ")
+        return cls.model_validate({"status": status, "detail": detail})
+
+
+def install_all() -> dict[str, InstallStep]:
     """Full FL-side install: note script + controller script + MIDI assignment."""
-    results: dict[str, str] = {}
+    results: dict[str, InstallStep] = {}
     try:
-        results["note_script"] = f"OK {install()}"
+        results["note_script"] = InstallStep(status="OK", detail=str(install()))
     except FileNotFoundError as exc:
-        results["note_script"] = f"FAIL {exc}"
+        results["note_script"] = InstallStep(status="FAIL", detail=str(exc))
     try:
-        results["controller_script"] = f"OK {install_controller()}"
+        results["controller_script"] = InstallStep(status="OK", detail=str(install_controller()))
     except FileNotFoundError as exc:
-        results["controller_script"] = f"FAIL {exc}"
-    results["midi_assignment"] = configure_midi()
+        results["controller_script"] = InstallStep(status="FAIL", detail=str(exc))
+    results["midi_assignment"] = InstallStep.from_status(configure_midi())
     return results
 
 
-def main() -> None:
+def main(argv: list[str] | None = None) -> None:
+    parser = argparse.ArgumentParser(description="Install the FL-side FL MCP files for this user.")
+    parser.add_argument("--json", action="store_true", help="print one JSON object of step results")
+    args = parser.parse_args(argv)
     results = install_all()
-    for step, status in results.items():
-        print(f"  [{status.split(' ', 1)[0]}] {step}: {status.split(' ', 1)[1] if ' ' in status else ''}")
-    if any(v.startswith("FAIL") for v in results.values()):
+    failed = any(step.status == "FAIL" for step in results.values())
+    if args.json:
+        print(json.dumps({name: step.model_dump() for name, step in results.items()}))
+    else:
+        for name, step in results.items():
+            print(f"  [{step.status}] {name}: {step.detail}")
+        if not failed:
+            print("\nDone. Open FL Studio first, then start your Claude session so the MIDI ports hot-plug.")
+    if failed:
         raise SystemExit(1)
-    print("\nDone. Open FL Studio first, then start your Claude session so the MIDI ports hot-plug.")
 
 
 if __name__ == "__main__":

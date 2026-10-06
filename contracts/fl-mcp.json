@@ -2,6 +2,10 @@
   "env": {
     "BRIDGE_PORT_FILE": "bridge_udp.json",
     "FLMCP_AGENT_PROJECT": "FLMCP_AGENT_PROJECT",
+    "FLMCP_FL_LICENSE": [
+      "licensed",
+      "trial"
+    ],
     "FLMCP_SPOOL_ROOT": "FLMCP_SPOOL_ROOT",
     "bridge_port_file_schema": {
       "description": "Endpoint published by the native Bridge in each session spool.",
@@ -67,6 +71,8 @@
       "operation_unsafe",
       "fl_relaunch_required",
       "file_lane_requires_reload",
+      "fl_trial_cannot_reopen",
+      "fl_trial_cannot_save",
       "unsupported_fl_build"
     ],
     "delivery": "ToolErrorResult JSON is delivered as the text content of isError tool results.",
@@ -588,7 +594,7 @@
       }
     },
     {
-      "description": "Play the loop once and record the live mix to a WAV for listening. Returns {\"path\",\n\"wavBase64\"} (base64 of the WAV, omitted with a note when the file\nexceeds the size cap). A render takes about the loop's length.\nCall analyze afterwards for measurements.",
+      "description": "Play the loop once and record the live mix to a WAV for listening. Returns {\"path\",\n\"wavBase64\"} (base64 of the WAV, omitted with a note when the file\nexceeds the size cap). A render takes about the loop's length.\nproject_saved is false only on a trial FL whose save before the capture\ndid not land (project_save_detail says why); the WAV is still verified.\nCall analyze afterwards for measurements.",
       "inputSchema": {
         "properties": {},
         "title": "renderArguments",
@@ -612,6 +618,23 @@
           "path": {
             "title": "Path",
             "type": "string"
+          },
+          "project_save_detail": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Project Save Detail"
+          },
+          "project_saved": {
+            "default": true,
+            "title": "Project Saved",
+            "type": "boolean"
           },
           "wavBase64": {
             "anyOf": [

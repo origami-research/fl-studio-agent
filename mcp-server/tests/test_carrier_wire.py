@@ -1,7 +1,7 @@
 """The MIDI carrier: correlation honesty, dropped-frame accounting, hello
 tracking, and event dispatch - against a fake ``rtmidi`` module, no hardware,
 no FL. The codec itself is flmcp_codec's frozen surface, covered by
-fl-scripts/controller/tests/test_framing.py.
+tests/test_controller_framing.py.
 """
 
 from __future__ import annotations
@@ -12,7 +12,10 @@ import types
 from typing import Any
 
 import pytest
-from flmcp_codec import (
+
+from fl_mcp import errors
+from fl_mcp.core.carriers import wire
+from fl_mcp.fl_scripts.flmcp_codec import (
     MAGIC,
     TYPE_EVENT,
     TYPE_RESPONSE,
@@ -20,9 +23,6 @@ from flmcp_codec import (
     encode_frame,
     encode_message,
 )
-
-from fl_mcp import errors
-from fl_mcp.core.carriers import wire
 from fl_mcp.schemas import ControlRequest, ControlResponse
 
 
@@ -157,6 +157,48 @@ def test_windows_opens_provisioned_ports_by_exact_name(monkeypatch):
         assert mod.created["in"].port_name == wire.RES_PORT_NAME
     finally:
         control.close()
+
+
+def _listed_ports(out_names, in_names):
+    """A fake rtmidi whose ports list the given names, as a real backend would."""
+    mod = _fake_rtmidi_module()
+    make_out, make_in = mod.MidiOut, mod.MidiIn
+
+    def midi_out():
+        port = make_out()
+        port.get_ports = lambda: list(out_names)
+        return port
+
+    def midi_in():
+        port = make_in()
+        port.get_ports = lambda: list(in_names)
+        return port
+
+    mod.MidiOut, mod.MidiIn = midi_out, midi_in
+    return mod
+
+
+def test_windows_opens_winmm_suffixed_loopmidi_names(monkeypatch):
+    """RtMidi's WinMM backend lists ports as '<name> <index>' (RtMidi.cpp
+    getPortName). Exact-name lookup alone never found loopMIDI's ports."""
+    mod = _listed_ports(["Microsoft GS Wavetable Synth 0", "FLMCP Req 1", "FLMCP Res 2"], ["FLMCP Req 0", "FLMCP Res 1"])
+    monkeypatch.setitem(sys.modules, "rtmidi", mod)
+    control = wire.windows_midi_control()
+    try:
+        assert mod.created["out"].port_name == "FLMCP Req 1"
+        assert mod.created["in"].port_name == "FLMCP Res 1"
+    finally:
+        control.close()
+
+
+@pytest.mark.parametrize(
+    ("listed", "problem"),
+    [(["FLMCP Request 0", "FLMCP Res 1"], "is missing"), (["FLMCP Req 0", "FLMCP Req 1"], "more than once")],
+)
+def test_windows_refuses_a_missing_or_ambiguous_port(monkeypatch, listed, problem):
+    monkeypatch.setitem(sys.modules, "rtmidi", _listed_ports(listed, ["FLMCP Res 0"]))
+    with pytest.raises(wire.ControlUnavailable, match=problem):
+        wire.windows_midi_control()
 
 
 def test_missing_rtmidi_is_control_unavailable(monkeypatch):
@@ -407,3 +449,38 @@ def test_send_request_fails_fast_when_the_shared_wire_stays_busy(rig):
     assert exc_info.value.category == "control_plane_busy"
     assert exc_info.value.retryable is True
     assert "busy" in exc_info.value.message
+
+
+def test_provisioned_ports_ask_the_controller_for_its_hello(monkeypatch):
+    """loopMIDI ports outlive FL's controller init: its OnInit hello went out
+    before this process opened them (live box 2026-10-05), so a provisioned
+    wire asks with ctl.hello instead of waiting for an announcement that
+    already happened."""
+    mod = _fake_rtmidi_module()
+    monkeypatch.setitem(sys.modules, "rtmidi", mod)
+    control = wire.windows_midi_control()
+    midi_in, midi_out = mod.created["in"], mod.created["out"]
+    try:
+        thread, box = _in_thread(lambda: control.await_hello(timeout=2.0))
+        for _ in range(400):
+            if midi_out.sent:
+                break
+            threading.Event().wait(0.005)
+        assert midi_out.sent, "no request was sent"
+        request = _last_sent_request(midi_out)
+        assert request["op"] == "ctl.hello"
+        _deliver_response(midi_in, request["id"], ret={"script_ver": "0.2.1", "fl_ver": "Trial v26.1.6", "ppq": 96})
+        thread.join(timeout=2.0)
+        assert box["result"].fl_ver == "Trial v26.1.6"
+        assert control.is_live()
+    finally:
+        control.close()
+
+
+def test_virtual_ports_wait_for_the_announced_hello(rig):
+    """Virtual ports hot-plug into a running FL, whose bind announces hello:
+    nothing to ask, so nothing is sent."""
+    control, _midi_in, midi_out = rig
+    with pytest.raises(errors.ToolError):
+        control.await_hello(timeout=0.05)
+    assert midi_out.sent == []

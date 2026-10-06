@@ -173,7 +173,7 @@ message is dropped. Every composite read - the ones docs/11 calls the ops "the s
 calls most" - has therefore never worked over MIDI.
 
 The codec is not at fault: chunking round-trips correctly in
-`fl-scripts/controller/tests/test_framing.py`. Only the *routing* after reassembly is
+`mcp-server/tests/test_controller_framing.py`. Only the *routing* after reassembly is
 wrong, and that is server-side, which is why in-process tests never caught it.
 
 Fixed in v2 by Lane W (found independently by reading, confirmed by this measurement):
@@ -426,7 +426,7 @@ precisely because TCC consent is un-scriptable; this is its in-FL sibling).
 The MCPTools escape hatch is closed and already documented: FL 2026 ships
 `run_piano_roll_script` in `System/Tools/MCP/MCPTools.pyc`, but that file is CPython
 **3.12** bytecode while the controller script runs in FL's embedded Python **3.9**, so
-`device_FLMCP.py` cannot import it (`fl-scripts/controller/NOTES.md`).
+`device_FLMCP.py` cannot import it (`mcp-server/src/fl_mcp/fl_scripts/NOTES.md`).
 
 **What remains genuinely unproven** (worth being precise, rather than calling this
 "basically passed"): the fast suite executes the pyscript under CPython 3.12 against a

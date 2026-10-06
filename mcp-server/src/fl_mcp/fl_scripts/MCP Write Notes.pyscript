@@ -1,0 +1,396 @@
+"""FL MCP - apply pending note edits from the MCP server to this piano roll.
+
+Run this from the piano roll's Tools > Scripting menu after asking Claude to
+write notes. It reads the pending commands from the FLMCP spool (the v2
+sequenced protocol: a queue index plus one file per command), applies them to
+the currently open piano roll in order, and marks each consumed.
+
+This is the manual-lane executor for the note plane. It is deliberately the
+*only* component that knows FL's units: the server sends beats, and PPQ is
+resolved here at runtime.
+
+Spool layout, per root (kept in sync with fl_mcp/spool.py):
+
+    <root>/commands/queue.json    {"proto": 2, "ids": [...]} - pending ids.
+                                  The script iterates THIS, never a directory
+                                  listing: os.listdir is unmeasured in FL's
+                                  sandbox, open-read and os.path.exists are
+                                  measured to work.
+    <root>/commands/<id>.json     one command; consumed = tombstone overwrite
+    <root>/responses/<id>.json    this script's confirmation, one per command
+    <root>/consumed.json          fail-closed applied-ids ledger
+
+FL Studio's embedded Python is sandboxed, and every constraint below was
+learned by watching this script fail:
+
+* `open()` works only inside FL's own data tree. Elsewhere it raises
+  SystemError, even though `os.path.exists()` returns True. Hence the spool
+  lives under Image-Line/FL Studio/Settings.
+* `open()` rejects the `encoding=` keyword. Use plain 'r'/'w'.
+* `os.remove()` is blocked outright, so a command is consumed by *overwriting*
+  it with a tombstone rather than deleting it.
+* Blocked calls raise SystemError, not OSError, so every guard here catches
+  Exception. Narrower handlers silently fail to catch FL's refusals.
+* FL calls `apply()` with NO arguments when a script defines no
+  `createDialog()`, so `apply` must tolerate being called bare.
+
+A piano roll script can only edit the score it was invoked on, so this cannot
+target an arbitrary channel or pattern; a command's `target` is advisory here.
+"""
+
+import json
+import os
+import traceback
+
+import flpianoroll as flp
+
+PROTO_VER = 2
+
+# Keep in sync with mcp-server/src/fl_mcp/flpaths.py.
+# FL allows writes under 'Piano roll scripts' recursively, but not elsewhere in
+# Settings - measured, see flpaths.py.
+SPOOL_SUBDIRS = [
+    os.path.join("Piano roll scripts", "FLMCP"),
+    "Piano roll scripts",
+]
+
+
+def _settings_dirs():
+    home = os.path.expanduser("~")
+    roots = [
+        os.path.join(home, "Documents", "Image-Line"),
+        os.path.join(home, "Image-Line"),
+        os.path.join(home, "OneDrive", "Documents", "Image-Line"),
+    ]
+    return [os.path.join(r, "FL Studio", "Settings") for r in roots]
+
+
+def _spool_roots():
+    return [os.path.join(s, sub) for s in _settings_dirs() for sub in SPOOL_SUBDIRS]
+
+
+def _read_text(path):
+    """Return (text, problem). Plain 'r' only - FL rejects encoding=."""
+    if not os.path.exists(path):
+        return None, "not found"
+    try:
+        f = open(path, "r")
+    except Exception as exc:
+        return None, "cannot open (%s)" % exc
+    try:
+        return f.read(), None
+    except Exception as exc:
+        return None, "cannot read (%s)" % exc
+    finally:
+        try:
+            f.close()
+        except Exception:
+            pass
+
+
+def _write_text(path, text):
+    """Best-effort write. Returns True on success."""
+    try:
+        f = open(path, "w")
+    except Exception:
+        return False
+    try:
+        f.write(text)
+        return True
+    except Exception:
+        return False
+    finally:
+        try:
+            f.close()
+        except Exception:
+            pass
+
+
+def _queue_ids():
+    """(ids, diagnostics): pending command ids from every readable queue index.
+
+    A queue that exists but cannot be read or parsed is a diagnostic, not a
+    silent "nothing pending" - that is how a spool outside FL's readable tree
+    surfaces to the user.
+    """
+    ids = []
+    diagnostics = []
+    for root in _spool_roots():
+        path = os.path.join(root, "commands", "queue.json")
+        text, problem = _read_text(path)
+        if text is None:
+            if problem != "not found":
+                diagnostics.append("%s -> %s" % (path, problem))
+            continue
+        try:
+            payload = json.loads(text)
+        except Exception as exc:
+            diagnostics.append("%s -> bad JSON (%s)" % (path, exc))
+            continue
+        for value in payload.get("ids", []):
+            if isinstance(value, int) and value not in ids:
+                ids.append(value)
+    ids.sort()
+    return ids, diagnostics
+
+
+def _read_command(cmd_id):
+    """Return (command, path, diagnostics); command is None if none readable.
+
+    A tombstone ({"consumed": true}) in one root does not hide a real command
+    in another - the mirrored copies are equivalent, so the first readable
+    non-tombstone wins and a tombstone anywhere means "already settled" only
+    when no root still holds the command.
+    """
+    diagnostics = []
+    tombstoned = False
+    for root in _spool_roots():
+        path = os.path.join(root, "commands", "%06d.json" % cmd_id)
+        text, problem = _read_text(path)
+        if text is None:
+            if problem != "not found":
+                diagnostics.append("%s -> %s" % (path, problem))
+            continue
+        try:
+            payload = json.loads(text)
+        except Exception as exc:
+            diagnostics.append("%s -> bad JSON (%s)" % (path, exc))
+            continue
+        if isinstance(payload, dict) and payload.get("op"):
+            return payload, path, diagnostics
+        tombstoned = True  # a tombstone from a previous run; not an error
+    return None, None, ([] if tombstoned else diagnostics)
+
+
+def _consumed_ids():
+    """(ids, corrupt_paths): every command id already applied, from any ledger.
+
+    A ledger that exists but cannot be parsed is reported in corrupt_paths, and
+    the caller must fail CLOSED on it: this file is the sole thing preventing an
+    already-applied command from replaying (duplicate notes, or clear_notes
+    re-firing), so a torn/corrupt ledger must never be silently read as
+    "nothing applied yet".
+    """
+    ids = []
+    corrupt = []
+    for root in _spool_roots():
+        path = os.path.join(root, "consumed.json")
+        text, _ = _read_text(path)
+        if text is None:
+            continue
+        try:
+            for value in json.loads(text).get("ids", []):
+                if value not in ids:
+                    ids.append(value)
+        except Exception:
+            corrupt.append(path)
+    return ids, corrupt
+
+
+def _consume_all(cmd_id):
+    """Record the command as applied. Returns the roots that accepted the write.
+
+    Consumption cannot depend on the root the command was *read* from: FL grants
+    read access more freely than write access, so the spool copy we read may sit
+    in a folder that refuses open(path, 'w').
+
+    So the record of what has been applied is a ledger written to *any* writable
+    root, and it is consulted before applying. A tombstone over the command file
+    is written too where possible, but is no longer what correctness depends on.
+    (os.remove is blocked outright in FL, so deleting is not an option either.)
+    """
+    ids, _corrupt = _consumed_ids()  # corrupt ledgers were vetted in run(); rewriting heals them
+    if cmd_id not in ids:
+        ids.append(cmd_id)
+    ledger = json.dumps({"ids": ids[-50:]})
+    tombstone = json.dumps({"consumed": True, "id": cmd_id})
+
+    accepted = []
+    refused = []
+    for root in _spool_roots():
+        try:
+            if not os.path.isdir(root):
+                continue
+        except Exception:
+            continue
+        if _write_text(os.path.join(root, "consumed.json"), ledger):
+            accepted.append(root)
+        else:
+            refused.append(root)
+        path = os.path.join(root, "commands", "%06d.json" % cmd_id)
+        if os.path.exists(path):
+            _write_text(path, tombstone)
+    return accepted, refused
+
+
+def _write_response(payload):
+    text = json.dumps(payload, indent=2)
+    name = os.path.join("responses", "%06d.json" % payload["id"])
+    for root in _spool_roots():
+        try:
+            if os.path.isdir(root):
+                _write_text(os.path.join(root, name), text)
+        except Exception:
+            pass  # never let result-reporting failure mask the real outcome
+
+
+def _apply_notes(cmd):
+    ppq = flp.score.PPQ
+    args = cmd.get("args") or {}
+    notes = args.get("notes") or []
+
+    if args.get("mode") == "replace":
+        flp.score.clearNotes(True)
+
+    for spec in notes:
+        note = flp.Note()
+        note.number = int(spec["key"])
+        note.time = int(round(float(spec["start"]) * ppq))
+        note.length = max(1, int(round(float(spec["length"]) * ppq)))
+        note.velocity = float(spec.get("velocity", 0.8))
+        note.pan = float(spec.get("pan", 0.5))
+        note.color = int(spec.get("color", 0))
+        flp.score.addNote(note)
+
+    return "added %d note(s) at PPQ %d" % (len(notes), ppq)
+
+
+def _clear_notes(cmd):
+    before = flp.score.noteCount
+    flp.score.clearNotes(True)
+    return "cleared %d note(s)" % before
+
+
+def _ping(cmd):
+    # The protocol (schemas.OP_ARGS) declares ping; harness.enable_autonomy
+    # uses it to prove the trigger path without touching the piano roll.
+    return "pong"
+
+
+HANDLERS = {"add_notes": _apply_notes, "clear_notes": _clear_notes, "ping": _ping}
+
+
+def run():
+    queue_ids, diagnostics = _queue_ids()
+
+    consumed, corrupt = _consumed_ids()
+    if corrupt:
+        # Fail closed: with an unreadable ledger we cannot know what already
+        # applied, and replaying add_notes/clear_notes silently corrupts the
+        # piano roll. Refuse and say so instead of guessing.
+        flp.Utils.ShowMessage(
+            "FL MCP: refusing to apply commands.\n\n"
+            "The applied-command ledger could not be read:\n%s\n\n"
+            "Applying now could duplicate an already-applied command. If you "
+            "are sure nothing is pending twice, delete the file(s) above and "
+            "run the script again." % "\n".join(corrupt)
+        )
+        return
+
+    pending = []
+    for cmd_id in queue_ids:
+        if cmd_id in consumed:
+            continue
+        cmd, path, cmd_diagnostics = _read_command(cmd_id)
+        diagnostics.extend(cmd_diagnostics)
+        if cmd is not None:
+            pending.append((cmd_id, cmd, path))
+
+    if not pending:
+        if diagnostics:
+            flp.Utils.ShowMessage(
+                "FL MCP: found command files but could not read them.\n\n"
+                + "\n".join(diagnostics)
+                + "\n\nThis usually means the spool is outside the folders "
+                "FL Studio is allowed to read."
+            )
+        else:
+            flp.Utils.ShowMessage(
+                "FL MCP: nothing to apply.\n\n"
+                "Ask Claude to write notes first, then run this script again."
+            )
+        return
+
+    applied = []
+    unmarked = None
+    for cmd_id, cmd, _path in pending:
+        # Consume before anything else: a command that crashes the script (or
+        # fails its checks) must not be replayed on the next run, and must not
+        # block the commands queued behind it forever.
+        accepted, refused = _consume_all(cmd_id)
+        if not accepted:
+            unmarked = (cmd_id, refused)
+
+        if cmd.get("proto") != PROTO_VER:
+            msg = "protocol mismatch: command #%s is v%s, this script is v%d" % (
+                cmd_id,
+                cmd.get("proto"),
+                PROTO_VER,
+            )
+            _write_response({"id": cmd_id, "ok": False, "op": cmd.get("op"), "err": msg})
+            flp.Utils.ShowMessage("FL MCP: %s\n\nUpdate the script or the server." % msg)
+            return
+
+        handler = HANDLERS.get(cmd.get("op"))
+        if handler is None:
+            msg = "unknown op %r" % cmd.get("op")
+            _write_response({"id": cmd_id, "ok": False, "err": msg})
+            flp.Utils.ShowMessage("FL MCP: %s" % msg)
+            return
+
+        try:
+            summary = handler(cmd)
+        except Exception as exc:
+            detail = "".join(traceback.format_exception_only(type(exc), exc)).strip()
+            _write_response({"id": cmd_id, "ok": False, "op": cmd.get("op"), "err": detail})
+            flp.Utils.ShowMessage("FL MCP: failed to apply command #%s.\n\n%s" % (cmd_id, detail))
+            return
+
+        # notes_written is the READBACK: what the piano roll holds after this
+        # command, not what the command asked for.
+        _write_response(
+            {
+                "id": cmd_id,
+                "ok": True,
+                "op": cmd.get("op"),
+                "notes_written": flp.score.noteCount,
+            }
+        )
+        applied.append("#%d %s" % (cmd_id, summary))
+
+    # Success is silent: the notes are visible in the piano roll, and a modal
+    # here would freeze FL's OnIdle (and with it the control plane) until
+    # dismissed - measured, docs/21 live-verified fact 6. Only a total
+    # consumption failure matters: one writable root is enough for the ledger,
+    # and the ledger is what prevents a re-apply.
+    if unmarked is not None:
+        cmd_id, refused = unmarked
+        flp.Utils.ShowMessage(
+            "FL MCP: applied %s, but command #%d could not be marked as done.\n\n"
+            "Running this script again will apply it a second time.\n\n"
+            "FL Studio refused to write to every spool location:\n%s"
+            % ("; ".join(applied), cmd_id, "\n".join(refused or _spool_roots()))
+        )
+
+
+# FL runs a .pyscript top to bottom, then calls apply() with no arguments when
+# the script defines no createDialog(). Doing the work at module level means the
+# edit applies immediately with no dialog to dismiss; `_ran` keeps the follow-up
+# apply() call from applying it a second time.
+_ran = False
+
+try:
+    run()
+    _ran = True
+except Exception:
+    try:
+        flp.Utils.ShowMessage("FL MCP: unexpected error.\n\n%s" % traceback.format_exc())
+    except Exception:
+        pass
+
+
+def apply(form=None):
+    global _ran
+    if not _ran:
+        run()
+        _ran = True

@@ -22,7 +22,7 @@ from fl_mcp import __version__, server
 from fl_mcp.audio import AudioAnalysis, SpectralBalance
 from fl_mcp.contract import build_version
 from fl_mcp.errors import ToolError
-from fl_mcp.schemas import DoctorReport, Note, NoteSetRef, PlaneStatus, Target
+from fl_mcp.schemas import DoctorReport, Note, NoteSetRef, PlaneStatus, RenderReceipt, Target
 
 
 class _FakeStore:
@@ -396,6 +396,9 @@ class _RenderFl:
         self.analyzed: list[Path] = []
 
     def render(self, output: Path) -> Path:
+        return self.render_receipt(output).path
+
+    def render_receipt(self, output: Path) -> RenderReceipt:
         import wave
 
         import numpy as np
@@ -405,7 +408,7 @@ class _RenderFl:
             wav.setsampwidth(2)
             wav.setframerate(44100)
             wav.writeframes((np.zeros(441)).astype("<i2").tobytes())
-        return output
+        return RenderReceipt(path=output, project_saved=True)
 
     def analyze(self, wav: Path) -> AudioAnalysis:
         self.analyzed.append(Path(wav))
@@ -425,6 +428,8 @@ def test_render_returns_path_and_wav_base64():
     result = server.render(ctx)
     assert Path(result.path).exists()
     assert base64.b64decode(result.wavBase64)[:4] == b"RIFF"
+    assert result.project_saved is True
+    assert result.project_save_detail is None
 
 
 def test_analyze_defaults_to_the_most_recent_render():

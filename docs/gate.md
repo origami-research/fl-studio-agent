@@ -14,7 +14,7 @@ exact head SHA, then runs the gate there. A PR number is fetched from
 stale tracking branch.
 
 The gate runs `uv sync`, installs the repository root editable into the
-`mcp-server` environment (required for `flmcp_codec`), fetches the proprietary
+`mcp-server` environment (the e2e tests import `harness`), fetches the proprietary
 SDK, builds and tests native code, then runs `uv run pytest -q` and
 `uvx ruff check`. Native work comes before pytest so the Python/C++ differential
 test is eligible to run. The SDK fetch, build, tests, Python tests, and Ruff are

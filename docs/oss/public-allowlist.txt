@@ -7,7 +7,6 @@ RUNBOOK_E2E.md
 SETUP.md
 contracts/
 docs/
-fl-scripts/
 install.sh
 mcp-server/
 native/CMakeLists.txt
@@ -16,4 +15,4 @@ pyproject.toml
 scripts/gate.sh
 scripts/windows/
 scripts/oss/
-scripts/check-release.sh
+scripts/build-wheel.sh

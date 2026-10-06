@@ -391,15 +391,22 @@ def render(ctx: Context) -> RenderResult:
     """Play the loop once and record the live mix to a WAV for listening. Returns {"path",
     "wavBase64"} (base64 of the WAV, omitted with a note when the file
     exceeds the size cap). A render takes about the loop's length.
+    project_saved is false only on a trial FL whose save before the capture
+    did not land (project_save_detail says why); the WAV is still verified.
     Call analyze afterwards for measurements."""
     fl = ctx.request_context.lifespan_context["fl"]
     output = Path(tempfile.mkdtemp(prefix="flmcp-render-")) / "render.wav"
     try:
-        path = fl.render(output)
+        receipt = fl.render_receipt(output)
     except ToolError as exc:
         return _tool_error_response(_tool_error_result(exc))
+    path = receipt.path
     ctx.request_context.lifespan_context[_LAST_RENDER_KEY] = path
-    result: dict[str, Any] = {"path": str(path)}
+    result: dict[str, Any] = {
+        "path": str(path),
+        "project_saved": receipt.project_saved,
+        "project_save_detail": receipt.project_save_detail,
+    }
     data = path.read_bytes()
     if len(data) <= RENDER_WAV_BASE64_MAX_BYTES:
         result["wavBase64"] = base64.b64encode(data).decode("ascii")

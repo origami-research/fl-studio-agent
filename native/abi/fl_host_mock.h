@@ -3,8 +3,9 @@
 // This is what makes the call contract in fl_host_abi.h provable with no FL in
 // the loop. A mock that inherits `TFruityPlugHost` cannot prove anything about
 // the contract - it builds a C++ vtable, so slot 0 IS Dispatcher and the
-// crashing call looks correct. This mock lays the VMT out the way FL does:
-// 200 bytes of header, then Dispatcher.
+// crashing call looks correct. This mock lays the VMT out the way FL does on
+// the build platform: on macOS 200 bytes of header, then Dispatcher; on Windows
+// Dispatcher first (fl_abi::kHostVmtHeaderSlots).
 //
 // The header slots are filled with a trap that counts the call and returns 0.
 // So a regression to `host->Dispatcher(...)` does not crash the test - it lands
@@ -27,10 +28,10 @@ namespace fl_mock {
 class FpcHost {
  public:
   FpcHost() {
-    for (std::size_t i = 0; i < fl_abi::kFpcVmtHeaderSlots; ++i) {
+    for (std::size_t i = 0; i < fl_abi::kHostVmtHeaderSlots; ++i) {
       vmt_[i] = reinterpret_cast<const void *>(&FpcHost::TrapSlot);
     }
-    vmt_[fl_abi::kFpcVmtHeaderSlots] = reinterpret_cast<const void *>(&FpcHost::DispatcherSlot);
+    vmt_[fl_abi::kHostVmtHeaderSlots] = reinterpret_cast<const void *>(&FpcHost::DispatcherSlot);
     image_.vmt = vmt_;
     image_.owner = this;
   }
@@ -71,7 +72,7 @@ class FpcHost {
   }
 
   Image image_{};
-  const void *vmt_[fl_abi::kFpcVmtHeaderSlots + 1]{};
+  const void *vmt_[fl_abi::kHostVmtHeaderSlots + 1]{};
   int header_slot_calls_ = 0;
 };
 

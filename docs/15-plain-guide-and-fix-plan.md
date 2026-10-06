@@ -84,8 +84,8 @@ Then separately: the server opened its own MIDI ports, FL connected at launch, a
 | Control transport | `control_midi.py` | Server-hosted virtual MIDI ports + request/response matching. No extra processes |
 | Note spool | `spool.py`, `flpaths.py` | Write/read the JSON files in FL's allowed folder |
 | Installer | `install.py` | Copies both scripts into FL's folders and writes FL's own config file (`reg.xml`) so zero clicking is needed in FL |
-| Controller script | `fl-scripts/controller/device_FLMCP.py` | Lives inside FL; executes control ops; also bridges to FL 2026's built-in `MCPTools` tools |
-| Note script | `fl-scripts/piano-roll/MCP Write Notes.pyscript` | Lives inside FL; applies queued note edits to the open piano roll |
+| Controller script | `mcp-server/src/fl_mcp/fl_scripts/device_FLMCP.py` | Lives inside FL; executes control ops; also bridges to FL 2026's built-in `MCPTools` tools |
+| Note script | `mcp-server/src/fl_mcp/fl_scripts/MCP Write Notes.pyscript` | Lives inside FL; applies queued note edits to the open piano roll |
 | Native plugin (endgame) | `native/` (on lane branches) | Will replace the note script + trigger with a silent in-FL worker |
 
 There is also a second branch (`integrate/lanes-wave1`) holding the bigger tool set (~18 tools), a Python "notebook kernel" (the AI writes real Python like `fl.track("Bass").notes`), a records store, and an action log.

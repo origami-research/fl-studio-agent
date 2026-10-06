@@ -11,7 +11,7 @@ From a fresh clone to "ask an agent for notes, they appear in FL Studio".
 ```bash
 cd mcp-server
 uv venv
-uv pip install -e . -e ..        # the package + the repo-root (harness + flmcp_codec)
+uv pip install -e . -e ..        # the package + the repo-root harness
 ```
 
 ## 2. Create the agent's project + wire FL

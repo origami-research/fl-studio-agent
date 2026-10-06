@@ -36,6 +36,7 @@ Documentation = "https://github.com/origami-research/fl-studio-agent/tree/main/d
 
 [project.scripts]
 fl-mcp = "fl_mcp.server:main"
+fl-mcp-doctor = "fl_mcp.doctor:main"
 fl-mcp-contract = "fl_mcp.contract:main"
 fl-mcp-dev-session = "fl_mcp.dev_session:main"
 fl-mcp-install = "fl_mcp.fl.install:main"
@@ -47,15 +48,16 @@ fl-mcp-listen = "fl_mcp.audio_stream:main"
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
+# Everything the runtime reads ships inside src/fl_mcp (the FL-side scripts in
+# fl_scripts/, the template, profiles), so a wheel built from this tree or from
+# its sdist is identical and self-contained. The one outside file is LICENSE,
+# which only the sdist route (scripts/build-wheel.sh) carries into the wheel.
 [tool.hatch.build.targets.wheel]
 packages = ["src/fl_mcp"]
 artifacts = ["src/fl_mcp/assets/session-template.flp"]
-dev-mode-dirs = ["src", "../fl-scripts/controller"]
 
 [tool.hatch.build.targets.sdist.force-include]
 "../LICENSE" = "LICENSE"
-"../fl-scripts/controller/device_FLMCP.py" = "src/fl_mcp/_controller/device_FLMCP.py"
-"../fl-scripts/controller/flmcp_codec.py" = "src/fl_mcp/_codec.py"
 
 
 [dependency-groups]
@@ -75,6 +77,14 @@ ignore = ["TRY003", "PLC0415", "E501"]  # E402 retired: fl/ quarantine fixed the
 # Tests may catch broadly / suppress deliberately. RUF059: unpacking a fixture
 # tuple (`session, bridge, control = wired`) and using a subset is idiomatic.
 "tests/**" = ["BLE", "TRY", "SIM105", "RUF059"]
+# F811/E402: the frozen codec is embedded after its host imports.
+# BLE001/TRY004/SIM115: FL's callback and cleanup boundaries cannot let host
+# exceptions escape.
+# PTH*: this soon-to-be-removed refuted ctl file lane must retain FL's legacy
+# path APIs until its dedicated deletion lands.
+"src/fl_mcp/fl_scripts/device_FLMCP.py" = [
+    "BLE001", "E402", "F811", "PTH104", "PTH111", "PTH112", "PTH118", "PTH120", "PTH123", "PTH208", "SIM115", "TRY004",
+]
 [tool.pytest.ini_options]
-testpaths = ["tests", "../fl-scripts/controller/tests"]
+testpaths = ["tests"]
 markers = ["e2e: requires a deliberate live FL Studio session"]

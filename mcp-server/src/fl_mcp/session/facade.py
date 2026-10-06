@@ -19,7 +19,7 @@ from pathlib import Path
 
 from fl_mcp import errors, flp
 from fl_mcp.audio_stream import AudioChunk, AudioEndpoint
-from fl_mcp.contract import ENV_AGENT_PROJECT, ENV_SPOOL_ROOT
+from fl_mcp.contract import ENV_AGENT_PROJECT, ENV_SPOOL_ROOT, FLLicense, fl_license_from_env
 from fl_mcp.core.carriers import CarrierUnavailable
 from fl_mcp.core.carriers.broker_client import BrokerControl
 from fl_mcp.core.carriers.spool import SpoolCarrier
@@ -45,6 +45,7 @@ from fl_mcp.schemas import (
     NoteWriteMode,
     PluginParam,
     PluginParamModel,
+    RenderReceipt,
     SessionState,
     Target,
     WriteReceipt,
@@ -92,6 +93,8 @@ def create_session(
     # The one host-OS read. FLSession takes its Platform by injection, so a
     # session built anywhere else never silently inherits the runner's OS.
     platform = platform or platform_for(sys.platform)
+    # Likewise the one FLMCP_FL_LICENSE read: FLSession requires it injected.
+    fl_license = fl_license_from_env(os.environ)
     spool_override = os.environ.get(ENV_SPOOL_ROOT)
     control: ControlCarrier | None
     control_factory: Callable[[], ControlCarrier] | None = None
@@ -101,8 +104,11 @@ def create_session(
         control = BrokerControl(session_root, endpoint)
         control_factory = lambda: BrokerControl(session_root, endpoint)  # noqa: E731 - recycle = fresh carrier, same session
     else:
+        # Every reopen (hot-plug recycle, post-reload reconnect) goes through
+        # the platform's wire too: Windows has provisioned ports, never virtual.
+        control_factory = platform.control_factory()
         try:
-            control = platform.control_factory()()
+            control = control_factory()
         except ControlUnavailable:
             log.exception("control wire unavailable; tools degrade to file/spool backends")
             control = None
@@ -130,6 +136,7 @@ def create_session(
         ),
         session_spool_root=Path(spool_override) if spool_override else None,
         platform=platform,
+        fl_license=fl_license,
     )
     session.prewarm()  # a live bridge is used from the first write, not the second (#93)
     return session
@@ -167,6 +174,7 @@ class FLSession:
         store: Store,
         project: Path | None,
         platform: Platform,
+        fl_license: FLLicense,
         control_factory: Callable[[], ControlCarrier] | None = None,
         profile: CapabilityProfileLike | None = None,
         plugin_param_models: tuple[PluginParamModel, ...] = (),
@@ -183,6 +191,7 @@ class FLSession:
         self.bridge_lane = BridgeLane(self)
         self.observer = Observer(project=project)
         self.session_spool_root = session_spool_root
+        self.fl_license = fl_license
         self.platform = platform
         self._profile_supported, self._profile_gate_detail = profile_gate()
         if not self._profile_supported:
@@ -362,7 +371,7 @@ class FLSession:
         with self._write_guard("set_tempo"):
             return controls.set_tempo(self, bpm)
 
-    def render_wav(self, output: Path) -> Path:
+    def render_wav(self, output: Path) -> RenderReceipt:
         with self._write_guard("render_wav"):
             return controls.render_wav(self, output)
 
@@ -489,7 +498,10 @@ class FLSession:
         lifecycle.reload_fl(self.project, self.link)
 
     def _require_file_lane(self) -> None:
-        """Refuse before mutating a session project that cannot reload in place."""
+        """Refuse before mutating a project FL cannot be made to reopen: a trial
+        FL cannot reopen saved projects, and a session FL has no in-place reload."""
+        if self.fl_license is FLLicense.TRIAL:
+            raise errors.fl_trial_cannot_reopen("This project-file edit")
         if self.session_spool_root is not None:
             raise errors.file_lane_requires_reload()
 

@@ -10,7 +10,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
       # Two editable installs: the server package, and the repo-root package
-      # that provides `harness` + `flmcp_codec` (replaces sys.path surgery).
+      # that provides `harness` (replaces sys.path surgery).
       - run: uv sync --locked
       - run: uv pip install --python .venv/bin/python -e .. ruff
       # Lint gate: the code-taste rules in AGENTS.md / docs/19 are enforced here,

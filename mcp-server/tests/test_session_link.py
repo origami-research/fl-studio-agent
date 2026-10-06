@@ -44,6 +44,30 @@ def test_create_session_is_the_factory(monkeypatch):
     assert "/" not in session.store.project_key
 
 
+class _TwoControlPlatform(FakePlatform):
+    """Hands out a silent wire first, then a live one: what a recycle reopens."""
+
+    def __init__(self, first: FakeControl, then: FakeControl) -> None:
+        super().__init__(first)
+        self._queue = [first, then]
+
+    def control_factory(self):
+        return lambda: self._queue.pop(0)
+
+
+def test_create_session_recycles_through_the_platform_wire(monkeypatch):
+    """Live box 2026-10-05: create_session gave the link no factory outside
+    session mode, so a recycle on Windows reopened VIRTUAL ports (MidiControl's
+    default) and WinMM raised. Every reopen must come from the platform."""
+    silent, live = FakeControl(hello=None), FakeControl(hello=HELLO)
+    silent.close = lambda: None
+    session = create_session(platform=_TwoControlPlatform(silent, live))
+    monkeypatch.setattr(link_mod, "fl_process_running", lambda: True)
+
+    assert session._ensure_hello() is HELLO
+    assert session.control is live
+
+
 def test_create_session_ignores_a_missing_project_override(monkeypatch, tmp_path):
     missing = tmp_path / "not-created.flp"
     monkeypatch.setenv("FLMCP_AGENT_PROJECT", str(missing))

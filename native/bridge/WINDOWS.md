@@ -42,6 +42,9 @@ dumpbin /exports native\\build-windows\\Release\\"FL MCP Bridge_x64.dll"
 
 ## Install and validate
 
+On a box, `scripts/windows/provision.ps1` does this install, pins the DLL by
+sha256, and runs `fl-mcp-doctor`; see docs/35 "Windows box install". By hand:
+
 Copy the DLL into the FL native **Effects** plugin directory discovered from
 the installed FL copy, preserving this layout:
 

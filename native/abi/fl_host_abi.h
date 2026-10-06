@@ -1,5 +1,5 @@
-// The FL Studio 2026 (macOS) plugin -> host call ABI, and why it is NOT the one
-// the C++ SDK header implies.
+// The FL Studio 2026 plugin -> host call ABI: on macOS it is NOT the one the C++
+// SDK header implies; on Windows it is (see kHostVmtHeaderSlots).
 //
 // FL Studio 2026 for macOS is built with Free Pascal. `TFruityPlugHost` and
 // `TFruityPlug` are FPC *classes*, and an FPC VMT begins with a fixed header
@@ -97,13 +97,29 @@ inline constexpr std::size_t kFpcVmtHeaderSlots =
 inline constexpr std::size_t kFpcVmtHeaderBytes = kFpcVmtHeaderSlots * sizeof(void *);
 static_assert(kFpcVmtHeaderBytes == 200, "FL 2026's FPC VMT header is 200 bytes (25 slots)");
 
+// FL Studio for Windows is NOT a Free Pascal build in this respect: its VMT
+// pointer addresses the first declared virtual, the layout the C++ SDK header
+// implies. Live box 2026-10-05 (FL 26.1.6 build 5639, x64) called the Bridge's
+// Dispatcher (FPD_SetSampleRate 44100, FPD_SetBlockSize 512) at C++ vtable
+// slot 1, SaveRestoreState at 3 and Eff_Render at 7, and a host call at VMT+200
+// answered the palette-count probe out of range (abi_mismatch:palette_count).
+#if defined(_WIN32)
+inline constexpr std::size_t kHostVmtHeaderSlots = 0;
+#else
+inline constexpr std::size_t kHostVmtHeaderSlots = kFpcVmtHeaderSlots;
+#endif
+
 // Byte offset of the host's Nth declared virtual method. `TFruityPlugHost`
 // declares Dispatcher first (fp_plugclass.h), so Dispatcher is method 0.
 inline constexpr std::size_t HostMethodOffset(std::size_t method_index) {
-  return kFpcVmtHeaderBytes + method_index * sizeof(void *);
+  return (kHostVmtHeaderSlots + method_index) * sizeof(void *);
 }
 inline constexpr std::size_t kHostDispatcherOffset = HostMethodOffset(0);
-static_assert(kHostDispatcherOffset == 200, "TFruityPlugHost.Dispatcher is at VMT+200");
+#if defined(_WIN32)
+static_assert(kHostDispatcherOffset == 0, "FL for Windows: TFruityPlugHost.Dispatcher is at VMT+0");
+#else
+static_assert(kHostDispatcherOffset == 200, "FL for macOS: TFruityPlugHost.Dispatcher is at VMT+200");
+#endif
 
 // Self is passed in the first argument slot on both sides, so the only thing
 // that differs from the C++ declaration is which VMT entry we load.
@@ -114,13 +130,13 @@ using HostDispatcherFn = std::intptr_t (*)(void *self, std::intptr_t sender, std
 // again: it compiles to VMT slot 0 and takes the DAW down.
 inline std::intptr_t HostDispatch(TFruityPlugHost *host, std::intptr_t sender, std::intptr_t id,
                                   std::intptr_t index, std::intptr_t value) {
-  // Read the object's first word as bytes. FL's host is an FPC object, not the
+  // Read the object's first word as bytes. FL's host is a Pascal object, not the
   // C++ class this pointer is typed as, so the read is deliberately untyped -
   // casting through unsigned char* also keeps clang from warning that we are
   // memcpy-ing out of a "dynamic class".
   const unsigned char *const object = reinterpret_cast<const unsigned char *>(host);
   const unsigned char *vmt = nullptr;
-  std::memcpy(&vmt, object, sizeof vmt);  // FPC objects keep the VMT pointer at +0
+  std::memcpy(&vmt, object, sizeof vmt);  // Pascal objects keep the VMT pointer at +0
   HostDispatcherFn dispatcher = nullptr;
   std::memcpy(&dispatcher, vmt + kHostDispatcherOffset, sizeof dispatcher);
   return dispatcher(host, sender, id, index, value);

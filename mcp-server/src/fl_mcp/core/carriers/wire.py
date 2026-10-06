@@ -1,9 +1,9 @@
 """The MIDI carrier: server-hosted virtual ports + SysEx correlation, the
 control plane to the in-FL controller script.
 
-The codec (framing/chunking/reassembly) is ``flmcp_codec`` - the frozen module
-the controller script embeds byte-for-byte; imported as a real installed
-package (repo-root pyproject), no path games.
+The codec (framing/chunking/reassembly) is ``fl_mcp.fl_scripts.flmcp_codec``,
+the frozen module the controller script embeds byte-for-byte, shipped in this
+package beside that script.
 
 NO module-level singleton: MidiControl wraps a process-unique resource
 (duplicate virtual ports show FL duplicate devices and silently split
@@ -24,6 +24,7 @@ import contextlib
 import itertools
 import logging
 import os
+import re
 import threading
 import time
 from collections import deque
@@ -32,7 +33,8 @@ from typing import Any
 
 from pydantic import ValidationError
 
-from fl_mcp._codec import (
+from fl_mcp.errors import ToolError, control_plane_busy, control_plane_unavailable
+from fl_mcp.fl_scripts.flmcp_codec import (
     TYPE_CHUNK,
     TYPE_REQUEST,
     TYPE_RESPONSE,
@@ -41,7 +43,6 @@ from fl_mcp._codec import (
     decode_frame,
     encode_message,
 )
-from fl_mcp.errors import ToolError, control_plane_busy, control_plane_unavailable
 from fl_mcp.schemas import ControlRequest, ControlResponse, HelloEvent
 
 log = logging.getLogger(__name__)
@@ -96,6 +97,10 @@ class MidiControl:
         self._dropped_frames = 0
         self._hello: HelloEvent | None = None
         self._hello_event = threading.Event()
+        # Provisioned ports (Windows loopMIDI) exist before and after FL: the
+        # controller's OnInit hello went out when FL bound them at startup,
+        # usually before this process opened them, so hello must be asked for.
+        self._provisioned = not use_virtual_ports
 
         # Assigned before the open attempt so close() (also invoked by the
         # failure path below) always finds both attributes.
@@ -202,11 +207,22 @@ class MidiControl:
             self._call_lock.release()
 
     def await_hello(self, timeout: float = 5.0) -> HelloEvent:
-        """Block until the controller announces itself; raises ToolError
+        """Block until the controller announces itself (virtual ports) or
+        answers ``ctl.hello`` (provisioned ports); raises ToolError
         (control_plane_unavailable) on timeout."""
         hello = self._hello
         if hello is not None:
             return hello
+        if self._provisioned:
+            response = self.send_request("ctl.hello", timeout=timeout)
+            if not response.ok or not isinstance(response.ret, dict):
+                raise control_plane_unavailable("ctl.hello", timeout)
+            try:
+                self._hello = HelloEvent.model_validate(response.ret)
+            except ValidationError as exc:
+                raise control_plane_unavailable("ctl.hello", timeout) from exc
+            self._hello_event.set()
+            return self._hello
         if not self._hello_event.wait(timeout):
             raise control_plane_unavailable("hello", timeout)
         hello = self._hello
@@ -285,19 +301,31 @@ class MidiControl:
 
 
 def _port_number(port: Any, name: str) -> int:
+    """The index of the one listed port that IS ``name``.
+
+    RtMidi's WinMM backend (python-rtmidi 1.5.8, RtMidi.cpp getPortName)
+    appends ``" <index>"`` to every port name unless built with
+    RTMIDI_DO_NOT_ENSURE_UNIQUE_PORTNAMES, so loopMIDI's ``FLMCP Req`` lists
+    as ``FLMCP Req 0``. Accept the exact name or that one suffix form, and
+    refuse an ambiguous match rather than guess between two ports.
+    """
     names = list(port.get_ports())
-    try:
-        return names.index(name)
-    except ValueError as exc:
-        raise ControlUnavailable(
-            f"loopMIDI port {name!r} is missing. Install loopMIDI, provision the FLMCP Req and FLMCP Res ports, then retry fl_doctor. Available ports: {names or 'none'}."
-        ) from exc
+    suffixed = re.compile(re.escape(name) + r" \d+")
+    matches = [i for i, listed in enumerate(names) if listed == name or suffixed.fullmatch(listed)]
+    if len(matches) == 1:
+        return matches[0]
+    problem = "is missing" if not matches else "is listed more than once"
+    raise ControlUnavailable(
+        f"loopMIDI port {name!r} {problem}. Run loopMIDI in this user session with exactly one "
+        f"'FLMCP Req' and one 'FLMCP Res' port, then retry fl_doctor. Available ports: {names or 'none'}."
+    )
 
 
 def windows_midi_control() -> MidiControl:
-    """Open the exact loopMIDI names from scripts/windows/provisioning.py.
+    """Open the loopMIDI ports that scripts/windows/session-install.ps1 provisions.
 
-    VERIFY-ON-WINDOWS: verify the selected RtMidi backend lists these ports.
+    VERIFY-ON-WINDOWS: loopMIDI ports exist per user session while loopMIDI
+    runs, so this must run in the same session as loopMIDI and FL.
     """
     return MidiControl(
         use_virtual_ports=False,

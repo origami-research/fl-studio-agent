@@ -2,8 +2,8 @@
 # One-command installer for FL Studio MCP (macOS first; Windows tracked, not
 # yet implemented - see docs/08-roadmap.md).
 #
-# A thin wrapper around fl_mcp.install.install_all() + fl_mcp's fl_doctor -
-# all the real logic lives in Python (mcp-server/src/fl_mcp/install.py,
+# A thin wrapper around fl_mcp.fl.install.install_all() + fl_mcp's fl_doctor -
+# all the real logic lives in Python (mcp-server/src/fl_mcp/fl/install.py,
 # session.py's FLSession.doctor()) so this script and the `fl_doctor` MCP
 # tool never drift apart. No native plugin build step here: the native
 # Bridge plugin (native/) isn't ready (docs/12/15) and isn't part of this
@@ -84,13 +84,13 @@ if ! command -v uv >/dev/null 2>&1; then
 else
     echo "  Syncing mcp-server's Python environment (uv sync)..."
     if (cd "$MCP_DIR" && uv sync) >/tmp/flmcp_uv_sync.log 2>&1; then
-        INSTALL_OUTPUT="$("$MCP_VENV_PY" -m fl_mcp.install 2>&1)"
+        INSTALL_OUTPUT="$("$MCP_VENV_PY" -m fl_mcp.fl.install 2>&1)"
         INSTALL_RC=$?
         echo "$INSTALL_OUTPUT" | sed 's/^/  /'
         if [ "$INSTALL_RC" -eq 0 ]; then
             pass "Controller script, piano-roll script, and MIDI assignment installed"
         else
-            fail "fl_mcp.install reported a failure - see output above. Common cause: FL Studio has" \
+            fail "fl_mcp.fl.install reported a failure - see output above. Common cause: FL Studio has" \
                  "never been run on this machine (its Settings folder doesn't exist yet). Run FL" \
                  "Studio once, then retry."
         fi

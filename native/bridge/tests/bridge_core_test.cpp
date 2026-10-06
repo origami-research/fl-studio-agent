@@ -634,14 +634,20 @@ int main() {
   {
     CHECK(fl_abi::kFpcVmtHeaderSlots == 25);
     CHECK(fl_abi::kFpcVmtHeaderBytes == 200);
-    CHECK(fl_abi::kHostDispatcherOffset == 200);
     // The header field table we step over, as decoded from FL's own VMTs: 25
     // contiguous pointer-sized slots, 0..192.
     for (std::size_t i = 0; i < fl_abi::kFpcVmtHeaderSlots; ++i) {
       CHECK(fl_abi::kFpcVmtHeader[i].offset == i * sizeof(void *));
     }
+#if defined(_WIN32)
+    // FL for Windows indexes from the first declared virtual (live 2026-10-05).
+    CHECK(fl_abi::kHostDispatcherOffset == 0);
+    CHECK(fl_abi::HostMethodOffset(1) == 8);
+#else
+    CHECK(fl_abi::kHostDispatcherOffset == 200);
     CHECK(fl_abi::HostMethodOffset(0) == 200);
     CHECK(fl_abi::HostMethodOffset(1) == 208);
+#endif
 
     // The zero-note command - the one that proved the payload was innocent -
     // still reaches FL, and still through the FPC slot.

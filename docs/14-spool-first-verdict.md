@@ -55,4 +55,4 @@ Remaining manual step in the whole system: none for the control plane. The only 
 ## Artifacts on this branch
 
 - `control_spool.py` - the server-side spool client (removed after the verdict; it was never viable as the sole transport and had no live callers). This doc is its record.
-- `fl-scripts/controller/device_FLMCP.py` previously contained the `OnIdle` spool poll and sandbox diagnostics; both were removed when the broker replaced this refuted design.
+- `mcp-server/src/fl_mcp/fl_scripts/device_FLMCP.py` previously contained the `OnIdle` spool poll and sandbox diagnostics; both were removed when the broker replaced this refuted design.

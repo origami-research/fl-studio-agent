@@ -17,6 +17,7 @@ import fake_flpianoroll
 import fl_env
 import pytest
 
+from fl_mcp import fl_scripts
 from fl_mcp.core.carriers.spool import (
     SpoolCarrier,
     read_json,
@@ -26,9 +27,7 @@ from fl_mcp.core.carriers.spool import (
 from fl_mcp.core.transport import Transport
 from fl_mcp.errors import ToolError
 
-SCRIPT = (
-    Path(__file__).resolve().parents[2] / "fl-scripts" / "piano-roll" / "MCP Write Notes.pyscript"
-)
+SCRIPT = Path(fl_scripts.__file__).parent / "MCP Write Notes.pyscript"
 
 TARGET = {"pattern": 1, "channel": 0}
 

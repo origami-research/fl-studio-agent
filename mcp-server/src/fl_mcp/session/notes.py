@@ -26,6 +26,7 @@ from collections.abc import Sequence
 from typing import TYPE_CHECKING, Any, Literal
 
 from fl_mcp import errors, flp
+from fl_mcp.contract import FLLicense
 from fl_mcp.core.router import (
     FILE_PROVIDES,
     Capabilities,
@@ -309,6 +310,8 @@ class BridgeLane:
         here is a missing measurement after an applied command, not a failed
         write, and must therefore produce an honest unconfirmed receipt.
         """
+        if self._session.fl_license is FLLicense.TRIAL:
+            return None  # a trial never saves (controls.save_project): no post-write file exists
         project = self._session.project
         if project is None or not project.is_file():
             if not self._warned_missing_file_readback:

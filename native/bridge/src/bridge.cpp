@@ -440,6 +440,12 @@ class Bridge {
   // indexes from byte 200), and it has never been observed READING them either
   // - it does not ask our object for its ClassName or InstanceSize. They are
   // pads so that if it ever does, the read is inside memory we own.
+  //
+  // FL for Windows has no such header: live box 2026-10-05 (26.1.6 build 5639)
+  // called Dispatcher at C++ slot 1, SaveRestoreState at 3 and Eff_Render at 7,
+  // so there the SDK virtuals start at slot 0 and the slot numbers below read
+  // 25 less (fl_abi::kHostVmtHeaderSlots is the host side of the same fact).
+#if !defined(_WIN32)
 #define BRIDGE_VMT_HEADER_SLOT(n)                                             \
   virtual intptr_t _stdcall VmtHeader##n(intptr_t a, intptr_t b, intptr_t c) { \
     LogExtSlot(n, a, b, c);                                                   \
@@ -455,6 +461,7 @@ class Bridge {
   BRIDGE_VMT_HEADER_SLOT(21) BRIDGE_VMT_HEADER_SLOT(22) BRIDGE_VMT_HEADER_SLOT(23)
   BRIDGE_VMT_HEADER_SLOT(24)
 #undef BRIDGE_VMT_HEADER_SLOT
+#endif
 
   // --- the SDK's TFruityPlug virtuals, in SDK declaration order --------------
   // C++ slot 25 == VMT byte 200 == the FPC "first declared method". Every entry

@@ -1,7 +1,7 @@
 [project]
 name = "fl-mcp-repo"
 version = "0.1.0"
-description = "Repo-level packages: the FL test/ops harness and the controller wire codec"
+description = "Repo-level package: the FL test/ops harness"
 requires-python = ">=3.11"
 
 [build-system]
@@ -10,15 +10,11 @@ build-backend = "hatchling.build"
 
 # Installed editable (`uv pip install -e .` from the repo root) alongside the
 # mcp-server package. This is the declared replacement for the per-module
-# sys.path.insert hacks (docs/19 root cause 2): `harness` and `flmcp_codec`
-# become ordinary importable packages in any venv that installs the repo.
+# sys.path.insert hacks (docs/19 root cause 2): `harness` becomes an ordinary
+# importable package in any venv that installs the repo. The controller wire
+# codec ships inside fl-studio-agent as `fl_mcp.fl_scripts.flmcp_codec`.
 [tool.hatch.build.targets.wheel]
 packages = ["harness"]
-# Editable installs path the REAL source dirs (not snapshots): the repo root
-# for `harness`, and the controller dir for `flmcp_codec` - the codec is a
-# frozen-surface module that must stay beside the FL-side script it encodes
-# for, so it is pathed in place rather than moved or copied.
-dev-mode-dirs = [".", "fl-scripts/controller"]
 
 [tool.ruff]
 line-length = 110
@@ -28,14 +24,6 @@ select = ["E", "F", "I", "BLE", "TRY", "SIM", "PTH", "TID", "RUF"]
 ignore = ["TRY003", "PLC0415", "E501"]
 
 [tool.ruff.lint.per-file-ignores]
-# F811/E402: the frozen codec is embedded after its host imports.
-# BLE001/TRY004/SIM115/S110/S112: FL's callback and cleanup boundaries cannot
-# let host exceptions escape.
-# PTH*: this soon-to-be-removed refuted ctl file lane must retain FL's legacy
-# path APIs until its dedicated deletion lands.
-"fl-scripts/controller/device_FLMCP.py" = [
-    "BLE001", "E402", "F811", "PTH104", "PTH111", "PTH112", "PTH118", "PTH120", "PTH123", "PTH208", "SIM115", "S110", "S112", "TRY004",
-]
 # These live experiments preserve their primary failure after restoring FL,
 # and report best-effort probes rather than treating them as test assertions.
 "experiments/e3_playlist_write.py" = ["BLE001", "RUF059", "TRY300"]

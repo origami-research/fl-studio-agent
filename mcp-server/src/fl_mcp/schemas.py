@@ -8,6 +8,7 @@ This file is IMPLEMENTED, not a stub - it is the contract the lanes share.
 from __future__ import annotations
 
 from datetime import datetime
+from pathlib import Path
 from typing import Any, Literal
 
 from pydantic import BaseModel, Field, field_validator
@@ -82,6 +83,16 @@ class NoteDelta(BaseModel):
 
     def is_empty(self) -> bool:
         return not (self.added or self.removed or self.moved)
+
+
+class RenderReceipt(BaseModel):
+    """What render_wav confirmed: the verified Bridge capture, and whether the
+    project save before it landed. Only a trial FL may report an unsaved project
+    (its save can stop on FL's Buy dialog); a licensed FL fails the render instead."""
+
+    path: Path
+    project_saved: bool
+    project_save_detail: str | None = None
 
 
 class WriteReceipt(BaseModel):

@@ -1,7 +1,7 @@
 """The controller protocol version derived from the installable script.
 
-The controller script is bundled with the server wheel and is the only source
-of this value.  Reading its ``SCRIPT_VER`` keeps the server's expectation and
+The controller script ships inside this package (``fl_mcp.fl_scripts``) and is
+the only source of this value.  Reading its ``SCRIPT_VER`` keeps the server's expectation and
 what ``fl-mcp-install`` deploys from drifting apart.
 """
 
@@ -9,19 +9,13 @@ from __future__ import annotations
 
 import re
 from importlib.resources import files
-from pathlib import Path
 
 _SCRIPT_VER = re.compile(r'^SCRIPT_VER = "(?P<version>[^"]+)"$', re.MULTILINE)
-_BUNDLED_CONTROLLER = "_controller/device_FLMCP.py"
 
 
 def controller_script_bytes() -> bytes:
     """The controller bytes that ``fl-mcp-install`` deploys."""
-    bundled = files("fl_mcp").joinpath(_BUNDLED_CONTROLLER)
-    if bundled.is_file():
-        return bundled.read_bytes()
-    source = Path(__file__).resolve().parents[3] / "fl-scripts" / "controller" / "device_FLMCP.py"
-    return source.read_bytes()
+    return files("fl_mcp.fl_scripts").joinpath("device_FLMCP.py").read_bytes()
 
 
 def _controller_protocol_version() -> str:

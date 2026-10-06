@@ -32,6 +32,7 @@ from .schemas import (
     Note,
     NoteWriteMode,
     PluginParam,
+    RenderReceipt,
     SessionState,
     Target,
     WriteReceipt,
@@ -164,6 +165,11 @@ class FL:
 
         This takes about the loop's length and requires FL's audio output.
         """
+        return self.render_receipt(output).path
+
+    def render_receipt(self, output: str | Path) -> RenderReceipt:
+        """``render``, plus whether the project save before the capture landed
+        (a trial FL may record without it; see RenderReceipt)."""
         return self._session.render_wav(Path(output))
 
     def export_offline(self, output: str | Path) -> Path:

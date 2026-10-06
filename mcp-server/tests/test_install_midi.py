@@ -5,6 +5,8 @@ outside the FLMCP keys, and WARNs (never corrupts) on unexpected shapes -
 including the reproduced cross-key overreach the audit flagged as CRITICAL.
 """
 
+import json
+from importlib.resources import files
 
 import pytest
 
@@ -116,6 +118,27 @@ def test_install_controller_copies_the_versioned_source(tmp_path, monkeypatch):
     assert installed.read_bytes() == controller_script_bytes()
 
 
+def test_install_all_needs_only_the_installed_package(tmp_path, monkeypatch, capsys):
+    """The box has no repository checkout: every FL-side file must come out of
+    the wheel (fl_mcp.fl_scripts), and --json is the machine-readable result
+    the Windows arena install step records."""
+    settings = tmp_path / "Settings"
+    (settings / "Piano roll scripts").mkdir(parents=True)
+    monkeypatch.setattr(install, "fl_settings_dirs", lambda: [settings])
+    monkeypatch.setattr(install, "piano_roll_scripts_dir", lambda: settings / "Piano roll scripts")
+    monkeypatch.setattr(install, "reg_xml_path", lambda: tmp_path / "missing-reg.xml")
+    monkeypatch.setattr(install, "fl_process_running", lambda: False)
+
+    install.main(["--json"])
+
+    steps = json.loads(capsys.readouterr().out)
+    assert steps["note_script"]["status"] == "OK"
+    assert steps["controller_script"]["status"] == "OK"
+    assert steps["midi_assignment"]["status"] == "WARN"
+    packaged = files("fl_mcp.fl_scripts").joinpath(install.SCRIPT_FILENAME).read_bytes()
+    assert (settings / "Piano roll scripts" / install.SCRIPT_FILENAME).read_bytes() == packaged
+
+
 def test_no_midi_section_warns_not_corrupt(reg):
     reg.write_text("<?xml version='1.0'?>\n<XMLReg></XMLReg>", encoding="utf-8")
     before = reg.read_text()
@@ -146,3 +169,59 @@ def test_cross_key_overreach_regression(reg):
     assert '<Key Name="My Real Keyboard">\n                  <Value Name="Port" Type="2">7</Value>' in text
     # ...and the function must have WARNed rather than silently "succeeded".
     assert status.startswith("WARN")
+
+
+class _FakeRegistry:
+    """HKEY_CURRENT_USER as a dict of key path -> REG_SZ values."""
+
+    def __init__(self, keys=(), refuse: str | None = None):
+        self.keys: dict[str, dict[str, str]] = {k: {} for k in keys}
+        self._refuse = refuse
+
+    def subkeys(self, path):
+        prefix = path + "\\"
+        return sorted({k[len(prefix):].split("\\")[0] for k in self.keys if k.startswith(prefix)})
+
+    def values(self, path):
+        return dict(self.keys.get(path, {}))
+
+    def set_values(self, path, values):
+        stored = self.keys.setdefault(path, {})
+        stored.update({n: v for n, v in values.items() if n != self._refuse})
+
+
+IL = install.IMAGE_LINE_KEY
+
+
+def test_windows_assignment_lands_in_the_newest_fl_settings_key():
+    """The values FL 2026 for Windows wrote for a hand assignment (live box
+    2026-10-05), under the newest 'FL Studio <N>' key only."""
+    reg = _FakeRegistry([rf"{IL}\FL Studio 21\General", rf"{IL}\FL Studio 26\General", rf"{IL}\Shared\Paths"])
+    status = install.configure_midi_registry(reg)
+    assert status.startswith("OK") and "FL Studio 26" in status
+    assert reg.values(rf"{IL}\FL Studio 26\Devices\MIDI input\FLMCP Req") == {
+        "Type": "-3", "ScriptFolder": "FLMCP Bridge Script", "IDString": "-", "Port": "1", "Enabled": "1",
+    }
+    assert reg.values(rf"{IL}\FL Studio 26\Devices\MIDI output\FLMCP Res") == {"Port": "1", "IDString": "-"}
+    # The same-named output is parked off the control port, or FL links it to
+    # the script at startup and the replies loop back into FL's own input.
+    assert reg.values(rf"{IL}\FL Studio 26\Devices\MIDI output\FLMCP Req") == {"Port": "2", "IDString": "-"}
+    assert not any("FL Studio 21\\Devices" in k for k in reg.keys)
+
+
+def test_windows_assignment_keeps_fl_values_it_does_not_own():
+    req = rf"{IL}\FL Studio 26\Devices\MIDI input\FLMCP Req"
+    reg = _FakeRegistry([req])
+    reg.keys[req] = {"Type": "0", "ScriptFolder": "", "ConnectionCounter": "4"}
+    assert install.configure_midi_registry(reg).startswith("OK")
+    assert reg.values(req)["ConnectionCounter"] == "4"
+    assert reg.values(req)["Type"] == "-3"
+
+
+def test_windows_assignment_warns_when_fl_never_ran_for_this_user():
+    assert install.configure_midi_registry(_FakeRegistry([rf"{IL}\Shared\Paths"])).startswith("WARN")
+
+
+def test_windows_assignment_fails_on_a_read_back_mismatch():
+    reg = _FakeRegistry([rf"{IL}\FL Studio 26\General"], refuse="Enabled")
+    assert install.configure_midi_registry(reg).startswith("FAIL")

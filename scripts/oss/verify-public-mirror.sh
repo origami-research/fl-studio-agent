@@ -118,10 +118,10 @@ else
   record_skip "native build and ctest need the licensed FL Studio SDK. Configure with: cmake -S native -B native/build -DFL_SDK_DIR=/path/to/licensed-sdk"
 fi
 
-if (cd "$checkout" && bash scripts/check-release.sh >/dev/null 2>&1); then
-  echo "PASS: release artifact check (scripts/check-release.sh)"
+if (cd "$checkout" && bash scripts/build-wheel.sh --release --out "$work_dir/release" >/dev/null 2>&1); then
+  echo "PASS: release artifact check (scripts/build-wheel.sh --release)"
 else
-  record_failure "release artifact check (scripts/check-release.sh)"
+  record_failure "release artifact check (scripts/build-wheel.sh --release)"
 fi
 
 # Commit messages are public too: no private term may survive in any message.

@@ -18,6 +18,7 @@ from fl_mcp.schemas import (
     Note,
     NoteWriteMode,
     PluginParam,
+    RenderReceipt,
     SessionState,
     Target,
     WriteReceipt,
@@ -87,12 +88,12 @@ class FakeSession(FLSession):
         self.tempo = round(bpm * 1000) / 1000
         return self.tempo
 
-    def render_wav(self, output: Path) -> Path:
+    def render_wav(self, output: Path) -> RenderReceipt:
         output.write_bytes(b"RIFF....WAVE")
-        return output
+        return RenderReceipt(path=output, project_saved=True)
 
     def export_offline(self, output: Path) -> Path:
-        return self.render_wav(output)
+        return self.render_wav(output).path
 
     def save_project(self) -> int | None:
         if self.control is None:
