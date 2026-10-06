@@ -89,6 +89,8 @@ def create_session(
     # Session mode (FLMCP_SPOOL_ROOT set, e.g. an arena contestant) uses
     # BrokerControl: the machine-wide MIDI wire broadcasts pid-addressed
     # requests through one bind-wins broker.
+    # The one host-OS read. FLSession takes its Platform by injection, so a
+    # session built anywhere else never silently inherits the runner's OS.
     platform = platform or platform_for(sys.platform)
     spool_override = os.environ.get(ENV_SPOOL_ROOT)
     control: ControlCarrier | None
@@ -164,11 +166,11 @@ class FLSession:
         transport: Transport,
         store: Store,
         project: Path | None,
+        platform: Platform,
         control_factory: Callable[[], ControlCarrier] | None = None,
         profile: CapabilityProfileLike | None = None,
         plugin_param_models: tuple[PluginParamModel, ...] = (),
         session_spool_root: Path | None = None,
-        platform: Platform | None = None,
     ) -> None:
         self.link = ControlLink(control, factory=control_factory)
         self.plugin_param_models = plugin_param_models
@@ -181,7 +183,7 @@ class FLSession:
         self.bridge_lane = BridgeLane(self)
         self.observer = Observer(project=project)
         self.session_spool_root = session_spool_root
-        self.platform = platform or platform_for(sys.platform)
+        self.platform = platform
         self._profile_supported, self._profile_gate_detail = profile_gate()
         if not self._profile_supported:
             log.warning("%s", self._profile_gate_detail)

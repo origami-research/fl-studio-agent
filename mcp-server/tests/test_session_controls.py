@@ -13,7 +13,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-from session_fakes import HELLO, FakeControl, FakeSpool, make_session
+from session_fakes import HELLO, FakeControl, FakePlatform, FakeSpool, make_session
 
 from fl_mcp import errors, flp
 from fl_mcp.schemas import AutomationPoint, ControlResponse, PluginParamModel, PluginParamSpec
@@ -53,7 +53,6 @@ def test_export_offline_saves_then_subprocesses_the_resolved_fl_path(monkeypatch
     project = tmp_path / "live.flp"
     output = tmp_path / "mix.wav"
     project.write_bytes(b"FLhd")
-    app = tmp_path / "FL Studio.app"
     commands: list[list[str]] = []
     events: list[str] = []
 
@@ -64,17 +63,12 @@ def test_export_offline_saves_then_subprocesses_the_resolved_fl_path(monkeypatch
 
     monkeypatch.setattr("fl_mcp.session.controls.subprocess.run", render)
     control = FakeControl(hello=HELLO, handlers={"ctl.save": lambda args: events.append("save")})
-    platform = type(
-        "Mac",
-        (),
-        {"render_command": lambda _self, path: (str(app / "Contents/MacOS/OsxFL"), "-R", str(path))},
-    )()
-    session, _ = make_session(control=control, project=project, platform=platform)
+    session, _ = make_session(control=control, project=project)
 
     assert session.export_offline(output) == output.resolve()
     assert events == ["save", "render"]
     assert control.calls[-1] == ("ctl.save", [])
-    assert commands == [[str(app / "Contents/MacOS/OsxFL"), "-R", str(project.resolve())]]
+    assert commands == [[str(FakePlatform.render_executable), "-R", str(project.resolve())]]
     assert output.read_bytes() == b"RIFF....WAVE"
 
 

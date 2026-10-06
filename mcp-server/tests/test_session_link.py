@@ -6,12 +6,12 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-from carrier_fakes import control_platform
 from session_fakes import (
     HELLO,
     NOTES,
     TARGET,
     FakeControl,
+    FakePlatform,
     FakeSpool,
     isolate_spool,
     make_session,
@@ -38,7 +38,7 @@ def test_create_session_is_the_factory(monkeypatch):
     (when open) hot-plug onto test ports and segfault rtmidi's C layer at
     teardown - the live-found cause of the FL-open suite crashes."""
     fake = FakeControl(hello=HELLO)
-    session = create_session(platform=control_platform(fake))
+    session = create_session(platform=FakePlatform(fake))
     assert isinstance(session, FLSession)
     assert session.control is fake
     assert "/" not in session.store.project_key
@@ -48,7 +48,7 @@ def test_create_session_ignores_a_missing_project_override(monkeypatch, tmp_path
     missing = tmp_path / "not-created.flp"
     monkeypatch.setenv("FLMCP_AGENT_PROJECT", str(missing))
 
-    session = create_session(platform=control_platform(FakeControl(hello=HELLO)))
+    session = create_session(platform=FakePlatform(FakeControl(hello=HELLO)))
 
     assert session.project is None
 

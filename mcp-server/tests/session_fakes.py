@@ -12,14 +12,16 @@ use them - importing fixtures trips F811 when they appear as parameters.
 
 from __future__ import annotations
 
+from collections.abc import Callable, Sequence
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, NoReturn, cast
 
 from fl_mcp import errors
 from fl_mcp.clock import now
 from fl_mcp.controller_version import CONTROLLER_PROTOCOL_VERSION
 from fl_mcp.core.carriers.wire import MidiControl
 from fl_mcp.core.transport import Transport
+from fl_mcp.platform import Platform
 from fl_mcp.schemas import (
     ControlResponse,
     HelloEvent,
@@ -89,6 +91,35 @@ class FakeControl:
         return ControlResponse(id=len(self.calls), ok=True, ret=ret)
 
 
+class FakePlatform:
+    """The session's OS seam without the host OS: the fast suite runs on linux
+    CI, where the real platform_for() fails closed. Only what the suite drives
+    is implemented; anything else fails loudly instead of touching the host."""
+
+    render_executable = Path("/fake/FL/render")
+
+    def __init__(self, control: FakeControl | None = None) -> None:
+        self._control = control if control is not None else FakeControl(hello=None)
+
+    def control_factory(self) -> Callable[[], FakeControl]:
+        return lambda: self._control
+
+    def render_command(self, project: Path) -> Sequence[str]:
+        return (str(self.render_executable), "-R", str(project))
+
+    def _not_faked(self, name: str) -> NoReturn:
+        raise AssertionError(f"FakePlatform.{name} is not faked; add it if the suite needs it")
+
+    def broker_endpoint(self) -> NoReturn:
+        self._not_faked("broker_endpoint")
+
+    def fl_install(self) -> NoReturn:
+        self._not_faked("fl_install")
+
+    def sweep_fl(self) -> NoReturn:
+        self._not_faked("sweep_fl")
+
+
 class FakeSpool:
     """Session<->spool contract without the filesystem: scripted responses."""
 
@@ -138,7 +169,7 @@ def make_session(
     session_spool_root: Path | None = None,
     profile: CapabilityProfileLike | None = None,
     plugin_param_models: tuple[PluginParamModel, ...] = (),
-    platform: Any | None = None,
+    platform: FakePlatform | None = None,
 ) -> tuple[FLSession, FakeStore]:
     store = store or FakeStore()
     # The fakes implement exactly the surface FLSession consumes; the casts are
@@ -154,7 +185,7 @@ def make_session(
         control_factory=cast(Any, lambda: FakeControl(hello=None)),
         profile=profile,
         plugin_param_models=plugin_param_models,
-        platform=platform,
+        platform=cast(Platform, platform or FakePlatform()),
     )
     return session, store
 

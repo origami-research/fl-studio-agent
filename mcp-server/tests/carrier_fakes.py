@@ -97,29 +97,3 @@ class FakeBridge:
             "backend": "bridge",
             "spool": "udp",
         }
-
-
-class _ControlPlatform:
-    """The real Platform for this OS, except the control wire is the given fake.
-
-    create_session() selects the control carrier through Platform.control_factory(),
-    so tests inject a fake here instead of patching a module attribute.
-    """
-
-    def __init__(self, control):
-        import sys
-
-        from fl_mcp.platform.runtime import platform_for
-
-        self._base = platform_for(sys.platform)
-        self._control = control
-
-    def control_factory(self):
-        return lambda: self._control
-
-    def __getattr__(self, name):
-        return getattr(self._base, name)
-
-
-def control_platform(control):
-    return _ControlPlatform(control)

@@ -5,8 +5,7 @@ from __future__ import annotations
 import json
 
 import pytest
-from carrier_fakes import control_platform
-from session_fakes import HELLO, FakeControl, isolate_spool
+from session_fakes import HELLO, FakeControl, FakePlatform, isolate_spool
 
 from fl_mcp import plugin_models
 from fl_mcp.plugin_models import load_bundled_param_models
@@ -80,7 +79,7 @@ def test_create_session_uses_bundled_models_for_display_values(monkeypatch, bund
             "plugins.setParamValue": set_value,
         },
     )
-    session = create_session(platform=control_platform(control))
+    session = create_session(platform=FakePlatform(control))
     confirmed = session.set_plugin_param(0, "Filter mode", "Bandpass")
 
     assert session.plugin_param_models == load_bundled_param_models()
@@ -89,6 +88,6 @@ def test_create_session_uses_bundled_models_for_display_values(monkeypatch, bund
 
 def test_create_session_allows_model_override(monkeypatch):
 
-    session = create_session(platform=control_platform(FakeControl(hello=HELLO)), plugin_param_models=())
+    session = create_session(platform=FakePlatform(FakeControl(hello=HELLO)), plugin_param_models=())
 
     assert session.plugin_param_models == ()
