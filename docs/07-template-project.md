@@ -40,9 +40,22 @@ findings on `PatNum`/pattern length interaction]. Convention taught to the model
 tool docs: patterns are the model's workspace; renaming (`set_pattern_name`) is how it
 labels sections ("Verse Drums", "Hook Bass").
 
-Pattern 1 is also placed on playlist track 1 from beat 0 through the default 16-beat
-loop. The default note-write target is Pattern 1, so its notes are audible when FL
-renders the arrangement. This is a template invariant, not a render-time mutation.
+Pattern 1 is also placed on playlist track 1 at beat 0.
+The default note-write target is Pattern 1, so its notes are audible when FL renders the arrangement.
+This is a template invariant, not a render-time mutation.
+
+The clip is stored the way FL saves a pattern clip that was never resized: its cut window (record bytes 24-31) is the `0xFFFFFFFF, 0xFFFFFFFF` sentinel, not an explicit `0..length`.
+FL sizes such a clip from its pattern when it opens the project and regrows it live whenever the pattern grows, so a Full-song render covers everything written into Pattern 1.
+The record's head length (1536 ticks) is kept for file readers; FL ignores it for this clip and opens it one bar long, the length of the empty pattern.
+An explicit window pins the clip instead: the playlist stays at its saved length however long the pattern gets.
+Measured on trial FL 2026 for Windows (v26.1.6), where the scripting API cannot place or resize clips and the engine cannot save and reopen the project:
+
+| Template clip window | Song length at open | After 16 bars written into Pattern 1 | Full-song export at 130 BPM |
+| --- | --- | --- | --- |
+| `0..1536` (before) | 4 bars (tick 1535) | 4 bars (tick 1535) | 7.9 s |
+| `0xFF` x 8 (now) | 1 bar (tick 383) | 16 bars (tick 6143) | 29.54 s (16 bars) |
+
+FL's own save of the grown project writes the same sentinel with head length 6144, and it is the form most pattern clips in FL's bundled demo projects carry.
 
 ### Mixer
 
@@ -96,4 +109,4 @@ loading happened at human time, control happens at model time.
 The session template ships as package data at `fl_mcp/assets/session-template.flp`.
 Consumers must resolve it with `fl-mcp-template`, never copy it: this is the one
 canonical artifact used by the engine and its dev session. Its SHA-256 is
-`ff110f543ab6d41557d2eba0500a0fd6d715f861b3a877757a0d424cabf9a669`.
+`a080994a1b9d90b1e42b388e806d646f14f576f941ce2766ad43e7bf05daf2e4`.
