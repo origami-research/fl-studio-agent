@@ -12,6 +12,7 @@ use them - importing fixtures trips F811 when they appear as parameters.
 
 from __future__ import annotations
 
+import time
 from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import Any, NoReturn, cast
@@ -172,6 +173,7 @@ def make_session(
     plugin_param_models: tuple[PluginParamModel, ...] = (),
     platform: FakePlatform | None = None,
     fl_license: FLLicense = FLLicense.LICENSED,
+    clock: Callable[[], float] = time.time,
 ) -> tuple[FLSession, FakeStore]:
     store = store or FakeStore()
     # The fakes implement exactly the surface FLSession consumes; the casts are
@@ -189,6 +191,7 @@ def make_session(
         plugin_param_models=plugin_param_models,
         platform=cast(Platform, platform or FakePlatform()),
         fl_license=fl_license,
+        clock=clock,
     )
     return session, store
 

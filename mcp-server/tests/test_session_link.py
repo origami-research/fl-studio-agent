@@ -23,11 +23,28 @@ from fl_mcp.schemas import ControlResponse
 from fl_mcp.session import FLSession, create_session
 from fl_mcp.session import lifecycle as lifecycle_mod
 from fl_mcp.session import link as link_mod
+from fl_mcp.session.link import ControlLink
 
 
 @pytest.fixture(autouse=True)
 def isolated_spool(monkeypatch):
     isolate_spool(monkeypatch)
+
+
+class FakeClock:
+    """Injectable monotonic time: starts just after host boot (monotonic counts
+    from boot) and only moves when the code under test sleeps."""
+
+    def __init__(self, now: float = 5.0) -> None:
+        self.now = now
+        self.sleeps: list[float] = []
+
+    def __call__(self) -> float:
+        return self.now
+
+    def sleep(self, seconds: float) -> None:
+        self.sleeps.append(seconds)
+        self.now += seconds
 
 
 # --- create_session ----------------------------------------------------------
@@ -147,27 +164,28 @@ def test_silent_wire_does_not_recycle_when_fl_is_closed(monkeypatch):
     assert calls == []
 
 
-def test_recycle_is_rate_limited(monkeypatch):
+def test_recycle_is_rate_limited_but_never_refuses_the_first(monkeypatch):
     """An FL that is running but genuinely unconfigured must cost one recycle
-    wait per interval, not one per tool call."""
-    silent = FakeControl(hello=None)
-    silent.close = lambda: None
-    session, _ = make_session(control=silent)
-    factory_calls: list[bool] = []
+    wait per interval, not one per tool call. The FIRST recycle is never
+    refused, even 5s after host boot: a 0.0 "never recycled" sentinel read as
+    "recycled at boot" and silently skipped it on freshly booted hosts."""
+    clock = FakeClock(now=5.0)
+    factory_calls: list[float] = []
 
     def factory():
-        factory_calls.append(True)
-        still_silent = FakeControl(hello=None)
-        still_silent.close = lambda: None
-        return still_silent
+        factory_calls.append(clock())
+        return FakeControl(hello=None)
 
-    session.link._control_factory = factory
+    link = ControlLink(FakeControl(hello=None), factory=factory, clock=clock, sleep=clock.sleep)
     monkeypatch.setattr(link_mod, "fl_process_running", lambda: True)
     monkeypatch.setattr(link_mod, "RECYCLE_HELLO_WAIT_SECONDS", 0.0)
 
-    assert session._ensure_hello() is None
-    assert session._ensure_hello() is None  # immediately again - inside the interval
-    assert factory_calls == [True]
+    assert link.hello() is None
+    assert link.hello() is None  # immediately again - inside the interval
+    assert factory_calls == [5.0]
+    clock.now += link_mod.RECYCLE_MIN_INTERVAL_SECONDS
+    assert link.hello() is None
+    assert factory_calls == [5.0, 35.0]
 
 
 def test_recycle_hello_failure_is_logged(monkeypatch, caplog):
@@ -200,18 +218,17 @@ def test_recycle_retries_hello_until_fl_finishes_booting(monkeypatch, caplog):
                 raise errors.control_plane_unavailable("ctl.hello", timeout)
             return HELLO
 
-    silent = FakeControl(hello=None)
     delayed = DelayedHello()
-    session, _ = make_session(control=silent)
-    session.link._control_factory = lambda: delayed
+    clock = FakeClock()
+    link = ControlLink(FakeControl(hello=None), factory=lambda: delayed, clock=clock, sleep=clock.sleep)
     monkeypatch.setattr(link_mod, "fl_process_running", lambda: True)
-    monkeypatch.setattr(link_mod.time, "sleep", lambda _seconds: None)
 
     with caplog.at_level("INFO"):
-        assert session._ensure_hello() is HELLO
+        assert link.hello() is HELLO
 
     assert delayed.attempts == 3
     assert delayed.timeouts == [1.0, 2.0, 4.0]
+    assert clock.sleeps == [1.0, 2.0]
     assert sum("awaiting FL hello after port recycle" in r.message for r in caplog.records) == 3
     assert not any(r.levelname == "ERROR" for r in caplog.records)
 
@@ -246,7 +263,7 @@ def test_reload_reconnects_the_wire_fresh(monkeypatch, tmp_path):
     session.write_notes(TARGET, NOTES, "merge")
 
     assert old.closed and session.control is fresh
-    assert session.link._last_recycle == 0.0
+    assert session.link._last_recycle is None
 
 
 # --- settle after reload (issue #47 / experiment E7) --------------------------

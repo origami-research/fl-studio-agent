@@ -13,6 +13,7 @@ import logging
 import os
 import sys
 import threading
+import time
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from pathlib import Path
@@ -179,14 +180,18 @@ class FLSession:
         profile: CapabilityProfileLike | None = None,
         plugin_param_models: tuple[PluginParamModel, ...] = (),
         session_spool_root: Path | None = None,
+        clock: Callable[[], float] = time.time,
     ) -> None:
         self.link = ControlLink(control, factory=control_factory)
+        # The wall clock every Bridge heartbeat freshness check reads (the
+        # heartbeat stamps unix_time), injected so it is one clock, not three.
+        self._clock = clock
         self.plugin_param_models = plugin_param_models
         self.transport = transport
         self.store = store
         self.project = project
         self.profile = profile if profile is not None else load_profile()
-        self.breaker = BridgeBreaker(ping=self._bridge_ping)
+        self.breaker = BridgeBreaker(ping=self._bridge_ping, clock=clock)
         self.file_lane = FileLane(self)
         self.bridge_lane = BridgeLane(self)
         self.observer = Observer(project=project)
@@ -245,7 +250,7 @@ class FLSession:
     @property
     def caps(self) -> Capabilities:
         """Fresh per-op evidence; route() consumes it once per operation."""
-        return detect(self.link, self.transport, self.project, self.profile)
+        return detect(self.link, self.transport, self.project, self.profile, clock=self._clock)
 
     def prewarm(self) -> None:
         """Close the breaker up front when the bridge is already live, so the
@@ -282,7 +287,7 @@ class FLSession:
             root = self.session_spool_root
             if root is None:
                 return
-            heartbeat = read_heartbeat(root / "bridge_heartbeat.txt")
+            heartbeat = read_heartbeat(root / "bridge_heartbeat.txt", clock=self._clock)
             pid = bridge_pid(root)
             if self._audio_endpoint is not None and pid != self._audio_bridge_pid:
                 self._stop_audio_stream(send_stop=False)

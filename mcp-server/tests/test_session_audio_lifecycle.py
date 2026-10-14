@@ -18,19 +18,30 @@ from fl_mcp.session import detect as detect_mod
 from fl_mcp.session import state as state_mod
 from fl_mcp.session.detect import read_heartbeat
 
+# The session's wall clock, pinned to the heartbeat's own stamp. Heartbeat
+# freshness is wall-clock age (the Bridge stamps unix_time), so a host that
+# sleeps or steps its clock between writing this one-shot heartbeat and the
+# lifecycle reading it saw a "stale Bridge" and never started the stream
+# (a closed-lid laptop's DarkWake cycles did exactly that).
+NOW = 1_800_000_000
+
+
+def _clock() -> float:
+    return NOW
+
 
 def _write_heartbeat(root: Path, *, chunks: int = 0, drops: int = 0) -> None:
     root.joinpath("bridge_heartbeat.txt").write_text(
         "unix_time=%d\nproto=2\nabi=ok\nrender_rate=1\nstreaming=1\n"
         "stream_chunks_sent=%d\nstream_chunks_dropped=%d\nstream_sample_rate=48000\n"
-        % (time.time(), chunks, drops),
+        % (NOW, chunks, drops),
         encoding="utf-8",
     )
 
 
 def _session(root: Path):
     transport = Transport([UdpCarrier([root]), SpoolCarrier(root)], roots=[root])
-    session, _ = make_session(transport=transport, session_spool_root=root)
+    session, _ = make_session(transport=transport, session_spool_root=root, clock=_clock)
     return session
 
 
@@ -119,7 +130,7 @@ def test_audio_lifecycle_does_not_interleave_a_session_transport_request(monkeyp
     root.joinpath("bridge_udp.json").write_text('{"pid": 1}', encoding="utf-8")
     _write_heartbeat(root)
     transport = _BlockingStreamTransport()
-    session, _ = make_session(transport=transport, session_spool_root=root)
+    session, _ = make_session(transport=transport, session_spool_root=root, clock=_clock)
     monkeypatch.setenv("FLMCP_AUDIO_STREAM", "1")
     monkeypatch.setattr(detect_mod, "spool_roots", lambda: [root])
     try:
@@ -176,10 +187,10 @@ def test_doctor_reports_bridge_stream_drops(monkeypatch, tmp_path) -> None:
     monkeypatch.setattr(state_mod, "piano_roll_scripts_dir", lambda: tmp_path)
     monkeypatch.setattr(state_mod, "pid_alive", lambda pid: pid == 1)
 
-    status = state_mod._note_plane_status()
+    status = state_mod._note_plane_status(clock=_clock)
 
     assert status == PlaneStatus(
         connected=True, detail=f"spool at {root}; live audio streaming; chunks=8, drops=2, sample_rate=48000"
     )
-    heartbeat = read_heartbeat(root / "bridge_heartbeat.txt")
+    heartbeat = read_heartbeat(root / "bridge_heartbeat.txt", clock=_clock)
     assert heartbeat.stream_chunks_dropped == 2

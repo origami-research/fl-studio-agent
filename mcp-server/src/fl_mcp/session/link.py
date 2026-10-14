@@ -67,10 +67,18 @@ class ControlLink:
         self,
         control: ControlCarrier | None,
         factory: Callable[[], ControlCarrier] | None = None,
+        *,
+        clock: Callable[[], float] = time.monotonic,
+        sleep: Callable[[float], None] = time.sleep,
     ) -> None:
         self.control = control
         self._control_factory = factory if factory is not None else MidiControl
-        self._last_recycle = 0.0
+        self._clock = clock
+        self._sleep = sleep
+        # None until the first recycle. A 0.0 sentinel read as "recycled at
+        # monotonic 0", so on a host booted under the interval ago (the
+        # monotonic clock counts from boot) the first recycle was refused.
+        self._last_recycle: float | None = None
         self._warned_controller_versions: set[str] = set()
 
     def _check_controller_protocol(self, hello: HelloEvent) -> HelloEvent:
@@ -129,9 +137,10 @@ class ControlLink:
         non-None (the caller's guard in :meth:`hello`)."""
         if not fl_process_running():
             return None  # nothing to bind to - FL is not even running
-        if time.monotonic() - self._last_recycle < RECYCLE_MIN_INTERVAL_SECONDS:
+        now = self._clock()
+        if self._last_recycle is not None and now - self._last_recycle < RECYCLE_MIN_INTERVAL_SECONDS:
             return None  # recycled too recently - one wait per interval, not per call
-        self._last_recycle = time.monotonic()
+        self._last_recycle = now
         log.info("FL is running but the wire is silent; recycling ports for a hot-plug bind")
         self.control.close()
         try:
@@ -140,13 +149,13 @@ class ControlLink:
             log.exception("port recycle failed; control plane stays down")
             self.control = None
             return None
-        deadline = time.monotonic() + RECYCLE_HELLO_WAIT_SECONDS
+        deadline = self._clock() + RECYCLE_HELLO_WAIT_SECONDS
         retry_wait = RECYCLE_HELLO_RETRY_INITIAL_SECONDS
         attempt = 0
         last_error: errors.ToolError | None = None
         while True:
             attempt += 1
-            remaining = max(0.0, deadline - time.monotonic())
+            remaining = max(0.0, deadline - self._clock())
             log.info(
                 "awaiting FL hello after port recycle (attempt %d, %.1fs remaining)",
                 attempt,
@@ -158,7 +167,7 @@ class ControlLink:
                 )
             except errors.ToolError as exc:
                 last_error = exc
-            remaining = deadline - time.monotonic()
+            remaining = deadline - self._clock()
             if remaining <= 0:
                 detail = last_error.message if last_error is not None else "no detail"
                 log.error(
@@ -175,7 +184,7 @@ class ControlLink:
                 pause,
                 last_error.message if last_error is not None else "no detail",
             )
-            time.sleep(pause)
+            self._sleep(pause)
             retry_wait = min(retry_wait * 2, RECYCLE_HELLO_RETRY_MAX_SECONDS)
 
     def reconnect(self) -> None:
@@ -190,7 +199,7 @@ class ControlLink:
         except ControlUnavailable:
             log.exception("wire re-open after reload failed; live ops degrade")
             self.control = None
-        self._last_recycle = 0.0
+        self._last_recycle = None
 
     def request(
         self,
@@ -224,12 +233,12 @@ class ControlLink:
         itself succeeded, and the next live op will surface its own error."""
         if self.control is None:
             return
-        deadline = time.monotonic() + FL_BOOT_TIMEOUT_SECONDS
-        while time.monotonic() < deadline:
+        deadline = self._clock() + FL_BOOT_TIMEOUT_SECONDS
+        while self._clock() < deadline:
             try:
                 if self.control.send_request("state.snapshot", timeout=5.0).ok:
                     return
             except errors.ToolError as exc:
                 log.debug("settle snapshot probe failed: %s", exc.message)
-            time.sleep(SETTLE_POLL_SECONDS)
+            self._sleep(SETTLE_POLL_SECONDS)
         log.warning("FL did not settle within %ss of relaunch", FL_BOOT_TIMEOUT_SECONDS)

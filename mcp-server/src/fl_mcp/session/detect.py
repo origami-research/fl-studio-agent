@@ -151,6 +151,8 @@ def detect(
     transport: Transport,
     project: Path | None,
     profile: CapabilityProfileLike,
+    *,
+    clock: Callable[[], float] = time.time,
 ) -> Capabilities:
     """Pure, per-op capability detection: no env var, no globals, nothing a
     human flips. The heartbeat proves the bridge is ticking; the wire proves
@@ -159,7 +161,7 @@ def detect(
     (spool health, file-lane state)."""
     best = _NO_HEARTBEAT
     for root in spool_roots():
-        candidate = read_heartbeat(root / BRIDGE_HEARTBEAT_FILE)
+        candidate = read_heartbeat(root / BRIDGE_HEARTBEAT_FILE, clock=clock)
         if candidate.age < best.age:
             best = candidate
     live = (
