@@ -375,6 +375,8 @@ The engine uses the per-machine MIDI wire directly, not the session broker.
 FL must have the Bridge loaded, and the packaged template carries it as the last Master insert effect.
 FL's default startup project has no Bridge, so a box must open the agent project.
 The console session's FL launch (logon script and relaunch task) should therefore reset the agent project from the template and pass its path to `FL64.exe`, and start loopMIDI first.
+It should also re-apply the MIDI assignment (`fl_mcp.fl.install.configure_midi`, FL closed) before every launch.
+FL rewrites `Devices` on every clean exit, including each box stop or reboot, and starts from that rewritten key with the controller unlinked from any output (see the 2026-10-07 results).
 
 ### Trial mode
 
@@ -391,6 +393,16 @@ A trial FL cannot reopen a project it saved.
 
 Live lanes need no file: control-wire tempo, channel levels, plugin parameters, transport, and Bridge note writes work the same in trial.
 Reads parse the last saved file and are only as current as the last successful save.
+
+### Live box results (2026-10-07)
+
+Pool box fl-mcp-02, provisioned like the 2026-10-05 box; its install doctor passed, then every cold start after the first stop had a silent controller.
+
+- Found: FL rewrites `HKCU\Software\Image-Line\FL Studio 26\Devices` on a clean exit with an entry for every port it has seen (`MIDI input\FLMCP Res`, both Microsoft outputs with `Port` -1, `ConnectionCounter`, `Sync`, `SendAllNotesOff`).
+  Started from that key, FL loads the controller script but links no output to it (`device.isAssigned()` is 0), so its OnInit hello and every reply go nowhere while loopMIDI passes data on both ports.
+- Confirmed by bisection, each FL started from a set key: the installer's own three keys linked 3 of 3 times; the same keys plus both remembered Microsoft outputs failed 3 of 3; with either one alone it linked (1 of 1 each).
+  Removing single remembered values from the full rewritten key never restored the link.
+- Fixed: `configure_midi_registry` replaces the FLMCP port keys outright and drops outputs FL remembers without a port; a launcher re-applies it before every FL start.
 
 ### Live box results (2026-10-05)
 

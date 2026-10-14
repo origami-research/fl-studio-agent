@@ -16,6 +16,7 @@ and read back from a hand assignment on a live Windows box on 2026-10-05.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 import re
 import shutil
@@ -127,6 +128,7 @@ class FLRegistry(Protocol):
     def subkeys(self, path: str) -> list[str]: ...
     def values(self, path: str) -> dict[str, str]: ...
     def set_values(self, path: str, values: Mapping[str, str]) -> None: ...
+    def delete_key(self, path: str) -> None: ...
 
 
 class CurrentUserRegistry:
@@ -164,6 +166,11 @@ class CurrentUserRegistry:
             for name, value in values.items():
                 winreg.SetValueEx(key, name, 0, winreg.REG_SZ, value)
 
+    def delete_key(self, path: str) -> None:
+        """Delete one leaf key (FL's device keys have no subkeys); an absent key is already gone."""
+        with contextlib.suppress(FileNotFoundError):
+            winreg.DeleteKey(winreg.HKEY_CURRENT_USER, path)
+
 
 # loopMIDI ports are bidirectional, so FL also lists "FLMCP Req" as an output.
 # At startup FL links a scripted input to the same-named output when that
@@ -183,22 +190,57 @@ WINDOWS_ASSIGNMENT: dict[str, dict[str, str]] = {
 }
 
 
+# FL for Windows rewrites Devices on every clean exit (each box stop or
+# reboot), keeping an entry for every MIDI port it has seen. Live box
+# 2026-10-07: from that rewritten key FL started with the controller script
+# unlinked from any output (device.isAssigned() == 0), so its hello and every
+# reply went nowhere, on every cold start. Remembering both Microsoft outputs
+# without a port was enough to break it; the installer's own key set linked
+# every time. So the assignment owns its ports' keys outright, and outputs FL
+# merely remembers without a port are dropped. An output with a port (a real
+# device someone assigned) is kept.
+NO_PORT = "-1"
+
+
+def _stale_device_keys(registry: FLRegistry, devices: str) -> list[str]:
+    """Keys under ``devices`` FL must not start with: entries for our ports that
+    are not the assignment's own, and outputs remembered without a port."""
+    stale: list[str] = []
+    for section in ("MIDI input", "MIDI output"):
+        for name in registry.subkeys(f"{devices}\\{section}"):
+            if rf"Devices\{section}\{name}" in WINDOWS_ASSIGNMENT:
+                continue
+            path = f"{devices}\\{section}\\{name}"
+            ours = name in (REQ_PORT_NAME, RES_PORT_NAME)
+            portless = section == "MIDI output" and registry.values(path).get("Port", NO_PORT) == NO_PORT
+            if ours or portless:
+                stale.append(path)
+    return stale
+
+
 def configure_midi_registry(registry: FLRegistry) -> str:
-    """Write the FLMCP controller assignment into the newest ``FL Studio <N>``
-    settings key and read it back. FL reads it at startup and rewrites it on a
-    clean exit, so the caller closes FL first."""
+    """Make the newest ``FL Studio <N>`` settings key hold exactly the FLMCP
+    controller assignment and nothing FL remembered that unlinks it, then read
+    it back. FL reads it at startup and rewrites it on a clean exit, so the
+    caller closes FL first, and a box re-applies it before every FL launch."""
     versions = [(int(m.group(1)), name) for name in registry.subkeys(IMAGE_LINE_KEY)
                 if (m := _FL_SETTINGS_KEY.fullmatch(name))]
     if not versions:
         return (f"WARN no HKCU\\{IMAGE_LINE_KEY}\\FL Studio <N> key; start FL once as this user, "
                 "then rerun the install")
     root = f"{IMAGE_LINE_KEY}\\{max(versions)[1]}"
+    devices = f"{root}\\Devices"
+    for path in _stale_device_keys(registry, devices):
+        registry.delete_key(path)
     for subkey, values in WINDOWS_ASSIGNMENT.items():
         path = f"{root}\\{subkey}"
+        registry.delete_key(path)
         registry.set_values(path, values)
         stored = registry.values(path)
-        if any(stored.get(name) != value for name, value in values.items()):
+        if stored != values:
             return f"FAIL HKCU\\{path} reads back {stored}, wrote {values}"
+    if stale := _stale_device_keys(registry, devices):
+        return f"FAIL HKCU still holds device keys that unlink the controller: {stale}"
     return f"OK controller assigned to {REQ_PORT_NAME}/{RES_PORT_NAME} port {CONTROL_PORT} (HKCU\\{root})"
 
 

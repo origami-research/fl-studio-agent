@@ -174,9 +174,10 @@ def test_cross_key_overreach_regression(reg):
 class _FakeRegistry:
     """HKEY_CURRENT_USER as a dict of key path -> REG_SZ values."""
 
-    def __init__(self, keys=(), refuse: str | None = None):
+    def __init__(self, keys=(), refuse: str | None = None, undeletable: str | None = None):
         self.keys: dict[str, dict[str, str]] = {k: {} for k in keys}
         self._refuse = refuse
+        self._undeletable = undeletable
 
     def subkeys(self, path):
         prefix = path + "\\"
@@ -188,6 +189,10 @@ class _FakeRegistry:
     def set_values(self, path, values):
         stored = self.keys.setdefault(path, {})
         stored.update({n: v for n, v in values.items() if n != self._refuse})
+
+    def delete_key(self, path):
+        if path != self._undeletable:
+            self.keys.pop(path, None)
 
 
 IL = install.IMAGE_LINE_KEY
@@ -209,13 +214,61 @@ def test_windows_assignment_lands_in_the_newest_fl_settings_key():
     assert not any("FL Studio 21\\Devices" in k for k in reg.keys)
 
 
-def test_windows_assignment_keeps_fl_values_it_does_not_own():
-    req = rf"{IL}\FL Studio 26\Devices\MIDI input\FLMCP Req"
-    reg = _FakeRegistry([req])
-    reg.keys[req] = {"Type": "0", "ScriptFolder": "", "ConnectionCounter": "4"}
+# HKCU\Software\Image-Line\FL Studio 26\Devices exactly as FL rewrote it on a
+# clean exit (box stop) on fl-mcp-02, 2026-10-07. FL started from this key with
+# the controller unlinked from any output on every cold start; from the
+# installer's own key set it linked every time.
+_FL_PERSISTED_DEVICES = {
+    r"MIDI input\FLMCP Req": {"Type": "-3", "ScriptFolder": "FLMCP Bridge Script", "IDString": "-",
+                              "Port": "1", "Enabled": "1", "ConnectionCounter": "4"},
+    r"MIDI input\FLMCP Res": {"Type": "0", "ScriptFolder": "", "IDString": "-", "ConnectionCounter": "1",
+                              "Port": "-1", "Enabled": "0"},
+    r"MIDI output\FLMCP Req": {"Port": "2", "IDString": "-", "Sync": "0", "SendAllNotesOff": "1"},
+    r"MIDI output\FLMCP Res": {"Port": "1", "IDString": "-", "Sync": "0", "SendAllNotesOff": "1"},
+    r"MIDI output\Microsoft GS Wavetable Synth": {"Port": "-1", "Sync": "0", "SendAllNotesOff": "1", "IDString": "-"},
+    r"MIDI output\Microsoft MIDI Mapper": {"Port": "-1", "Sync": "0", "SendAllNotesOff": "1", "IDString": "-"},
+}
+
+
+def _devices(reg):
+    prefix = rf"{IL}\FL Studio 26\Devices" + "\\"
+    return {k[len(prefix):]: v for k, v in reg.keys.items() if k.startswith(prefix)}
+
+
+def test_windows_assignment_resets_what_fl_persisted_on_exit():
+    """Why: FL's clean-exit rewrite of Devices left the controller silent on
+    every later cold start (fl-mcp-02, 2026-10-07). Re-applying the assignment
+    must give FL exactly the installer's key set, which links every time."""
+    reg = _FakeRegistry([rf"{IL}\FL Studio 26\General"])
+    for sub, values in _FL_PERSISTED_DEVICES.items():
+        reg.keys[rf"{IL}\FL Studio 26\Devices\{sub}"] = dict(values)
     assert install.configure_midi_registry(reg).startswith("OK")
-    assert reg.values(req)["ConnectionCounter"] == "4"
-    assert reg.values(req)["Type"] == "-3"
+    assert _devices(reg) == {
+        r"MIDI input\FLMCP Req": {"Type": "-3", "ScriptFolder": "FLMCP Bridge Script", "IDString": "-",
+                                  "Port": "1", "Enabled": "1"},
+        r"MIDI output\FLMCP Res": {"Port": "1", "IDString": "-"},
+        r"MIDI output\FLMCP Req": {"Port": "2", "IDString": "-"},
+    }
+
+
+def test_windows_assignment_keeps_a_device_someone_assigned():
+    """Only what FL merely remembers goes: a real output with a port, and any
+    input, stay as their owner set them."""
+    keyboard_in = rf"{IL}\FL Studio 26\Devices\MIDI input\My Keyboard"
+    synth_out = rf"{IL}\FL Studio 26\Devices\MIDI output\My Synth"
+    reg = _FakeRegistry([rf"{IL}\FL Studio 26\General"])
+    reg.keys[keyboard_in] = {"Type": "0", "Port": "-1", "Enabled": "1"}
+    reg.keys[synth_out] = {"Port": "3", "IDString": "-"}
+    assert install.configure_midi_registry(reg).startswith("OK")
+    assert reg.values(keyboard_in) == {"Type": "0", "Port": "-1", "Enabled": "1"}
+    assert reg.values(synth_out) == {"Port": "3", "IDString": "-"}
+
+
+def test_windows_assignment_fails_when_a_stale_key_survives():
+    stuck = rf"{IL}\FL Studio 26\Devices\MIDI output\Microsoft MIDI Mapper"
+    reg = _FakeRegistry([rf"{IL}\FL Studio 26\General"], undeletable=stuck)
+    reg.keys[stuck] = {"Port": "-1"}
+    assert install.configure_midi_registry(reg).startswith("FAIL")
 
 
 def test_windows_assignment_warns_when_fl_never_ran_for_this_user():
