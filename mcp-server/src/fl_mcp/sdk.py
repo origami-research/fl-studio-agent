@@ -161,15 +161,14 @@ class FL:
         return self._session.add_effect(args.insert_index, args.plugin_name)
 
     def render(self, output: str | Path) -> Path:
-        """Play the loop once and record the live mix to ``output``.
+        """Play the live arrangement once and record the mix to ``output``.
 
-        This takes about the loop's length and requires FL's audio output.
+        This takes about the arrangement's live length and requires FL's audio output.
         """
         return self.render_receipt(output).path
 
     def render_receipt(self, output: str | Path) -> RenderReceipt:
-        """``render``, plus whether the project save before the capture landed
-        (a trial FL may record without it; see RenderReceipt)."""
+        """``render``, plus the live span it recorded (see RenderSpan)."""
         return self._session.render_wav(Path(output))
 
     def export_offline(self, output: str | Path) -> Path:

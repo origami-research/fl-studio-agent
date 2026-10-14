@@ -262,8 +262,9 @@ def run(code: str, ctx: Context) -> RunResult:
       project-file only; proven only for empty Master slot 0.
     - fl.render("out.wav") -> Path; fl.analyze(wav) -> bpm/key/LUFS/spectral
       balance; fl.read_wav(path) -> (samples, sample_rate).
-      A render takes about a minute and produces the real mix, so render once
-      when the pass is done; the harness listens back after you say you are
+      A render plays the live arrangement in real time (FL's loop mode decides:
+      the playlist in song mode, only the selected pattern in pattern mode), so
+      render once when the pass is done; the harness listens back after you say you are
       done; use get_notes/get_scene (cheap, live) to check work instead.
     - fl.snapshot() -> tempo + channels.
     - Session mode (FLMCP_SPOOL_ROOT set, including a match) never reboots FL.
@@ -388,11 +389,12 @@ _LAST_RENDER_KEY = "last_render"
 
 @_tool_boundary
 def render(ctx: Context) -> RenderResult:
-    """Play the loop once and record the live mix to a WAV for listening. Returns {"path",
-    "wavBase64"} (base64 of the WAV, omitted with a note when the file
-    exceeds the size cap). A render takes about the loop's length.
-    project_saved is false only on a trial FL whose save before the capture
-    did not land (project_save_detail says why); the WAV is still verified.
+    """Play the live arrangement once from its start and record the mix to a WAV for
+    listening. FL's loop mode decides what plays: the playlist in song mode, the
+    selected pattern in pattern mode. Returns {"path", "wavBase64", "span"}:
+    wavBase64 is the WAV in base64 (omitted with a note past the size cap); span
+    says what played (source "song" or "pattern"), its live beats and tempo, and
+    the seconds recorded. A render takes about that long, ten minutes at most.
     Call analyze afterwards for measurements."""
     fl = ctx.request_context.lifespan_context["fl"]
     output = Path(tempfile.mkdtemp(prefix="flmcp-render-")) / "render.wav"
@@ -404,8 +406,7 @@ def render(ctx: Context) -> RenderResult:
     ctx.request_context.lifespan_context[_LAST_RENDER_KEY] = path
     result: dict[str, Any] = {
         "path": str(path),
-        "project_saved": receipt.project_saved,
-        "project_save_detail": receipt.project_save_detail,
+        "span": receipt.span,
     }
     data = path.read_bytes()
     if len(data) <= RENDER_WAV_BASE64_MAX_BYTES:

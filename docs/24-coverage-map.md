@@ -46,7 +46,7 @@ Capability acquisition is governed by the [capability acquisition model](33-capa
 | Markers / time & key sig / groove | NONE | T3 | file RE; some via controller API (documented) |
 | Stem export / MIDI export | NONE | T3 | render is full-mix only; stems need per-track routing or CLI flags (unknown) |
 | Live project save | live (wire) | T2 | live-verified (#164, #167): `FPT_Save` persists live state, and the saved `.flp` is reparsed to confirm the resulting project state. |
-| Full-mix render | live Bridge capture | T3 | live-verified 2026-09-04: 16 written notes yielded 347711 stereo frames at 44100 Hz (7.88 s, -18.4 LUFS, -2.3 dBFS) and `render_wav` took about 9 s, versus about 64 s for CLI export. `fl.render(path)` saves live state, arms the Master Bridge, plays once, and records exact frames. It needs FL audio output, the same box requirement as RDP audio. Missing Bridge, capture stalls, drops, silence, or a mismatched WAV fail loudly. `fl.export_offline(path)` is separately requested, boots a second FL, and takes about a minute. |
+| Full-mix render | live Bridge capture | T3 | live-verified 2026-09-04: 16 written notes yielded 347711 stereo frames at 44100 Hz (7.88 s, -18.4 LUFS, -2.3 dBFS) and `render_wav` took about 9 s, versus about 64 s for CLI export. `fl.render(path)` reads the live arrangement's length from FL (playlist in song mode, selected pattern in pattern mode, at the live tempo), arms the Master Bridge, plays once, and records exact frames; nothing is saved. It needs FL audio output, the same box requirement as RDP audio. Missing Bridge, capture stalls, drops, silence, or a mismatched WAV fail loudly. `fl.export_offline(path)` is separately requested, boots a second FL, and takes about a minute. |
 | Render analysis (BPM/key/loudness/peak/spectrum) | local WAV | T2 | `fl.analyze(path)` is deterministic Python measurement, no model or FL session required. |
 | Scene analysis (key/digest) | file | T2 | covered (get_scene) |
 | Undo / redo control | undo via wire | T3 | redo + file-lane revert unbuilt (store content-addresses writes) |
@@ -75,9 +75,9 @@ and 99 are live-confirmed crash/hang hazards and 106 also wedges the bridge
 tick.  Calling another unknown id to look for a renderer would violate the
 ledger and can take down the user's FL session.  No host call was added.
 
-**Safe mitigation now.** Do not put `fl.render()` in the ears loop. It saves
-the live project then invokes the separate FL CLI renderer, validates the WAV,
-and remains a user-visible, single-flight operation at a bounded cadence.
+**Safe mitigation now.** Do not put `fl.render()` in the ears loop. It plays the
+live arrangement once in real time while the Bridge records it, validates the
+WAV, and remains a user-visible, single-flight operation at a bounded cadence.
 The macOS `-R` command and adjacent WAV output were live-verified in #169.
 
 **Next evidence step.** On a matching FLEngine dylib, statically disassemble

@@ -97,13 +97,15 @@ confirmed_bpm = fl.set_tempo(128.0)
 
 ### `fl.render(output: str | Path) -> Path`
 
-**Availability:** live session with a configured project file. Saves the live
-project, then blocks while FL's CLI renders that saved `.flp`; returns the
-confirmed WAV path. The macOS `-R <project.flp>` invocation and its adjacent
-`<project>.wav` output are **ASSUMED-live-verify**. It raises if saving fails,
-FL cannot render, or no non-empty WAV appears.
+**Availability:** live session with the Master Bridge and FL audio output. Reads
+the live arrangement's length from FL (the playlist in song mode, the selected
+pattern in pattern mode, at the live tempo), plays it once from the start while
+the Bridge records the mix, and returns the verified WAV path. Nothing is saved.
+It raises before recording if song mode has an empty playlist or the capture
+would pass ten minutes, and after recording if the WAV does not verify.
+`fl.render_receipt(path)` also returns the span it recorded (`RenderSpan`).
 
-A render takes about a minute and produces the real mix, so render once when the
+A render plays in real time and produces the real mix, so render once when the
 pass is done; the harness listens back after you say you are done; use
 `get_notes`/`get_scene` (cheap, live) to check work instead.
 
@@ -117,7 +119,7 @@ wav = fl.render("/tmp/mix.wav")
 `samples` is a float64 NumPy array shaped `(frames, channels)`, normalized to
 roughly `[-1, 1]`; `sample_rate` is Hz.
 
-`render(path) -> Path` saves then invokes FL's CLI renderer and preserves the
+`render(path) -> Path` records the live mix through the Bridge and preserves the
 confirmed artifact. Use `read_wav` only when raw NumPy samples are wanted, and
 `analyze` when derived metrics are enough.
 
@@ -130,6 +132,12 @@ peak = abs(samples).max()
 
 **Availability:** local file analysis. Computes deterministic metrics from a
 PCM WAV; it does not control FL.
+It streams the file in fixed-size blocks, so its memory stays flat however long the
+render (prefer it to `read_wav`, which loads every frame, for a full-length song).
+Integrated loudness and tempo equal a whole-file pass; true peak is 4x band-limited
+interpolation per block with real signal on both sides of each seam; key and spectral
+balance come from the mean Hann-windowed spectrum of 65,536-frame segments (one
+segment, so exactly the whole-file spectrum, for a render that short).
 
 ```python
 analysis = fl.analyze("/tmp/mix.wav")

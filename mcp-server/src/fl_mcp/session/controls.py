@@ -16,12 +16,13 @@ import time
 from math import isfinite
 from numbers import Real
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 
 from fl_mcp import audio, errors, flp
 from fl_mcp.contract import ENV_AGENT_PROJECT, ENV_SPOOL_ROOT, FLLicense
 from fl_mcp.errors import NotePlaneUnavailable, WriteRejected
 from fl_mcp.schemas import (
+    CAPTURE_MAX_SECONDS,
     AutomationPoint,
     AutomationReceipt,
     ChannelLevels,
@@ -29,6 +30,7 @@ from fl_mcp.schemas import (
     PluginParamModel,
     PluginParamSpec,
     RenderReceipt,
+    RenderSpan,
 )
 
 from .link import LIVE_READ_TIMEOUT_SECONDS, LIVE_SET_TIMEOUT_SECONDS
@@ -44,6 +46,20 @@ SAVE_BUSY_RETRIES = 2
 SAVE_BUSY_RETRY_SECONDS = 0.25
 RENDER_TIMEOUT_SECONDS = 300.0
 RENDER_TAIL_SECONDS = 0.5
+# A render plays at least one 4/4 bar; its capture, tail included, stops at
+# CAPTURE_MAX_SECONDS because it holds the tool call for its whole length.
+RENDER_MIN_BEATS = 4.0
+
+# FL's MIDI-scripting vocabulary for the live span (IL FL-Studio-API-Stubs).
+# Live-measured on FL 2026 (dev-01, 2026-10-07): getSongLength(ABSTICKS) is the
+# playlist's LAST tick (1535 for a 1536-tick clip; 0 for an empty playlist) in
+# either loop mode; getPatternLength counts 16th steps, not the beats the stubs
+# document (32 beats of notes -> 128); getSongLength(MS) keeps its old value after
+# a tempo change until the next edit, so seconds come from ticks and live tempo.
+FL_LOOP_MODE_PATTERN = 0
+FL_LOOP_MODE_SONG = 1
+FL_SONGLENGTH_ABSTICKS = 2
+FL_STEPS_PER_BEAT = 4
 
 log = logging.getLogger(__name__)
 
@@ -128,16 +144,89 @@ def _render_env() -> dict[str, str]:
     return env
 
 
-def _render_span_seconds(project: Path) -> float:
-    """One arrangement pass plus a short decay tail, from saved authoritative state."""
-    parsed = flp.read(project)
-    end_ticks = max((item.position + item.length for item in parsed.playlist), default=parsed.ppq * 16)
-    beats = end_ticks / parsed.ppq
-    return beats * 60.0 / parsed.tempo + RENDER_TAIL_SECONDS
+def _live_read(session: FLSession, op: str, args: list) -> object:
+    """One live controller read: FL's answer, or a typed error naming why not."""
+    if session._ensure_hello() is None or session.control is None:
+        raise errors.control_plane_unavailable(op, LIVE_READ_TIMEOUT_SECONDS)
+    resp = session.control.send_request(op, args=args, timeout=LIVE_READ_TIMEOUT_SECONDS)
+    if not resp.ok:
+        detail = resp.err or "no detail"
+        if errors.is_operation_unsafe(detail):
+            raise errors.operation_unsafe(op)
+        raise errors.fl_api_error(op, detail)
+    return resp.ret
+
+
+def _live_int(session: FLSession, op: str, args: list | None = None) -> int:
+    value = _live_read(session, op, args or [])
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise errors.fl_api_error(op, f"returned {value!r}, not an integer")
+    return value
+
+
+def live_arrangement_span(session: FLSession) -> RenderSpan:
+    """How long FL's live arrangement plays from its start, in its current loop mode.
+
+    THE answer to "how long is the arrangement": song mode reads the playlist's
+    end, pattern mode the selected pattern's length, both at FL's live tempo.
+    The saved .flp is never consulted: a trial FL never saves, so it would always
+    answer with the template's four-bar loop (dev arena, 2026-10-07).
+    """
+    loop_mode = _live_int(session, "transport.getLoopMode")
+    tempo_bpm = _live_int(session, "mixer.getCurrentTempo") / 1000.0
+    if tempo_bpm <= 0:
+        raise errors.fl_api_error("mixer.getCurrentTempo", f"returned a tempo of {tempo_bpm:g} BPM")
+    pattern: int | None = None
+    source: Literal["song", "pattern"]
+    if loop_mode == FL_LOOP_MODE_SONG:
+        source = "song"
+        ppq = _live_int(session, "general.getRecPPQ")
+        if ppq <= 0:
+            raise errors.fl_api_error("general.getRecPPQ", f"returned {ppq} ticks per beat")
+        last_tick = _live_int(session, "transport.getSongLength", [FL_SONGLENGTH_ABSTICKS])
+        if last_tick <= 0:
+            # Live 2026-10-07: song mode over an empty playlist records silence.
+            raise errors.ToolError(
+                "render_failed",
+                "FL is in song mode and its playlist is empty, so playing it records only silence.",
+                "Place a pattern on the playlist, or switch FL to pattern mode, then render again.",
+            )
+        beats = (last_tick + 1) / ppq
+    elif loop_mode == FL_LOOP_MODE_PATTERN:
+        source = "pattern"
+        pattern = _live_int(session, "patterns.patternNumber")
+        steps = _live_int(session, "patterns.getPatternLength", [pattern])
+        if steps <= 0:
+            raise errors.fl_api_error("patterns.getPatternLength", f"pattern {pattern} is {steps} steps long")
+        beats = steps / FL_STEPS_PER_BEAT
+    else:
+        raise errors.fl_api_error("transport.getLoopMode", f"returned unknown loop mode {loop_mode}")
+
+    played_beats = max(beats, RENDER_MIN_BEATS)
+    seconds = played_beats * 60.0 / tempo_bpm
+    if seconds + RENDER_TAIL_SECONDS > CAPTURE_MAX_SECONDS:
+        raise errors.ToolError(
+            "render_failed",
+            f"The live {source} is {beats:g} beats at {tempo_bpm:g} BPM ({seconds:.1f} s); "
+            f"a render records at most {CAPTURE_MAX_SECONDS:g} s including its "
+            f"{RENDER_TAIL_SECONDS:g} s tail.",
+            "Shorten the arrangement or raise the tempo, then render again.",
+        )
+    return RenderSpan(
+        source=source,
+        pattern=pattern,
+        beats=beats,
+        tempo_bpm=tempo_bpm,
+        seconds=seconds,
+        capture_seconds=seconds + RENDER_TAIL_SECONDS,
+        note=None
+        if played_beats == beats
+        else f"the live {source} is {beats:g} beats; the render played the {RENDER_MIN_BEATS:g}-beat minimum",
+    )
 
 
 def _live_render(session: FLSession, output: Path, seconds: float) -> Path:
-    """Play the saved arrangement once while the master Bridge records it."""
+    """Play the live arrangement from its start while the master Bridge records it."""
     response_timeout = min(10.0, max(2.0, seconds / 2.0 + 2.0))
     with session._transport_use():
         started = session.transport.send("capture_start", seconds=seconds)
@@ -225,7 +314,7 @@ def _live_render(session: FLSession, output: Path, seconds: float) -> Path:
             retryable=True,
         )
     try:
-        samples, rate = audio._read_wav(captured)
+        frames, rate = audio.wav_format(captured)
         measured = audio.analyze_wav(captured)
     except (OSError, ValueError) as exc:
         raise errors.ToolError(
@@ -236,12 +325,12 @@ def _live_render(session: FLSession, output: Path, seconds: float) -> Path:
         ) from exc
     if (
         rate != start.sample_rate
-        or abs(len(samples) - expected_frames) > expected_frames * 0.01
+        or abs(frames - expected_frames) > expected_frames * 0.01
         or measured.integrated_lufs <= -60
     ):
         raise errors.ToolError(
             "render_failed",
-            f"Bridge WAV did not verify: frames={len(samples)}/{expected_frames}, rate={rate}/{start.sample_rate}, "
+            f"Bridge WAV did not verify: frames={frames}/{expected_frames}, rate={rate}/{start.sample_rate}, "
             f"lufs={measured.integrated_lufs:.1f}{stop_detail}",
             "Confirm FL audio output and Master Bridge routing, then retry.",
             retryable=True,
@@ -257,38 +346,15 @@ def _live_render(session: FLSession, output: Path, seconds: float) -> Path:
     return output
 
 
-def _save_before_render(session: FLSession) -> tuple[bool, str | None]:
-    """Save so the render length reflects the live arrangement.
-
-    Licensed: a failed save fails the render, as before. Trial: FL is never
-    asked to save (save_project), because its Buy dialog would freeze the very
-    transport the capture needs. The Bridge capture does not need the saved
-    file, so the render runs and the receipt says the project was not saved.
-    """
-    if session.fl_license is FLLicense.TRIAL:
-        return False, (
-            "not saved: a trial FL answers Save with a modal Buy dialog that freezes the controller. "
-            "The render length came from the last saved project file."
-        )
-    save_project(session)
-    return True, None
-
-
 def render_wav(session: FLSession, output: Path) -> RenderReceipt:
-    """Play the loop once and record the live mix, about the loop's length.
+    """Play the live arrangement once and record the live mix.
 
-    The Bridge and FL audio output device are required. It fails loudly when
-    that live path is unavailable rather than masking it with an offline export.
+    The length is FL's own, read live just before the capture
+    (live_arrangement_span); nothing is saved first, so a trial FL renders
+    exactly like a licensed one. The Bridge and FL audio output device are
+    required: it fails loudly when that live path is unavailable rather than
+    masking it with an offline export.
     """
-    if session.project is None:
-        raise errors.ToolError(
-            "render_failed",
-            "Cannot render without a configured saved FL project.",
-            "Configure an existing .flp project, then retry.",
-        )
-    output = output.expanduser().resolve()
-    project = session.project.expanduser().resolve()
-    saved, save_detail = _save_before_render(session)
     if not session.caps.bridge_live:
         raise errors.ToolError(
             "render_failed",
@@ -296,8 +362,9 @@ def render_wav(session: FLSession, output: Path) -> RenderReceipt:
             "Start FL with an audio output device and confirm bridge_heartbeat.txt, then retry.",
             retryable=True,
         )
-    path = _live_render(session, output, _render_span_seconds(project))
-    return RenderReceipt(path=path, project_saved=saved, project_save_detail=save_detail)
+    span = live_arrangement_span(session)
+    path = _live_render(session, output.expanduser().resolve(), span.capture_seconds)
+    return RenderReceipt(path=path, span=span)
 
 
 def export_offline(session: FLSession, output: Path) -> Path:
@@ -477,27 +544,15 @@ def set_automation(session: FLSession, channel: int, points: list[AutomationPoin
 # vendor blob). So this surface is live-or-error, never a file fallback.
 
 
-def _plugin_read(session: FLSession, op: str, args: list) -> object:
-    if session._ensure_hello() is None or session.control is None:
-        raise errors.control_plane_unavailable(op, 0.0)
-    resp = session.control.send_request(op, args=args, timeout=LIVE_READ_TIMEOUT_SECONDS)
-    if not resp.ok:
-        detail = resp.err or "no detail"
-        if errors.is_operation_unsafe(detail):
-            raise errors.operation_unsafe(op)
-        raise errors.fl_api_error(op, detail)
-    return resp.ret
-
-
 def _plugin_param_count(session: FLSession, channel: int) -> int:
-    return int(_plugin_read(session, "plugins.getParamCount", [channel, GENERATOR_SLOT]) or 0)
+    return int(_live_read(session, "plugins.getParamCount", [channel, GENERATOR_SLOT]) or 0)
 
 
 def _plugin_model(session: FLSession, channel: int) -> PluginParamModel | None:
     """Select static semantics only when the session was explicitly given them."""
     if not session.plugin_param_models:
         return None
-    plugin = str(_plugin_read(session, "plugins.getPluginName", [channel, GENERATOR_SLOT]))
+    plugin = str(_live_read(session, "plugins.getPluginName", [channel, GENERATOR_SLOT]))
     return next((model for model in session.plugin_param_models if model.plugin == plugin), None)
 
 
@@ -599,10 +654,10 @@ def plugin_params(
     for index in range(count):
         if len(out) >= limit:
             break
-        name = str(_plugin_read(session, "plugins.getParamName", [index, channel, GENERATOR_SLOT]))
+        name = str(_live_read(session, "plugins.getParamName", [index, channel, GENERATOR_SLOT]))
         if query is not None and query.lower() not in name.lower():
             continue
-        value = float(_plugin_read(session, "plugins.getParamValue", [index, channel, GENERATOR_SLOT]))
+        value = float(_live_read(session, "plugins.getParamValue", [index, channel, GENERATOR_SLOT]))
         out.append(_param(index, name, value, _spec(model, index, name)))
     return out
 
@@ -637,7 +692,7 @@ def set_plugin_param(session: FLSession, channel: int, param: int | str, value: 
                 "get a fresh index from track.params()"
             )
 
-    name = str(_plugin_read(session, "plugins.getParamName", [index, channel, GENERATOR_SLOT]))
+    name = str(_live_read(session, "plugins.getParamName", [index, channel, GENERATOR_SLOT]))
     requested = _resolve_value(value, _spec(model, index, name))
 
     if session.control is None:
@@ -652,7 +707,7 @@ def set_plugin_param(session: FLSession, channel: int, param: int | str, value: 
     if not resp.ok:
         raise errors.fl_api_error("plugins.setParamValue", resp.err or "no detail")
 
-    confirmed = float(_plugin_read(session, "plugins.getParamValue", [index, channel, GENERATOR_SLOT]))
+    confirmed = float(_live_read(session, "plugins.getParamValue", [index, channel, GENERATOR_SLOT]))
     if abs(confirmed - requested) > PLUGIN_PARAM_TOLERANCE:
         raise WriteRejected(
             f"param {name!r} readback {confirmed} is not the requested {requested}",

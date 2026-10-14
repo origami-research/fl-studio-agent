@@ -17,6 +17,7 @@ from typing import Any
 
 import anyio
 from mcp.types import CallToolResult
+from session_fakes import RENDER_SPAN
 
 from fl_mcp import __version__, server
 from fl_mcp.audio import AudioAnalysis, SpectralBalance
@@ -408,7 +409,7 @@ class _RenderFl:
             wav.setsampwidth(2)
             wav.setframerate(44100)
             wav.writeframes((np.zeros(441)).astype("<i2").tobytes())
-        return RenderReceipt(path=output, project_saved=True)
+        return RenderReceipt(path=output, span=RENDER_SPAN)
 
     def analyze(self, wav: Path) -> AudioAnalysis:
         self.analyzed.append(Path(wav))
@@ -421,15 +422,14 @@ class _RenderFl:
         )
 
 
-def test_render_returns_path_and_wav_base64():
+def test_render_returns_path_wav_base64_and_live_span():
     import base64
 
     ctx = _ctx(fl=_RenderFl())
     result = server.render(ctx)
     assert Path(result.path).exists()
     assert base64.b64decode(result.wavBase64)[:4] == b"RIFF"
-    assert result.project_saved is True
-    assert result.project_save_detail is None
+    assert result.span == RENDER_SPAN  # the caller sees what played and for how long
 
 
 def test_analyze_defaults_to_the_most_recent_render():

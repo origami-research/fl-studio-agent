@@ -209,7 +209,6 @@ class FLSession:
         self._transport_lock = threading.Lock()
         self._write_state_lock = threading.Lock()
         self._write_action: str | None = None
-        self._write_owner_thread: int | None = None
         self._run_refusals = 0
         # Development-mode file-edit batching: file-lane ops write the .flp
         # but defer the FL reload so N edits cost ONE reboot, not N. Session
@@ -586,18 +585,11 @@ class FLSession:
                 f"Live operation '{action}' refused: {self._profile_gate_detail}",
                 "Run the capture command on this FL install, ship its reviewed profile, then retry.",
             )
-        owns_active_write = False
         if not self._write_lock.acquire(blocking=False):
             with self._write_state_lock:
-                if self._write_owner_thread == threading.get_ident():
-                    # render_wav saves through controls.save_project() while
-                    # holding this guard. Re-entering from that same request
-                    # is serialization, not a competing write.
-                    owns_active_write = True
                 remaining_action = self._write_action or "another FL MCP write"
-            if not owns_active_write and (
-                action != "render_wav"
-                or not self._write_lock.acquire(timeout=RENDER_IN_FLIGHT_WRITE_WAIT_SECONDS)
+            if action != "render_wav" or not self._write_lock.acquire(
+                timeout=RENDER_IN_FLIGHT_WRITE_WAIT_SECONDS
             ):
                 if action == "render_wav":
                     with self._write_state_lock:
@@ -606,16 +598,11 @@ class FLSession:
                         action, remaining_action, RENDER_IN_FLIGHT_WRITE_WAIT_SECONDS
                     )
                 raise errors.concurrent_write(action)
-        if owns_active_write:
-            yield
-            return
         with self._write_state_lock:
             self._write_action = action
-            self._write_owner_thread = threading.get_ident()
         try:
             yield
         finally:
             with self._write_state_lock:
                 self._write_action = None
-                self._write_owner_thread = None
             self._write_lock.release()

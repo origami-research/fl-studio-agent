@@ -85,14 +85,33 @@ class NoteDelta(BaseModel):
         return not (self.added or self.removed or self.moved)
 
 
+class RenderSpan(BaseModel):
+    """How long a render played, read from the live FL session just before the
+    capture (never from the saved .flp, which a trial FL never rewrites).
+
+    ``source`` is what FL plays in its current loop mode: the playlist
+    (``"song"``) or the selected pattern (``"pattern"``, numbered by
+    ``pattern``). ``beats`` is that live length and ``tempo_bpm`` FL's live
+    tempo. ``seconds`` is the time played, after the one-bar minimum (``note``
+    says when it applied); the capture records ``capture_seconds``, which adds
+    a short decay tail. The tempo is the one at render time, so a song that
+    automates its tempo is captured at that tempo's length.
+    """
+
+    source: Literal["song", "pattern"]
+    pattern: int | None = None
+    beats: float = Field(gt=0)
+    tempo_bpm: float = Field(gt=0)
+    seconds: float = Field(gt=0)
+    capture_seconds: float = Field(gt=0)
+    note: str | None = None
+
+
 class RenderReceipt(BaseModel):
-    """What render_wav confirmed: the verified Bridge capture, and whether the
-    project save before it landed. Only a trial FL may report an unsaved project
-    (its save can stop on FL's Buy dialog); a licensed FL fails the render instead."""
+    """What render_wav confirmed: the verified Bridge capture and the live span it recorded."""
 
     path: Path
-    project_saved: bool
-    project_save_detail: str | None = None
+    span: RenderSpan
 
 
 class WriteReceipt(BaseModel):
@@ -219,8 +238,12 @@ class PingArgs(BaseModel):
     pass
 
 
+# The longest Bridge capture a render may request, decay tail included.
+CAPTURE_MAX_SECONDS = 600.0
+
+
 class CaptureStartArgs(BaseModel):
-    seconds: float = Field(gt=0, le=600)
+    seconds: float = Field(gt=0, le=CAPTURE_MAX_SECONDS)
     sample_rate_hint: int | None = Field(default=None, ge=8_000, le=192_000)
 
 

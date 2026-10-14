@@ -14,7 +14,7 @@ from mcp.server.mcpserver.tools.base import Tool
 from pydantic import BaseModel, Field, model_validator
 
 from fl_mcp import __version__
-from fl_mcp.schemas import Note, Target
+from fl_mcp.schemas import Note, RenderSpan, Target
 
 ENV_SPOOL_ROOT = "FLMCP_SPOOL_ROOT"
 ENV_AGENT_PROJECT = "FLMCP_AGENT_PROJECT"
@@ -159,10 +159,8 @@ class RenderResult(BaseModel):
     path: str
     wavBase64: str | None = None
     note: str | None = None
-    # False only on a trial FL whose pre-render save did not land; the capture
-    # still verified, and project_save_detail says why the save failed.
-    project_saved: bool = True
-    project_save_detail: str | None = None
+    # The live length the capture recorded and where FL read it (song/pattern).
+    span: RenderSpan
 
 
 def build_version() -> str:

@@ -15,7 +15,7 @@ The server exposes six tools:
 | `run` | Execute Python against the FL SDK. Its docstring is the SDK cheatsheet. |
 | `get_notes` | Read notes from a project. |
 | `get_scene` | Read a compact musical scene summary. |
-| `render` | Save and render a project to WAV. |
+| `render` | Play the live arrangement once and record the mix to WAV. |
 | `analyze` | Analyze a WAV deterministically. |
 | `fl_doctor` | Report live-lane readiness and actionable fixes. |
 

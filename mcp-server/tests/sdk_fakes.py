@@ -9,6 +9,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from session_fakes import RENDER_SPAN
+
 from fl_mcp.schemas import (
     AutomationPoint,
     AutomationReceipt,
@@ -90,7 +92,7 @@ class FakeSession(FLSession):
 
     def render_wav(self, output: Path) -> RenderReceipt:
         output.write_bytes(b"RIFF....WAVE")
-        return RenderReceipt(path=output, project_saved=True)
+        return RenderReceipt(path=output, span=RENDER_SPAN)
 
     def export_offline(self, output: Path) -> Path:
         return self.render_wav(output).path

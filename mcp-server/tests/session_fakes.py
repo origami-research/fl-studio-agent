@@ -25,12 +25,14 @@ from fl_mcp.core.carriers.wire import MidiControl
 from fl_mcp.core.transport import Transport
 from fl_mcp.platform import Platform
 from fl_mcp.schemas import (
+    OP_ARGS,
     ControlResponse,
     HelloEvent,
     Note,
     NoteDelta,
     NoteSetRef,
     PluginParamModel,
+    RenderSpan,
     SpoolCommand,
     SpoolResponse,
     Target,
@@ -40,6 +42,58 @@ from fl_mcp.session import detect as detect_mod
 from fl_mcp.session.detect import CapabilityProfileLike
 from fl_mcp.store import Store
 
+
+class FakeArrangement:
+    """FL's live arrangement as the controller script answers it, in the units
+    live-measured on FL 2026 (see controls.py): the playlist's last tick, the
+    selected pattern's length in 16th steps, tempo as BPM x 1000. Mutable, so a
+    test can change FL between two renders."""
+
+    def __init__(
+        self,
+        *,
+        loop_mode: int = 0,
+        tempo_bpm: float = 130.0,
+        ppq: int = 96,
+        song_last_tick: int = 1535,
+        pattern: int = 1,
+        pattern_steps: int = 16,
+    ) -> None:
+        self.loop_mode = loop_mode
+        self.tempo_bpm = tempo_bpm
+        self.ppq = ppq
+        self.song_last_tick = song_last_tick
+        self.pattern = pattern
+        self.pattern_steps = pattern_steps
+
+    def _song_length(self, args: list[Any]) -> int:
+        assert args == [2], "the span reads SONGLENGTH_ABSTICKS"
+        return self.song_last_tick
+
+    def _pattern_length(self, args: list[Any]) -> int:
+        assert args == [self.pattern], "the span reads the selected pattern"
+        return self.pattern_steps
+
+    def handlers(self) -> dict[str, Callable[[list[Any]], Any]]:
+        return {
+            "transport.getLoopMode": lambda args: self.loop_mode,
+            "mixer.getCurrentTempo": lambda args: round(self.tempo_bpm * 1000),
+            "general.getRecPPQ": lambda args: self.ppq,
+            "transport.getSongLength": self._song_length,
+            "patterns.patternNumber": lambda args: self.pattern,
+            "patterns.getPatternLength": self._pattern_length,
+        }
+
+
+# What a render of the template's four-bar pattern at 130 BPM reports.
+RENDER_SPAN = RenderSpan(
+    source="pattern",
+    pattern=1,
+    beats=16.0,
+    tempo_bpm=130.0,
+    seconds=16 * 60 / 130,
+    capture_seconds=16 * 60 / 130 + 0.5,
+)
 HELLO = HelloEvent(script_ver=CONTROLLER_PROTOCOL_VERSION, fl_ver="2026", ppq=96)
 TARGET = Target(pattern=1, channel=0)
 NOTES = [Note(key=60, start=0, length=1)]
@@ -131,6 +185,7 @@ class FakeSpool:
         self._id = 0
 
     def send(self, op: str, **args: Any) -> SpoolCommand:
+        OP_ARGS[op](**args)  # the real Transport validates every send the same way
         self._id += 1
         self.sent.append((op, args))
         return SpoolCommand(id=self._id, op=op, args={})

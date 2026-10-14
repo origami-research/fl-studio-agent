@@ -13,7 +13,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-from session_fakes import HELLO, FakeControl, FakePlatform, FakeSpool, make_session
+from session_fakes import HELLO, FakeArrangement, FakeControl, FakePlatform, FakeSpool, make_session
 
 from fl_mcp import errors, flp
 from fl_mcp.schemas import AutomationPoint, ControlResponse, PluginParamModel, PluginParamSpec
@@ -73,15 +73,11 @@ def test_export_offline_saves_then_subprocesses_the_resolved_fl_path(monkeypatch
 
 
 def test_render_wav_refuses_when_the_live_bridge_is_unavailable(tmp_path):
-    project = tmp_path / "live.flp"
-    output = tmp_path / "mix.wav"
-    project.write_bytes(b"FLhd")
-
-    control = FakeControl(hello=HELLO, handlers={"ctl.save": lambda args: None})
-    session, _ = make_session(control=control, project=project)
+    control = FakeControl(hello=HELLO, handlers=FakeArrangement().handlers())
+    session, _ = make_session(control=control)
 
     with pytest.raises(errors.ToolError, match="Bridge is not live"):
-        session.render_wav(output)
+        session.render_wav(tmp_path / "mix.wav")
 
 
 def test_render_waits_for_an_in_flight_write_then_proceeds(monkeypatch, tmp_path):
@@ -149,14 +145,6 @@ def test_render_refusal_after_bounded_wait_names_the_remaining_write(monkeypatch
     assert "Retry in 0.01 seconds" in excinfo.value.fix
 
 
-def test_render_guard_can_reenter_without_waiting_for_itself(tmp_path):
-    """Render's save path runs under the render guard, so same-request nesting must not deadlock."""
-    session, _ = make_session(project=tmp_path / "agent.flp")
-
-    with session._write_guard("render_wav"), session._write_guard("save_project"):
-        pass
-
-
 def test_live_render_verification_failure_is_a_tool_error_not_a_type_error(monkeypatch, tmp_path):
     """A failed capture must preserve its render_failed category and recovery hint."""
     captured = tmp_path / "capture.wav"
@@ -183,16 +171,14 @@ def test_live_render_verification_failure_is_a_tool_error_not_a_type_error(monke
     control = FakeControl(
         hello=HELLO,
         handlers={
-            "ctl.save": lambda args: None,
+            **FakeArrangement().handlers(),
             "transport.setSongPos": lambda args: None,
             "transport.start": lambda args: None,
             "transport.stop": lambda args: None,
         },
     )
-    session, _ = make_session(control=control, transport=transport, project=tmp_path / "live.flp")
-    session.project.write_bytes(b"FLhd")
+    session, _ = make_session(control=control, transport=transport)
     monkeypatch.setattr(FLSession, "caps", property(lambda self: SimpleNamespace(bridge_live=True)))
-    monkeypatch.setattr(controls, "_render_span_seconds", lambda project: 0.0)
     monkeypatch.setattr(controls.time, "sleep", lambda seconds: None)
 
     with pytest.raises(errors.ToolError) as excinfo:
@@ -227,7 +213,7 @@ def _verified_live_render(monkeypatch, tmp_path, stop):
     session, _ = make_session(control=control, transport=transport, project=tmp_path / "live.flp")
     session.project.write_bytes(b"FLhd")
     monkeypatch.setattr(controls.time, "sleep", lambda seconds: None)
-    monkeypatch.setattr(controls.audio, "_read_wav", lambda path: ([0.1] * 100, 44100))
+    monkeypatch.setattr(controls.audio, "wav_format", lambda path: (100, 44100))
     monkeypatch.setattr(controls.audio, "analyze_wav", lambda path: SimpleNamespace(integrated_lufs=-12.0))
     return session, control
 
@@ -244,7 +230,7 @@ def test_live_render_retries_an_unacknowledged_stop_after_capture(monkeypatch, t
 
     session, control = _verified_live_render(monkeypatch, tmp_path, stop)
 
-    assert controls._live_render(session, tmp_path / "mix.wav", 0.0) == tmp_path / "mix.wav"
+    assert controls._live_render(session, tmp_path / "mix.wav", 1.0) == tmp_path / "mix.wav"
     assert [op for op, _ in control.calls].count("transport.stop") == 2
     assert [op for op, _ in session.transport.sent] == ["capture_start", "capture_stop"]
 
@@ -257,7 +243,7 @@ def test_live_render_returns_verified_wav_when_stop_stays_unacknowledged(monkeyp
         lambda args: (_ for _ in ()).throw(errors.control_plane_unavailable("transport.stop", 8.0)),
     )
 
-    assert controls._live_render(session, tmp_path / "mix.wav", 0.0) == tmp_path / "mix.wav"
+    assert controls._live_render(session, tmp_path / "mix.wav", 1.0) == tmp_path / "mix.wav"
     assert [op for op, _ in control.calls].count("transport.stop") == 2
     assert "FL may still be playing; the next transport command re-seats it" in caplog.text
 
@@ -274,7 +260,7 @@ def test_live_render_reports_unacknowledged_stop_when_capture_fails(monkeypatch,
     )
 
     with pytest.raises(errors.ToolError, match=r"transport\.stop was unacknowledged") as excinfo:
-        controls._live_render(session, tmp_path / "mix.wav", 0.0)
+        controls._live_render(session, tmp_path / "mix.wav", 1.0)
     assert excinfo.value.category == "render_failed"
 
 
