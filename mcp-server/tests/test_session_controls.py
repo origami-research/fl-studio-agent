@@ -13,7 +13,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-from session_fakes import HELLO, FakeArrangement, FakeControl, FakePlatform, FakeSpool, make_session
+from session_fakes import HELLO, FakeControl, FakePlatform, FakeSpool, arrangement, make_session
 
 from fl_mcp import errors, flp
 from fl_mcp.schemas import AutomationPoint, ControlResponse, PluginParamModel, PluginParamSpec
@@ -73,7 +73,7 @@ def test_export_offline_saves_then_subprocesses_the_resolved_fl_path(monkeypatch
 
 
 def test_render_wav_refuses_when_the_live_bridge_is_unavailable(tmp_path):
-    control = FakeControl(hello=HELLO, handlers=FakeArrangement().handlers())
+    control = FakeControl(hello=HELLO, handlers=arrangement())
     session, _ = make_session(control=control)
 
     with pytest.raises(errors.ToolError, match="Bridge is not live"):
@@ -171,7 +171,7 @@ def test_live_render_verification_failure_is_a_tool_error_not_a_type_error(monke
     control = FakeControl(
         hello=HELLO,
         handlers={
-            **FakeArrangement().handlers(),
+            **arrangement(),
             "transport.setSongPos": lambda args: None,
             "transport.start": lambda args: None,
             "transport.stop": lambda args: None,

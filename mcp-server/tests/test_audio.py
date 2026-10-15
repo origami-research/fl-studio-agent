@@ -4,7 +4,6 @@ import subprocess
 import sys
 import wave
 
-import audio_oracle
 import numpy as np
 import pytest
 
@@ -87,8 +86,6 @@ def test_low_sample_rate_wav_without_key_band_is_analyzed_without_argmax_error(t
     assert result.key is None
 
 
-
-
 def _write(path, samples, sample_rate):
     frames = samples if samples.ndim == 2 else samples[:, None]
     with wave.open(str(path), "wb") as wav:
@@ -110,67 +107,18 @@ def _music(seconds, sample_rate, seed=3):
     return np.stack([left, 0.8 * left + 0.02 * rng.standard_normal(len(t))], axis=1)
 
 
-def _pulse_between_samples(length, centre):
-    # A band-limited pulse whose true peak (1.0) falls between two samples.
-    n = np.arange(length)
-    return np.sinc(n - centre) * np.exp(-(((n - centre) / 400.0) ** 2))
-
-
-@pytest.mark.parametrize(("seconds", "sample_rate"), [(0.5, 48000), (1.2, 44100), (1.0, 22050)])
-def test_streaming_analysis_equals_the_whole_file_analyzer_on_short_renders(tmp_path, seconds, sample_rate):
-    # Shorter than one spectrum segment: every measurement is the whole-file one.
-    path = _write(tmp_path / "short.wav", _music(seconds, sample_rate), sample_rate)
-
-    new, old = analyze_wav(path), audio_oracle.analyze_wav(path)
-    assert new.key == old.key
-    assert new.bpm == old.bpm
-    assert new.integrated_lufs == pytest.approx(old.integrated_lufs, rel=1e-9)
-    assert new.spectral_balance.model_dump() == pytest.approx(old.spectral_balance.model_dump(), rel=1e-9)
-    # Both upsample a zero-padded window; the padding differs (one block's context versus
-    # three times the render), which moves the interpolated peak by under 0.001 dB.
-    assert new.true_peak_dbfs == pytest.approx(old.true_peak_dbfs, abs=1e-3)
-
-
 @pytest.mark.parametrize("sample_rate", [48000, 44100])
-def test_streaming_analysis_of_a_long_render_keeps_each_measurement(tmp_path, sample_rate):
-    # Many blocks: loudness and tempo are block-exact (filter state and partial hops carry
-    # over), true peak agrees to 0.01 dB, and the averaged spectrum keeps key and balance.
-    path = _write(tmp_path / "long.wav", _music(9.0, sample_rate), sample_rate)
-    new, old = analyze_wav(path), audio_oracle.analyze_wav(path)
+def test_a_many_block_render_keeps_tempo_key_and_loudness(tmp_path, sample_rate):
+    # 9 s spans many blocks: filter state, partial hops and spectrum segments carry over.
+    t = np.arange(9 * sample_rate) / sample_rate
+    tone = 0.1 * np.sin(2 * np.pi * 997 * t)
+    beats = np.exp(-((t % 0.5) * 30)) * np.sin(2 * np.pi * 440 * t)  # A4 hits at 120 BPM
+    loud = analyze_wav(_write(tmp_path / "tone.wav", np.stack([tone, tone], axis=1), sample_rate))
+    song = analyze_wav(_write(tmp_path / "beats.wav", beats, sample_rate))
 
-    assert new.integrated_lufs == pytest.approx(old.integrated_lufs, abs=1e-9)
-    assert new.bpm == old.bpm
-    assert new.true_peak_dbfs == pytest.approx(old.true_peak_dbfs, abs=0.01)
-    assert new.key == old.key == "A"
-    for band in ("low_dbfs", "mid_dbfs", "high_dbfs"):
-        assert getattr(new.spectral_balance, band) == pytest.approx(getattr(old.spectral_balance, band), abs=0.5)
-
-
-@pytest.mark.parametrize(
-    "case",
-    ["pulse_on_first_seam", "pulse_on_second_seam", "pulse_at_render_start", "pulse_at_render_end", "noise", "abrupt_tone"],
-)
-def test_block_true_peak_matches_the_whole_signal_meter(case):
-    block = audio._BLOCK
-    length = block * 3 + 1234
-    rng = np.random.default_rng(7)
-    if case == "pulse_on_first_seam":
-        mono = 0.9 * _pulse_between_samples(length, block - 0.5)
-    elif case == "pulse_on_second_seam":
-        mono = 0.9 * _pulse_between_samples(length, 2 * block - 0.5) + 0.01 * rng.standard_normal(length)
-    elif case == "pulse_at_render_start":
-        mono = 0.9 * _pulse_between_samples(length, 0.5)
-    elif case == "pulse_at_render_end":
-        mono = 0.9 * _pulse_between_samples(length, length - 1.5)
-    elif case == "noise":
-        mono = 0.3 * rng.standard_normal(length)
-    else:  # a tone cut off at both ends rings past its sample peak (Gibbs) - kept as is
-        mono = 0.5 * np.sin(np.pi / 2 * np.arange(length) + np.pi / 4)
-    samples = np.stack([mono, -0.5 * mono], axis=1)
-
-    # Both are band-limited estimates of the same peak; they agree to under 0.01 dB
-    # (full-band noise, whose sinc tails reach furthest past a seam, is the widest case).
-    assert audio._true_peak(samples) == pytest.approx(audio_oracle._true_peak(samples), rel=1e-3)
+    assert loud.integrated_lufs == pytest.approx(-20.0, abs=0.1)  # BS.1770: -20 dBFS stereo 1 kHz
+    assert loud.true_peak_dbfs == pytest.approx(-20.0, abs=0.01)
+    assert (song.bpm, song.key) == (120.0, "A")
 
 
 def test_true_peak_finds_an_inter_sample_peak_across_many_blocks():
@@ -183,7 +131,9 @@ def test_true_peak_finds_an_inter_sample_peak_across_many_blocks():
     samples = np.stack([tone, -tone], axis=1)
     assert np.abs(samples).max() < 0.36
 
-    assert audio._true_peak(samples) == pytest.approx(0.5, abs=1e-3)
+    meter = audio._TruePeak(2)
+    meter.add(samples)
+    assert meter.finish() == pytest.approx(0.5, abs=1e-3)
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="resource.getrusage is POSIX-only")

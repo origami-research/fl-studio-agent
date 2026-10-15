@@ -5,14 +5,14 @@
 # the engine from ONE stamped wheel into a dedicated venv, installs the Bridge DLL
 # and loopMIDI, then runs session-install.ps1 inside that user's session (an
 # interactive scheduled task) to install the per-user FL files, bring up the MIDI
-# ports, start FL on the agent project, and run fl-mcp-doctor. Every downloaded
-# artifact must be pinned by sha256 and is read back after it lands; a local path
-# may be unpinned because the caller already verified it. The typed result is written to
-# -ResultPath; stdout ends with FLMCP_INSTALL_OK or FLMCP_INSTALL_FAILED.
+# ports, start FL on the agent project, and run fl-mcp-doctor. Every artifact is
+# pinned by sha256 and read back after it lands. The typed result is written to
+# C:\FLMCP\install-result.json; stdout ends with FLMCP_INSTALL_OK or FLMCP_INSTALL_FAILED.
 #
 # Artifact arguments take a presigned https URL or a local path. Build the wheel and
 # its hash-locked requirements with scripts/build-wheel.sh; the Bridge DLL is the
-# native-windows workflow artifact "FL-MCP-Bridge-Windows-x64".
+# native-windows workflow artifact "FL-MCP-Bridge-Windows-x64". session-install.ps1
+# ships beside this script.
 [CmdletBinding()]
 param(
     [Parameter(Mandatory)][string]$WheelUrl,
@@ -28,24 +28,21 @@ param(
     # Optional: `reg export "HKCU\Software\Tobias Erichsen\loopMIDI"` captured after
     # creating the two ports once by hand; imported into the FL user's hive.
     [string]$LoopMidiPortsRegUrl,
-    [string]$LoopMidiPortsRegSha256,
-    [string]$SessionScriptUrl = (Join-Path $PSScriptRoot 'session-install.ps1'),
-    [string]$SessionScriptSha256,
-    [string]$Root = 'C:\FLMCP',
-    [string]$FLRoot,
-    [string]$ResultPath = 'C:\FLMCP\install-result.json',
-    # python-rtmidi 1.5.8 has no cp313 Windows wheel, so the engine venv uses 3.12.
-    # 3.12.10 is the last 3.12 release with a Windows installer (python.org MD5 matches).
-    [string]$PythonExe = 'C:\Program Files\Python312\python.exe',
-    [string]$PythonInstallerUrl = 'https://www.python.org/ftp/python/3.12.10/python-3.12.10-amd64.exe',
-    [string]$PythonInstallerSha256 = '67B5635E80EA51072B87941312D00EC8927C4DB9BA18938F7AD2D27B328B95FB',
-    # The winget manifest TobiasErichsen.loopMIDI 1.0.16.27 pins this zip (a WiX Burn bundle).
-    [string]$LoopMidiZipUrl = 'https://www.tobias-erichsen.de/wp-content/uploads/2020/01/loopMIDISetup_1_0_16_27.zip',
-    [string]$LoopMidiZipSha256 = '975399EB76E2C5A1D553ECD8975AB361261CCAB8FD9412B8060B19877CB4E0D5',
-    [int]$SessionTimeoutSeconds = 600
+    [string]$LoopMidiPortsRegSha256
 )
 
 $ErrorActionPreference = 'Stop'
+$Root = 'C:\FLMCP'
+$ResultPath = 'C:\FLMCP\install-result.json'
+# python-rtmidi 1.5.8 has no cp313 Windows wheel, so the engine venv uses 3.12.
+# 3.12.10 is the last 3.12 release with a Windows installer (python.org MD5 matches).
+$PythonExe = 'C:\Program Files\Python312\python.exe'
+$PythonInstallerUrl = 'https://www.python.org/ftp/python/3.12.10/python-3.12.10-amd64.exe'
+$PythonInstallerSha256 = '67B5635E80EA51072B87941312D00EC8927C4DB9BA18938F7AD2D27B328B95FB'
+# The winget manifest TobiasErichsen.loopMIDI 1.0.16.27 pins this zip (a WiX Burn bundle).
+$LoopMidiZipUrl = 'https://www.tobias-erichsen.de/wp-content/uploads/2020/01/loopMIDISetup_1_0_16_27.zip'
+$LoopMidiZipSha256 = '975399EB76E2C5A1D553ECD8975AB361261CCAB8FD9412B8060B19877CB4E0D5'
+$SessionTimeoutSeconds = 600
 Set-StrictMode -Version Latest
 $script:steps = New-Object System.Collections.ArrayList
 $script:engine = [ordered]@{ wheel = $WheelName; version = $null; venv_python = $null }
@@ -77,21 +74,17 @@ function Invoke-Native([string]$Exe, [string[]]$Arguments) {
 }
 
 function Get-Artifact([string]$Source, [string]$Destination, [string]$Sha256, [string]$Name) {
+    # Every artifact runs elevated on this box, so it must be pinned.
+    if (-not $Sha256) { Stop-Install $Name "$Source has no sha256 pin" }
     if ($Source -match '^https?://') {
-        # A downloaded artifact runs elevated on this box, so it must be pinned.
-        if (-not $Sha256) { Stop-Install $Name "remote artifact $Source has no sha256 pin" }
         [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
         (New-Object System.Net.WebClient).DownloadFile($Source, $Destination)
     } else {
         Copy-Item -LiteralPath $Source -Destination $Destination -Force
     }
-    if ($Sha256) {
-        $actual = (Get-FileHash -LiteralPath $Destination -Algorithm SHA256).Hash
-        if ($actual -ne $Sha256.ToUpperInvariant()) { Stop-Install $Name "sha256 $actual, pinned $Sha256" }
-        Add-Step $Name 'ok' "sha256 $actual"
-    } else {
-        Add-Step $Name 'ok' "fetched $((Get-Item -LiteralPath $Destination).Length) bytes (no pin)"
-    }
+    $actual = (Get-FileHash -LiteralPath $Destination -Algorithm SHA256).Hash
+    if ($actual -ne $Sha256.ToUpperInvariant()) { Stop-Install $Name "sha256 $actual, pinned $Sha256" }
+    Add-Step $Name 'ok' "sha256 $actual"
 }
 
 function Stop-FL {
@@ -141,16 +134,6 @@ try {
         Stop-Install 'elevated' 'run as SYSTEM or from an elevated prompt'
     }
     if (-not (Get-LocalUser -Name $FLUser -ErrorAction SilentlyContinue)) { Stop-Install 'fl_user' "local user '$FLUser' does not exist" }
-    if (-not $FLRoot) {
-        # Same rule as fl_mcp.fl.paths.fl_app(): the newest installed FL Studio.
-        $newest = Get-ChildItem -Path (Join-Path $env:ProgramFiles 'Image-Line') -Directory -Filter 'FL Studio*' -ErrorAction SilentlyContinue |
-            Where-Object { Test-Path -LiteralPath (Join-Path $_.FullName 'FL64.exe') } | Sort-Object Name -Descending | Select-Object -First 1
-        if (-not $newest) { Stop-Install 'fl_install' "no FL Studio*\FL64.exe under $env:ProgramFiles\Image-Line" }
-        $FLRoot = $newest.FullName
-    }
-    $flExe = Join-Path $FLRoot 'FL64.exe'
-    if (-not (Test-Path -LiteralPath $flExe)) { Stop-Install 'fl_install' "$flExe not found" }
-    Add-Step 'fl_install' 'ok' "$flExe $((Get-Item -LiteralPath $flExe).VersionInfo.ProductVersion)"
     if ($WheelName -notmatch '^fl_studio_agent-(?<version>[^-]+)-py3-none-any\.whl$') {
         Stop-Install 'wheel_name' "'$WheelName' is not an fl_studio_agent wheel name"
     }
@@ -166,7 +149,7 @@ try {
     Get-Artifact $RequirementsUrl $requirements $RequirementsSha256 'requirements_sha256'
     Get-Artifact $BridgeDllUrl $dll $BridgeDllSha256 'bridge_dll_sha256'
     $sessionScript = Join-Path $Root 'session-install.ps1'
-    Get-Artifact $SessionScriptUrl $sessionScript $SessionScriptSha256 'session_script'
+    Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'session-install.ps1') -Destination $sessionScript -Force
     $portsReg = $null
     if ($LoopMidiPortsRegUrl) {
         $portsReg = Join-Path $sessionDir 'loopmidi-ports.reg'
@@ -213,6 +196,11 @@ try {
     $script:engine.venv_python = $venvPython
     Add-Step 'engine_version' 'ok' "fl-studio-agent $expectedVersion imports from $venv"
 
+    $flExe = (Invoke-Native $venvPython @('-c', 'from fl_mcp.fl.paths import fl_app; print(fl_app())')).Output.Trim()
+    if (-not (Test-Path -LiteralPath $flExe)) { Stop-Install 'fl_install' "the engine resolves FL to '$flExe', which does not exist" }
+    $FLRoot = Split-Path -Parent $flExe
+    Add-Step 'fl_install' 'ok' "$flExe $((Get-Item -LiteralPath $flExe).VersionInfo.ProductVersion)"
+
     # Every process the FL user starts after its next logon sees this; the session
     # step also sets it explicitly for fl-mcp-doctor.
     [Environment]::SetEnvironmentVariable('FLMCP_FL_LICENSE', $FLLicense, 'Machine')
@@ -239,7 +227,6 @@ try {
         $zip = Join-Path $downloads (Split-Path -Leaf $LoopMidiZipUrl)
         Get-Artifact $LoopMidiZipUrl $zip $LoopMidiZipSha256 'loopmidi_zip_sha256'
         Expand-Archive -LiteralPath $zip -DestinationPath (Join-Path $downloads 'loopmidi') -Force
-        # VERIFY-ON-WINDOWS: standard WiX Burn switches, as winget uses for this bundle.
         $p = Start-Process (Join-Path $downloads 'loopmidi\loopMIDISetup.exe') -ArgumentList '/quiet', '/norestart' -Wait -PassThru
         if ($p.ExitCode -notin 0, 3010) { Stop-Install 'loopmidi' "installer exit $($p.ExitCode)" }
         $loopMidi = Find-LoopMidi
@@ -255,8 +242,8 @@ try {
 
     $sessionResult = Join-Path $sessionDir 'result.json'
     Remove-Item -LiteralPath $sessionResult -Force -ErrorAction SilentlyContinue
-    $taskArgs = "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$sessionScript`" -Root `"$Root`" " +
-        "-FLExe `"$flExe`" -FLLicense $FLLicense -LoopMidiExe `"$loopMidi`" -ResultPath `"$sessionResult`""
+    $taskArgs = "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$sessionScript`" " +
+        "-FLExe `"$flExe`" -FLLicense $FLLicense -LoopMidiExe `"$loopMidi`""
     if ($portsReg) { $taskArgs += " -LoopMidiPortsReg `"$portsReg`"" }
     $taskName = 'FLMCPSessionInstall'
     $action = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument $taskArgs

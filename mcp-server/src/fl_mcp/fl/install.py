@@ -9,8 +9,7 @@ Three file operations, all done with FL closed:
 FL only loads these from fixed locations under the user's Image-Line data
 folder, so they are copied there rather than referenced in place. The
 assignment is what removes the last manual step (assigning the controller in
-FL's MIDI settings); it was validated by hand on 2026-08-26 on macOS (docs/12/14)
-and read back from a hand assignment on a live Windows box on 2026-10-05.
+FL's MIDI settings); its fields are the ones FL writes for a hand assignment.
 """
 
 from __future__ import annotations
@@ -55,6 +54,24 @@ REQ_PORT_NAME = "FLMCP Req"
 RES_PORT_NAME = "FLMCP Res"
 SCRIPT_NAME = "FLMCP Bridge Script"
 CONTROL_PORT = 1  # any matching int; input and output must agree
+
+
+class InstallStep(BaseModel):
+    """One install step's outcome; ``WARN`` means the step needs a human or FL restart."""
+
+    status: Literal["OK", "WARN", "FAIL"]
+    detail: str
+
+    def __str__(self) -> str:
+        return f"{self.status} {self.detail}"
+
+
+def _ok(where: str) -> InstallStep:
+    return InstallStep(status="OK", detail=f"controller assigned to {REQ_PORT_NAME}/{RES_PORT_NAME} port {CONTROL_PORT} ({where})")
+
+
+def _warn(detail: str) -> InstallStep:
+    return InstallStep(status="WARN", detail=detail)
 
 
 def script_dir() -> Path | None:
@@ -175,8 +192,7 @@ class CurrentUserRegistry:
 # loopMIDI ports are bidirectional, so FL also lists "FLMCP Req" as an output.
 # At startup FL links a scripted input to the same-named output when that
 # output has no port, and the script then replies into its own input instead
-# of "FLMCP Res" (live box 2026-10-05: no ctl.hello answer until this output
-# was parked on another port).
+# of "FLMCP Res", so that output is parked on another port.
 PARKED_PORT = CONTROL_PORT + 1
 
 # What FL 2026 for Windows itself writes (REG_SZ, read back from a hand
@@ -190,15 +206,11 @@ WINDOWS_ASSIGNMENT: dict[str, dict[str, str]] = {
 }
 
 
-# FL for Windows rewrites Devices on every clean exit (each box stop or
-# reboot), keeping an entry for every MIDI port it has seen. Live box
-# 2026-10-07: from that rewritten key FL started with the controller script
-# unlinked from any output (device.isAssigned() == 0), so its hello and every
-# reply went nowhere, on every cold start. Remembering both Microsoft outputs
-# without a port was enough to break it; the installer's own key set linked
-# every time. So the assignment owns its ports' keys outright, and outputs FL
-# merely remembers without a port are dropped. An output with a port (a real
-# device someone assigned) is kept.
+# FL for Windows rewrites Devices on every clean exit with an entry for every
+# MIDI port it has seen, and started from that rewrite it links no output to
+# the controller script (docs/35). So the assignment owns its ports' keys
+# outright and drops outputs FL remembers without a port; an output with a
+# port (a real device someone assigned) is kept.
 NO_PORT = "-1"
 
 
@@ -218,7 +230,7 @@ def _stale_device_keys(registry: FLRegistry, devices: str) -> list[str]:
     return stale
 
 
-def configure_midi_registry(registry: FLRegistry) -> str:
+def configure_midi_registry(registry: FLRegistry) -> InstallStep:
     """Make the newest ``FL Studio <N>`` settings key hold exactly the FLMCP
     controller assignment and nothing FL remembered that unlinks it, then read
     it back. FL reads it at startup and rewrites it on a clean exit, so the
@@ -226,8 +238,7 @@ def configure_midi_registry(registry: FLRegistry) -> str:
     versions = [(int(m.group(1)), name) for name in registry.subkeys(IMAGE_LINE_KEY)
                 if (m := _FL_SETTINGS_KEY.fullmatch(name))]
     if not versions:
-        return (f"WARN no HKCU\\{IMAGE_LINE_KEY}\\FL Studio <N> key; start FL once as this user, "
-                "then rerun the install")
+        return _warn(f"no HKCU\\{IMAGE_LINE_KEY}\\FL Studio <N> key; start FL once as this user, then rerun the install")
     root = f"{IMAGE_LINE_KEY}\\{max(versions)[1]}"
     devices = f"{root}\\Devices"
     for path in _stale_device_keys(registry, devices):
@@ -238,31 +249,28 @@ def configure_midi_registry(registry: FLRegistry) -> str:
         registry.set_values(path, values)
         stored = registry.values(path)
         if stored != values:
-            return f"FAIL HKCU\\{path} reads back {stored}, wrote {values}"
-    if stale := _stale_device_keys(registry, devices):
-        return f"FAIL HKCU still holds device keys that unlink the controller: {stale}"
-    return f"OK controller assigned to {REQ_PORT_NAME}/{RES_PORT_NAME} port {CONTROL_PORT} (HKCU\\{root})"
+            return InstallStep(status="FAIL", detail=f"HKCU\\{path} reads back {stored}, wrote {values}")
+    return _ok(f"HKCU\\{root}")
 
 
-def configure_midi() -> str:
+def configure_midi() -> InstallStep:
     """Write the FLMCP controller assignment into FL's registry (FL closed):
     reg.xml on macOS, configure_midi_registry on Windows.
 
     Idempotent. If the FLMCP input/output keys are absent, they are inserted
     into the MIDI input/output sections. If present, the input and output Port
     values are normalized to CONTROL_PORT (they must agree for FL to route
-    request/response) and the input Enabled flag is set. Returns a status
-    string; never raises on a missing/oddly-shaped reg.xml and never edits
-    outside the FLMCP keys - returns WARN so the installer can fall back to a
-    one-time manual assignment.
+    request/response) and the input Enabled flag is set. Never raises on a
+    missing/oddly-shaped reg.xml and never edits outside the FLMCP keys -
+    returns WARN so the installer can fall back to a one-time manual assignment.
     """
     if fl_process_running():
-        return "WARN FL Studio is running; close it before changing its MIDI registry"
+        return _warn("FL Studio is running; close it before changing its MIDI registry")
     if sys.platform == "win32":
         return configure_midi_registry(CurrentUserRegistry())
     reg_xml = reg_xml_path()
     if not reg_xml.is_file():
-        return f"WARN reg.xml not found at {reg_xml}; assign the controller once in FL's MIDI settings"
+        return _warn(f"reg.xml not found at {reg_xml}; assign the controller once in FL's MIDI settings")
     data = reg_xml.read_text(encoding="utf-8")
 
     input_key = (
@@ -281,62 +289,42 @@ def configure_midi() -> str:
         f'                </Key>'
     )
 
-    data, removed_inputs = _remove_numbered_port_keys(data, REQ_PORT_NAME)
-    data, removed_outputs = _remove_numbered_port_keys(data, RES_PORT_NAME)
-    changed = bool(removed_inputs or removed_outputs)
+    data, _ = _remove_numbered_port_keys(data, REQ_PORT_NAME)
+    data, _ = _remove_numbered_port_keys(data, RES_PORT_NAME)
     enabled_missing = False
 
     # --- input key ---
     if f'<Key Name="{REQ_PORT_NAME}">' in data:
         data, ok = _set_int_value(data, REQ_PORT_NAME, "Port", CONTROL_PORT)
         if not ok:
-            return (f"WARN {REQ_PORT_NAME} key present but has no Port value; "
-                    "unexpected reg.xml shape - assign the controller once in FL")
+            return _warn(f"{REQ_PORT_NAME} key present but has no Port value; "
+                         "unexpected reg.xml shape - assign the controller once in FL")
         data, enabled_ok = _set_int_value(data, REQ_PORT_NAME, "Enabled", 1)
         enabled_missing = not enabled_ok  # an OK below must not overclaim this
-        changed = True
     else:
         data, n = re.subn(r'(<Key Name="MIDI input">\s*)',
                           r'\g<1>' + input_key + "\n                ", data, count=1)
         if not n:
-            return 'WARN could not locate <Key Name="MIDI input"> in reg.xml; assign controller once in FL'
-        changed = True
+            return _warn('could not locate <Key Name="MIDI input"> in reg.xml; assign controller once in FL')
 
     # --- output key ---
     if f'<Key Name="{RES_PORT_NAME}">' in data:
         data, ok = _set_int_value(data, RES_PORT_NAME, "Port", CONTROL_PORT)
         if not ok:
-            return (f"WARN {RES_PORT_NAME} key present but has no Port value; "
-                    "unexpected reg.xml shape - assign the controller once in FL")
-        changed = True
+            return _warn(f"{RES_PORT_NAME} key present but has no Port value; "
+                         "unexpected reg.xml shape - assign the controller once in FL")
     else:
         data, n = re.subn(r'(<Key Name="MIDI output">\s*)',
                           r'\g<1>' + output_key + "\n                ", data, count=1)
         if not n:
-            return 'WARN could not locate <Key Name="MIDI output"> in reg.xml; assign controller once in FL'
-        changed = True
+            return _warn('could not locate <Key Name="MIDI output"> in reg.xml; assign controller once in FL')
 
-    if changed:
-        shutil.copy2(reg_xml, reg_xml.with_name(f"{reg_xml.name}.bak"))
-        reg_xml.write_text(data, encoding="utf-8")
-        if enabled_missing:
-            return (f"WARN ports assigned, but {REQ_PORT_NAME} has no Enabled value to set; "
-                    "check the controller is enabled in FL's MIDI settings")
-        return f"OK controller assigned to {REQ_PORT_NAME}/{RES_PORT_NAME} port {CONTROL_PORT} (reg.xml; backup written)"
-    return "OK controller assignment already present"
-
-
-class InstallStep(BaseModel):
-    """One install step's outcome; ``WARN`` means the step needs a human or FL restart."""
-
-    status: Literal["OK", "WARN", "FAIL"]
-    detail: str
-
-    @classmethod
-    def from_status(cls, text: str) -> InstallStep:
-        """Read a ``"<STATUS> <detail>"`` line from configure_midi()."""
-        status, _, detail = text.partition(" ")
-        return cls.model_validate({"status": status, "detail": detail})
+    shutil.copy2(reg_xml, reg_xml.with_name(f"{reg_xml.name}.bak"))
+    reg_xml.write_text(data, encoding="utf-8")
+    if enabled_missing:
+        return _warn(f"ports assigned, but {REQ_PORT_NAME} has no Enabled value to set; "
+                     "check the controller is enabled in FL's MIDI settings")
+    return _ok("reg.xml; backup written")
 
 
 def install_all() -> dict[str, InstallStep]:
@@ -350,7 +338,7 @@ def install_all() -> dict[str, InstallStep]:
         results["controller_script"] = InstallStep(status="OK", detail=str(install_controller()))
     except FileNotFoundError as exc:
         results["controller_script"] = InstallStep(status="FAIL", detail=str(exc))
-    results["midi_assignment"] = InstallStep.from_status(configure_midi())
+    results["midi_assignment"] = configure_midi()
     return results
 
 

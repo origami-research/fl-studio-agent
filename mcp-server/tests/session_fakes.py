@@ -15,7 +15,7 @@ from __future__ import annotations
 import time
 from collections.abc import Callable, Sequence
 from pathlib import Path
-from typing import Any, NoReturn, cast
+from typing import Any, cast
 
 from fl_mcp import errors
 from fl_mcp.clock import now
@@ -43,46 +43,20 @@ from fl_mcp.session.detect import CapabilityProfileLike
 from fl_mcp.store import Store
 
 
-class FakeArrangement:
-    """FL's live arrangement as the controller script answers it, in the units
-    live-measured on FL 2026 (see controls.py): the playlist's last tick, the
-    selected pattern's length in 16th steps, tempo as BPM x 1000. Mutable, so a
-    test can change FL between two renders."""
-
-    def __init__(
-        self,
-        *,
-        loop_mode: int = 0,
-        tempo_bpm: float = 130.0,
-        ppq: int = 96,
-        song_last_tick: int = 1535,
-        pattern: int = 1,
-        pattern_steps: int = 16,
-    ) -> None:
-        self.loop_mode = loop_mode
-        self.tempo_bpm = tempo_bpm
-        self.ppq = ppq
-        self.song_last_tick = song_last_tick
-        self.pattern = pattern
-        self.pattern_steps = pattern_steps
-
-    def _song_length(self, args: list[Any]) -> int:
-        assert args == [2], "the span reads SONGLENGTH_ABSTICKS"
-        return self.song_last_tick
-
-    def _pattern_length(self, args: list[Any]) -> int:
-        assert args == [self.pattern], "the span reads the selected pattern"
-        return self.pattern_steps
-
-    def handlers(self) -> dict[str, Callable[[list[Any]], Any]]:
-        return {
-            "transport.getLoopMode": lambda args: self.loop_mode,
-            "mixer.getCurrentTempo": lambda args: round(self.tempo_bpm * 1000),
-            "general.getRecPPQ": lambda args: self.ppq,
-            "transport.getSongLength": self._song_length,
-            "patterns.patternNumber": lambda args: self.pattern,
-            "patterns.getPatternLength": self._pattern_length,
-        }
+def arrangement(
+    *, loop_mode: int = 0, tempo_bpm: float = 130.0, song_last_tick: int = 1535, pattern: int = 1, steps: int = 16
+) -> dict[str, Callable[[list[Any]], Any]]:
+    """FL's live arrangement as the controller answers it, in the units measured
+    on FL 2026 (see controls.py): the playlist's last tick, the selected
+    pattern's length in 16th steps, tempo as BPM x 1000."""
+    return {
+        "transport.getLoopMode": lambda args: loop_mode,
+        "mixer.getCurrentTempo": lambda args: round(tempo_bpm * 1000),
+        "general.getRecPPQ": lambda args: 96,
+        "transport.getSongLength": lambda args: song_last_tick if args == [2] else None,
+        "patterns.patternNumber": lambda args: pattern,
+        "patterns.getPatternLength": lambda args: steps if args == [pattern] else None,
+    }
 
 
 # What a render of the template's four-bar pattern at 130 BPM reports.
@@ -92,7 +66,6 @@ RENDER_SPAN = RenderSpan(
     beats=16.0,
     tempo_bpm=130.0,
     seconds=16 * 60 / 130,
-    capture_seconds=16 * 60 / 130 + 0.5,
 )
 HELLO = HelloEvent(script_ver=CONTROLLER_PROTOCOL_VERSION, fl_ver="2026", ppq=96)
 TARGET = Target(pattern=1, channel=0)
@@ -162,18 +135,6 @@ class FakePlatform:
 
     def render_command(self, project: Path) -> Sequence[str]:
         return (str(self.render_executable), "-R", str(project))
-
-    def _not_faked(self, name: str) -> NoReturn:
-        raise AssertionError(f"FakePlatform.{name} is not faked; add it if the suite needs it")
-
-    def broker_endpoint(self) -> NoReturn:
-        self._not_faked("broker_endpoint")
-
-    def fl_install(self) -> NoReturn:
-        self._not_faked("fl_install")
-
-    def sweep_fl(self) -> NoReturn:
-        self._not_faked("sweep_fl")
 
 
 class FakeSpool:

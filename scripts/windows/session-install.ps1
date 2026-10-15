@@ -4,20 +4,20 @@
 # of the user who runs FL, because everything here is per user or per session:
 # FL's Settings folder and HKCU MIDI assignment live in that profile, loopMIDI ports exist only
 # while loopMIDI runs in that session, and FL must start on that desktop. It writes
-# its typed result to -ResultPath, including the final fl-mcp-doctor report.
+# its typed result to C:\FLMCP\session\result.json, including the final fl-mcp-doctor report.
 [CmdletBinding()]
 param(
-    [Parameter(Mandatory)][string]$Root,
     [Parameter(Mandatory)][string]$FLExe,
     [Parameter(Mandatory)][ValidateSet('trial', 'licensed')][string]$FLLicense,
     [Parameter(Mandatory)][string]$LoopMidiExe,
-    [Parameter(Mandatory)][string]$ResultPath,
-    [string]$LoopMidiPortsReg,
-    [int]$BootTimeoutSeconds = 300
+    [string]$LoopMidiPortsReg
 )
 
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
+$Root = 'C:\FLMCP'
+$ResultPath = 'C:\FLMCP\session\result.json'
+$BootTimeoutSeconds = 300
 $steps = New-Object System.Collections.ArrayList
 $doctor = $null
 $sessionId = (Get-Process -Id $PID).SessionId
@@ -31,23 +31,14 @@ function Add-Step([string]$Name, [string]$Status, [string]$Detail) {
 function Invoke-Native([string]$Exe, [string[]]$Arguments) {
     # Windows PowerShell 5.1 turns native stderr into terminating errors under
     # ErrorActionPreference=Stop; the exit code is the verdict here, not stderr.
+    # Output is stdout only (the JSON reports); Error keeps stderr for failure details.
     $previous = $ErrorActionPreference
     $ErrorActionPreference = 'Continue'
     try {
-        $output = & $Exe @Arguments 2>$null | ForEach-Object { "$_" }
-        return [pscustomobject]@{ Code = $LASTEXITCODE; Output = ($output -join "`n") }
-    } finally {
-        $ErrorActionPreference = $previous
-    }
-}
-
-function Invoke-Python([string]$Code) {
-    # No double quotes inside $Code: Windows PowerShell 5.1 does not escape them for native commands.
-    $previous = $ErrorActionPreference
-    $ErrorActionPreference = 'Continue'
-    try {
-        $output = & $python -c $Code 2>&1 | ForEach-Object { "$_" }
-        return [pscustomobject]@{ Code = $LASTEXITCODE; Output = ($output -join "`n").Trim() }
+        $lines = @(& $Exe @Arguments 2>&1)
+        $stderr = $lines | Where-Object { $_ -is [Management.Automation.ErrorRecord] }
+        $stdout = $lines | Where-Object { $_ -isnot [Management.Automation.ErrorRecord] }
+        return [pscustomobject]@{ Code = $LASTEXITCODE; Output = ($stdout -join "`n").Trim(); Error = ($stderr -join "`n") }
     } finally {
         $ErrorActionPreference = $previous
     }
@@ -78,24 +69,25 @@ try {
 
     # A trial FL cannot reopen a project it saved, so the agent project is reset to
     # the packaged (licensed-authored) template on every install.
-    $project = Invoke-Python 'from fl_mcp.make_agent_project import create; print(create(force=True))'
-    if ($project.Code -ne 0 -or -not (Test-Path -LiteralPath $project.Output)) { throw "agent project: $($project.Output)" }
+    # No double quotes inside -c code: Windows PowerShell 5.1 does not escape them for native commands.
+    $project = Invoke-Native $python @('-c', 'from fl_mcp.make_agent_project import create; print(create(force=True))')
+    if ($project.Code -ne 0 -or -not (Test-Path -LiteralPath $project.Output)) { throw "agent project: $($project.Output) $($project.Error)" }
     Add-Step 'agent_project' 'ok' $project.Output
 
     if ($LoopMidiPortsReg) {
+        # loopMIDI reads its ports from HKCU\Software\Tobias Erichsen\loopMIDI at start.
         $imported = Invoke-Native 'reg.exe' @('import', $LoopMidiPortsReg)
-        # VERIFY-ON-WINDOWS: loopMIDI reads HKCU\Software\Tobias Erichsen\loopMIDI at start.
-        Add-Step 'loopmidi_ports_reg' $(if ($imported.Code -eq 0) { 'unverified' } else { 'failed' }) "reg import exit $($imported.Code)"
+        Add-Step 'loopmidi_ports_reg' $(if ($imported.Code -eq 0) { 'ok' } else { 'failed' }) "reg import exit $($imported.Code)"
     }
     Get-Process -Name loopMIDI -ErrorAction SilentlyContinue | Stop-Process -Force
     Start-Process -FilePath $LoopMidiExe
     Start-Sleep -Seconds 5
     # The engine's own port rule (WinMM-suffixed names, exactly one match) decides.
-    $ports = Invoke-Python 'from fl_mcp.core.carriers.wire import windows_midi_control; windows_midi_control().close(); print(''FLMCP Req and FLMCP Res open'')'
+    $ports = Invoke-Native $python @('-c', 'from fl_mcp.core.carriers.wire import windows_midi_control; windows_midi_control().close(); print(''FLMCP Req and FLMCP Res open'')')
     if ($ports.Code -eq 0) {
         Add-Step 'midi_ports' 'ok' $ports.Output
     } else {
-        Add-Step 'midi_ports' 'failed' ("$($ports.Output) Create both ports once in loopMIDI in this session, then pass " +
+        Add-Step 'midi_ports' 'failed' ("$($ports.Error) Create both ports once in loopMIDI in this session, then pass " +
             '`reg export "HKCU\Software\Tobias Erichsen\loopMIDI"` as -LoopMidiPortsRegUrl.')
     }
 

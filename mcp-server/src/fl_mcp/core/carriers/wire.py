@@ -324,8 +324,8 @@ def _port_number(port: Any, name: str) -> int:
 def windows_midi_control() -> MidiControl:
     """Open the loopMIDI ports that scripts/windows/session-install.ps1 provisions.
 
-    VERIFY-ON-WINDOWS: loopMIDI ports exist per user session while loopMIDI
-    runs, so this must run in the same session as loopMIDI and FL.
+    loopMIDI ports exist per user session while loopMIDI runs, so this must run
+    in the same session as loopMIDI and FL.
     """
     return MidiControl(
         use_virtual_ports=False,

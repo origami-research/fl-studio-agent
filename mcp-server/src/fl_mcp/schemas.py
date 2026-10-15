@@ -92,9 +92,8 @@ class RenderSpan(BaseModel):
     ``source`` is what FL plays in its current loop mode: the playlist
     (``"song"``) or the selected pattern (``"pattern"``, numbered by
     ``pattern``). ``beats`` is that live length and ``tempo_bpm`` FL's live
-    tempo. ``seconds`` is the time played, after the one-bar minimum (``note``
-    says when it applied); the capture records ``capture_seconds``, which adds
-    a short decay tail. The tempo is the one at render time, so a song that
+    tempo. ``seconds`` is the time played; the capture adds a short decay
+    tail. The tempo is the one at render time, so a song that
     automates its tempo is captured at that tempo's length.
     """
 
@@ -103,8 +102,6 @@ class RenderSpan(BaseModel):
     beats: float = Field(gt=0)
     tempo_bpm: float = Field(gt=0)
     seconds: float = Field(gt=0)
-    capture_seconds: float = Field(gt=0)
-    note: str | None = None
 
 
 class RenderReceipt(BaseModel):

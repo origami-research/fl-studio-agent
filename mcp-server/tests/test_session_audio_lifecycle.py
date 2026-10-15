@@ -21,8 +21,7 @@ from fl_mcp.session.detect import read_heartbeat
 # The session's wall clock, pinned to the heartbeat's own stamp. Heartbeat
 # freshness is wall-clock age (the Bridge stamps unix_time), so a host that
 # sleeps or steps its clock between writing this one-shot heartbeat and the
-# lifecycle reading it saw a "stale Bridge" and never started the stream
-# (a closed-lid laptop's DarkWake cycles did exactly that).
+# lifecycle reading it saw a "stale Bridge" and never started the stream.
 NOW = 1_800_000_000
 
 

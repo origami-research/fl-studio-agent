@@ -122,12 +122,6 @@ def _dbfs(value: float) -> float:
     return float(20 * np.log10(max(value, 1e-12)))
 
 
-def _true_peak(samples: np.ndarray) -> float:
-    meter = _TruePeak(samples.shape[1])
-    meter.add(samples)
-    return meter.finish()
-
-
 class _TruePeak:
     """4x band-limited interpolation, block by block.
 

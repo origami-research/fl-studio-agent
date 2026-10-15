@@ -10,7 +10,7 @@ from typing import Any, Protocol
 
 from fl_mcp import errors
 from fl_mcp.controller_version import CONTROLLER_PROTOCOL_VERSION, controller_protocol_matches
-from fl_mcp.core.carriers.wire import ControlUnavailable, MidiControl
+from fl_mcp.core.carriers.wire import ControlUnavailable
 from fl_mcp.fl.process import FL_BOOT_TIMEOUT_SECONDS, fl_process_running
 from fl_mcp.schemas import ControlResponse, HelloEvent
 
@@ -66,19 +66,18 @@ class ControlLink:
     def __init__(
         self,
         control: ControlCarrier | None,
-        factory: Callable[[], ControlCarrier] | None = None,
+        factory: Callable[[], ControlCarrier],
         *,
         clock: Callable[[], float] = time.monotonic,
         sleep: Callable[[float], None] = time.sleep,
     ) -> None:
         self.control = control
-        self._control_factory = factory if factory is not None else MidiControl
+        self._control_factory = factory
         self._clock = clock
         self._sleep = sleep
-        # None until the first recycle. A 0.0 sentinel read as "recycled at
-        # monotonic 0", so on a host booted under the interval ago (the
-        # monotonic clock counts from boot) the first recycle was refused.
-        self._last_recycle: float | None = None
+        # -inf, not 0.0: the monotonic clock counts from boot, so 0.0 would
+        # refuse the first recycle on a host booted under the interval ago.
+        self._last_recycle = float("-inf")
         self._warned_controller_versions: set[str] = set()
 
     def _check_controller_protocol(self, hello: HelloEvent) -> HelloEvent:
@@ -138,7 +137,7 @@ class ControlLink:
         if not fl_process_running():
             return None  # nothing to bind to - FL is not even running
         now = self._clock()
-        if self._last_recycle is not None and now - self._last_recycle < RECYCLE_MIN_INTERVAL_SECONDS:
+        if now - self._last_recycle < RECYCLE_MIN_INTERVAL_SECONDS:
             return None  # recycled too recently - one wait per interval, not per call
         self._last_recycle = now
         log.info("FL is running but the wire is silent; recycling ports for a hot-plug bind")
@@ -199,7 +198,7 @@ class ControlLink:
         except ControlUnavailable:
             log.exception("wire re-open after reload failed; live ops degrade")
             self.control = None
-        self._last_recycle = None
+        self._last_recycle = float("-inf")
 
     def request(
         self,

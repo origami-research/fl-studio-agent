@@ -73,9 +73,8 @@ class _TwoControlPlatform(FakePlatform):
 
 
 def test_create_session_recycles_through_the_platform_wire(monkeypatch):
-    """Live box 2026-10-05: create_session gave the link no factory outside
-    session mode, so a recycle on Windows reopened VIRTUAL ports (MidiControl's
-    default) and WinMM raised. Every reopen must come from the platform."""
+    """Every reopen comes from the platform: on Windows, virtual ports (MidiControl's
+    default) raise in WinMM."""
     silent, live = FakeControl(hello=None), FakeControl(hello=HELLO)
     silent.close = lambda: None
     session = create_session(platform=_TwoControlPlatform(silent, live))
@@ -263,7 +262,7 @@ def test_reload_reconnects_the_wire_fresh(monkeypatch, tmp_path):
     session.write_notes(TARGET, NOTES, "merge")
 
     assert old.closed and session.control is fresh
-    assert session.link._last_recycle is None
+    assert session.link._last_recycle == float("-inf")
 
 
 # --- settle after reload (issue #47 / experiment E7) --------------------------

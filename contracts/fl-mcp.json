@@ -71,8 +71,7 @@
       "operation_unsafe",
       "fl_relaunch_required",
       "file_lane_requires_reload",
-      "fl_trial_cannot_reopen",
-      "fl_trial_cannot_save",
+      "fl_trial_unsupported",
       "unsupported_fl_build"
     ],
     "delivery": "ToolErrorResult JSON is delivered as the text content of isError tool results.",
@@ -604,29 +603,12 @@
       "outputSchema": {
         "$defs": {
           "RenderSpan": {
-            "description": "How long a render played, read from the live FL session just before the\ncapture (never from the saved .flp, which a trial FL never rewrites).\n\n``source`` is what FL plays in its current loop mode: the playlist\n(``\"song\"``) or the selected pattern (``\"pattern\"``, numbered by\n``pattern``). ``beats`` is that live length and ``tempo_bpm`` FL's live\ntempo. ``seconds`` is the time played, after the one-bar minimum (``note``\nsays when it applied); the capture records ``capture_seconds``, which adds\na short decay tail. The tempo is the one at render time, so a song that\nautomates its tempo is captured at that tempo's length.",
+            "description": "How long a render played, read from the live FL session just before the\ncapture (never from the saved .flp, which a trial FL never rewrites).\n\n``source`` is what FL plays in its current loop mode: the playlist\n(``\"song\"``) or the selected pattern (``\"pattern\"``, numbered by\n``pattern``). ``beats`` is that live length and ``tempo_bpm`` FL's live\ntempo. ``seconds`` is the time played; the capture adds a short decay\ntail. The tempo is the one at render time, so a song that\nautomates its tempo is captured at that tempo's length.",
             "properties": {
               "beats": {
                 "exclusiveMinimum": 0,
                 "title": "Beats",
                 "type": "number"
-              },
-              "capture_seconds": {
-                "exclusiveMinimum": 0,
-                "title": "Capture Seconds",
-                "type": "number"
-              },
-              "note": {
-                "anyOf": [
-                  {
-                    "type": "string"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ],
-                "default": null,
-                "title": "Note"
               },
               "pattern": {
                 "anyOf": [
@@ -663,8 +645,7 @@
               "source",
               "beats",
               "tempo_bpm",
-              "seconds",
-              "capture_seconds"
+              "seconds"
             ],
             "title": "RenderSpan",
             "type": "object"

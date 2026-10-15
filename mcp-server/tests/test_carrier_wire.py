@@ -453,9 +453,8 @@ def test_send_request_fails_fast_when_the_shared_wire_stays_busy(rig):
 
 def test_provisioned_ports_ask_the_controller_for_its_hello(monkeypatch):
     """loopMIDI ports outlive FL's controller init: its OnInit hello went out
-    before this process opened them (live box 2026-10-05), so a provisioned
-    wire asks with ctl.hello instead of waiting for an announcement that
-    already happened."""
+    before this process opened them, so a provisioned wire asks with ctl.hello
+    instead of waiting for an announcement that already happened."""
     mod = _fake_rtmidi_module()
     monkeypatch.setitem(sys.modules, "rtmidi", mod)
     control = wire.windows_midi_control()

@@ -98,7 +98,7 @@ def create_session(
     fl_license = fl_license_from_env(os.environ)
     spool_override = os.environ.get(ENV_SPOOL_ROOT)
     control: ControlCarrier | None
-    control_factory: Callable[[], ControlCarrier] | None = None
+    control_factory: Callable[[], ControlCarrier]
     if spool_override:
         session_root = Path(spool_override)
         endpoint = platform.broker_endpoint()
@@ -176,7 +176,7 @@ class FLSession:
         project: Path | None,
         platform: Platform,
         fl_license: FLLicense,
-        control_factory: Callable[[], ControlCarrier] | None = None,
+        control_factory: Callable[[], ControlCarrier],
         profile: CapabilityProfileLike | None = None,
         plugin_param_models: tuple[PluginParamModel, ...] = (),
         session_spool_root: Path | None = None,
@@ -237,12 +237,7 @@ class FLSession:
 
     @control.setter
     def control(self, value: ControlCarrier | None) -> None:
-        # sdk_fakes.FakeSession assigns ``self.control`` without calling this
-        # __init__; the first assignment bootstraps its link.
-        if getattr(self, "link", None) is None:
-            self.link = ControlLink(value)
-        else:
-            self.link.control = value
+        self.link.control = value
 
     # -- the Routable surface (docs/30 Surface 3) -----------------------------
 
@@ -505,7 +500,7 @@ class FLSession:
         """Refuse before mutating a project FL cannot be made to reopen: a trial
         FL cannot reopen saved projects, and a session FL has no in-place reload."""
         if self.fl_license is FLLicense.TRIAL:
-            raise errors.fl_trial_cannot_reopen("This project-file edit")
+            raise errors.fl_trial_unsupported("this project-file edit")
         if self.session_spool_root is not None:
             raise errors.file_lane_requires_reload()
 

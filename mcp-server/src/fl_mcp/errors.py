@@ -30,8 +30,7 @@ ErrorCategory = Literal[
     "operation_unsafe",
     "fl_relaunch_required",
     "file_lane_requires_reload",
-    "fl_trial_cannot_reopen",
-    "fl_trial_cannot_save",
+    "fl_trial_unsupported",
     "unsupported_fl_build",
 ]
 
@@ -246,28 +245,16 @@ def unsupported_in_live_session(action: str) -> ToolError:
     )
 
 
-def fl_trial_cannot_reopen(action: str) -> ToolError:
-    """A trial FL cannot reopen a saved project, so nothing may depend on it."""
+def fl_trial_unsupported(action: str) -> ToolError:
+    """A trial FL cannot reopen a saved project, and answers Save with a modal Buy dialog."""
     return ToolError(
-        "fl_trial_cannot_reopen",
-        f"FL Studio is configured as a trial (FLMCP_FL_LICENSE=trial), and a trial cannot reopen a "
-        f"saved project. {action} needs FL to open the .flp, so it was refused before anything changed.",
+        "fl_trial_unsupported",
+        f"FL Studio is configured as a trial (FLMCP_FL_LICENSE=trial). A trial cannot reopen a saved "
+        f"project, and answers Save with a modal 'Buy FL Studio' dialog that freezes the controller, "
+        f"so {action} was refused before anything changed.",
         "Use live lanes: notes through the Bridge; tempo, plugin parameters, and channel levels "
-        "through the control wire; render_wav for audio (Bridge capture). Automation clips, adding "
-        "effects, and export_offline need a licensed FL.",
-        retryable=False,
-    )
-
-
-def fl_trial_cannot_save(action: str) -> ToolError:
-    """A trial FL answers Save with a modal Buy dialog that freezes the controller."""
-    return ToolError(
-        "fl_trial_cannot_save",
-        f"FL Studio is configured as a trial (FLMCP_FL_LICENSE=trial). A trial FL answers Save with a "
-        f"modal 'Buy FL Studio' dialog that freezes the controller until a human closes it, so {action} "
-        "was refused before FL was asked.",
-        "Keep working through the live lanes; render_wav records the live mix without a save. Saving "
-        "the project needs a licensed FL.",
+        "through the control wire; render_wav for audio (Bridge capture). Saving, automation clips, "
+        "adding effects, and export_offline need a licensed FL.",
         retryable=False,
     )
 

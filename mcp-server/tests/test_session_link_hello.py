@@ -51,4 +51,4 @@ def test_busy_ping_after_a_hello_trusts_that_hello() -> None:
         def send_request(self, op: str, args: Any = None, kwargs: Any = None, timeout: float = 2.0) -> ControlResponse:
             raise errors.control_plane_busy(op, timeout)
 
-    assert ControlLink(_BusyPing()).hello() is hello
+    assert ControlLink(_BusyPing(), factory=_BusyPing).hello() is hello

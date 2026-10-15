@@ -1,16 +1,11 @@
 #!/usr/bin/env bash
 # Build the fl-studio-agent wheel from the committed tree and prove it is self-contained.
-#
 # Usage: scripts/build-wheel.sh [--release] [--out DIR]
 #
-# Default (box artifact): the version is stamped <pyproject version>+g<short commit>,
-# so every commit is a distinct pip version: `pip show` names the exact build and pip
-# never answers "already satisfied" across different code. Beside the wheel it writes
-# <wheel>.requirements.txt, the hash-locked runtime closure exported from uv.lock.
-# It prints the name and sha256 pins that scripts/windows/provision.ps1 verifies.
-# --release builds the unstamped version (PyPI rejects local versions); same checks.
-#
-# Nothing is uploaded.
+# The version is stamped <pyproject version>+g<short commit> (--release: unstamped, for
+# PyPI), so pip never calls different code "already satisfied". Beside the wheel it writes
+# <wheel>.requirements.txt (hash-locked from uv.lock) and prints the sha256 pins
+# scripts/windows/provision.ps1 verifies. Nothing is uploaded.
 set -euo pipefail
 
 repo_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
@@ -68,25 +63,6 @@ requirements="$work_dir/dist/$name.requirements.txt"
 uv export --directory "$src/mcp-server" --frozen --no-dev --no-emit-project --no-header --format requirements-txt \
   --quiet --output-file "$requirements"
 
-# Every runtime file must be inside the wheel: the box has no repository checkout.
-python3 - "$wheel" "$version" <<'PY'
-import sys, zipfile
-wheel, version = sys.argv[1], sys.argv[2]
-names = set(zipfile.ZipFile(wheel).namelist())
-required = [
-    "fl_mcp/fl_scripts/device_FLMCP.py",
-    "fl_mcp/fl_scripts/flmcp_codec.py",
-    "fl_mcp/fl_scripts/MCP Write Notes.pyscript",
-    "fl_mcp/assets/session-template.flp",
-    f"fl_studio_agent-{version}.dist-info/licenses/LICENSE",
-]
-missing = [n for n in required if n not in names]
-if not any(n.startswith("fl_mcp/profiles/") and n.endswith(".json") for n in names):
-    missing.append("fl_mcp/profiles/*.json")
-if missing:
-    sys.exit(f"wheel is missing runtime files: {missing}")
-PY
-
 # The Windows closure must resolve to binary wheels only for the box Python.
 uv pip compile "$requirements" --python-platform x86_64-pc-windows-msvc --python-version "$box_python" \
   --only-binary :all: --no-header --quiet --output-file "$work_dir/windows-resolution.txt"
@@ -102,7 +78,7 @@ venv_python="$work_dir/venv/bin/python"
 test -s "$work_dir/contract.json"
 (cd "$work_dir" && "$venv_python" - "$version" <<'PY'
 import sys
-from importlib.metadata import entry_points, version
+from importlib.metadata import distribution, entry_points, version
 from importlib.resources import files
 
 import fl_mcp
@@ -116,7 +92,11 @@ assert version("fl-studio-agent") == fl_mcp.__version__ == build_version() == ex
 assert "site-packages" in fl_mcp.__file__, f"imported from {fl_mcp.__file__}, not the installed wheel"
 assert CONTROLLER_PROTOCOL_VERSION
 assert wire.encode_message
-assert files("fl_mcp.fl_scripts").joinpath("MCP Write Notes.pyscript").is_file()
+# Every runtime file comes from the wheel: the box has no repository checkout.
+for script in ("device_FLMCP.py", "flmcp_codec.py", "MCP Write Notes.pyscript"):
+    assert files("fl_mcp.fl_scripts").joinpath(script).is_file(), script
+assert any(p.name.endswith(".json") for p in files("fl_mcp.profiles").iterdir())
+assert distribution("fl-studio-agent").read_text("licenses/LICENSE")
 assert template_path().is_file()
 scripts = {ep.name for ep in entry_points(group="console_scripts")}
 assert {"fl-mcp", "fl-mcp-doctor", "fl-mcp-install"} <= scripts, scripts

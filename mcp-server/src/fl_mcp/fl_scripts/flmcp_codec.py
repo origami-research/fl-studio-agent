@@ -22,7 +22,7 @@ TYPE_EVENT = 0x03
 TYPE_CHUNK = 0x04
 
 # SysEx frames are capped at 512 bytes (docs/03) - driver behavior on larger
-# frames is unverified and out of scope here [ASSUMED cap holds; NOTES.md].
+# frames is unverified and out of scope here [ASSUMED cap holds].
 MAX_FRAME_BYTES = 512
 # base64 chars of the real payload carried per chunk frame. Comfortably under
 # the cap after the chunk-envelope JSON scaffolding and the frame header are

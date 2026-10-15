@@ -299,11 +299,7 @@ The first Windows production milestone is the spool-backed Bridge with verified 
 
 A feature is portable only when its core has no platform import and its platform-specific boundary has a concrete test or recorded `VERIFY-ON-WINDOWS` evidence.
 
-## Windows box install (2026-09-24)
-
-This replaces the earlier repository-checkout runbook (`provision.ps1 -RepoRoot` plus `accept.ps1`).
-It is written before a live box run.
-Everything marked VERIFY-ON-WINDOWS below is an assumption until a box proves it.
+## Windows box install
 
 ### What a box needs
 
@@ -324,45 +320,17 @@ The engine venv uses CPython 3.12, not the box's 3.13.
 The MIDI carrier is loopMIDI.
 RtMidi's WinMM backend lists every port as `<name> <index>`, so the engine matches `FLMCP Req 0` as `FLMCP Req`, and refuses a missing or duplicated port.
 loopMIDI ports belong to the user session and exist only while loopMIDI runs there.
-loopMIDI has no command-line port creation.
+loopMIDI has no command-line port creation; it recreates its ports from `HKCU\Software\Tobias Erichsen\loopMIDI` at start, so a captured `reg export` of that key provisions them.
 
-### Install interface
+### Install
 
-Artifact arguments take a presigned URL or a local path.
+It installs Python 3.12 and loopMIDI when missing, the locked closure and the wheel into `C:\FLMCP\venv`, sets the machine variable `FLMCP_FL_LICENSE`, and copies the DLL into `<FL>\Plugins\Fruity\Effects\FL MCP Bridge\`, stopping FL only when the DLL changes.
 
-```powershell
-provision.ps1 -WheelUrl <url> -WheelName fl_studio_agent-0.1.0+g36ceb61-py3-none-any.whl -WheelSha256 <sha> `
-  -RequirementsUrl <url> -RequirementsSha256 <sha> -BridgeDllUrl <url> -BridgeDllSha256 <sha> `
-  -FLUser <console user> [-FLLicense trial|licensed] [-LoopMidiPortsRegUrl <url> -LoopMidiPortsRegSha256 <sha>]
-```
+It then runs `session-install.ps1` as a one-shot interactive scheduled task in the FL user's console session.
+That part runs `fl-mcp-install --json`, resets `Documents\Image-Line\FL Studio\Projects\FLMCP Agent.flp` from the packaged template, restarts loopMIDI, opens both ports with the engine's own port rule, starts FL on the agent project, and polls `fl-mcp-doctor` until every plane is connected or the boot timeout passes.
 
-The SYSTEM part fetches and verifies the artifacts, installs Python 3.12.10 to `C:\Program Files\Python312` if missing (pinned installer, no PATH change), and installs the locked closure and then the wheel into `C:\FLMCP\venv`.
-It checks that the installed version equals the wheel name's stamp, sets the machine variable `FLMCP_FL_LICENSE`, and copies the DLL into `<FL>\Plugins\Fruity\Effects\FL MCP Bridge\`, stopping FL only when the DLL changes.
-It installs loopMIDI 1.0.16.27 from the zip that winget pins, when missing.
-
-It then runs `scripts/windows/session-install.ps1` as a one-shot interactive scheduled task in the FL user's console session.
-That part runs `fl-mcp-install --json` (controller, piano-roll script, and the MIDI assignment, which FL for Windows keeps in `HKCU\Software\Image-Line\FL Studio <N>\Devices`, not in a reg.xml), and resets `Documents\Image-Line\FL Studio\Projects\FLMCP Agent.flp` from the packaged template.
-It imports the optional captured loopMIDI registry export into the user's hive, restarts loopMIDI in the session, and opens both ports with the engine's own port rule.
-Finally it starts FL on the agent project and polls `fl-mcp-doctor` until every plane is connected or the boot timeout passes.
-
-The result is `C:\FLMCP\install-result.json`, and stdout ends with `FLMCP_INSTALL_OK` or `FLMCP_INSTALL_FAILED`:
-
-```json
-{
-  "schema": "flmcp-box-install/1",
-  "ok": true,
-  "finished_at": "2026-09-24T00:00:00.0000000Z",
-  "fl_user": "<console user>",
-  "fl_license": "trial",
-  "engine": {"wheel": "<wheel name>", "version": "0.1.0+g36ceb61", "venv_python": "C:\\FLMCP\\venv\\Scripts\\python.exe"},
-  "steps": [{"name": "wheel_sha256", "part": "system", "status": "ok", "detail": "sha256 ..."}],
-  "doctor": {"status": "ok", "control_plane": {}, "note_plane": {}, "project_file": {}, "run_refusals": 0}
-}
-```
-
-A step status is `ok`, `failed`, or `unverified` (written but not yet confirmed, such as the MIDI assignment before the controller hello).
+The result is `C:\FLMCP\install-result.json` (schema `flmcp-box-install/1`: per-step `ok`, `failed`, or `unverified`, plus the `fl_doctor` report), and stdout ends with `FLMCP_INSTALL_OK` or `FLMCP_INSTALL_FAILED`.
 `ok` is true only when no step failed and the doctor reports `ok`.
-The doctor object is the `fl_doctor` report shape from `contracts/fl-mcp.json`.
 
 ### Single-session defaults
 
@@ -373,48 +341,27 @@ Without `FLMCP_AGENT_PROJECT` the engine's project is `Documents\Image-Line\FL S
 The engine uses the per-machine MIDI wire directly, not the session broker.
 
 FL must have the Bridge loaded, and the packaged template carries it as the last Master insert effect.
-FL's default startup project has no Bridge, so a box must open the agent project.
-The console session's FL launch (logon script and relaunch task) should therefore reset the agent project from the template and pass its path to `FL64.exe`, and start loopMIDI first.
-It should also re-apply the MIDI assignment (`fl_mcp.fl.install.configure_midi`, FL closed) before every launch.
-FL rewrites `Devices` on every clean exit, including each box stop or reboot, and starts from that rewritten key with the controller unlinked from any output (see the 2026-10-07 results).
+FL's default startup project has no Bridge, so a box must open the agent project; FL started with a project path skips the trial welcome dialog, which a plain launch shows.
+The console session's FL launch (logon script and relaunch task) should therefore reset the agent project from the template, start loopMIDI first, and pass the project path to `FL64.exe`.
+
+FL for Windows keeps the MIDI assignment in `HKCU\Software\Image-Line\FL Studio <N>\Devices`, not in a `reg.xml`.
+It rewrites that key on every clean exit (each box stop or reboot) with every port it has seen, and started from the rewrite it links no output to the controller script.
+So the launch must re-apply the assignment (`fl_mcp.fl.install.configure_midi`, FL closed) before every start.
+
+FL for Windows indexes the plugin and host VMTs from the first declared virtual, with no Free Pascal header (`fl_host_abi.h`).
 
 ### Trial mode
 
-A trial FL cannot reopen a project it saved.
-`FLMCP_FL_LICENSE=trial` (typed as `FLLicense` in `fl_mcp.contract`) refuses every path that makes FL open a saved project, at one choke point and before any file changes, with the `fl_trial_cannot_reopen` error.
+A trial FL cannot reopen a project it saved, and it answers Save with a modal Buy dialog that freezes the controller until a human closes it.
+`FLMCP_FL_LICENSE=trial` (typed as `FLLicense` in `fl_mcp.contract`) refuses every path that saves or makes FL open a saved project, before any file changes, with the `fl_trial_unsupported` error.
 
-| Where the engine needs FL to open a .flp | Code | Trial |
+| Where the engine needs FL to save or open a .flp | Code | Trial |
 | --- | --- | --- |
-| FL launch on the agent project (box install, `fl-mcp-dev-session`) | `fl.process.launch_fl` | Works (live 2026-10-05): the file is a fresh copy of the licensed-authored template, never saved by the trial, and the trial opens it. |
-| File-lane reload after a project-file edit: note writes when the Bridge is not live, tempo and channel-level fallbacks without the control wire, automation, adding effects | `FLSession._reload_fl`, `lifecycle.reload_fl` | Blocked: it kills FL and reopens a file the trial may have saved. Refused under `trial`. |
-| `export_offline` (a second FL rendering the saved project, `-R` or `/R`) | `controls.export_offline` | Blocked. Refused under `trial`. |
-| `render_wav` (play the live arrangement once while the Bridge captures) | `controls.render_wav` | Opens nothing and saves nothing, licensed or trial. The length is read live (`controls.live_arrangement_span`): the playlist's end in song mode, the selected pattern's length in pattern mode, at FL's live tempo. It used to come from the saved file, which a trial never rewrites, so every trial render was the template's four bars (7.885 s, dev arena 2026-10-07). |
-| Bridge note receipts (save, then parse the saved file) | `BridgeLane._live_readback` | Opens nothing. Under `trial` there is no save (`save_project` refuses with `fl_trial_cannot_save`), so the write applies and the receipt says unconfirmed. |
+| FL launch on the agent project (box install, `fl-mcp-dev-session`) | `fl.process.launch_fl` | Works: the file is a fresh copy of the licensed-authored template, never saved by the trial. |
+| File-lane reload after a project-file edit: note writes when the Bridge is not live, tempo and channel-level fallbacks without the control wire, automation, adding effects | `FLSession._reload_fl`, `lifecycle.reload_fl` | Refused: it kills FL and reopens a file the trial may have saved. |
+| `export_offline` (a second FL rendering the saved project, `-R` or `/R`) | `controls.export_offline` | Refused. |
+| `render_wav` (play the live arrangement once while the Bridge captures) | `controls.render_wav` | Works: it saves nothing, and its length is read live (`controls.live_arrangement_span`). |
+| Bridge note receipts (save, then parse the saved file) | `BridgeLane._live_readback` | `save_project` is refused, so the write applies and the receipt says unconfirmed. |
 
 Live lanes need no file: control-wire tempo, channel levels, plugin parameters, transport, and Bridge note writes work the same in trial.
 Reads parse the last saved file and are only as current as the last successful save.
-
-### Live box results (2026-10-07)
-
-Pool box fl-mcp-02, provisioned like the 2026-10-05 box; its install doctor passed, then every cold start after the first stop had a silent controller.
-
-- Found: FL rewrites `HKCU\Software\Image-Line\FL Studio 26\Devices` on a clean exit with an entry for every port it has seen (`MIDI input\FLMCP Res`, both Microsoft outputs with `Port` -1, `ConnectionCounter`, `Sync`, `SendAllNotesOff`).
-  Started from that key, FL loads the controller script but links no output to it (`device.isAssigned()` is 0), so its OnInit hello and every reply go nowhere while loopMIDI passes data on both ports.
-- Confirmed by bisection, each FL started from a set key: the installer's own three keys linked 3 of 3 times; the same keys plus both remembered Microsoft outputs failed 3 of 3; with either one alone it linked (1 of 1 each).
-  Removing single remembered values from the full rewritten key never restored the link.
-- Fixed: `configure_midi_registry` replaces the FLMCP port keys outright and drops outputs FL remembers without a port; a launcher re-applies it before every FL start.
-
-### Live box results (2026-10-05)
-
-
-- Confirmed: loopMIDI's Burn installer honors `/quiet /norestart` from SYSTEM and installs `C:\Program Files (x86)\Tobias Erichsen\loopMIDI\loopMIDI.exe`.
-- Confirmed: a `reg export` of `HKCU\Software\Tobias Erichsen\loopMIDI` (ports are `REG_DWORD` values under `Ports`), imported into the user's hive, recreates `FLMCP Req` and `FLMCP Res` when loopMIDI restarts, and the WinMM names match the engine's rule.
-- Refuted: FL for Windows has no `Settings\reg.xml`; it keeps the MIDI assignment in the real registry under `HKCU\Software\Image-Line\FL Studio <N>\Devices`, with the same fields as macOS as `REG_SZ` values (read back from a hand assignment). `fl-mcp-install` now writes there.
-  loopMIDI ports are bidirectional, so FL also lists `FLMCP Req` as an output; at startup FL links the scripted input to that same-named output while it has no port, and the controller's replies loop back into FL. The install parks that output on another port.
-- Found: loopMIDI ports outlive FL's controller init, so its OnInit hello goes out before the engine opens them; the engine asks with `ctl.hello` on provisioned ports.
-- Confirmed: FL, started by the scheduled task with the agent project path, opens it in trial mode with no welcome dialog (title `FLMCP Agent.flp - FL Studio 2026`), finds the DLL by its folder, and loads the Master Bridge from the Mac-authored template. A plain launch still shows the welcome dialog.
-- Refuted, then fixed: FL for Windows indexes the plugin and host VMTs from the first declared virtual, not past a 200-byte Free Pascal header (`fl_host_abi.h` `kHostVmtHeaderSlots`). With the fix the heartbeat reads `abi=ok`, `tick` advances and `render_rate` is positive on the VB-Cable device.
-- Confirmed: a trial save (FPT_Save) opens FL's modal Buy dialog, and every later controller call times out until a human closes it. Nothing saves under `trial` now (`fl_trial_cannot_save`); note receipts stay unconfirmed and `render_wav` records without a save.
-- Confirmed: `fl-mcp-doctor` reports `ok`, and a model run through the harness wrote four notes through the Bridge and `render_wav` captured them (7.9 s, RMS -19.9 dBFS, C-E-G-C on beats 1-4). Tempo readback was not exercised.
-- Trial exit (Alt+F4) opens a browser to Image-Line's trial-exit page.
-- The Windows capability-profile gate is vacuous today: FL version detection reads a macOS `Info.plist`, so no build is detected and no profile is enforced.

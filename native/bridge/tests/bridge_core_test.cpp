@@ -640,7 +640,7 @@ int main() {
       CHECK(fl_abi::kFpcVmtHeader[i].offset == i * sizeof(void *));
     }
 #if defined(_WIN32)
-    // FL for Windows indexes from the first declared virtual (live 2026-10-05).
+    // FL for Windows indexes from the first declared virtual (kHostVmtHeaderSlots).
     CHECK(fl_abi::kHostDispatcherOffset == 0);
     CHECK(fl_abi::HostMethodOffset(1) == 8);
 #else

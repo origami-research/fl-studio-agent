@@ -1,8 +1,7 @@
 """Pure-Python tests for device_FLMCP.py's framing and dispatch logic.
 
 This is the only part of the controller script we can verify without a
-running FL Studio - see fl_mcp/fl_scripts/NOTES.md for everything that
-remains [ASSUMED] pending a manual run against real FL.
+running FL Studio.
 """
 
 from types import SimpleNamespace

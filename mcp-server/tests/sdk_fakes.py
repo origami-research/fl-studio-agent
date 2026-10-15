@@ -26,6 +26,7 @@ from fl_mcp.schemas import (
     WriteReceipt,
 )
 from fl_mcp.session import FLSession
+from fl_mcp.session.link import ControlLink
 from fl_mcp.store import Store
 
 
@@ -58,7 +59,7 @@ class FakeSession(FLSession):
     """
 
     def __init__(self, *, store: Store, channels=(), control=None, tempo: float | None = 120.0):
-        self.control = control
+        self.link = ControlLink(control, factory=lambda: control)
         self.store = store
         self.project = None
         self.tempo = tempo

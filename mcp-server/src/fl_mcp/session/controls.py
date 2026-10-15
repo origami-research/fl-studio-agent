@@ -45,13 +45,12 @@ PLUGIN_PARAM_TOLERANCE = 0.02
 SAVE_BUSY_RETRIES = 2
 SAVE_BUSY_RETRY_SECONDS = 0.25
 RENDER_TIMEOUT_SECONDS = 300.0
+# A render's capture, this decay tail included, stops at CAPTURE_MAX_SECONDS
+# because it holds the tool call for its whole length.
 RENDER_TAIL_SECONDS = 0.5
-# A render plays at least one 4/4 bar; its capture, tail included, stops at
-# CAPTURE_MAX_SECONDS because it holds the tool call for its whole length.
-RENDER_MIN_BEATS = 4.0
 
 # FL's MIDI-scripting vocabulary for the live span (IL FL-Studio-API-Stubs).
-# Live-measured on FL 2026 (dev-01, 2026-10-07): getSongLength(ABSTICKS) is the
+# Live-measured on FL 2026: getSongLength(ABSTICKS) is the
 # playlist's LAST tick (1535 for a 1536-tick clip; 0 for an empty playlist) in
 # either loop mode; getPatternLength counts 16th steps, not the beats the stubs
 # document (32 beats of notes -> 128); getSongLength(MS) keeps its old value after
@@ -75,13 +74,11 @@ def save_project(session: FLSession) -> None:
     Live-verified 2026-09-02: live tempo 145 in RAM then save_project made the
     on-disk .flp reparse to 145 (was 130). FL's globalTransport return for
     FPT_Save is a non-flag internal int that varies per call, so it is NOT
-    surfaced - success is by-effect; a refusal raises below.
-
-    Never under a trial license: live box 2026-10-05, the first trial save
-    opened FL's modal Buy dialog and every later controller call timed out.
+    surfaced - success is by-effect; a refusal raises below. Never under a
+    trial license (errors.fl_trial_unsupported).
     """
     if session.fl_license is FLLicense.TRIAL:
-        raise errors.fl_trial_cannot_save("saving the project")
+        raise errors.fl_trial_unsupported("saving the project")
     if session._ensure_hello() is None or session.control is None:
         # A failed liveness probe does not shrink the save's documented
         # budget.  In session mode that probe crosses the broker first; using
@@ -169,13 +166,10 @@ def live_arrangement_span(session: FLSession) -> RenderSpan:
 
     THE answer to "how long is the arrangement": song mode reads the playlist's
     end, pattern mode the selected pattern's length, both at FL's live tempo.
-    The saved .flp is never consulted: a trial FL never saves, so it would always
-    answer with the template's four-bar loop (dev arena, 2026-10-07).
+    The saved .flp is never consulted: a trial FL never saves.
     """
     loop_mode = _live_int(session, "transport.getLoopMode")
     tempo_bpm = _live_int(session, "mixer.getCurrentTempo") / 1000.0
-    if tempo_bpm <= 0:
-        raise errors.fl_api_error("mixer.getCurrentTempo", f"returned a tempo of {tempo_bpm:g} BPM")
     pattern: int | None = None
     source: Literal["song", "pattern"]
     if loop_mode == FL_LOOP_MODE_SONG:
@@ -185,7 +179,6 @@ def live_arrangement_span(session: FLSession) -> RenderSpan:
             raise errors.fl_api_error("general.getRecPPQ", f"returned {ppq} ticks per beat")
         last_tick = _live_int(session, "transport.getSongLength", [FL_SONGLENGTH_ABSTICKS])
         if last_tick <= 0:
-            # Live 2026-10-07: song mode over an empty playlist records silence.
             raise errors.ToolError(
                 "render_failed",
                 "FL is in song mode and its playlist is empty, so playing it records only silence.",
@@ -195,15 +188,11 @@ def live_arrangement_span(session: FLSession) -> RenderSpan:
     elif loop_mode == FL_LOOP_MODE_PATTERN:
         source = "pattern"
         pattern = _live_int(session, "patterns.patternNumber")
-        steps = _live_int(session, "patterns.getPatternLength", [pattern])
-        if steps <= 0:
-            raise errors.fl_api_error("patterns.getPatternLength", f"pattern {pattern} is {steps} steps long")
-        beats = steps / FL_STEPS_PER_BEAT
+        beats = _live_int(session, "patterns.getPatternLength", [pattern]) / FL_STEPS_PER_BEAT
     else:
         raise errors.fl_api_error("transport.getLoopMode", f"returned unknown loop mode {loop_mode}")
 
-    played_beats = max(beats, RENDER_MIN_BEATS)
-    seconds = played_beats * 60.0 / tempo_bpm
+    seconds = beats * 60.0 / tempo_bpm
     if seconds + RENDER_TAIL_SECONDS > CAPTURE_MAX_SECONDS:
         raise errors.ToolError(
             "render_failed",
@@ -218,10 +207,6 @@ def live_arrangement_span(session: FLSession) -> RenderSpan:
         beats=beats,
         tempo_bpm=tempo_bpm,
         seconds=seconds,
-        capture_seconds=seconds + RENDER_TAIL_SECONDS,
-        note=None
-        if played_beats == beats
-        else f"the live {source} is {beats:g} beats; the render played the {RENDER_MIN_BEATS:g}-beat minimum",
     )
 
 
@@ -363,14 +348,14 @@ def render_wav(session: FLSession, output: Path) -> RenderReceipt:
             retryable=True,
         )
     span = live_arrangement_span(session)
-    path = _live_render(session, output.expanduser().resolve(), span.capture_seconds)
+    path = _live_render(session, output.expanduser().resolve(), span.seconds + RENDER_TAIL_SECONDS)
     return RenderReceipt(path=path, span=span)
 
 
 def export_offline(session: FLSession, output: Path) -> Path:
     """Boot a second FL and export with -R, for offline deliverables only."""
     if session.fl_license is FLLicense.TRIAL:
-        raise errors.fl_trial_cannot_reopen("export_offline (a second FL rendering the saved .flp)")
+        raise errors.fl_trial_unsupported("export_offline (a second FL rendering the saved .flp)")
     if session.project is None:
         raise errors.ToolError(
             "render_failed",

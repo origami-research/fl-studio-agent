@@ -10,7 +10,7 @@ and docs/03-protocols.md (Protocol A) for the wire spec this implements.
 Every FL API call below is checked against the IL-Group FL Studio API Stubs
 (github.com/IL-Group/FL-Studio-API-Stubs, `src/midi_controller_scripting/`)
 during Spike 3. Corrections against docs/05's draft table are called out
-inline as `# Spike 3:`. Full findings: NOTES.md beside this file.
+inline as `# Spike 3:`.
 
 This file is imported standalone (no FL modules present) by the pytest suite
 (mcp-server/tests/test_controller_framing.py), so every FL-only name is imported through
@@ -76,7 +76,7 @@ TYPE_EVENT = 0x03
 TYPE_CHUNK = 0x04
 
 # SysEx frames are capped at 512 bytes (docs/03) - driver behavior on larger
-# frames is unverified and out of scope here [ASSUMED cap holds; NOTES.md].
+# frames is unverified and out of scope here [ASSUMED cap holds].
 MAX_FRAME_BYTES = 512
 # base64 chars of the real payload carried per chunk frame. Comfortably under
 # the cap after the chunk-envelope JSON scaffolding and the frame header are
@@ -181,7 +181,7 @@ class Reassembler:
 # unparseable base64/JSON, or a request missing/lying about "id") still needs
 # a schema-valid id to respond with. -1 is outside the server's
 # "monotonically increasing per session" id range (docs/03), reserved here to
-# mean "framing-level error, not correlated to any request." NOTES.md.
+# mean "framing-level error, not correlated to any request."
 UNKNOWN_ID = -1
 
 
@@ -241,7 +241,7 @@ def _state_snapshot():
 def _undo_probe():
     """`state.undo_probe` - every undo-history *getter* FL exposes, in one
     round trip. Roadmap open question 17 (docs/08): can this attribute whose
-    step is on top? Short answer: no, not by content - see NOTES.md. FL gives
+    step is on top? Short answer: no, not by content. FL gives
     position/count, never the name string passed to saveUndo() back out.
     """
     return {
@@ -257,10 +257,9 @@ def _undo_probe():
 # built-in Gopher assistant) exposing ~47 tools this script's own ALLOWED
 # table doesn't reach: add_effect/add_channel/remove_channels (create/destroy
 # - Surface 1 in docs/01 cannot do this), plugin-parameter get/set by name,
-# and run_piano_roll_script/save_piano_roll_script. See NOTES.md "MCPTools
-# bridge" for the full spike: direct `import MCPTools` here is expected to
-# fail with a bytecode-magic-number mismatch (MCPTools.pyc is compiled for
-# CPython 3.12; this interpreter is CPython 3.9 per docs/01), reproduced
+# and run_piano_roll_script/save_piano_roll_script. Direct `import MCPTools`
+# here is expected to fail with a bytecode-magic-number mismatch (MCPTools.pyc
+# is compiled for CPython 3.12; this interpreter is CPython 3.9 per docs/01), reproduced
 # empirically outside FL. mcp.import_tools/mcp.call below still attempt the
 # live import at runtime - FL's actual embedded interpreter is unverified
 # against a live run - and report success/failure rather than assume either.
@@ -278,8 +277,7 @@ _DEFAULT_MCP_TOOLS_DIRS = [
 
 # The public MCPTools functions, hardcoded from decompiling MCPTools.pyc
 # (stubbing its FL-module + `ilmcp` imports under a matching CPython 3.12 and
-# reading `inspect.signature` per function - NOTES.md "MCPTools bridge" has
-# the method). Not read live via get_mcp_tools_json(): that call reads a
+# reading `inspect.signature` per function). Not read live via get_mcp_tools_json(): that call reads a
 # registry populated by the real `ilmcp.mcp_tool` decorator, which returns an
 # empty list under any stand-in decorator, since nothing registered into it.
 # Private (`_`-prefixed) helpers and the `mcp_tool`/`whenDone` names are
@@ -528,7 +526,7 @@ def _send_frames(frame_type, payload_obj, msg_id=None):
     if device is None:
         return  # no MIDI out assigned yet, or running outside FL (tests)
     for frame in encode_message(frame_type, payload_obj, msg_id=msg_id):
-        device.midiOutSysex(frame)  # device.midiOutSysex(message: bytes) - VERIFIED, see NOTES.md
+        device.midiOutSysex(frame)  # device.midiOutSysex(message: bytes) - VERIFIED
 
 
 def _send_response(response_dict):
@@ -548,7 +546,7 @@ def _hello_fields():
         "script_ver": SCRIPT_VER,
         # ui.getVersion(mode=4) is the FL Studio version string. general.getVersion()
         # returns the *API* version (an int) - docs/05's draft table conflated the
-        # two; corrected here. See NOTES.md.
+        # two; corrected here.
         "fl_ver": ui.getVersion(),
         "ppq": general.getRecPPQ(),
         "tempo": mixer.getCurrentTempo(),
