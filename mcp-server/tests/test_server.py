@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -16,6 +17,7 @@ from types import SimpleNamespace
 from typing import Any
 
 import anyio
+import pytest
 from mcp.types import CallToolResult
 from session_fakes import RENDER_SPAN
 
@@ -23,6 +25,9 @@ from fl_mcp import __version__, server
 from fl_mcp.audio import AudioAnalysis, SpectralBalance
 from fl_mcp.contract import build_version
 from fl_mcp.errors import ToolError
+from fl_mcp.kernel.host import RUN_CELL_TIMEOUT_SECONDS, KernelHost
+from fl_mcp.kernel.launch import PosixLauncher, Workspace
+from fl_mcp.platform import MacPlatform
 from fl_mcp.schemas import DoctorReport, Note, NoteSetRef, PlaneStatus, RenderReceipt, Target
 
 
@@ -48,12 +53,9 @@ class _FakeSession:
         self.store = _FakeStore(ref)
         self.read_targets: list[Target] = []
         self.control = None
-        self.run_refusals = 0
+        self.platform = MacPlatform()
         self.audio_stream_started = False
         self.closed = False
-
-    def record_run_refusal(self) -> None:
-        self.run_refusals += 1
 
     def start_audio_stream_lifecycle(self) -> None:
         self.audio_stream_started = True
@@ -73,122 +75,94 @@ class _FakeSession:
             control_plane=PlaneStatus(connected=False, detail="no hello", fix="open FL"),
             note_plane=PlaneStatus(connected=True),
             project_file=PlaneStatus(connected=True),
-            run_refusals=self.run_refusals,
         )
 
 
-def _ctx(fl: Any = None, session: Any = None) -> Any:
+def _ctx(fl: Any = None, session: Any = None, kernel: Any = None) -> Any:
     """A stub Context: same lifespan-context shape the real lifespan yields."""
     session = _FakeSession() if session is None else session
-    return SimpleNamespace(request_context=SimpleNamespace(lifespan_context={"fl": fl, "session": session}))
+    return SimpleNamespace(
+        request_context=SimpleNamespace(lifespan_context={"fl": fl, "session": session, "kernel": kernel})
+    )
+
+
+@pytest.fixture
+def kernel(fake_session, tmp_path):
+    """A real kernel process over the sdk_fakes session: run is exercised end to end."""
+    host = KernelHost(fake_session, Workspace.create(tmp_path / "kernel"), PosixLauncher(), os.environ)
+    yield host
+    host.close()
 
 
 # -- run ----------------------------------------------------------------------
 
 
-def test_run_returns_repr_of_last_expression():
-    result = server.run("x = 2\nx * 3", _ctx())
+def test_run_returns_repr_of_last_expression(kernel):
+    result = server.run("x = 2\nx * 3", _ctx(kernel=kernel))
+    assert result.outcome == "ok"
     assert result.stdout == ""
     assert result.result == "6"
 
 
-def test_run_captures_stdout_without_leaking_to_the_wire(capsys):
-    result = server.run("print('hi')", _ctx())
+def test_run_captures_stdout_without_leaking_to_the_wire(kernel, capsys):
+    result = server.run("print('hi')", _ctx(kernel=kernel))
     assert result.stdout == "hi\n"
     assert result.result is None
-    assert capsys.readouterr().out == ""  # nothing reached real stdout
+    assert capsys.readouterr().out == ""  # nothing reached the server's stdout, the JSON-RPC wire
 
 
-def test_run_namespace_holds_fl_and_theory():
-    fl = SimpleNamespace(tempo=120.5)
-    result = server.run("fl.tempo", _ctx(fl=fl))
-    assert result.result == "120.5"
-    result = server.run("theory.chord('C4')", _ctx())
-    assert result.result == "[60, 64, 67]"
+def test_run_namespace_holds_fl_and_theory(kernel):
+    assert server.run("fl.tempo", _ctx(kernel=kernel)).result == "120.0"
+    assert server.run("theory.chord('C4')", _ctx(kernel=kernel)).result == "[60, 64, 67]"
 
 
-def test_run_error_reads_like_python_with_no_server_frames():
-    result = server.run("print('before')\n1 / 0", _ctx())
+def test_run_error_reads_like_python_with_no_engine_frames(kernel):
+    result = server.run("print('before')\n1 / 0", _ctx(kernel=kernel))
+    assert result.outcome == "error"
     assert result.stdout == "before\n"  # output up to the failure is kept
     tb = result.traceback
     assert "ZeroDivisionError" in tb
     assert '"<fl>", line 2' in tb
-    assert "server.py" not in tb  # the exec plumbing is not the user's problem
-    assert "result" not in result
-
-
-def test_run_syntax_error_is_a_traceback_not_a_crash():
-    result = server.run("def broken(:", _ctx())
-    assert "SyntaxError" in result.traceback
-
-
-def test_run_allows_music_code_stdlib_imports():
-    result = server.run("import math\nmath.sqrt(9)", _ctx())
-    assert result.result == "3.0"
-
-
-def test_run_assignment_only_yields_none_result():
-    result = server.run("x = 41", _ctx())
-    assert result.stdout == ""
+    assert "cell.py" not in tb  # the exec plumbing is not the user's problem
     assert result.result is None
 
 
-def test_run_refusals_steer_introspection_and_are_counted():
-    for code, offender in (
-        ("import inspect", "import 'inspect'"),
-        ("help(fl)", "builtin 'help'"),
-        ("getattr(fl, 'track')", "builtin 'getattr'"),
-        ("type(fl)", "builtin 'type'"),
-        ("fl.__dict__", "attribute '__dict__'"),
-    ):
-        session = _FakeSession()
-        response = server.run(code, _ctx(fl=object(), session=session))
-
-        assert isinstance(response, CallToolResult)
-        payload = json.loads(response.content[0].text)
-        assert payload["error"] == "restricted_namespace"
-        assert offender in payload["message"]
-        assert payload["message"].endswith("get_scene instead.")
-        assert len(payload["message"].replace("...", "").split()) < 30
-        assert server.fl_doctor(_ctx(session=session)).run_refusals == 1
+def test_run_syntax_error_is_a_traceback_not_a_crash(kernel):
+    result = server.run("def broken(:", _ctx(kernel=kernel))
+    assert result.outcome == "error"
+    assert "SyntaxError" in result.traceback
 
 
-def test_run_refusal_counter_accumulates_per_session():
-    session = _FakeSession()
+def test_run_is_full_python(kernel):
+    """The owner's call (2026-10-18): every import, introspection, and builtin.
 
-    server.run("help(fl)", _ctx(fl=object(), session=session))
-    server.run("open('notes.txt')", _ctx(fl=object(), session=session))
+    The OS, not a Python allowlist, is the boundary (docs/38).
+    """
+    code = "import inspect, os, socket\ntype(fl).__name__, callable(getattr(fl, 'track')), 'track' in dir(fl)"
+    result = server.run(code, _ctx(kernel=kernel))
+    assert result.result == "('FL', True, True)", result
 
-    assert server.fl_doctor(_ctx(session=session)).run_refusals == 2
+
+def test_run_docstring_states_the_real_cell_budget():
+    assert f"{RUN_CELL_TIMEOUT_SECONDS:g} s budget" in server.run.__doc__
 
 
-def test_run_refusals_steer_filesystem_network_and_exec_attempts():
-    for code, offender in (
-        ("import os", "import 'os'"),
-        ("import socket", "import 'socket'"),
-        ("open('notes.txt')", "builtin 'open'"),
-        ("exec('pass')", "builtin 'exec'"),
-        ("eval('1 + 1')", "builtin 'eval'"),
-        ("compile('1', '<fl>', 'eval')", "builtin 'compile'"),
-        ("__import__('os')", "builtin '__import__'"),
-        ("globals()", "builtin 'globals'"),
-        ("input()", "builtin 'input'"),
-        ("breakpoint()", "builtin 'breakpoint'"),
-        ("fl.__class__", "attribute '__class__'"),
-        ("().__class__.__mro__", "attribute '__mro__'"),
-        ("object.__subclasses__()", "attribute '__subclasses__'"),
-        ("(lambda: None).__globals__", "attribute '__globals__'"),
-        ("__builtins__", "builtin '__builtins__'"),
-    ):
-        response = server.run(code, _ctx(fl=object()))
+def test_run_without_a_kernel_is_a_structured_error(tmp_path):
+    """A kernel that cannot start reaches the model as kernel_unavailable, not a crash."""
 
-        assert isinstance(response, CallToolResult)
-        payload = json.loads(response.content[0].text)
-        assert payload["error"] == "restricted_namespace"
-        assert offender in payload["message"]
-        assert "this session has no filesystem" in payload["message"]
-        assert "fl.track(name).write([...])" in payload["message"]
-        assert len(payload["message"].replace("...", "").split()) < 30
+    class _NoLaunch:
+        confined = False
+
+        def __call__(self, argv, *, workspace, env):
+            raise OSError("no interpreter")
+
+    host = KernelHost(_FakeSession(), Workspace.create(tmp_path), _NoLaunch(), {})
+    response = server.run("1", _ctx(kernel=host))
+
+    assert isinstance(response, CallToolResult)
+    payload = json.loads(response.content[0].text)
+    assert payload["error"] == "kernel_unavailable"
+    assert "no interpreter" in payload["message"]
 
 
 # -- get_notes ----------------------------------------------------------------
@@ -270,24 +244,39 @@ def test_fl_doctor_returns_the_typed_report():
     assert result.control_plane.fix == "open FL"
 
 
-def test_lifespan_logs_run_refusals_once_at_close(monkeypatch, caplog):
+def test_lifespan_builds_the_kernel_workspace_under_the_box_root(monkeypatch, tmp_path):
     session = _FakeSession()
-    session.run_refusals = 2
     monkeypatch.setattr(server, "create_session", lambda: session)
     monkeypatch.setattr(server.sdk, "connect", lambda _: object())
+    monkeypatch.setenv(server.ENV_KERNEL_ROOT, str(tmp_path))
+    seen = {}
 
     async def start_and_stop() -> None:
-        async with server.lifespan(None):
-            pass
+        async with server.lifespan(None) as context:
+            seen["workspace"] = context["kernel"].workspace
 
-    with caplog.at_level(logging.INFO, logger=server.__name__):
-        anyio.run(start_and_stop)
+    anyio.run(start_and_stop)
 
-    assert [record.getMessage() for record in caplog.records] == [
-        "run session closed with 2 refusals"
-    ]
+    assert seen["workspace"].root == tmp_path.resolve()
+    assert seen["workspace"].work.is_dir() and seen["workspace"].renders.is_dir()
     assert session.audio_stream_started
     assert session.closed
+
+
+def test_lifespan_without_a_box_root_removes_its_temp_workspace(monkeypatch):
+    session = _FakeSession()
+    monkeypatch.setattr(server, "create_session", lambda: session)
+    monkeypatch.setattr(server.sdk, "connect", lambda _: object())
+    monkeypatch.delenv(server.ENV_KERNEL_ROOT, raising=False)
+    seen = {}
+
+    async def start_and_stop() -> None:
+        async with server.lifespan(None) as context:
+            seen["root"] = context["kernel"].workspace.root
+            assert seen["root"].is_dir()
+
+    anyio.run(start_and_stop)
+    assert not seen["root"].exists()
 
 
 # -- main / logging -----------------------------------------------------------
@@ -324,38 +313,19 @@ def test_server_info_uses_the_installed_package_version_and_build_description():
 # --- run() namespace (addendum A12) -------------------------------------------
 
 
-def test_run_namespace_can_actually_write_notes(monkeypatch):
+def test_run_namespace_can_actually_write_notes(kernel, fake_session):
     """The regression this guards: ``Note`` was missing from run()'s namespace,
-    which made the product's PRIMARY operation inexpressible. Track.write takes
-    list[Note]; theory.chord/scale return bare ints; theory.drums returns a v1
-    schemas.Note that v2 rejects. Every route to writing a note was closed.
+    which made the product's PRIMARY operation inexpressible. The write now
+    crosses the kernel wire and lands in the server's session store.
     """
-    captured: dict[str, object] = {}
-
-    class FakeTrack:
-        def write(self, notes, mode="merge"):
-            captured["notes"] = notes
-            captured["mode"] = mode
-            return f"wrote {len(notes)}"
-
-    class FakeFL:
-        def track(self, _name_or_index):
-            return FakeTrack()
-
     out = server.run(
-        "notes = [Note(key='C4', start=0.0, length=1.0)]\nfl.track(0).write(notes, mode='replace')",
-        _ctx(FakeFL()),
+        "notes = [Note(key='C4', start=0.0, length=1.0)]\nfl.track('Bass').write(notes, mode='replace').confirmed_notes",
+        _ctx(kernel=kernel),
     )
 
     assert out.traceback is None, out.traceback
-    assert out.result == "'wrote 1'"
-    assert captured["mode"] == "replace"
-    assert captured["notes"][0].key == 60  # "C4" resolved at construction
-
-
-def test_run_namespace_exposes_theory_alongside_note():
-    out = server.run("theory.chord('C4')", _ctx(object()))
-    assert out.result == "[60, 64, 67]"
+    assert out.result == "1"
+    assert [n.key for n in fake_session.read_notes(Target(pattern=1, channel=1))] == [60]
 
 
 # --- MCP registration round trip (addendum A15) --------------------------------
@@ -422,19 +392,26 @@ class _RenderFl:
         )
 
 
-def test_render_returns_path_wav_base64_and_live_span():
+def _workspace_only(tmp_path: Path) -> Any:
+    """The render tools read only the kernel host's workspace."""
+    return SimpleNamespace(workspace=Workspace.create(tmp_path / "kernel"))
+
+
+def test_render_returns_path_wav_base64_and_live_span(tmp_path):
     import base64
 
-    ctx = _ctx(fl=_RenderFl())
-    result = server.render(ctx)
+    kernel = _workspace_only(tmp_path)
+    result = server.render(_ctx(fl=_RenderFl(), kernel=kernel))
     assert Path(result.path).exists()
+    # In the renders folder, so model code in run can read the same WAV.
+    assert Path(result.path).is_relative_to(kernel.workspace.renders)
     assert base64.b64decode(result.wavBase64)[:4] == b"RIFF"
     assert result.span == RENDER_SPAN  # the caller sees what played and for how long
 
 
-def test_analyze_defaults_to_the_most_recent_render():
+def test_analyze_defaults_to_the_most_recent_render(tmp_path):
     fl = _RenderFl()
-    ctx = _ctx(fl=fl)
+    ctx = _ctx(fl=fl, kernel=_workspace_only(tmp_path))
     rendered = server.render(ctx)
     metrics = server.analyze(ctx)
     assert metrics.bpm == 140.0
@@ -442,42 +419,8 @@ def test_analyze_defaults_to_the_most_recent_render():
     assert fl.analyzed == [Path(rendered.path)]
 
 
-def test_analyze_renders_fresh_when_nothing_was_rendered_yet():
+def test_analyze_renders_fresh_when_nothing_was_rendered_yet(tmp_path):
     fl = _RenderFl()
-    metrics = server.analyze(_ctx(fl=fl))
+    metrics = server.analyze(_ctx(fl=fl, kernel=_workspace_only(tmp_path)))
     assert metrics.bpm == 140.0
     assert len(fl.analyzed) == 1
-
-
-def test_run_namespace_keeps_ordinary_python_and_automation_points():
-    """Exceptions, isinstance/map, and AutomationPoint stay usable inside the guard."""
-    code = (
-        "try:\n"
-        "    int('x')\n"
-        "except ValueError:\n"
-        "    pass\n"
-        "pts = list(map(lambda v: AutomationPoint(position=float(v), value=0.5, tension=0.0), range(2)))\n"
-        "print(isinstance(pts[0], AutomationPoint), len(pts))\n"
-    )
-    result = server.run(code, _ctx())
-    assert result.stdout.strip() == "True 2", result
-
-
-def test_run_namespace_keeps_dir_for_sdk_discovery():
-    """dir() returns names only; producers rely on it to explore the SDK (#198).
-
-    PR #217 re-refused it by accident and a live producer hit the refusal
-    (run 18, 2026-09-06).  The refused and allowed sets must never overlap.
-    """
-    assert "dir" in server._RUN_BUILTINS
-    assert "dir" not in server._RUN_REFUSED_BUILTINS
-    assert not (set(server._RUN_BUILTINS) & server._RUN_REFUSED_BUILTINS)
-
-    class _Sdk:
-        track = None
-
-    session = _FakeSession()
-    result = server.run("dir(fl)", _ctx(fl=_Sdk(), session=session))
-    assert not isinstance(result, CallToolResult)
-    assert "track" in result.result
-    assert server.fl_doctor(_ctx(session=session)).run_refusals == 0

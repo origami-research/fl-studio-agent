@@ -23,7 +23,7 @@ remember its work.
 | Remembering notes we wrote | The server writes down every note it sends (the "shadow score") because FL can't be asked |
 | Naming notes | We invent our own IDs (fingerprints of the note data) since FL has none |
 | Undo | Every action the model takes shows up as one named undo step in FL, and we also keep our own log file |
-| Running Python for the model | A long-lived Python session like a Jupyter notebook; no sandbox, the permission prompt is the safety gate |
+| Running Python for the model | A long-lived Python kernel like a Jupyter notebook; full Python, confined to its workspace by the OS, not by Python filtering ([38](38-python-kernel.md)) |
 | Doing multiple things at once | Skipped for now - things just run in order |
 | Reading notes back | Try asking FL nicely first (probing its message bus); fall back to a piano-roll script; memory-hacking only as a last resort |
 
@@ -176,15 +176,13 @@ edit several tracks in one go), the model writes a short Python program and
 runs it in a persistent session - like a Jupyter notebook that stays alive
 between turns.
 
-- No sandbox: the code has full Python; the host's permission prompt is the
-  safety gate (same trust model as Claude Code running shell commands).
+- Full Python in its own process: every import, files, `%pip install`.
+  The operating system confines it to its workspace; on Windows boxes it is an
+  AppContainer ([38](38-python-kernel.md)).
 - No separate scratch memory: the model's conversation history is its memory.
-- One special feature: big note collections come back as a *handle plus a
-  summary* ("5000 notes, C2-C6, busy") instead of dumping thousands of notes
-  into the model's context.
-  The model filters first and pulls only the slice it actually needs.
-- If the project was reloaded or undone since the last cell, the session
-  detects it and refuses to act on stale handles.
+- Not built: the planned *handle plus a summary* for big note collections and
+  stale-handle refusal inside the kernel. Large collections are summarized by
+  `get_notes` instead, and a cell's result is the plain repr of its value.
 
 ## Storage layout
 

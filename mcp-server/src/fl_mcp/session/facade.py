@@ -209,7 +209,6 @@ class FLSession:
         self._transport_lock = threading.Lock()
         self._write_state_lock = threading.Lock()
         self._write_action: str | None = None
-        self._run_refusals = 0
         # Development-mode file-edit batching: file-lane ops write the .flp
         # but defer the FL reload so N edits cost ONE reboot, not N. Session
         # mode refuses this lane before a file mutation because FL has no
@@ -221,15 +220,6 @@ class FLSession:
         self._audio_stream_thread: threading.Thread | None = None
         self._audio_endpoint: AudioEndpoint | None = None
         self._audio_bridge_pid: int | None = None
-
-    @property
-    def run_refusals(self) -> int:
-        with self._write_state_lock:
-            return self._run_refusals
-
-    def record_run_refusal(self) -> None:
-        with self._write_state_lock:
-            self._run_refusals += 1
 
     @property
     def control(self) -> ControlCarrier | None:

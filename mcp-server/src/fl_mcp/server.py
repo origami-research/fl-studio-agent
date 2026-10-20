@@ -9,17 +9,13 @@ logging to STDERR - stdout is the JSON-RPC wire, one stray line corrupts it.
 
 from __future__ import annotations
 
-import ast
 import base64
-import builtins
 import contextlib
 import functools
-import io
 import logging
 import os
 import sys
 import tempfile
-import traceback
 from pathlib import Path
 from typing import Any
 
@@ -27,9 +23,10 @@ from mcp.server.mcpserver import Context, MCPServer
 from mcp.types import CallToolResult, TextContent
 from pydantic import ValidationError
 
-from fl_mcp import __version__, theory
+from fl_mcp import __version__
 from fl_mcp.audio import AudioAnalysis
 from fl_mcp.contract import (
+    ENV_KERNEL_ROOT,
     GetNotesResult,
     GetSceneResult,
     RenderResult,
@@ -39,10 +36,12 @@ from fl_mcp.contract import (
     ToolErrorResult,
     build_version,
 )
-from fl_mcp.errors import ToolError, restricted_namespace
+from fl_mcp.errors import ToolError
+from fl_mcp.kernel.host import KernelHost
+from fl_mcp.kernel.launch import Workspace
 
 from . import flp, scene, sdk
-from .schemas import AutomationPoint, DoctorReport, Note, Target
+from .schemas import DoctorReport, Target
 from .session import create_session
 
 log = logging.getLogger(__name__)
@@ -54,158 +53,31 @@ LOG_LEVEL_ENV = "FL_MCP_LOG"
 GET_NOTES_FULL_LIST_MAX = 200
 GET_NOTES_SAMPLE_SIZE = 20
 
-_RUN_STDLIB_MODULES = frozenset(
-    {
-        "math",
-        "random",
-        "itertools",
-        "functools",
-        "statistics",
-        "json",
-        "re",
-        "dataclasses",
-        "typing",
-        "collections",
-    }
-)
-# Named so the refusal names the offender: getattr/type/vars would let a
-# string reach the dunder attributes the AST guard refuses syntactically.
-# dir() only returns names (it cannot reach an attribute), and producers use it
-# to discover the SDK (#198), so it stays available.
-_RUN_REFUSED_BUILTINS = frozenset(
-    {
-        "open",
-        "exec",
-        "eval",
-        "compile",
-        "__import__",
-        "globals",
-        "locals",
-        "input",
-        "breakpoint",
-        "getattr",
-        "setattr",
-        "delattr",
-        "vars",
-        "type",
-        "object",
-        "super",
-        "help",
-        "memoryview",
-    }
-)
-_RUN_BUILTINS = {
-    name: getattr(builtins, name)
-    for name in (
-        # values, containers, iteration
-        "dir",
-        "abs",
-        "all",
-        "any",
-        "bool",
-        "callable",
-        "chr",
-        "dict",
-        "divmod",
-        "enumerate",
-        "filter",
-        "float",
-        "format",
-        "frozenset",
-        "hash",
-        "hex",
-        "int",
-        "isinstance",
-        "issubclass",
-        "iter",
-        "len",
-        "list",
-        "map",
-        "max",
-        "min",
-        "next",
-        "ord",
-        "pow",
-        "print",
-        "range",
-        "repr",
-        "reversed",
-        "round",
-        "set",
-        "slice",
-        "sorted",
-        "str",
-        "sum",
-        "tuple",
-        "zip",
-        # exceptions, so ordinary try/except music code does not NameError
-        "Exception",
-        "ArithmeticError",
-        "AssertionError",
-        "AttributeError",
-        "IndexError",
-        "KeyError",
-        "LookupError",
-        "NameError",
-        "RuntimeError",
-        "StopIteration",
-        "TypeError",
-        "ValueError",
-        "ZeroDivisionError",
-    )
-}
-
-
-def _run_import(
-    name: str, globals: Any = None, locals: Any = None, fromlist: Any = (), level: int = 0
-) -> Any:
-    """The import hook used only by producer code in ``run``."""
-    root = name.split(".", 1)[0]
-    if level or root not in _RUN_STDLIB_MODULES:
-        raise restricted_namespace(f"import {name!r}")
-    return builtins.__import__(name, globals, locals, fromlist, level)
-
-
-class _RunNamespaceGuard(ast.NodeVisitor):
-    """Reject source that can escape the deliberately small producer namespace."""
-
-    def visit_Import(self, node: ast.Import) -> None:
-        for alias in node.names:
-            self._check_import(alias.name)
-
-    def visit_ImportFrom(self, node: ast.ImportFrom) -> None:
-        self._check_import(node.module or ".", node.level)
-
-    def visit_Name(self, node: ast.Name) -> None:
-        if node.id in _RUN_REFUSED_BUILTINS or node.id == "__builtins__":
-            raise restricted_namespace(f"builtin {node.id!r}")
-
-    def visit_Attribute(self, node: ast.Attribute) -> None:
-        if node.attr.startswith("__"):
-            raise restricted_namespace(f"attribute {node.attr!r}")
-        self.generic_visit(node)
-
-    @staticmethod
-    def _check_import(name: str, level: int = 0) -> None:
-        if level or name.split(".", 1)[0] not in _RUN_STDLIB_MODULES:
-            raise restricted_namespace(f"import {name!r}")
-
 
 @contextlib.asynccontextmanager
 async def lifespan(server: Any) -> Any:
     """Async context manager: build the session after FL launches so MIDI ports
-    hot-plug into the running host, yield {"fl": sdk.connect(session)}, close
-    the transport on shutdown."""
+    hot-plug into the running host, yield {"fl": sdk.connect(session)} and the
+    run kernel host, close both on shutdown."""
     session = create_session()
     session.start_audio_stream_lifecycle()
     fl = sdk.connect(session)
-    # "session" rides along because doctor() and provenance reads are session
-    # surface, deliberately not exposed on the SDK object the model drives.
-    try:
-        yield {"fl": fl, "session": session}
-    finally:
-        log.info("run session closed with %d refusals", session.run_refusals)
-        session.close()
+    with contextlib.ExitStack() as cleanup:
+        # The box names a per-job root and owns its lifetime; a dev run gets a
+        # temp root removed at shutdown.
+        root = os.environ.get(ENV_KERNEL_ROOT) or cleanup.enter_context(
+            tempfile.TemporaryDirectory(prefix="flmcp-kernel-", ignore_cleanup_errors=True)
+        )
+        kernel = KernelHost(
+            session, Workspace.create(Path(root)), session.platform.kernel_launcher(), os.environ
+        )
+        # "session" rides along because doctor() and provenance reads are session
+        # surface, deliberately not exposed on the SDK object the model drives.
+        try:
+            yield {"fl": fl, "session": session, "kernel": kernel}
+        finally:
+            kernel.close()
+            session.close()
 
 
 def _tool_boundary(fn: Any) -> Any:
@@ -233,14 +105,23 @@ def _tool_boundary(fn: Any) -> Any:
 
 @_tool_boundary
 def run(code: str, ctx: Context) -> RunResult:
-    """Execute Python against the live FL Studio session. The namespace holds
-    ``fl`` (the SDK), ``theory``, ``Note``, ``AutomationPoint``, and the allowlisted modules ``math``,
-    ``random``, ``itertools``, ``functools``, ``statistics``, ``json``, ``re``,
-    ``dataclasses``, ``typing``, and ``collections``. A trailing expression is
-    repr'd like a REPL. Returns {"stdout", "result"} or, on any error,
-    {"stdout", "traceback"} - read the traceback and fix the call.
+    """Run a Python cell in a persistent kernel bound to the live FL Studio
+    session, like a Jupyter notebook. Variables, imports, and functions persist
+    across calls. It is full Python: import anything, use files, numpy,
+    time.sleep, type/dir/getattr. `%pip install pkg` (or `!pip install pkg`)
+    installs a package for later imports; `!cmd` runs a shell command. The
+    working directory is your workspace, the one place you can write; its files
+    last for the session. Pre-bound: fl (the SDK), theory, Note,
+    AutomationPoint. A trailing expression is repr'd like a REPL.
 
-    The full working surface (no introspection needed):
+    Returns {"outcome", "stdout", "result" | "traceback"}; stdout includes
+    stderr. outcome is "ok", or "error" (read the traceback and fix the code),
+    or "interrupted" when the cell ran past its 300 s budget (time inside fl
+    calls does not count) - the kernel and its variables are intact, or "kernel_lost" when
+    the kernel process died or was killed (os._exit, a crash, or ignoring the
+    interrupt) - its variables are gone, files stay, the next run starts fresh.
+
+    The SDK (no introspection needed):
     - fl.set_tempo(140.0) -> confirmed BPM; fl.tempo reads it back.
     - fl.channels -> [Channel(index, name), ...].
     - fl.track("Bass") / fl.track(2, pattern=1) -> Track (exact name, index, or
@@ -260,8 +141,10 @@ def run(code: str, ctx: Context) -> RunResult:
       generator plugin parameters, values normalized 0..1.
     - fl.add_effect(0, "Fruity Parametric EQ 2") -> tuple[Effect, ...] -
       project-file only; proven only for empty Master slot 0.
-    - fl.render("out.wav") -> Path; fl.analyze(wav) -> bpm/key/LUFS/spectral
-      balance; fl.read_wav(path) -> (samples, sample_rate).
+    - fl.render("mix.wav") -> Path of the WAV. Only the file name is used: it
+      lands in the session's renders folder, which you can read but not write.
+      fl.analyze(path) -> bpm/key/LUFS/spectral balance; fl.read_wav(path) ->
+      (samples: numpy.ndarray, sample_rate: int).
       A render plays the live arrangement in real time (FL's loop mode decides:
       the playlist in song mode, only the selected pattern in pattern mode), so
       render once when the pass is done; the harness listens back after you say you are
@@ -280,51 +163,11 @@ def run(code: str, ctx: Context) -> RunResult:
     command applied but live state could not be read back, its receipt has
     ``unconfirmed_write=True`` and ``confirmed_notes=None``.
     """
-    # Engineering notes (not part of the model-facing description above):
-    # ``Note`` is in the namespace because ``Track.write`` takes ``list[Note]``;
-    # without it the primary write path is inexpressible.
-    # ``theory.drums`` returns v2 ``schemas.Note`` and composes directly with
-    # ``Track.write`` (an earlier claim here that v2 rejects it was refuted by
-    # direct construction+write on 2026-09-01).
-    fl = ctx.request_context.lifespan_context["fl"]
-    namespace: dict[str, Any] = {
-        "fl": fl,
-        "theory": theory,
-        "Note": Note,
-        "AutomationPoint": AutomationPoint,
-        "__builtins__": {**_RUN_BUILTINS, "__import__": _run_import},
-    }
-    try:
-        tree = ast.parse(code, mode="exec")
-    except SyntaxError as exc:
-        return RunResult(stdout="", traceback="".join(traceback.format_exception_only(exc)))
-
-    # REPL semantics: a trailing expression is evaluated and repr'd, so
-    # `fl.tempo` answers like Python instead of printing nothing.
-    last_expr: ast.Expression | None = None
-    if tree.body and isinstance(tree.body[-1], ast.Expr):
-        last_expr = ast.Expression(tree.body.pop().value)
-
-    try:
-        _RunNamespaceGuard().visit(tree)
-        if last_expr is not None:
-            _RunNamespaceGuard().visit(last_expr)
-    except ToolError:
-        ctx.request_context.lifespan_context["session"].record_run_refusal()
-        raise
-
-    stdout = io.StringIO()
-    try:
-        with contextlib.redirect_stdout(stdout):
-            exec(compile(tree, "<fl>", "exec"), namespace)
-            result = eval(compile(last_expr, "<fl>", "eval"), namespace) if last_expr else None
-    except BaseException as exc:  # noqa: BLE001 - the REPL boundary: user code (incl. sys.exit) must never kill the server; its error IS the result
-        frames = exc.__traceback__.tb_next if exc.__traceback__ else None
-        return RunResult(
-            stdout=stdout.getvalue(),
-            traceback="".join(traceback.format_exception(type(exc), exc, frames)),
-        )
-    return RunResult(stdout=stdout.getvalue(), result=None if result is None else repr(result))
+    # Engineering notes (not part of the model-facing description above): the
+    # kernel is a separate process (fl_mcp.kernel, docs/38) and the OS, not
+    # Python filtering, confines it to its workspace. A test keeps the
+    # docstring's "300 s" in step with kernel.host.RUN_CELL_TIMEOUT_SECONDS.
+    return ctx.request_context.lifespan_context["kernel"].run(code)
 
 
 @_tool_boundary
@@ -397,7 +240,7 @@ def render(ctx: Context) -> RenderResult:
     the seconds recorded. A render takes about that long, ten minutes at most.
     Call analyze afterwards for measurements."""
     fl = ctx.request_context.lifespan_context["fl"]
-    output = Path(tempfile.mkdtemp(prefix="flmcp-render-")) / "render.wav"
+    output = _fresh_render_path(ctx)
     try:
         receipt = fl.render_receipt(output)
     except ToolError as exc:
@@ -427,7 +270,7 @@ def analyze(ctx: Context, wav: str | None = None) -> AudioAnalysis:
     try:
         path = Path(wav) if wav else ctx.request_context.lifespan_context.get(_LAST_RENDER_KEY)
         if path is None:
-            path = fl.render(Path(tempfile.mkdtemp(prefix="flmcp-render-")) / "render.wav")
+            path = fl.render(_fresh_render_path(ctx))
             ctx.request_context.lifespan_context[_LAST_RENDER_KEY] = path
         return AudioAnalysis.model_validate(fl.analyze(path))
     except ToolError as exc:
@@ -495,6 +338,12 @@ def get_scene(ctx: Context, detail: str = "summary", channel: int | None = None)
     return GetSceneResult.from_summary(
         SceneSummary.model_validate(scene.summarize(project, names, tempo=proj.tempo))
     )
+
+
+def _fresh_render_path(ctx: Context) -> Path:
+    """A new WAV path in the renders folder, so run can read the result too."""
+    renders = ctx.request_context.lifespan_context["kernel"].workspace.renders
+    return Path(tempfile.mkdtemp(prefix="render-", dir=renders)) / "render.wav"
 
 
 def tool_definitions() -> tuple[Any, ...]:

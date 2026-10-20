@@ -23,7 +23,7 @@ ErrorCategory = Literal[
     "internal_error",
     "unknown_target",
     "fl_api_error",
-    "restricted_namespace",
+    "kernel_unavailable",
     "unsupported_in_live_session",
     "render_failed",
     "stale_handle",
@@ -187,23 +187,14 @@ def invalid_argument(call: str, detail: str) -> ToolError:
     )
 
 
-def restricted_namespace(offender: str) -> ToolError:
-    """Code outside run's music-only namespace is refused before execution."""
-    introspection = ("dir", "help", "inspect", "type", "__dict__", "getattr")
-    if any(name in offender for name in introspection):
-        message = (
-            f"{offender} is unavailable; use fl.channels, fl.track(...).params(), get_notes, "
-            "or get_scene instead."
-        )
-    else:
-        message = (
-            f"{offender} is unavailable: this session has no filesystem; write music with "
-            "fl.track(name).write([...]) instead."
-        )
+def kernel_unavailable(detail: str) -> ToolError:
+    """The run kernel could not start, so no model code ran."""
     return ToolError(
-        "restricted_namespace",
-        message,
-        "Use fl, theory, Note, or an allowlisted standard-library module.",
+        "kernel_unavailable",
+        f"The Python kernel for run could not start: {detail}",
+        "This is an engine setup problem on this host, not your code. FL and the project are "
+        "unaffected; the other tools still work. Retry once, then report it.",
+        retryable=True,
     )
 
 

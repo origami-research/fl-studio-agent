@@ -19,6 +19,8 @@ from fl_mcp.schemas import Note, RenderSpan, Target
 ENV_SPOOL_ROOT = "FLMCP_SPOOL_ROOT"
 ENV_AGENT_PROJECT = "FLMCP_AGENT_PROJECT"
 ENV_FL_LICENSE = "FLMCP_FL_LICENSE"
+# Where the run kernel's per-session workspace lives (docs/38). Unset: a fresh temp dir.
+ENV_KERNEL_ROOT = "FLMCP_KERNEL_ROOT"
 BRIDGE_PORT_FILE = "bridge_udp.json"
 
 
@@ -63,15 +65,24 @@ class ToolErrorResult(BaseModel):
     candidates: list[str] | None = None
 
 
+# ok: the cell finished. error: it raised (traceback). interrupted: it ran past its
+# time budget and was stopped, the kernel kept its state. kernel_lost: the kernel
+# process died or was killed, its state is gone and the next run starts fresh.
+RunOutcome = Literal["ok", "error", "interrupted", "kernel_lost"]
+
+
 class RunResult(BaseModel):
+    outcome: RunOutcome
     stdout: str
     result: str | None = None
     traceback: str | None = None
 
     @model_validator(mode="after")
-    def _has_one_outcome(self) -> RunResult:
-        if self.traceback is not None and self.result is not None:
-            raise ValueError("run result cannot contain both result and traceback")
+    def _outcome_matches_payload(self) -> RunResult:
+        if (self.outcome == "ok") != (self.traceback is None):
+            raise ValueError("a run result has a traceback exactly when its outcome is not ok")
+        if self.result is not None and self.outcome != "ok":
+            raise ValueError("only an ok run result carries a result")
         return self
 
 
@@ -205,6 +216,7 @@ def build_contract() -> dict[str, Any]:
             ENV_SPOOL_ROOT: ENV_SPOOL_ROOT,
             ENV_AGENT_PROJECT: ENV_AGENT_PROJECT,
             ENV_FL_LICENSE: [member.value for member in FLLicense],
+            ENV_KERNEL_ROOT: ENV_KERNEL_ROOT,
             "BRIDGE_PORT_FILE": BRIDGE_PORT_FILE,
             "bridge_port_file_schema": BridgePortFile.model_json_schema(),
         },

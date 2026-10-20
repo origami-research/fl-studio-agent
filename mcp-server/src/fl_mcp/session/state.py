@@ -158,7 +158,6 @@ def doctor(session: FLSession, *, clock: Callable[[], float] = time.time) -> Doc
         control_plane=control_plane,
         note_plane=note_plane,
         project_file=project_file,
-        run_refusals=session.run_refusals,
     )
 
 

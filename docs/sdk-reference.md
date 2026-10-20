@@ -113,6 +113,9 @@ pass is done; the harness listens back after you say you are done; use
 wav = fl.render("/tmp/mix.wav")
 ```
 
+From the `run` tool only the file name is used: the WAV lands in the session's
+read-only renders folder and the returned path says where ([38](38-python-kernel.md)).
+
 ### `fl.read_wav(path: str | Path) -> tuple[np.ndarray, int]`
 
 **Availability:** local file read. Loads a PCM WAV as `(samples, sample_rate)`.

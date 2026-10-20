@@ -12,6 +12,8 @@ dependencies = [
     "watchdog>=6.0.0",
     "numpy>=2.0.0",
     "flpkit==0.8.1",
+    # The run kernel's %pip installs with the engine's own interpreter.
+    "pip>=24.0",
 ]
 keywords = ["fl-studio", "mcp", "music-production", "piano-roll"]
 classifiers = [
@@ -43,6 +45,7 @@ fl-mcp-install = "fl_mcp.fl.install:main"
 fl-mcp-control-broker = "fl_mcp.control_broker:main"
 fl-mcp-template = "fl_mcp.template:main"
 fl-mcp-listen = "fl_mcp.audio_stream:main"
+fl-mcp-kernel-sid = "fl_mcp.kernel.windows:print_sid"
 
 [build-system]
 requires = ["hatchling"]

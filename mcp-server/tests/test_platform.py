@@ -7,6 +7,8 @@ from pathlib import Path
 
 import pytest
 
+from fl_mcp.kernel.launch import Launcher, PosixLauncher
+from fl_mcp.kernel.windows import AppContainerLauncher
 from fl_mcp.platform import (
     BrokerEndpoint,
     FLInstall,
@@ -32,6 +34,19 @@ def test_platform_for_dispatches_only_supported_platforms(sys_platform, expected
 def test_unsupported_platform_names_the_platform_and_remedy():
     with pytest.raises(PlatformUnsupportedError, match="'linux'; use darwin or win32"):
         platform_for("linux").fl_install()
+
+
+def test_kernel_launcher_is_confined_only_where_the_platform_can_confine_it(monkeypatch):
+    """Windows (production) is AppContainer; macOS is a dev host with no OS boundary (docs/38)."""
+    assert MacPlatform().kernel_launcher().confined is False
+    monkeypatch.setenv("SYSTEMROOT", r"C:\Windows")
+    monkeypatch.setattr("fl_mcp.platform.runtime.CtypesWin32", lambda icacls: ("win32-api", icacls.name))
+    launcher = WindowsPlatform().kernel_launcher()
+    assert isinstance(launcher, AppContainerLauncher)
+    assert launcher.confined is True
+    assert launcher.api == ("win32-api", "icacls.exe")
+    with pytest.raises(PlatformUnsupportedError):
+        platform_for("linux").kernel_launcher()
 
 
 class _FakeSweep:
@@ -66,6 +81,9 @@ class _FakePlatform:
 
     def sweep_fl(self) -> ProcessSweep:
         return _FakeSweep()
+
+    def kernel_launcher(self) -> Launcher:
+        return PosixLauncher()
 
 
 def test_fake_platform_satisfies_the_protocol():

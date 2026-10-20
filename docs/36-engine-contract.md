@@ -10,7 +10,8 @@ uv run fl-mcp-contract > ../contracts/fl-mcp.json
 
 The contract is built from the registered MCP tools and their Pydantic input
 and output models. It also publishes the supported session environment names
-and the Bridge port-file schema. The test suite fails when the checked-in file
+and the Bridge port-file schema. `FLMCP_KERNEL_ROOT` is the `run` kernel's
+workspace root; [38](38-python-kernel.md) has the box contract around it. The test suite fails when the checked-in file
 does not match the generated contract.
 
 Tools publish only their success model as `outputSchema`. Anticipated engine

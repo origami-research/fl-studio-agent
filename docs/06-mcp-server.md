@@ -96,8 +96,8 @@ Tool errors are structured and always name the fix:
 ```
 
 Categories: `control_plane_unavailable`, `note_plane_unavailable`, `unknown_target`
-(with candidates), `fl_api_error` (verbatim from script), `restricted_namespace`
-(producer code attempted a filesystem, process, or introspection escape), `unsupported_in_live_session`
+(with candidates), `fl_api_error` (verbatim from script), `kernel_unavailable`
+(the `run` kernel could not start or failed its boundary probe, docs/38), `unsupported_in_live_session`
 (the two walls, with template guidance), `render_failed`.
 
 ## Startup sequence
@@ -113,6 +113,8 @@ Categories: `control_plane_unavailable`, `note_plane_unavailable`, `unknown_targ
 
 - The server executes **no arbitrary code in FL** - the script dispatch is
   whitelisted (05); the plugin executes a fixed op set (04).
+- Model code from `run` executes in a separate kernel process confined by the OS
+  to its workspace (an AppContainer on Windows), never in the server (docs/38).
 - Filesystem: spool dir + project saves + render outputs only; sample loading takes
   absolute paths but the tool schema documents that it reads user files (hosts can
   gate it with permissions).

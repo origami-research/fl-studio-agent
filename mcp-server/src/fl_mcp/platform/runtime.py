@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
@@ -11,6 +12,8 @@ from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
 from fl_mcp.core.carriers.wire import MidiControl, windows_midi_control
 from fl_mcp.fl import paths, process
+from fl_mcp.kernel.launch import Launcher, PosixLauncher
+from fl_mcp.kernel.windows import AppContainerLauncher, CtypesWin32, icacls_path
 
 if TYPE_CHECKING:
     from fl_mcp.session.link import ControlCarrier
@@ -71,6 +74,10 @@ class Platform(Protocol):
 
     def sweep_fl(self) -> ProcessSweep: ...
 
+    def kernel_launcher(self) -> Launcher:
+        """How the run kernel starts; on a production OS this is its security boundary (docs/38)."""
+        ...
+
 
 @dataclass(frozen=True)
 class _ExistingProcessSweep:
@@ -121,6 +128,9 @@ class MacPlatform:
     def sweep_fl(self) -> ProcessSweep:
         return _ExistingProcessSweep()
 
+    def kernel_launcher(self) -> Launcher:
+        return PosixLauncher()  # a dev host: no OS boundary (docs/38)
+
 
 class WindowsPlatform:
     """Windows adapter; helpers delegate now, fleet-only seams land later."""
@@ -142,6 +152,9 @@ class WindowsPlatform:
 
     def sweep_fl(self) -> ProcessSweep:
         return _WindowsProcessSweep()
+
+    def kernel_launcher(self) -> Launcher:
+        return AppContainerLauncher(CtypesWin32(icacls_path(os.environ)))
 
 
 class _WindowsProcessSweep:
@@ -217,6 +230,9 @@ class UnsupportedPlatform:
         self._unsupported()
 
     def sweep_fl(self) -> ProcessSweep:
+        self._unsupported()
+
+    def kernel_launcher(self) -> Launcher:
         self._unsupported()
 
 

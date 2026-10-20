@@ -3,25 +3,22 @@
 from __future__ import annotations
 
 import argparse
-import ast
 import code
 import contextlib
-import io
 import json
 import os
 import shutil
 import tempfile
 import time
-import traceback
 import uuid
 from collections.abc import Iterator, Sequence
 from pathlib import Path
-from typing import Any
 
 from fl_mcp import sdk
 from fl_mcp.contract import ENV_AGENT_PROJECT, ENV_SPOOL_ROOT
 from fl_mcp.core.carriers.udp import PORT_FILE, BridgeEndpoint, discover
 from fl_mcp.fl.process import fl_kill_pid, launch_fl
+from fl_mcp.kernel.cell import new_namespace, run_cell
 from fl_mcp.template import template_path
 
 ENV_PROJECT = ENV_AGENT_PROJECT
@@ -54,7 +51,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         with _session_environment(project, spool):
             fl = sdk.connect()
             if args.exec_code is not None:
-                _execute(args.exec_code, {"fl": fl})
+                _execute(args.exec_code, fl)
             elif not args.no_repl:
                 code.interact("FL MCP dev session. Live SDK is bound as `fl`.", local={"fl": fl})
         return 0
@@ -157,23 +154,14 @@ def _restore_environment(name: str, value: str | None) -> None:
         os.environ[name] = value
 
 
-def _execute(source: str, namespace: dict[str, Any]) -> None:
-    tree = ast.parse(source, mode="exec")
-    trailing = (
-        ast.Expression(tree.body.pop().value) if tree.body and isinstance(tree.body[-1], ast.Expr) else None
-    )
-    stdout = io.StringIO()
-    try:
-        with contextlib.redirect_stdout(stdout):
-            exec(compile(tree, "<fl-mcp-dev-session>", "exec"), namespace)
-            result = eval(compile(trailing, "<fl-mcp-dev-session>", "eval"), namespace) if trailing else None
-    except BaseException as exc:
-        raise RuntimeError("".join(traceback.format_exception(type(exc), exc, exc.__traceback__))) from exc
-    output = stdout.getvalue()
-    if output:
-        print(output, end="")
-    if trailing is not None:
-        print(repr(result))
+def _execute(source: str, fl: sdk.FL) -> None:
+    """Run one cell the way the run tool does; a failing cell raises its traceback."""
+    result = run_cell(source, new_namespace(fl))
+    print(result.stdout, end="")
+    if result.traceback is not None:
+        raise RuntimeError(result.traceback)
+    if result.result is not None:
+        print(result.result)
 
 
 def _teardown(marker: Path, token: str, pid: int | None) -> None:

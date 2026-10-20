@@ -6,6 +6,7 @@
       "licensed",
       "trial"
     ],
+    "FLMCP_KERNEL_ROOT": "FLMCP_KERNEL_ROOT",
     "FLMCP_SPOOL_ROOT": "FLMCP_SPOOL_ROOT",
     "bridge_port_file_schema": {
       "description": "Endpoint published by the native Bridge in each session spool.",
@@ -64,7 +65,7 @@
       "internal_error",
       "unknown_target",
       "fl_api_error",
-      "restricted_namespace",
+      "kernel_unavailable",
       "unsupported_in_live_session",
       "render_failed",
       "stale_handle",
@@ -127,7 +128,7 @@
   },
   "tools": [
     {
-      "description": "Execute Python against the live FL Studio session. The namespace holds\n``fl`` (the SDK), ``theory``, ``Note``, ``AutomationPoint``, and the allowlisted modules ``math``,\n``random``, ``itertools``, ``functools``, ``statistics``, ``json``, ``re``,\n``dataclasses``, ``typing``, and ``collections``. A trailing expression is\nrepr'd like a REPL. Returns {\"stdout\", \"result\"} or, on any error,\n{\"stdout\", \"traceback\"} - read the traceback and fix the call.\n\nThe full working surface (no introspection needed):\n- fl.set_tempo(140.0) -> confirmed BPM; fl.tempo reads it back.\n- fl.channels -> [Channel(index, name), ...].\n- fl.track(\"Bass\") / fl.track(2, pattern=1) -> Track (exact name, index, or\n  unique substring; pattern defaults to 1).\n- Track.write([Note(...), ...], mode=\"merge\"|\"replace\") writes to the\n  channel named by Track, selecting and verifying it live when needed;\n  it returns a receipt with confirmed_notes. Track.notes() -> confirmed\n  state; Track.clear() clears that named channel.\n- Note(key=60 or \"C4\"/\"F#3\", start=0.0, length=1.0, velocity=0.8, pan=0.5)\n  with start/length in beats from pattern start.\n- Track.set_channel_levels(volume=0.9, pan=-0.15, pitch=0) - project-file\n  channel levels; volume 0..1, pan -1..1, pitch whole semitones -48..48.\n- Track.set_automation([AutomationPoint(position=0.0, value=0.5,\n  tension=0.0)]) - position in beats, value normalized 0..1 (file lane;\n  unavailable in session mode).\n- Track.params(query=\"cutoff\") / Track.set_param(\"cutoff\", 0.55) - live\n  generator plugin parameters, values normalized 0..1.\n- fl.add_effect(0, \"Fruity Parametric EQ 2\") -> tuple[Effect, ...] -\n  project-file only; proven only for empty Master slot 0.\n- fl.render(\"out.wav\") -> Path; fl.analyze(wav) -> bpm/key/LUFS/spectral\n  balance; fl.read_wav(path) -> (samples, sample_rate).\n  A render plays the live arrangement in real time (FL's loop mode decides:\n  the playlist in song mode, only the selected pattern in pattern mode), so\n  render once when the pass is done; the harness listens back after you say you are\n  done; use get_notes/get_scene (cheap, live) to check work instead.\n- fl.snapshot() -> tempo + channels.\n- Session mode (FLMCP_SPOOL_ROOT set, including a match) never reboots FL.\n  Use notes through the Bridge and tempo, params, or levels through the control\n  wire. `fl.file_edit()` is unavailable there because automation clips and adding\n  effects still need a project reload. Outside session mode, `with fl.file_edit():`\n  batches those file-lane edits into one reload.\n- theory.chord(\"C\", \"minor\") / theory.scale(\"E\", \"minor\") -> MIDI ints;\n  theory.drums(\"x...x...x...x...\", key=\"C1\", step_beats=0.25) -> a\n  ready-to-write [Note] step grid ('x' = hit, '.' = rest).\n\nEvery write returns FL's confirmed readback when available. If a bridge\ncommand applied but live state could not be read back, its receipt has\n``unconfirmed_write=True`` and ``confirmed_notes=None``.",
+      "description": "Run a Python cell in a persistent kernel bound to the live FL Studio\nsession, like a Jupyter notebook. Variables, imports, and functions persist\nacross calls. It is full Python: import anything, use files, numpy,\ntime.sleep, type/dir/getattr. `%pip install pkg` (or `!pip install pkg`)\ninstalls a package for later imports; `!cmd` runs a shell command. The\nworking directory is your workspace, the one place you can write; its files\nlast for the session. Pre-bound: fl (the SDK), theory, Note,\nAutomationPoint. A trailing expression is repr'd like a REPL.\n\nReturns {\"outcome\", \"stdout\", \"result\" | \"traceback\"}; stdout includes\nstderr. outcome is \"ok\", or \"error\" (read the traceback and fix the code),\nor \"interrupted\" when the cell ran past its 300 s budget (time inside fl\ncalls does not count) - the kernel and its variables are intact, or \"kernel_lost\" when\nthe kernel process died or was killed (os._exit, a crash, or ignoring the\ninterrupt) - its variables are gone, files stay, the next run starts fresh.\n\nThe SDK (no introspection needed):\n- fl.set_tempo(140.0) -> confirmed BPM; fl.tempo reads it back.\n- fl.channels -> [Channel(index, name), ...].\n- fl.track(\"Bass\") / fl.track(2, pattern=1) -> Track (exact name, index, or\n  unique substring; pattern defaults to 1).\n- Track.write([Note(...), ...], mode=\"merge\"|\"replace\") writes to the\n  channel named by Track, selecting and verifying it live when needed;\n  it returns a receipt with confirmed_notes. Track.notes() -> confirmed\n  state; Track.clear() clears that named channel.\n- Note(key=60 or \"C4\"/\"F#3\", start=0.0, length=1.0, velocity=0.8, pan=0.5)\n  with start/length in beats from pattern start.\n- Track.set_channel_levels(volume=0.9, pan=-0.15, pitch=0) - project-file\n  channel levels; volume 0..1, pan -1..1, pitch whole semitones -48..48.\n- Track.set_automation([AutomationPoint(position=0.0, value=0.5,\n  tension=0.0)]) - position in beats, value normalized 0..1 (file lane;\n  unavailable in session mode).\n- Track.params(query=\"cutoff\") / Track.set_param(\"cutoff\", 0.55) - live\n  generator plugin parameters, values normalized 0..1.\n- fl.add_effect(0, \"Fruity Parametric EQ 2\") -> tuple[Effect, ...] -\n  project-file only; proven only for empty Master slot 0.\n- fl.render(\"mix.wav\") -> Path of the WAV. Only the file name is used: it\n  lands in the session's renders folder, which you can read but not write.\n  fl.analyze(path) -> bpm/key/LUFS/spectral balance; fl.read_wav(path) ->\n  (samples: numpy.ndarray, sample_rate: int).\n  A render plays the live arrangement in real time (FL's loop mode decides:\n  the playlist in song mode, only the selected pattern in pattern mode), so\n  render once when the pass is done; the harness listens back after you say you are\n  done; use get_notes/get_scene (cheap, live) to check work instead.\n- fl.snapshot() -> tempo + channels.\n- Session mode (FLMCP_SPOOL_ROOT set, including a match) never reboots FL.\n  Use notes through the Bridge and tempo, params, or levels through the control\n  wire. `fl.file_edit()` is unavailable there because automation clips and adding\n  effects still need a project reload. Outside session mode, `with fl.file_edit():`\n  batches those file-lane edits into one reload.\n- theory.chord(\"C\", \"minor\") / theory.scale(\"E\", \"minor\") -> MIDI ints;\n  theory.drums(\"x...x...x...x...\", key=\"C1\", step_beats=0.25) -> a\n  ready-to-write [Note] step grid ('x' = hit, '.' = rest).\n\nEvery write returns FL's confirmed readback when available. If a bridge\ncommand applied but live state could not be read back, its receipt has\n``unconfirmed_write=True`` and ``confirmed_notes=None``.",
       "inputSchema": {
         "properties": {
           "code": {
@@ -144,6 +145,16 @@
       "name": "run",
       "outputSchema": {
         "properties": {
+          "outcome": {
+            "enum": [
+              "ok",
+              "error",
+              "interrupted",
+              "kernel_lost"
+            ],
+            "title": "Outcome",
+            "type": "string"
+          },
           "result": {
             "anyOf": [
               {
@@ -174,6 +185,7 @@
           }
         },
         "required": [
+          "outcome",
           "stdout"
         ],
         "title": "RunResult",
@@ -867,11 +879,6 @@
           },
           "project_file": {
             "$ref": "#/$defs/PlaneStatus"
-          },
-          "run_refusals": {
-            "default": 0,
-            "title": "Run Refusals",
-            "type": "integer"
           },
           "status": {
             "enum": [
