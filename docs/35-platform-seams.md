@@ -364,7 +364,7 @@ A trial FL cannot reopen a project it saved, and it answers Save with a modal Bu
 | File-lane reload after a project-file edit: note writes when the Bridge is not live, tempo and channel-level fallbacks without the control wire, automation, adding effects | `FLSession._reload_fl`, `lifecycle.reload_fl` | Refused: it kills FL and reopens a file the trial may have saved. |
 | `export_offline` (a second FL rendering the saved project, `-R` or `/R`) | `controls.export_offline` | Refused. |
 | `render_wav` (play the live arrangement once while the Bridge captures) | `controls.render_wav` | Works: it saves nothing, and its length is read live (`controls.live_arrangement_span`). |
-| Bridge note receipts (save, then parse the saved file) | `BridgeLane._live_readback` | `save_project` is refused, so the write applies and the receipt says unconfirmed. |
+| Bridge note results (save, then parse the saved file) | `BridgeLane._saved_state` | `save_project` is never attempted; the Bridge acknowledgement confirms the write and the session records it. |
 
 Live lanes need no file: control-wire tempo, channel levels, plugin parameters, transport, and Bridge note writes work the same in trial.
 Reads parse the last saved file and are only as current as the last successful save.

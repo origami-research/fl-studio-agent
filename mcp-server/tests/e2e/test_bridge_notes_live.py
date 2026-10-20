@@ -1,4 +1,4 @@
-"""Live bridge note receipts against one disposable FL session.
+"""Live bridge note results against one disposable FL session.
 
 Run deliberately with ``FL_E2E=1``.  This starts FL through the dev-session
 owner, which also tears it down; it refuses to overlap another FL session.
@@ -36,7 +36,9 @@ track = fl.track(0)
 track.write([Note(key=48, start=0, length=1)], mode="merge")
 replaced = track.write([Note(key=60, start=0, length=1)], mode="replace")
 merged = track.write([Note(key=64, start=1, length=1)], mode="merge")
-print("BRIDGE_RECEIPTS=" + json.dumps([replaced.model_dump(), merged.model_dump()]))
+backend = fl._session.store.last_action().backend
+read = [n.key for n in track.notes()]
+print("BRIDGE_RECEIPTS=" + json.dumps([replaced.model_dump(), merged.model_dump(), backend, read]))
 '''
     completed = subprocess.run(
         [sys.executable, "-m", "fl_mcp.dev_session", "--exec", source],
@@ -48,7 +50,7 @@ print("BRIDGE_RECEIPTS=" + json.dumps([replaced.model_dump(), merged.model_dump(
     assert completed.returncode == 0, completed.stderr or completed.stdout
     line = next((line for line in completed.stdout.splitlines() if line.startswith("BRIDGE_RECEIPTS=")), None)
     assert line is not None, completed.stdout
-    replaced, merged = json.loads(line.removeprefix("BRIDGE_RECEIPTS="))
-    assert [replaced["backend"], merged["backend"]] == ["bridge", "bridge"]
-    assert [replaced["confirmed_notes"], merged["confirmed_notes"]] == [1, 2]
-    assert not replaced["unconfirmed_write"] and not merged["unconfirmed_write"]
+    replaced, merged, backend, read = json.loads(line.removeprefix("BRIDGE_RECEIPTS="))
+    assert backend == "bridge"
+    assert [replaced["total"], merged["total"]] == [1, 2]
+    assert read == [60, 64], "an immediate read returns the written notes"

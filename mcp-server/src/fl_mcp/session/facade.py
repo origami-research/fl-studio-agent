@@ -37,7 +37,7 @@ from fl_mcp.plugin_models import load_bundled_param_models
 from fl_mcp.profile import profile_gate
 from fl_mcp.schemas import (
     AutomationPoint,
-    AutomationReceipt,
+    AutomationResult,
     Channel,
     ChannelLevels,
     DoctorReport,
@@ -49,7 +49,7 @@ from fl_mcp.schemas import (
     RenderReceipt,
     SessionState,
     Target,
-    WriteReceipt,
+    WriteResult,
 )
 from fl_mcp.store import Store
 
@@ -329,30 +329,60 @@ class FLSession:
 
     # -- notes ----------------------------------------------------------------
 
-    def write_notes(self, target: Target, notes: list[Note], mode: NoteWriteMode) -> WriteReceipt:
+    def write_notes(self, target: Target, notes: list[Note], mode: NoteWriteMode) -> WriteResult:
         with self._write_guard("write_notes"):
-            if self.project is None and not self.caps.bridge_live:
-                raise NotePlaneUnavailable(
-                    "No backend can apply targeted notes: no project file is configured and the Bridge is not live. "
-                    "(The pyscript lane cannot target a channel - see write_notes.)"
-                )
+            self._require_note_path()
             # The concurrency rule (docs/27 §5): never clobber a mid-edit user
             # note. Merge writes are purely additive, so they skip the guard.
             if mode != "merge":
                 self.observer.guard_write(target)
-            return ops_notes.write_notes(self, target, notes, mode)
+            track = self._track_name(target.channel)
+            after = ops_notes.write_notes(self, target, notes, mode)
+            return self._write_result(track, target, mode, len(notes), after)
 
-    def clear_notes(self, target: Target) -> WriteReceipt:
+    def clear_notes(self, target: Target) -> WriteResult:
         with self._write_guard("clear_notes"):
-            if self.project is None and not self.caps.bridge_live:
-                raise NotePlaneUnavailable(
-                    "No backend can clear targeted notes: no project file is configured and the Bridge is not live."
-                )
+            self._require_note_path()
             self.observer.guard_write(target)
-            return ops_notes.clear_notes(self, target)
+            track = self._track_name(target.channel)
+            return self._write_result(track, target, "replace", 0, ops_notes.clear_notes(self, target))
 
     def read_notes(self, target: Target) -> list[Note]:
         return note_ops.read_notes(self, target)
+
+    def all_notes(self) -> dict[tuple[int, int], list[Note]]:
+        return note_ops.all_notes(self)
+
+    def _require_note_path(self) -> None:
+        if self.project is None and not self.caps.bridge_live:
+            log.warning("no note backend: no project file is configured and the Bridge is not live")
+            raise NotePlaneUnavailable(
+                "FL Studio is not accepting note edits right now.",
+                fix="FL may still be starting. Wait a moment and retry the write.",
+            )
+
+    def _track_name(self, channel: int) -> str:
+        """The channel's name for the write result, resolved BEFORE the write so
+        nothing can fail after FL applied it. A label is not worth refusing a
+        live write over: an unreadable project or a busy FL labels by index."""
+        try:
+            channels = self.channel_names()
+        except (flp.FlpError, OSError, errors.ToolError):
+            log.exception("could not read channel names for the write result")
+            channels = []
+        return next((c.name for c in channels if c.index == channel), f"Channel {channel}")
+
+    @staticmethod
+    def _write_result(
+        track: str, target: Target, mode: NoteWriteMode, wrote: int, after: list[Note] | None
+    ) -> WriteResult:
+        return WriteResult(
+            wrote=wrote,
+            track=track,
+            pattern=target.pattern,
+            mode=mode,
+            total=None if after is None else len(after),
+        )
 
     # -- controls -------------------------------------------------------------
 
@@ -373,7 +403,7 @@ class FLSession:
         """Yield live master-mix chunks; every gap remains visible in metadata."""
         if self.session_spool_root is None:
             raise errors.ToolError(
-                "audio_stream_unavailable", "Live streaming requires a session spool root."
+                "audio_stream_unavailable", "Live audio streaming is only available during a match."
             )
         endpoint = AudioEndpoint(self.session_spool_root)
         endpoint.start(publish=False)
@@ -383,7 +413,9 @@ class FLSession:
         if not response.ok:
             endpoint.close()
             raise errors.ToolError(
-                "audio_stream_unavailable", response.err or "Bridge refused stream_start", retryable=True
+                "audio_stream_unavailable",
+                "FL Studio could not start streaming audio.",
+                retryable=True,
             )
         endpoint.publish(response.sample_rate or 44_100)
         try:
@@ -418,15 +450,16 @@ class FLSession:
         with self._write_guard("add_effect"):
             if self.project is None:
                 raise NotePlaneUnavailable(
-                    "No project file is configured for adding an effect. "
-                    "Effect records can only be written through the project file."
+                    "Effects cannot be added in this session: there is no saved song to edit.",
+                    fix="Shape the sound with Track.set_param or levels instead.",
+                    retryable=False,
                 )
             self._prepare_file_write()
             confirmed = tuple(flp.add_effect(self.project, insert_index, plugin_name))
             self._reload_fl()
             return confirmed
 
-    def set_automation(self, channel: int, points: list[AutomationPoint]) -> AutomationReceipt:
+    def set_automation(self, channel: int, points: list[AutomationPoint]) -> AutomationResult:
         with self._write_guard("set_automation"):
             return controls.set_automation(self, channel, points)
 
@@ -457,13 +490,16 @@ class FLSession:
         self.link.command("transport.stop")
 
     def undo(self) -> None:
-        """``general.undo``."""
+        """``general.undo``. The note record does not follow it (docs/27 §1a known gap)."""
         self.link.command("general.undo")
 
     # -- reads ----------------------------------------------------------------
 
     def snapshot(self) -> SessionState:
         return state.snapshot(self)
+
+    def tempo(self) -> float | None:
+        return state.tempo(self)
 
     def channel_names(self) -> list[Channel]:
         return state.channel_names(self)
@@ -490,7 +526,7 @@ class FLSession:
         """Refuse before mutating a project FL cannot be made to reopen: a trial
         FL cannot reopen saved projects, and a session FL has no in-place reload."""
         if self.fl_license is FLLicense.TRIAL:
-            raise errors.fl_trial_unsupported("this project-file edit")
+            raise errors.fl_trial_unsupported("this edit (it rewrites the saved song)")
         if self.session_spool_root is not None:
             raise errors.file_lane_requires_reload()
 

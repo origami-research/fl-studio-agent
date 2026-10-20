@@ -66,8 +66,8 @@ for channel in fl.channels:
 
 ### `fl.tempo -> float`
 
-**Availability:** confirmed session snapshot; raises when tempo is not known.
-Returns BPM.
+**Availability:** live FL when connected (so a `set_tempo` shows at once),
+otherwise the project's saved tempo; raises when neither is known. Returns BPM.
 
 ```python
 print(fl.tempo)
@@ -103,7 +103,7 @@ pattern in pattern mode, at the live tempo), plays it once from the start while
 the Bridge records the mix, and returns the verified WAV path. Nothing is saved.
 It raises before recording if song mode has an empty playlist or the capture
 would pass ten minutes, and after recording if the WAV does not verify.
-`fl.render_receipt(path)` also returns the span it recorded (`RenderSpan`).
+The `render` MCP tool also returns the span it recorded (`RenderSpan`).
 
 A render plays in real time and produces the real mix, so render once when the
 pass is done; the harness listens back after you say you are done; use
@@ -174,24 +174,26 @@ print(state.playing, state.current_pattern)
 A `Track` is the resolved channel and pattern returned by `fl.track(...)`. Its
 public `channel: int` and `pattern: int` attributes are the resolved indices.
 
-### `track.write(notes: list[Note], mode: NoteWriteMode = "merge") -> WriteReceipt`
+### `track.write(notes: list[Note], mode: NoteWriteMode = "merge") -> WriteResult`
 
-**Availability:** project write. `notes` are musical notes to apply. `mode` is
-`"merge"` to add them or `"replace"` to replace this target's notes. Returns a
-receipt with backend, target, confirmed note count, and delta. A bridge command
-that FL applied but whose live state could not be read back has
-`unconfirmed_write=True` and `confirmed_notes=None` rather than a stale count.
+**Availability:** live Bridge, or project write outside a match. `notes` are
+musical notes to apply. `mode` is `"merge"` to add them or `"replace"` to
+replace this target's notes. Returns `WriteResult(wrote, track, pattern, mode,
+total)`: the notes written, the channel's name, and the target's confirmed note
+count afterwards (see [docs/27 "Note state"](27-shared-surfaces.md#1a-note-state)).
+`total` is None only for a merge onto a track the session never saw. A refusal or
+timeout raises.
 
 ```python
-receipt = fl.track("Bass").write(
+result = fl.track("Bass").write(
     [Note(key="C2", start=0, length=1, velocity=0.85)], mode="replace"
 )
 ```
 
-### `track.clear() -> WriteReceipt`
+### `track.clear() -> WriteResult`
 
-**Availability:** project write. Removes all notes from this channel/pattern
-target and returns the confirmed receipt.
+**Availability:** as `write`. Removes all notes from this channel/pattern
+target and returns the result (`total=0`).
 
 ```python
 fl.track("Bass").clear()
@@ -199,15 +201,15 @@ fl.track("Bass").clear()
 
 ### `track.notes() -> list[Note]`
 
-**Availability:** recorded/project-file state. Returns notes confirmed for this
-channel/pattern target.
+**Availability:** always. Returns the notes FL has on this channel/pattern
+target now: this session's confirmed writes over the project FL loaded.
 
 ```python
 for note in fl.track("Bass").notes():
     print(note.key, note.start)
 ```
 
-### `track.set_automation(points: list[AutomationPoint]) -> AutomationReceipt`
+### `track.set_automation(points: list[AutomationPoint]) -> AutomationResult`
 
 **Availability:** project write. Replaces this channel's existing automation
 clip and returns points confirmed by reparsing the saved project. It requires

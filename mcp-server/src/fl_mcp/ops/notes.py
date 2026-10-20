@@ -11,7 +11,6 @@ from fl_mcp.core.router import (
     CapabilityTag,
     Mode,
     Operation,
-    Receipt,
     Routable,
     Target,
     route,
@@ -43,11 +42,11 @@ CLEAR = Operation.spec(
 
 def write_notes(
     session: Routable, target: Target, notes: Sequence[Note], mode: Mode = "merge"
-) -> Receipt:
+) -> list[Note] | None:
     op = WRITE.at(target, mode=mode)
     return route(op, session.caps, session.lanes, session.breaker).apply(op, notes)
 
 
-def clear_notes(session: Routable, target: Target) -> Receipt:
+def clear_notes(session: Routable, target: Target) -> list[Note] | None:
     op = CLEAR.at(target)
     return route(op, session.caps, session.lanes, session.breaker).apply(op, [])

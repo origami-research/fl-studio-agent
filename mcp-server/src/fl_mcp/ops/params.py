@@ -11,7 +11,6 @@ from fl_mcp.core.router import (
     Capability,
     CapabilityTag,
     Operation,
-    Receipt,
     Routable,
     Target,
     route,
@@ -29,7 +28,7 @@ SET = Operation.spec(
 )
 
 
-def set_params(session: Routable, channel: int, params: Sequence[Any]) -> Receipt:
+def set_params(session: Routable, channel: int, params: Sequence[Any]) -> Any:
     """``params`` are (index, value) pairs, values normalized 0..1."""
     op = SET.at(Target(channel=channel))
     return route(op, session.caps, session.lanes, session.breaker).apply(op, params)

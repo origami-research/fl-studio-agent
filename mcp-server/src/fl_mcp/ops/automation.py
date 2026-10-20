@@ -11,7 +11,6 @@ from fl_mcp.core.router import (
     Capability,
     CapabilityTag,
     Operation,
-    Receipt,
     Routable,
     Target,
     route,
@@ -30,6 +29,6 @@ WRITE = Operation.spec(
 )
 
 
-def set_automation(session: Routable, channel: int, points: Sequence[Any]) -> Receipt:
+def set_automation(session: Routable, channel: int, points: Sequence[Any]) -> Any:
     op = WRITE.at(Target(channel=channel))
     return route(op, session.caps, session.lanes, session.breaker).apply(op, points)

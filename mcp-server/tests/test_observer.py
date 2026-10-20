@@ -336,21 +336,21 @@ def test_guard_refuses_when_checkpoint_parse_fails(
 
     assert excinfo.value.category == "operation_unsafe"
     assert excinfo.value.retryable
-    assert "Cannot verify whether the user has unsaved score edits" in excinfo.value.message
-    assert "clobbering" in excinfo.value.fix
+    assert "someone is editing this track" in excinfo.value.message
+    assert "overwrite their edit" in excinfo.value.message
 
 
-def test_guard_refuses_when_project_file_disappears(score_env) -> None:
+def test_guard_refuses_when_project_file_disappears(score_env, caplog) -> None:
     observer, _save, _state, _clock = score_env
     assert observer._project is not None
     observer._project.unlink()
 
-    with pytest.raises(errors.ToolError) as excinfo:
+    with caplog.at_level("WARNING"), pytest.raises(errors.ToolError) as excinfo:
         observer.guard_write(TARGET)
 
     assert excinfo.value.category == "operation_unsafe"
     assert excinfo.value.retryable
-    assert "could not stat project file" in excinfo.value.message
+    assert any("could not stat project file" in r.message for r in caplog.records), "the operator's detail is logged"
 
 
 # --- the concurrency guard ----------------------------------------------------

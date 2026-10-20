@@ -17,6 +17,8 @@ import shlex
 import subprocess
 import sys
 import traceback
+from pathlib import Path
+from types import TracebackType
 from typing import Any
 
 from fl_mcp import theory
@@ -24,6 +26,9 @@ from fl_mcp.contract import RunResult
 from fl_mcp.schemas import AutomationPoint, Note
 
 CELL_FILENAME = "<fl>"
+# Frames from files under the engine package are plumbing, not the model's code.
+# Pure path comparison (no filesystem): co_filename and __file__ share a source.
+_ENGINE_DIR = Path(__file__).parents[1]
 # Per text field of a result. Past this a model cannot use the text, and the
 # whole result must stay well under the server's wire-message bound.
 OUTPUT_LIMIT_CHARS = 1_000_000
@@ -99,17 +104,43 @@ def run_cell(code: str, namespace: dict[str, Any]) -> RunResult:
             exec(compile(tree, CELL_FILENAME, "exec"), namespace)
             result = eval(compile(last_expr, CELL_FILENAME, "eval"), namespace) if last_expr else None
     except BaseException as exc:  # noqa: BLE001 - the cell boundary: model code's exception (incl. SystemExit, KeyboardInterrupt) IS the result
-        frames = exc.__traceback__.tb_next if exc.__traceback__ else None
         return RunResult(
             outcome="error",
             stdout=_bounded(output.getvalue()),
-            traceback=_bounded("".join(traceback.format_exception(type(exc), exc, frames))),
+            traceback=_bounded(_model_traceback(exc)),
         )
     return RunResult(
         outcome="ok",
         stdout=_bounded(output.getvalue()),
         result=None if result is None else _bounded(repr(result)),
     )
+
+
+def _model_traceback(exc: BaseException) -> str:
+    """The traceback as the model reads it: every exception in the chain
+    Python prints, each without engine frames."""
+    seen: set[int] = set()
+    link: BaseException | None = exc
+    while link is not None and id(link) not in seen:
+        seen.add(id(link))
+        link.__traceback__ = _model_frames(link.__traceback__)
+        link = link.__cause__ or (None if link.__suppress_context__ else link.__context__)
+    return "".join(traceback.format_exception(exc))
+
+
+def _model_frames(tb: TracebackType | None) -> TracebackType | None:
+    """The traceback without engine frames: the exec plumbing above the cell
+    and the SDK and kernel wire below an fl call. The model's code ends at its
+    fl call and the error follows, like any library call."""
+    kept: list[TracebackType] = []
+    while tb is not None:
+        if not Path(tb.tb_frame.f_code.co_filename).is_relative_to(_ENGINE_DIR):
+            kept.append(tb)
+        tb = tb.tb_next
+    rebuilt = None
+    for frame in reversed(kept):
+        rebuilt = TracebackType(rebuilt, frame.tb_frame, frame.tb_lasti, frame.tb_lineno)
+    return rebuilt
 
 
 def _bounded(text: str) -> str:

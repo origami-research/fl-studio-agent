@@ -72,12 +72,13 @@ def test_export_offline_saves_then_subprocesses_the_resolved_fl_path(monkeypatch
     assert output.read_bytes() == b"RIFF....WAVE"
 
 
-def test_render_wav_refuses_when_the_live_bridge_is_unavailable(tmp_path):
+def test_render_wav_refuses_when_the_live_bridge_is_unavailable(tmp_path, caplog):
     control = FakeControl(hello=HELLO, handlers=arrangement())
     session, _ = make_session(control=control)
 
-    with pytest.raises(errors.ToolError, match="Bridge is not live"):
+    with caplog.at_level("WARNING"), pytest.raises(errors.ToolError, match="cannot record right now"):
         session.render_wav(tmp_path / "mix.wav")
+    assert any("Bridge is not live" in r.message for r in caplog.records)
 
 
 def test_render_waits_for_an_in_flight_write_then_proceeds(monkeypatch, tmp_path):
@@ -248,8 +249,8 @@ def test_live_render_returns_verified_wav_when_stop_stays_unacknowledged(monkeyp
     assert "FL may still be playing; the next transport command re-seats it" in caplog.text
 
 
-def test_live_render_reports_unacknowledged_stop_when_capture_fails(monkeypatch, tmp_path):
-    """Capture failure remains render_failed and retains the cleanup hazard."""
+def test_live_render_reports_unacknowledged_stop_when_capture_fails(monkeypatch, tmp_path, caplog):
+    """Capture failure remains render_failed; the cleanup hazard reaches the operator log."""
     session, _ = _verified_live_render(
         monkeypatch,
         tmp_path,
@@ -259,9 +260,11 @@ def test_live_render_reports_unacknowledged_stop_when_capture_fails(monkeypatch,
         ok=False, path=None, frames_written=None, err="Bridge wrote no audio frames"
     )
 
-    with pytest.raises(errors.ToolError, match=r"transport\.stop was unacknowledged") as excinfo:
+    with caplog.at_level("WARNING"), pytest.raises(errors.ToolError, match="recorded no audio") as excinfo:
         controls._live_render(session, tmp_path / "mix.wav", 1.0)
     assert excinfo.value.category == "render_failed"
+    assert "Bridge" not in excinfo.value.message
+    assert any("transport.stop was unacknowledged" in r.message for r in caplog.records)
 
 
 @pytest.mark.parametrize("wav", [None, b""])
@@ -346,7 +349,7 @@ def test_set_tempo_live_unconfirmed_raises():
     control = FakeControl(hello=HELLO, handlers={"mixer.setCurrentTempo": lambda args: True})
     session, _ = make_session(control=control)
 
-    with pytest.raises(WriteRejected, match="UNCONFIRMED"):
+    with pytest.raises(WriteRejected, match="did not report it back"):
         session.set_tempo(130.0)
 
 
@@ -454,7 +457,6 @@ def test_automation_project_backend_returns_reparsed_points(monkeypatch, tmp_pat
     receipt = session.set_automation(2, [AutomationPoint(position=1, value=0.25, tension=-0.5)])
 
     assert receipt.points == [AutomationPoint(position=1, value=0.25, tension=-0.5)]
-    assert receipt.backend == "project-write"
     assert no_reload == [True]
 
 
@@ -471,7 +473,7 @@ def test_automation_refuses_a_session_reparse_mismatch(monkeypatch, tmp_path, no
     )
     session, _ = make_session(project=tmp_path / "agent.flp")
 
-    with pytest.raises(WriteRejected, match="UNCONFIRMED"):
+    with pytest.raises(WriteRejected, match="did not save as written"):
         session.set_automation(2, [AutomationPoint(position=1, value=0.25, tension=-0.5)])
     assert no_reload == []
 
@@ -506,7 +508,7 @@ def test_automation_file_seam_rejects_an_absent_readback_channel(monkeypatch, tm
 
 def test_automation_requires_a_project_file():
     session, _ = make_session()
-    with pytest.raises(NotePlaneUnavailable, match="No backend can write automation"):
+    with pytest.raises(NotePlaneUnavailable, match="Automation clips cannot be written"):
         session.set_automation(2, [])
 
 
@@ -830,7 +832,7 @@ def test_session_file_edit_refuses_before_the_file_lane(monkeypatch, tmp_path):
         pass
 
     assert excinfo.value.category == "file_lane_requires_reload"
-    assert excinfo.value.retryable is True
+    assert excinfo.value.retryable is False, "retrying never helps: FL is never reopened in a match"
     assert reloads == []
 
 

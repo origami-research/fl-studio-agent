@@ -360,7 +360,7 @@ def run_file_cycle(project: MatrixProject, workdir: Path, *, tempo: float) -> Cy
         before_bytes = target.read_bytes()
         before = flp.read(target)
         assert before.channels, "reader found no channels"
-        before_summary = scene.summarize(target, tempo=before.tempo)
+        before_summary = scene.summarize(target, scene.project_rows(target), tempo=before.tempo)
         assert before_summary["note_count"] == len(before.notes)
 
     fresh = max(_pattern_ids(before_bytes), default=0) + 1
@@ -444,7 +444,7 @@ def run_file_cycle(project: MatrixProject, workdir: Path, *, tempo: float) -> Cy
             saved = next(c for c in after.channels if c.index == channel)
             assert saved.volume == round(CYCLE_VOLUME * flp.LEVEL_MAX)
             assert saved.pan == round(flp.PAN_CENTRE + CYCLE_PAN * flp.PAN_CENTRE)
-        after_summary = scene.summarize(target, tempo=after.tempo)
+        after_summary = scene.summarize(target, scene.project_rows(target), tempo=after.tempo)
         assert after_summary["note_count"] == before_summary["note_count"] + len(CYCLE_NOTES)
 
     after_bytes = target.read_bytes()

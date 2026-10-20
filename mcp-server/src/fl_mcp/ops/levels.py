@@ -11,7 +11,6 @@ from fl_mcp.core.router import (
     Capability,
     CapabilityTag,
     Operation,
-    Receipt,
     Routable,
     Target,
     route,
@@ -29,6 +28,6 @@ SET = Operation.spec(
 )
 
 
-def set_levels(session: Routable, channel: int, levels: Sequence[Any]) -> Receipt:
+def set_levels(session: Routable, channel: int, levels: Sequence[Any]) -> Any:
     op = SET.at(Target(channel=channel))
     return route(op, session.caps, session.lanes, session.breaker).apply(op, levels)

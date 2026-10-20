@@ -90,8 +90,8 @@ def test_snapshot_without_live_or_project_is_an_explicit_setup_error():
         session.snapshot()
 
     assert excinfo.value.category == "control_plane_unavailable"
-    assert "No backend can read session state" in excinfo.value.message
-    assert "make_agent_project" in excinfo.value.fix
+    assert "state cannot be read" in excinfo.value.message
+    assert excinfo.value.retryable is True
 
 
 # --- doctor ------------------------------------------------------------------

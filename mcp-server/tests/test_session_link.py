@@ -3,6 +3,7 @@ self-heal, settle, reload reconnect, and create_session."""
 
 from __future__ import annotations
 
+import shutil
 from pathlib import Path
 
 import pytest
@@ -24,6 +25,7 @@ from fl_mcp.session import FLSession, create_session
 from fl_mcp.session import lifecycle as lifecycle_mod
 from fl_mcp.session import link as link_mod
 from fl_mcp.session.link import ControlLink
+from fl_mcp.template import template_path
 
 
 @pytest.fixture(autouse=True)
@@ -255,7 +257,9 @@ def test_reload_reconnects_the_wire_fresh(monkeypatch, tmp_path):
     monkeypatch.setattr(link_mod, "FL_BOOT_TIMEOUT_SECONDS", 0.0)  # no FL to settle on
     old = FakeControl(hello=HELLO)
     fresh = FakeControl(hello=HELLO)
-    session, _ = make_session(control=old, transport=FakeSpool(), project=tmp_path / "agent.flp")
+    project = tmp_path / "agent.flp"
+    shutil.copyfile(template_path(), project)
+    session, _ = make_session(control=old, transport=FakeSpool(), project=project)
     session.link._control_factory = lambda: fresh
     session.link._last_recycle = 12345.0
 

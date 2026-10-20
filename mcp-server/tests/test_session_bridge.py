@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 import math
 import os
+import shutil
 import time
 from pathlib import Path
 from types import SimpleNamespace
@@ -28,6 +29,7 @@ from session_fakes import (
 )
 
 from fl_mcp import errors, flp
+from fl_mcp.contract import FLLicense
 from fl_mcp.core.router import route
 from fl_mcp.ops import notes as ops_notes
 from fl_mcp.schemas import Note, SpoolResponse, Target
@@ -42,6 +44,7 @@ from fl_mcp.session.detect import (
     read_heartbeat,
 )
 from fl_mcp.session.notes import BridgeLane, FileLane
+from fl_mcp.template import template_path
 
 PING_OK = SpoolResponse(id=0, ok=True, op="ping")
 BRIDGE_OK = SpoolResponse(id=0, ok=True, op="add_notes", notes_written=999)  # 999: a lying echo
@@ -60,6 +63,18 @@ def write_heartbeat(path: Path, *, unix_time: int | None = None, proto: int | No
         lines.append(f"abi={abi}")
     lines += ["pat=-1", "chan=-1"]
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def routed(session: FLSession) -> str:
+    """Which lane served the last write: the backend the session recorded."""
+    return session.store.writes[-1][4]
+
+
+def template_copy(tmp_path: Path) -> Path:
+    """A real copy of the session template, for writes that route to the file lane."""
+    path = tmp_path / "agent.flp"
+    shutil.copyfile(template_path(), path)
+    return path
 
 
 @pytest.fixture()
@@ -88,7 +103,7 @@ def selected_channel_control(channel: int = 0) -> FakeControl:
 def project_flp(monkeypatch, tmp_path, *, ppq=192, file_notes=2):
     """The flp seams the bridge path touches: ppq for the stamp, notes_at for
     the readback. write_notes raises - the bridge path must never file-write."""
-    monkeypatch.setattr(flp, "read", lambda path: SimpleNamespace(ppq=ppq, notes=[]))
+    monkeypatch.setattr(flp, "read", lambda path: SimpleNamespace(ppq=ppq, notes=[], channels=()))
     monkeypatch.setattr(
         flp,
         "notes_at",
@@ -114,20 +129,20 @@ def test_fresh_heartbeat_and_matching_channel_routes_bridge(monkeypatch, tmp_pat
     spool = FakeSpool(responses={"ping": PING_OK, "add_notes": BRIDGE_OK})
     session, store = make_session(control=selected_channel_control(0), transport=spool, project=project)
 
-    receipt = session.write_notes(TARGET, NOTES, "merge")
+    result = session.write_notes(TARGET, NOTES, "merge")
 
-    assert receipt.backend == "bridge"
+    assert routed(session) == "bridge"
     # Ping-gated first use, then the spooled command carries the project's
     # ppq; the consumer never guesses.
     assert spool.sent == [
         ("ping", {}),
         ("add_notes", {"target": TARGET, "notes": NOTES, "mode": "merge", "ppq": 192}),
     ]
-    # Readback-only: the count comes from the file read, NEVER the echo (999).
-    assert receipt.confirmed_notes == 2
+    # A licensed FL saved, so the total is the saved file's readback, NEVER the echo (999).
+    assert result.total == 2
     # Recorded against the spool command id, and FL was never reloaded (the
     # write landed live; a reload would destroy it).
-    assert store.writes == [(TARGET, NOTES, "merge", "bridge", 2)]
+    assert store.writes[0][3:] == ("merge", "bridge", 2)
     assert no_reload == []
 
 
@@ -152,11 +167,11 @@ def test_bridge_clear_spools_clear_notes(monkeypatch, tmp_path, bridge_env, no_r
     )
     session, store = make_session(control=selected_channel_control(0), transport=spool, project=project)
 
-    receipt = session.clear_notes(TARGET)
+    result = session.clear_notes(TARGET)
 
-    assert receipt.backend == "bridge" and receipt.confirmed_notes == 0
+    assert result.total == 0
     assert spool.sent == [("ping", {}), ("clear_notes", {"target": TARGET})]
-    assert store.writes == [(TARGET, [], "replace", "bridge", 2)]
+    assert store.writes[0][2:] == ([], "replace", "bridge", 2)
     assert no_reload == []
 
 
@@ -165,10 +180,11 @@ def test_stale_heartbeat_routes_project_write(monkeypatch, tmp_path, bridge_env,
     monkeypatch.setattr(flp, "write_notes", lambda path, notes, *, pattern, channel, mode: list(notes))
     spool = FakeSpool()
     session, _ = make_session(
-        control=selected_channel_control(0), transport=spool, project=tmp_path / "agent.flp"
+        control=selected_channel_control(0), transport=spool, project=template_copy(tmp_path)
     )
 
-    assert session.write_notes(TARGET, NOTES, "merge").backend == "project-write"
+    session.write_notes(TARGET, NOTES, "merge")
+    assert routed(session) == "project-write"
     assert spool.sent == [], "a dead bridge must never receive commands"
 
 
@@ -187,7 +203,7 @@ def test_stale_heartbeat_refuses_a_session_write_before_the_bridge_timeout(
     session, _ = make_session(
         control=selected_channel_control(0),
         transport=spool,
-        project=tmp_path / "agent.flp",
+        project=template_copy(tmp_path),
         session_spool_root=tmp_path,
     )
 
@@ -197,8 +213,8 @@ def test_stale_heartbeat_refuses_a_session_write_before_the_bridge_timeout(
     # The producer hears the diagnosis (a loaded bridge whose GUI-thread tick
     # stopped: locked Mac, modal dialog), never "requires reopening the file".
     assert excinfo.value.category == "note_plane_unavailable"
-    assert "has not ticked" in excinfo.value.message
-    assert "screen is locked" in (excinfo.value.fix or "")
+    assert "stopped responding" in excinfo.value.message
+    assert "locked screen" in excinfo.value.fix
     assert excinfo.value.retryable is True
     assert spool.sent == []
     assert writes == []
@@ -215,7 +231,7 @@ def test_stale_heartbeat_with_fl_gone_is_not_blamed_on_the_gui_thread(
     session, _ = make_session(
         control=selected_channel_control(0),
         transport=FakeSpool(),
-        project=tmp_path / "agent.flp",
+        project=template_copy(tmp_path),
         session_spool_root=tmp_path,
     )
     with pytest.raises(errors.ToolError) as excinfo:
@@ -231,10 +247,11 @@ def test_unspoken_heartbeat_proto_routes_project_write(monkeypatch, tmp_path, br
     monkeypatch.setattr(flp, "write_notes", lambda path, notes, *, pattern, channel, mode: list(notes))
     spool = FakeSpool()
     session, _ = make_session(
-        control=selected_channel_control(0), transport=spool, project=tmp_path / "agent.flp"
+        control=selected_channel_control(0), transport=spool, project=template_copy(tmp_path)
     )
 
-    assert session.write_notes(TARGET, NOTES, "merge").backend == "project-write"
+    session.write_notes(TARGET, NOTES, "merge")
+    assert routed(session) == "project-write"
     assert spool.sent == []
 
 
@@ -245,7 +262,8 @@ def test_matching_target_channel_skips_selection(monkeypatch, tmp_path, bridge_e
     spool = FakeSpool(responses={"ping": PING_OK, "add_notes": BRIDGE_OK})
     session, _ = make_session(control=control, transport=spool, project=project)
 
-    assert session.write_notes(TARGET, NOTES, "merge").backend == "bridge"
+    session.write_notes(TARGET, NOTES, "merge")
+    assert routed(session) == "bridge"
     assert "select_channels" not in [op for op, _ in control.calls]
 
 
@@ -270,7 +288,8 @@ def test_mismatched_target_selects_and_verifies_before_bridge_write(
     spool = FakeSpool(responses={"ping": PING_OK, "add_notes": BRIDGE_OK})
     session, _ = make_session(control=control, transport=spool, project=project)
 
-    assert session.write_notes(TARGET, NOTES, "merge").backend == "bridge"
+    session.write_notes(TARGET, NOTES, "merge")
+    assert routed(session) == "bridge"
     assert [op for op, _ in control.calls].count("select_channels") == 1
     assert session.caps.bridge_channel == 0
     assert [op for op, _ in spool.sent] == ["ping", "add_notes"]
@@ -307,9 +326,10 @@ def test_wire_down_cannot_prove_the_channel_routes_project_write(
     with the wire down nobody can - correctness beats liveness."""
     monkeypatch.setattr(flp, "write_notes", lambda path, notes, *, pattern, channel, mode: list(notes))
     spool = FakeSpool(responses={"ping": PING_OK})
-    session, _ = make_session(control=None, transport=spool, project=tmp_path / "agent.flp")
+    session, _ = make_session(control=None, transport=spool, project=template_copy(tmp_path))
 
-    assert session.write_notes(TARGET, NOTES, "merge").backend == "project-write"
+    session.write_notes(TARGET, NOTES, "merge")
+    assert routed(session) == "project-write"
     assert spool.sent == []
 
 
@@ -331,7 +351,8 @@ def test_profile_live_channel_targeting_widens_eligibility(monkeypatch, tmp_path
         profile=LIVE_PROFILE,
     )
 
-    assert session.write_notes(TARGET, NOTES, "merge").backend == "bridge"
+    session.write_notes(TARGET, NOTES, "merge")
+    assert routed(session) == "bridge"
 
 
 # -- the breaker at the session seam ------------------------------------------
@@ -347,7 +368,8 @@ def test_prewarm_closes_the_breaker_before_the_first_bridge_write(
     session.prewarm()
 
     assert session.breaker.closed is True
-    assert session.write_notes(TARGET, NOTES, "merge").backend == "bridge"
+    session.write_notes(TARGET, NOTES, "merge")
+    assert routed(session) == "bridge"
     assert [op for op, _ in spool.sent] == ["ping", "add_notes"]
 
 
@@ -355,13 +377,14 @@ def test_failed_prewarm_keeps_the_first_write_on_the_file_lane(monkeypatch, tmp_
     monkeypatch.setattr(flp, "write_notes", lambda path, notes, *, pattern, channel, mode: list(notes))
     spool = FakeSpool()  # no ping response: the bridge cannot prove its pumps run
     session, _ = make_session(
-        control=selected_channel_control(0), transport=spool, project=tmp_path / "agent.flp"
+        control=selected_channel_control(0), transport=spool, project=template_copy(tmp_path)
     )
 
     session.prewarm()
 
     assert session.breaker.closed is False
-    assert session.write_notes(TARGET, NOTES, "merge").backend == "project-write"
+    session.write_notes(TARGET, NOTES, "merge")
+    assert routed(session) == "project-write"
     assert [op for op, _ in spool.sent] == ["ping", "ping"]
 
 
@@ -372,18 +395,17 @@ def test_failed_ping_falls_back_to_file_for_that_call(monkeypatch, tmp_path, bri
     monkeypatch.setattr(flp, "write_notes", lambda path, notes, *, pattern, channel, mode: list(notes))
     spool = FakeSpool()  # no scripted ping response: the round trip times out
     session, store = make_session(
-        control=selected_channel_control(0), transport=spool, project=tmp_path / "agent.flp"
+        control=selected_channel_control(0), transport=spool, project=template_copy(tmp_path)
     )
 
-    receipt = session.write_notes(TARGET, NOTES, "merge")
+    session.write_notes(TARGET, NOTES, "merge")
 
-    assert receipt.backend == "project-write"
     assert [op for op, _ in spool.sent] == ["ping"]
-    assert store.writes == [(TARGET, NOTES, "merge", "project-write", 0)]
+    assert store.writes[0][3:] == ("merge", "project-write", 0)
     assert session.breaker.closed is False
 
 
-def test_bridge_refusal_raises_and_records_nothing(monkeypatch, tmp_path, bridge_env, no_reload):
+def test_bridge_refusal_raises_and_records_nothing(monkeypatch, tmp_path, bridge_env, no_reload, caplog):
     project = project_flp(monkeypatch, tmp_path)
     spool = FakeSpool(
         responses={
@@ -393,8 +415,9 @@ def test_bridge_refusal_raises_and_records_nothing(monkeypatch, tmp_path, bridge
     )
     session, store = make_session(control=selected_channel_control(0), transport=spool, project=project)
 
-    with pytest.raises(WriteRejected, match="no plugin host"):
+    with caplog.at_level("WARNING"), pytest.raises(WriteRejected, match="refused the note edit"):
         session.write_notes(TARGET, NOTES, "merge")
+    assert any("no plugin host" in r.message for r in caplog.records), "the Bridge's reason is logged"
     assert store.writes == []
     assert no_reload == []
     assert session.breaker.closed is False, "a refusal re-arms the ping gate"
@@ -430,50 +453,96 @@ def test_bridge_timeout_with_fl_dead_is_a_hard_failure(monkeypatch, tmp_path, br
     assert "unacked" in session.breaker.last_hard_fingerprint
 
 
-def test_bridge_readback_failure_is_unconfirmed(monkeypatch, tmp_path, bridge_env, no_reload):
-    monkeypatch.setattr(flp, "read", lambda path: SimpleNamespace(ppq=96))
+def test_failed_saved_readback_leaves_the_acknowledgement_as_confirmation(
+    monkeypatch, tmp_path, bridge_env, no_reload
+):
+    """A torn project file: FL's acknowledgement still confirms a replace;
+    a merge onto a baseline nobody can read has no knowable total."""
+    monkeypatch.setattr(flp, "read", lambda path: SimpleNamespace(ppq=96, channels=(), notes=()))
 
     def torn(path, pattern, channel):
         raise flp.FlpError("torn header")
 
     monkeypatch.setattr(flp, "notes_at", torn)
     spool = FakeSpool(responses={"ping": PING_OK, "add_notes": BRIDGE_OK})
-    session, _ = make_session(
-        control=selected_channel_control(0), transport=spool, project=tmp_path / "agent.flp"
-    )
+    project = tmp_path / "agent.flp"
+    project.write_bytes(b"FLhd")
+    session, store = make_session(control=selected_channel_control(0), transport=spool, project=project)
 
-    receipt = session.write_notes(TARGET, NOTES, "merge")
+    other = Target(pattern=2, channel=0)
+    assert session.write_notes(other, NOTES, "merge").total is None
+    assert store.writes == [], "an unknowable state is never recorded as truth"
+    assert session.write_notes(TARGET, NOTES, "replace").total == 1
+    assert session.read_notes(TARGET) == NOTES
 
-    assert receipt.backend == "bridge"
-    assert receipt.unconfirmed_write is True
-    assert receipt.confirmed_notes is None
-    assert receipt.delta.is_empty()
 
-
-def test_bridge_write_with_missing_project_is_unconfirmed_once(monkeypatch, tmp_path, bridge_env, no_reload, caplog):
-    """A launcher path can precede its .flp: Bridge writes still land, but no file is read."""
-    missing_project = tmp_path / "not-created.flp"
+def test_trial_bridge_write_is_confirmed_by_the_acknowledgement(monkeypatch, tmp_path, bridge_env, no_reload):
+    """Live runs bdea5e90/b5343990: a trial FL cannot save, and every write
+    came back "unconfirmed" while reads showed the stale file. The ack is the
+    confirmation: the write is definitive, recorded, and read back at once."""
+    project = project_flp(monkeypatch, tmp_path, file_notes=1)
+    saves: list[bool] = []
+    monkeypatch.setattr(notes_mod.controls, "save_project", lambda session: saves.append(True))
     spool = FakeSpool(responses={"ping": PING_OK, "add_notes": BRIDGE_OK})
     session, _ = make_session(
-        control=selected_channel_control(0), transport=spool, project=missing_project
+        control=selected_channel_control(0), transport=spool, project=project, fl_license=FLLicense.TRIAL
     )
-    monkeypatch.setattr(flp, "read", lambda *_args: pytest.fail("missing project must not be opened"))
-    monkeypatch.setattr(flp, "notes_at", lambda *_args: pytest.fail("missing project must not be opened"))
 
-    with caplog.at_level("WARNING"):
-        first = session.write_notes(TARGET, NOTES, "merge")
-        second = session.write_notes(TARGET, NOTES, "merge")
+    merged = session.write_notes(TARGET, [Note(key=64, start=1, length=1)], "merge")
 
-    assert [first.confirmed_notes, second.confirmed_notes] == [None, None]
-    assert first.unconfirmed_write and second.unconfirmed_write
-    assert sum("receipts are unconfirmed" in r.message for r in caplog.records) == 1
-    assert not any(r.exc_info for r in caplog.records)
+    assert merged.total == 2, "the file's one note plus the merged one"
+    assert [n.key for n in session.read_notes(TARGET)] == [60, 64]
+    replaced = session.write_notes(TARGET, NOTES, "replace")
+    assert (replaced.wrote, replaced.total) == (1, 1)
+    assert session.read_notes(TARGET) == NOTES
+    assert saves == [], "a trial FL is never asked to save"
+
+
+def test_a_save_after_the_write_supersedes_the_record(monkeypatch, tmp_path, bridge_env, no_reload):
+    """A person's Cmd+S (or any save of FL's live state) postdates the record:
+    the saved project then holds what FL has, their edits included."""
+    project = project_flp(monkeypatch, tmp_path, file_notes=1)
+    spool = FakeSpool(responses={"ping": PING_OK, "add_notes": BRIDGE_OK})
+    session, _ = make_session(
+        control=selected_channel_control(0), transport=spool, project=project, fl_license=FLLicense.TRIAL
+    )
+    three = [Note(key=60 + i, start=i, length=1) for i in range(3)]
+
+    session.write_notes(TARGET, three, "replace")
+    assert session.read_notes(TARGET) == three, "the record is newer than the loaded project"
+
+    later = time.time() + 5
+    os.utime(project, (later, later))
+    assert len(session.read_notes(TARGET)) == 1, "the newer save wins"
+
+
+def test_bridge_writes_without_a_project_file_count_from_this_sessions_writes(
+    monkeypatch, tmp_path, bridge_env, no_reload
+):
+    """No .flp to read (create_session leaves project None): Bridge writes
+    still land, a replace is fully known, and later reads count from it."""
+    monkeypatch.setattr(flp, "read", lambda *_args: pytest.fail("no project must be opened"))
+    snapshot = {"tempo": 100000, "ppq": 96, "playing": False, "current_pattern": 1, "mixer": [],
+                "channels": [{"idx": 0, "name": "Kick", "vol": 0.78, "pan": 0.0, "muted": False}]}
+    control = FakeControl(
+        hello=HELLO, handlers={"channels.selectedChannel": lambda args: 0, "state.snapshot": lambda args: snapshot}
+    )
+    spool = FakeSpool(responses={"ping": PING_OK, "add_notes": BRIDGE_OK})
+    session, _ = make_session(control=control, transport=spool, project=None)
+
+    first = session.write_notes(TARGET, NOTES, "replace")
+    second = session.write_notes(TARGET, [Note(key=64, start=1, length=1)], "merge")
+
+    assert [first.total, second.total] == [1, 2]
+    assert second.track == "Kick"
+    assert [n.key for n in session.read_notes(TARGET)] == [60, 64]
+    assert session.write_notes(Target(pattern=2, channel=0), NOTES, "merge").total is None
 
 
 def test_bridge_rewrite_saves_live_readback_for_replace_and_merge(
     monkeypatch, tmp_path, bridge_env, no_reload
 ):
-    """Regression: existing live notes must not leak into a stale receipt.
+    """Regression: existing live notes must not leak into a stale result.
 
     The fake bridge response deliberately lies about its count. Each save
     exposes FL's post-write state: replace removes the legacy note, then merge
@@ -482,10 +551,10 @@ def test_bridge_rewrite_saves_live_readback_for_replace_and_merge(
     existing = FlpNote(position=0, length=96, key=48, channel=0, velocity=100, pan=64)
     replaced = FlpNote(position=0, length=96, key=60, channel=0, velocity=100, pan=64)
     merged = FlpNote(position=96, length=96, key=64, channel=0, velocity=100, pan=64)
-    post_save = [[replaced], [replaced, merged]]
+    post_save = [[existing], [replaced], [replaced, merged]]
     saves: list[int] = []
-    monkeypatch.setattr(flp, "read", lambda path: SimpleNamespace(ppq=96))
-    monkeypatch.setattr(flp, "notes_at", lambda path, pattern, channel: post_save[len(saves) - 1])
+    monkeypatch.setattr(flp, "read", lambda path: SimpleNamespace(ppq=96, channels=()))
+    monkeypatch.setattr(flp, "notes_at", lambda path, pattern, channel: post_save[len(saves)])
     monkeypatch.setattr(notes_mod.controls, "save_project", lambda session: saves.append(1))
     spool = FakeSpool(responses={"ping": PING_OK, "add_notes": BRIDGE_OK})
     session, _ = make_session(
@@ -498,11 +567,10 @@ def test_bridge_rewrite_saves_live_readback_for_replace_and_merge(
     }
     session.observer._baseline_mtime_ns = session.project.stat().st_mtime_ns
 
-    replaced_receipt = session.write_notes(TARGET, [Note(key=60, start=0, length=1)], "replace")
-    merged_receipt = session.write_notes(TARGET, [Note(key=64, start=1, length=1)], "merge")
+    replaced_result = session.write_notes(TARGET, [Note(key=60, start=0, length=1)], "replace")
+    merged_result = session.write_notes(TARGET, [Note(key=64, start=1, length=1)], "merge")
 
-    assert [replaced_receipt.confirmed_notes, merged_receipt.confirmed_notes] == [1, 2]
-    assert not replaced_receipt.unconfirmed_write and not merged_receipt.unconfirmed_write
+    assert [replaced_result.total, merged_result.total] == [1, 2]
     assert saves == [1, 1]
     assert session.observer._baseline[(1, 0)] == [
         Note(key=60, start=0, length=1, velocity=100 / 127, pan=0.5),
@@ -518,7 +586,7 @@ def test_ppq_stamp_falls_back_to_hello_when_file_unreadable(monkeypatch, tmp_pat
     monkeypatch.setattr(flp, "notes_at", lambda path, pattern, channel: [])
     spool = FakeSpool(responses={"ping": PING_OK, "add_notes": BRIDGE_OK})
     session, _ = make_session(
-        control=selected_channel_control(0), transport=spool, project=tmp_path / "agent.flp"
+        control=selected_channel_control(0), transport=spool, project=template_copy(tmp_path)
     )
 
     session.write_notes(TARGET, NOTES, "merge")

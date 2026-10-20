@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import time
 from collections.abc import Callable
 from typing import TYPE_CHECKING
@@ -14,10 +15,13 @@ from fl_mcp.fl.process import bridge_pid, fl_process_running, pid_alive
 from fl_mcp.profile import installed_bridge_build, profile_gate
 from fl_mcp.schemas import Channel, DoctorReport, PlaneStatus, SessionState
 
+from . import controls
 from .detect import BRIDGE_HEARTBEAT_FILE, BRIDGE_HEARTBEAT_FRESH_SECONDS, read_heartbeat
 
 if TYPE_CHECKING:
     from .facade import FLSession
+
+log = logging.getLogger(__name__)
 
 # state.snapshot arrives as ~10 chunked SysEx frames (measured ~4.8KB on a
 # 5-channel/18-track project, addendum A5); give bigger projects headroom.
@@ -31,7 +35,7 @@ def channel_names(session: FLSession) -> list[Channel]:
     resolution. File-first because targets are file coordinates and the
     file answers instantly mid-reload; the live snapshot is the fallback
     for sessions without a project."""
-    if session.project is not None:
+    if session.project is not None and session.project.is_file():
         proj = flp.read(session.project)
         return [
             Channel(
@@ -43,6 +47,19 @@ def channel_names(session: FLSession) -> list[Channel]:
             for c in proj.channels
         ]
     return session.snapshot().channels
+
+
+def tempo(session: FLSession) -> float | None:
+    """FL's tempo now - THE tempo read behind fl.tempo and get_scene.
+
+    Live from FL whenever FL is connected, so a set_tempo shows at once;
+    the project's saved tempo only when FL is not connected (a trial FL
+    never saves, so its file keeps the tempo it opened with)."""
+    if session._ensure_hello() is not None and session.control is not None:
+        return controls._live_int(session, "mixer.getCurrentTempo") / 1000.0
+    if session.project is not None and session.project.is_file():
+        return flp.read(session.project).tempo
+    return None
 
 
 def snapshot(session: FLSession) -> SessionState:
@@ -78,13 +95,11 @@ def snapshot(session: FLSession) -> SessionState:
             ],
         )
 
+    log.warning("snapshot: the control wire is not connected and no project file is configured")
     raise errors.ToolError(
         "control_plane_unavailable",
-        "No backend can read session state: the control plane is not connected and "
-        "no project file is configured.",
-        "Launch FL Studio with the FLMCP controller script assigned, or run "
-        "`python -m fl_mcp.make_agent_project` / set FLMCP_AGENT_PROJECT to a .flp "
-        "the agent may read.",
+        "FL Studio is not answering, so its state cannot be read right now.",
+        "FL may still be starting. Retry in a moment.",
         retryable=True,
     )
 
@@ -274,12 +289,7 @@ def _note_plane_status(*, clock: Callable[[], float] = time.time) -> PlaneStatus
             stream = _stream_detail(heartbeat)
             if stream is not None:
                 return PlaneStatus(connected=True, detail=f"spool at {root}; {stream}")
-    return PlaneStatus(
-        connected=True,
-        detail=f"spool at {roots[0]} (the bridge lane routes automatically "
-        "when its heartbeat proves it live and the selected channel matches; "
-        "otherwise targeted notes apply via the project file)",
-    )
+    return PlaneStatus(connected=True, detail=f"spool at {roots[0]}")
 
 
 def _stream_detail(heartbeat: object) -> str | None:

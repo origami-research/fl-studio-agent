@@ -16,6 +16,7 @@ plug in the same way.
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Sequence
 from dataclasses import dataclass
 from enum import Flag, auto
@@ -24,6 +25,8 @@ from typing import Any, Literal, Protocol
 from fl_mcp import errors
 
 from .provenance import CapabilityTag, register
+
+log = logging.getLogger(__name__)
 
 # -- the capability algebra ---------------------------------------------------
 
@@ -148,25 +151,20 @@ class _DeadEvidence:
 # -- the lane -------------------------------------------------------------------
 
 
-class Receipt(Protocol):
-    """What a lane CONFIRMED (readback, never echo - docs/27 §1)."""
-
-    backend: str
-
-
 class Lane(Protocol):
     """One way to apply operations (docs/30 Surface 3).
 
     ``can_serve`` is a PURE predicate over (op, evidence) - route() may
     evaluate it under hypothetical evidence to learn what the service rests
     on. ``apply`` RAISES on failure; it never silently falls through - the
-    router decides fallback BEFORE the call (docs/27 §1)."""
+    router decides fallback BEFORE the call (docs/27 §1). It returns what
+    it CONFIRMED (readback, never echo); each op's glue function types that."""
 
     name: str  # "project-write", "bridge"
 
     def can_serve(self, op: Operation, caps: Capabilities) -> bool: ...
 
-    def apply(self, op: Operation, data: Sequence[Any]) -> Receipt: ...
+    def apply(self, op: Operation, data: Sequence[Any]) -> Any: ...
 
 
 # What each lane KIND provides, stated once so a concrete lane's can_serve is
@@ -203,14 +201,16 @@ class CapabilityUnavailable(errors.ToolError):
 
     def __init__(self, op: Operation, caps: Capabilities) -> None:
         requires = ", ".join(c.name.lower() for c in Capability if c.name and c in op.requires)
+        # The operator's story stays in the log; the model hears what it can do.
+        log.warning(
+            "no lane can serve %s (requires: %s; bridge %s)",
+            op.kind, requires, "live" if caps.bridge_live else "down",
+        )
         super().__init__(
             # errors.py's "no backend can apply this change" category.
             "note_plane_unavailable",
-            f"No lane can serve {op.kind} (requires: {requires}; "
-            f"bridge {'live' if caps.bridge_live else 'down'}).",
-            "Run fl_doctor. A LIVE op needs FL running with the Bridge healthy and its "
-            "breaker closed; FILE/TARGETED ops need a project file the agent may rewrite "
-            "(python -m fl_mcp.make_agent_project, or FLMCP_AGENT_PROJECT).",
+            f"FL Studio cannot take this edit ({op.kind.replace('_', ' ')}) right now.",
+            "FL may be busy or still starting. Retry in a moment.",
             retryable=True,
         )
 

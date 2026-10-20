@@ -26,16 +26,15 @@ from fl_mcp.audio import AudioAnalysis, _read_wav, analyze_wav
 from .flp import Effect
 from .schemas import (
     AutomationPoint,
-    AutomationReceipt,
+    AutomationResult,
     Channel,
     ChannelLevels,
     Note,
     NoteWriteMode,
     PluginParam,
-    RenderReceipt,
     SessionState,
     Target,
-    WriteReceipt,
+    WriteResult,
 )
 from .session import FLSession, create_session
 
@@ -97,36 +96,37 @@ def connect(session: FLSession | None = None) -> FL:
 
 
 class FL:
-    """The project. Reads return confirmed state (store or live FL, labeled)."""
+    """The live FL Studio session. Edits apply immediately; reads return what FL has now."""
 
     def __init__(self, session: FLSession) -> None:
         self._session = session
 
     @property
     def channels(self) -> list[Channel]:
+        """The channels in FL now."""
         return self._session.snapshot().channels
 
     @property
     def tempo(self) -> float:
-        tempo = self._session.snapshot().tempo_bpm
+        """FL's tempo now, in BPM."""
+        tempo = self._session.tempo()
         if tempo is None:
             raise errors.control_plane_unavailable("mixer.getCurrentTempo", 0.0)
         return tempo
 
     def track(self, name_or_index: str | int, pattern: int = 1) -> Track:
-        """Resolve by index, exact name, then unambiguous substring; raises
-        ChannelNotFound listing the real names otherwise. This is THE place
-        channel names resolve - Target is ints-only past this boundary.
-        ``pattern`` targets that pattern's roll (B3-3: PatNum is honored live).
-
-        Resolution reads the PROJECT FILE, not the live snapshot: targets are
-        file coordinates (that is what write_notes patches), and the file
-        answers instantly while FL may be mid-boot right after a reload
-        (dogfood A12: the live read raced every post-write reload)."""
+        """A channel's piano roll in ``pattern``: by index, exact name, or a unique
+        part of the name. Raises ChannelNotFound listing the channels otherwise.
+        """
+        # THE place channel names resolve - Target is ints-only past this
+        # boundary. Resolution reads the PROJECT FILE, not the live snapshot: targets are
+        # file coordinates (that is what write_notes patches), and the file
+        # answers instantly while FL may be mid-boot right after a reload
+        # (dogfood A12: the live read raced every post-write reload).
         try:
             args = _TrackArgs(name_or_index=name_or_index, pattern=pattern)
         except ValidationError as exc:
-            raise errors.invalid_argument("fl.track", str(exc)) from exc
+            raise errors.invalid_argument("fl.track", str(exc)) from None
         channels = self._session.channel_names()
         listing = ", ".join(f"{c.index}: {c.name}" for c in channels) or "(none)"
         if isinstance(args.name_or_index, int):
@@ -144,39 +144,33 @@ class FL:
         raise ChannelNotFound(f"No channel matching {args.name_or_index!r}. Channels: {listing}")
 
     def set_tempo(self, bpm: float) -> float:
-        """Returns FL's own read-back, never the request echo."""
+        """Set FL's tempo now; returns the tempo FL reports afterwards."""
         return self._session.set_tempo(bpm)
 
     def add_effect(self, insert_index: int, plugin_name: str) -> tuple[Effect, ...]:
-        """Add a proven native effect to a mixer insert and return file readback.
-
-        The current FL-authored evidence supports only Fruity Parametric EQ 2
-        on the empty Master slot 0. Other placements or plugins refuse before
-        synthesizing opaque plugin state.
+        """Add Fruity Parametric EQ 2 to the empty Master slot 0 (the one supported
+        placement); returns the effects now on that insert. Outside a match only.
         """
         try:
             args = _AddEffectArgs(insert_index=insert_index, plugin_name=plugin_name)
         except ValidationError as exc:
-            raise errors.invalid_argument("fl.add_effect", str(exc)) from exc
+            raise errors.invalid_argument("fl.add_effect", str(exc)) from None
         return self._session.add_effect(args.insert_index, args.plugin_name)
 
     def render(self, output: str | Path) -> Path:
-        """Play the live arrangement once and record the mix to ``output``.
+        """Play the song once and record the mix to ``output``: how to hear your edits.
 
-        This takes about the arrangement's live length and requires FL's audio output.
+        It takes about the song's length in real time.
         """
-        return self.render_receipt(output).path
-
-    def render_receipt(self, output: str | Path) -> RenderReceipt:
-        """``render``, plus the live span it recorded (see RenderSpan)."""
-        return self._session.render_wav(Path(output))
+        return self._session.render_wav(Path(output)).path
 
     def export_offline(self, output: str | Path) -> Path:
-        """Boot a second FL and export, about a minute, for offline deliverables."""
+        """Export the saved song with a second FL (about a minute). Licensed FL only; use render to listen."""
         return self._session.export_offline(Path(output))
 
     def save(self) -> None:
-        """Save the live project to its .flp (live-verified 2026-09-02)."""
+        """Save the song to disk. Never needed for edits to take effect or be heard:
+        they are live in FL immediately. A trial FL Studio cannot save."""
         self._session.save_project()
 
     def analyze(self, wav: str | Path) -> AudioAnalysis:
@@ -194,26 +188,26 @@ class FL:
         self._session.stop()
 
     def undo(self) -> None:
+        """Undo FL's last action. Notes this session wrote still read as written:
+        write the track again to set its notes for certain."""
         self._session.undo()
 
     def snapshot(self) -> SessionState:
+        """FL's tempo, transport and channels now."""
         return self._session.snapshot()
 
     def file_edit(self) -> AbstractContextManager[None]:
-        """Batch development-mode file-lane edits into ONE FL reload.
+        """Batch edits that rewrite the saved song (automation, effects) into one FL reopen.
 
-        Session mode refuses this context before writing: it never kills FL
-        during a match. Use the live note and control lanes there.
-
-        Each file-lane op rewrites the .flp and normally reloads FL - a full
-        restart. Group them so the reload happens once::
+        Outside a match only: during a match FL is never reopened, so this raises.
+        Notes, tempo, parameters and levels apply live and need no batching::
 
             with fl.file_edit():
                 fl.track("Bass").set_automation(points)
-                fl.track("Kick").set_channel_levels(volume=0.9)
-
-        Live ops (notes over the bridge, tempo/params/levels over the wire)
-        are unaffected - they never reload."""
+                fl.add_effect(0, "Fruity Parametric EQ 2")
+        """
+        # Each file-lane op rewrites the .flp and normally reloads FL - a full
+        # restart; the batch reloads once on exit. Session mode refuses it.
         return self._session.file_edit()
 
 
@@ -224,47 +218,52 @@ class Track:
         try:
             args = _TargetArgs(channel=channel, pattern=pattern)
         except ValidationError as exc:
-            raise errors.invalid_argument("Track", str(exc)) from exc
+            raise errors.invalid_argument("Track", str(exc)) from None
         self.channel = args.channel
         self.pattern = args.pattern
         self._fl = fl
 
-    def write(self, notes: Sequence[NoteInput], mode: NoteWriteMode = "merge") -> WriteReceipt:
-        """Applies NOW. Raises on failure; the receipt carries the confirmed
-        note count and backend, or ``unconfirmed_write=True`` when FL accepted
-        a bridge command but its live state could not be read back."""
+    def write(self, notes: Sequence[NoteInput], mode: NoteWriteMode = "merge") -> WriteResult:
+        """Write notes to this track now; "merge" adds them, "replace" swaps the pattern's notes.
+
+        Returns how many notes were written and the track's total afterwards.
+        The notes are in FL when this returns: read them back with notes(),
+        hear them with fl.render(). Raises if FL did not take the edit.
+        """
         try:
             normalized_notes = _NOTES.validate_python(notes)
             normalized_mode = _WRITE_MODE.validate_python(mode)
         except ValidationError as exc:
-            raise errors.invalid_argument("Track.write", str(exc)) from exc
+            raise errors.invalid_argument("Track.write", str(exc)) from None
         target = Target(pattern=self.pattern, channel=self.channel)
         return self._fl._session.write_notes(target, normalized_notes, normalized_mode)
 
-    def clear(self) -> WriteReceipt:
+    def clear(self) -> WriteResult:
+        """Remove every note from this track's pattern."""
         target = Target(pattern=self.pattern, channel=self.channel)
         return self._fl._session.clear_notes(target)
 
     def notes(self) -> list[Note]:
+        """The notes on this track's pattern as FL has them now, including your writes."""
         target = Target(pattern=self.pattern, channel=self.channel)
         return self._fl._session.read_notes(target)
 
-    def set_automation(self, points: Sequence[AutomationPointInput]) -> AutomationReceipt:
-        """Replace this channel's existing clip and return the saved-file readback."""
+    def set_automation(self, points: Sequence[AutomationPointInput]) -> AutomationResult:
+        """Replace this channel's existing automation clip. Outside a match only."""
         try:
             normalized_points = _AUTOMATION_POINTS.validate_python(points)
         except ValidationError as exc:
-            raise errors.invalid_argument("Track.set_automation", str(exc)) from exc
+            raise errors.invalid_argument("Track.set_automation", str(exc)) from None
         return self._fl._session.set_automation(self.channel, normalized_points)
 
     def set_channel_levels(
         self, *, volume: float | None = None, pan: float | None = None, pitch: int | None = None
     ) -> ChannelLevels:
-        """Set this channel's levels through the file lane and return its readback."""
+        """Set this channel's volume (0..1), pan (-1..1) and/or pitch (semitones); returns FL's values."""
         try:
             args = _ChannelLevelsArgs(volume=volume, pan=pan, pitch=pitch)
         except ValidationError as exc:
-            raise errors.invalid_argument("Track.set_channel_levels", str(exc)) from exc
+            raise errors.invalid_argument("Track.set_channel_levels", str(exc)) from None
         if args.volume is None and args.pan is None and args.pitch is None:
             raise errors.invalid_argument(
                 "Track.set_channel_levels", "pass volume, pan, and/or pitch"
@@ -274,23 +273,21 @@ class Track:
         )
 
     def params(self, query: str | None = None, limit: int = 40) -> list[PluginParam]:
-        """The channel generator's live parameters (E2: Sytrus exposes 597).
-        ``query`` filters by substring; live-only - raises when FL is not
-        connected, because plugin state has no honest file representation."""
+        """The instrument's parameters with their current values (normalized 0..1).
+        ``query`` filters by name substring; ``limit`` caps how many are listed."""
         try:
             args = _ParamsArgs(query=query, limit=limit)
         except ValidationError as exc:
-            raise errors.invalid_argument("Track.params", str(exc)) from exc
+            raise errors.invalid_argument("Track.params", str(exc)) from None
         return self._fl._session.plugin_params(self.channel, query=args.query, limit=args.limit)
 
     def set_param(self, param: int | str, value: float | str) -> PluginParam:
-        """Set by normalized value, or a model-backed display/option value.
-
-        ``str`` values require captured metadata for this exact plugin. Returns
-        FL's READBACK; FL may quantize to the control's own grid.
+        """Set a parameter by index or name to a normalized value (0..1), or to a
+        display/option string where the plugin's labels are known. Returns FL's
+        value, which may snap to the control's own steps.
         """
         try:
             args = _ParamSetArgs(param=param, value=value)
         except ValidationError as exc:
-            raise errors.invalid_argument("Track.set_param", str(exc)) from exc
+            raise errors.invalid_argument("Track.set_param", str(exc)) from None
         return self._fl._session.set_plugin_param(self.channel, args.param, args.value)

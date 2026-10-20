@@ -5,14 +5,35 @@ These are the stable contracts still cited by code and tests. They are not a sep
 ## 1. Lane
 
 ```python
-class NoteLane(Protocol):
-    name: Literal["project-write", "bridge"]
-    def write(self, target: Target, notes: list[Note], mode: NoteWriteMode) -> WriteReceipt: ...
-    def clear(self, target: Target) -> WriteReceipt: ...
-    def read(self, target: Target) -> list[Note]: ...
+class Lane(Protocol):
+    name: str  # "project-write", "bridge" - recorded in the action log, never shown to the model
+    def can_serve(self, op: Operation, caps: Capabilities) -> bool: ...
+    def apply(self, op: Operation, data: Sequence[Note]) -> list[Note] | None: ...
 ```
 
-Receipts report confirmed readback, never an echo. A lane failure raises; the router decides fallback before the call.
+`apply` returns the target's notes as FL confirmed them, never an echo.
+A lane failure raises; the router decides fallback before the call.
+The facade turns the confirmed notes into the model-facing `WriteResult(wrote, track, pattern, mode, total)`.
+
+## 1a. Note state
+
+FL has no live note getter.
+PROBE_VERDICT Q1 (2026-08-30) found none, and a re-check on 2026-10-18 found nothing newer: the Bridge's `wp_*` getters read time, context, colors, and project info, and the controller's FL API has no piano-roll read.
+So the engine's record of applied writes is the source of truth for the notes it wrote.
+
+- **Write.** FL acknowledging a Bridge command means FL applied it, so the acknowledged edit is the confirmed state at that boundary: `replace` leaves exactly the sent notes, and `merge` leaves the track's known notes plus the sent ones.
+  Where FL can save (licensed FL with a readable project), the lane saves and re-reads the project instead, which is stronger evidence.
+  A refusal or a timeout raises and records nothing.
+- **Record.** The store keeps that state per (pattern, channel), in memory for this session only: a later server must not inherit claims about an FL that has since been reset.
+  The action log stays durable history.
+- **Read.** `read_notes`, `get_notes`, `get_scene`, and `Track.notes()` overlay the record on the project FL loaded.
+  A target this session never wrote reads from the project, which still describes it.
+  A save of the project newer than a record (FL saving its live state, including a person's Cmd+S) supersedes that record, because the save holds everything FL had then.
+  Tempo is read live from FL whenever FL is connected.
+- **Unknown.** A merge onto a track whose earlier notes the session never saw (no project to read) has no knowable total: the result says `total=None` and nothing is recorded.
+- **Known gap.** `fl.undo()` reverts FL without telling the record, so a note read after an undo can be stale.
+
+Model-facing text (tool descriptions, results, error messages and fixes, SDK docstrings) never names these internals; `tests/test_clean_traces.py` replays the live runs that motivated this and scans every such string.
 
 ## 2. Capabilities and router
 
@@ -94,6 +115,6 @@ FL push callbacks cover transport, position, focus/selection, context, and routi
 
 - No feature flags for lane choice.
 - Version facts come from the profile or data-derived detection.
-- Boundaries verify by readback.
+- Boundaries verify by readback; where no readback exists, FL's acknowledgement is the confirmation and the session records it.
 - Lanes raise; routers decide.
 - Superseded mechanisms are deleted when the canonical path ships.

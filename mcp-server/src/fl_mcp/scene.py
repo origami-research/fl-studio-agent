@@ -26,11 +26,13 @@ no key at all.
 
 from __future__ import annotations
 
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 from . import flp
+from .schemas import Note
 
 
 @dataclass(frozen=True)
@@ -44,8 +46,23 @@ class SceneRow:
     velocity: int = 100  # 0-127
 
 
-def _read_rows(project: Path) -> list[SceneRow]:
-    """Load rows via the v2 flp reader (ticks -> beats). The test seam."""
+def rows_from_notes(notes: Mapping[tuple[int, int], Sequence[Note]]) -> list[SceneRow]:
+    """Rows from per-(pattern, channel) notes in tool units - the session's live view."""
+    return [
+        SceneRow(
+            midi=n.key,
+            channel=channel,
+            start_beat=n.start,
+            length_beats=n.length,
+            velocity=round(n.velocity * 127),
+        )
+        for (_pattern, channel), group in sorted(notes.items())
+        for n in group
+    ]
+
+
+def project_rows(project: Path) -> list[SceneRow]:
+    """Rows decoded from a saved project file (ticks -> beats)."""
     proj = flp.read(Path(project))
     return [
         SceneRow(
@@ -57,6 +74,7 @@ def _read_rows(project: Path) -> list[SceneRow]:
         )
         for n in proj.notes
     ]
+
 
 @dataclass(frozen=True)
 class ClipRow:
@@ -259,11 +277,13 @@ def _playlist_digest(clips: list[ClipRow]) -> tuple[dict[str, Any], str]:
 
 def summarize(
     project: Path,
+    rows: Sequence[SceneRow],
     channel_names: dict[int, str] | None = None,
     tempo: float | None = None,
 ) -> dict[str, Any]:
-    """Analyse the project into something a model can reason about directly."""
-    rows = _read_rows(project)
+    """Analyse ``rows`` (and ``project``'s playlist and automation) into
+    something a model can reason about directly. Named channels without
+    notes are listed too, so an empty channel reads as empty, not missing."""
     names = channel_names or {}
     playlist, playlist_line = _playlist_digest(_read_clips(project))
     automations = _read_automations(project)
@@ -289,20 +309,26 @@ def summarize(
         for a in automations
     ]
 
+    by_channel: dict[int, list] = {}
+    for row in rows:
+        by_channel.setdefault(row.channel, []).append(row)
+    empty = [{"index": i, "name": name, "notes": 0} for i, name in sorted(names.items()) if i not in by_channel]
+    empty_line = (
+        ["no notes: " + ", ".join(f"{c['name']} (ch{c['index']})" for c in empty)] if empty else []
+    )
+
     if not rows:
         return {
             "tempo": tempo,
             "key": None,
-            "channels": [],
+            "channels": empty,
             "note_count": 0,
             "playlist": playlist,
             **automation_section,
-            "summary": f"tempo {tempo:g}, no notes yet" if tempo else "empty project",
+            "summary": "\n".join(
+                [f"tempo {tempo:g}, no notes yet" if tempo else "no notes yet", *empty_line]
+            ),
         }
-
-    by_channel: dict[int, list] = {}
-    for row in rows:
-        by_channel.setdefault(row.channel, []).append(row)
 
     weighted: dict[int, int] = {}
     for row in rows:
@@ -331,6 +357,7 @@ def summarize(
         lines.append(f"tempo {tempo:g}")
     lines.append(f"key {key} (confidence: {confidence})")
     lines += [s.describe() for s in summaries]
+    lines += empty_line
     lines.append(playlist_line)
     lines += automation_lines
 
@@ -352,12 +379,13 @@ def summarize(
                 **({"root_motion": s.root_motion} if s.root_motion else {}),
             }
             for s in summaries
-        ],
+        ]
+        + empty,
         "summary": "\n".join(lines),
     }
 
 
-def notes_detail(project: Path, channel: int | None = None) -> list[dict[str, Any]]:
+def notes_detail(rows: Sequence[SceneRow], channel: int | None = None) -> list[dict[str, Any]]:
     """Note-level data, for the cases that genuinely need it."""
 
     return [
@@ -367,8 +395,8 @@ def notes_detail(project: Path, channel: int | None = None) -> list[dict[str, An
             "midi": r.midi,
             "start": r.start_beat,
             "length": r.length_beats,
-            "velocity": round(r.velocity / 127, 2),  # FlpNote velocity is 0-127
+            "velocity": round(r.velocity / 127, 2),  # SceneRow velocity is 0-127
         }
-        for r in _read_rows(project)
+        for r in rows
         if channel is None or r.channel == channel
     ]

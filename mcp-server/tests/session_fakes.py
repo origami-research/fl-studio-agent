@@ -12,13 +12,13 @@ use them - importing fixtures trips F811 when they appear as parameters.
 
 from __future__ import annotations
 
+import tempfile
 import time
 from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import Any, cast
 
 from fl_mcp import errors
-from fl_mcp.clock import now
 from fl_mcp.contract import FLLicense
 from fl_mcp.controller_version import CONTROLLER_PROTOCOL_VERSION
 from fl_mcp.core.carriers.wire import MidiControl
@@ -30,7 +30,6 @@ from fl_mcp.schemas import (
     HelloEvent,
     Note,
     NoteDelta,
-    NoteSetRef,
     PluginParamModel,
     RenderSpan,
     SpoolCommand,
@@ -160,22 +159,17 @@ class FakeSpool:
         return outcome
 
 
-class FakeStore:
+class FakeStore(Store):
+    """The real Store (on a throwaway root) that also lists each write it was
+    handed, so tests can assert what the session recorded and by which lane."""
+
     def __init__(self) -> None:
-        self.writes: list[tuple[Target, list[Note], str, str, int]] = []
-        self.ground_truths: list[tuple[Target, list[Note]]] = []
-        self.preloaded: dict[tuple[int, int], list[Note]] = {}
+        super().__init__("fake", root=Path(tempfile.mkdtemp(prefix="flmcp-fake-store-")))
+        self.writes: list[tuple[Target, list[Note], list[Note], str, str, int]] = []
 
-    def record_write(self, target, notes, mode, backend, command_id) -> NoteDelta:
-        self.writes.append((target, notes, mode, backend, command_id))
-        return NoteDelta(added=list(notes))
-
-    def notes_at(self, target) -> list[Note] | None:
-        return self.preloaded.get((target.pattern, target.channel))
-
-    def mark_ground_truth(self, target, notes) -> NoteSetRef:
-        self.ground_truths.append((target, notes))
-        return NoteSetRef(id="gt", target=target, provenance="project", as_of=now())
+    def record_write(self, target, before, after, mode, backend, command_id) -> NoteDelta:
+        self.writes.append((target, before, after, mode, backend, command_id))
+        return super().record_write(target, before, after, mode, backend, command_id)
 
 
 def make_session(

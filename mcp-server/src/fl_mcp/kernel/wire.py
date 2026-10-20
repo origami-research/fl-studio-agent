@@ -38,6 +38,7 @@ SessionMethod = Literal[
     "set_tempo",
     "snapshot",
     "stop",
+    "tempo",
     "undo",
     "write_notes",
 ]

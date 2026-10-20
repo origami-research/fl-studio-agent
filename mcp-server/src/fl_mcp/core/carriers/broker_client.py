@@ -61,8 +61,8 @@ class BrokerControl:
         if pid is None:
             raise ToolError(
                 "control_plane_unavailable",
-                f"No response to {op!r}: this session's FL has not published its bridge port file under {self._session_spool_root}.",
-                "Wait for FL to finish loading its project, then retry.",
+                f"FL Studio did not answer {op!r}: it has not finished starting.",
+                "Wait for FL to finish loading, then retry.",
                 retryable=True,
             )
         conn = self._connect()

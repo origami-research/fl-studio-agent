@@ -1,9 +1,14 @@
-"""What we believe about the project: shadow score + action log. Pure data.
+"""This session's note state and its durable action log. Pure data.
 
-LANE K implements this module (docs/21), merging the essentials of v1's
-records/actions/hashing/diff. Content-addressed note sets (hash of the
-canonical form), a structured delta per write, provenance labels (shadow claim
-vs project ground truth). No FL IO here - the session feeds it, tools read it.
+FL has no live note getter (PROBE_VERDICT Q1, re-checked 2026-10-18), so the
+note state of a target this session wrote is the state FL confirmed for that
+write; every other target is whatever the project held when FL loaded it,
+and a later save of the project (FL saving its live state) supersedes the
+records it postdates (docs/27 "Note state"). The state is in memory on purpose: it describes the
+FL session this server drives, and a later server must not inherit claims
+about an FL that has since been reset. The action log (before/after hashes
+and the structured delta per write) is durable history. No FL IO here - the
+session feeds it, tools read it.
 """
 
 from __future__ import annotations
@@ -12,6 +17,7 @@ import hashlib
 import json
 import threading
 from collections.abc import Iterator
+from datetime import datetime
 from pathlib import Path
 
 from fl_mcp.clock import now
@@ -23,7 +29,6 @@ from .schemas import (
     Note,
     NoteDelta,
     NoteMove,
-    NoteSetRef,
     NoteWriteMode,
     Target,
 )
@@ -41,51 +46,39 @@ _MIN_MOVE_CONFIDENCE = 0.001
 
 
 class Store:
-    """Durable per-project memory. Thread-safe: MCP dispatches concurrently."""
+    """Per-session note state plus a durable action log. Thread-safe: MCP dispatches concurrently."""
 
     def __init__(self, project_key: str, root: Path | None = None) -> None:
         self.project_key = project_key
         self.root = root if root is not None else paths.project_dir(project_key)
-        self.shadow_path = self.root / "shadow.json"
         self.actions_path = self.root / "actions.jsonl"
         self._lock = threading.Lock()
-        self._by_id: dict[str, list[Note]] = {}
-        self._targets: dict[str, NoteSetRef] = {}
-        if self.shadow_path.is_file():
-            # A corrupt shadow file raises here, loudly. Reading it as "empty"
-            # would silently forget every claim this store ever recorded.
-            raw = json.loads(self.shadow_path.read_text(encoding="utf-8"))
-            self._by_id = {
-                ref_id: [Note.model_validate(n) for n in notes]
-                for ref_id, notes in raw["note_sets"].items()
-            }
-            self._targets = {
-                key: NoteSetRef.model_validate(ref) for key, ref in raw["targets"].items()
-            }
+        self._notes: dict[tuple[int, int], tuple[datetime, list[Note]]] = {}
 
     def record_write(
         self,
         target: Target,
-        notes: list[Note],
+        before: list[Note],
+        after: list[Note],
         mode: NoteWriteMode,
         backend: str,
         command_id: int,
     ) -> NoteDelta:
-        """Apply the write to the shadow score, append the ActionEntry with
-        before/after hashes, return the structured delta."""
+        """Make ``after`` the target's state, then append the ActionEntry.
+
+        The state is set first: the write already landed in FL, so a failing
+        log append (raised to the caller) must not leave reads stale."""
+        delta = diff_notes(before, after)
         with self._lock:
-            before = self._notes_at_locked(target) or []
-            after = [*before, *notes] if mode == "merge" else list(notes)
-            delta = diff_notes(before, after)
-            ref = self._store_locked(target, after, provenance="shadow")
+            self._notes[(target.pattern, target.channel)] = (now(), list(after))
             entry = ActionEntry(
                 id=command_id,
-                op="clear_notes" if not notes and mode == "replace" else "add_notes",
+                op="clear_notes" if not after and mode == "replace" else "add_notes",
                 target=target,
                 mode=mode,
                 backend=backend,
                 before_hash=noteset_hash(before),
-                after_hash=ref.id,
+                after_hash=noteset_hash(after),
                 delta=delta,
                 summary=(
                     f"+{len(delta.added)} -{len(delta.removed)} ~{len(delta.moved)}"
@@ -96,30 +89,21 @@ class Store:
             with self.actions_path.open("a", encoding="utf-8") as f:
                 f.write(entry.model_dump_json(by_alias=True))
                 f.write("\n")
-            self._save_locked()
-            return delta
+        return delta
 
-    def notes_at(self, target: Target) -> list[Note] | None:
-        with self._lock:
-            notes = self._notes_at_locked(target)
-            return list(notes) if notes is not None else None
+    def notes_at(self, target: Target, saved_at: datetime | None = None) -> list[Note] | None:
+        """The target's state if this session wrote it after ``saved_at`` (the
+        project's last save, which holds everything FL had then), else None."""
+        return self.written(saved_at).get((target.pattern, target.channel))
 
-    def ref_at(self, target: Target) -> NoteSetRef | None:
+    def written(self, saved_at: datetime | None = None) -> dict[tuple[int, int], list[Note]]:
+        """Every (pattern, channel) this session wrote after ``saved_at``, with its state."""
         with self._lock:
-            return self._targets.get(f"{target.pattern}:{target.channel}")
-
-    def notes_by_id(self, ref_id: str) -> list[Note] | None:
-        """Old note sets stay addressable by hash after the target moves on."""
-        with self._lock:
-            notes = self._by_id.get(ref_id)
-            return list(notes) if notes is not None else None
-
-    def mark_ground_truth(self, target: Target, notes: list[Note]) -> NoteSetRef:
-        """Record a project read-back: provenance 'project', not 'shadow'."""
-        with self._lock:
-            ref = self._store_locked(target, list(notes), provenance="project")
-            self._save_locked()
-            return ref
+            return {
+                key: list(notes)
+                for key, (at, notes) in self._notes.items()
+                if saved_at is None or at > saved_at
+            }
 
     def history(self) -> Iterator[ActionEntry]:
         with self._lock:
@@ -131,30 +115,6 @@ class Store:
     def last_action(self) -> ActionEntry | None:
         entries = list(self.history())
         return entries[-1] if entries else None
-
-    def _notes_at_locked(self, target: Target) -> list[Note] | None:
-        ref = self._targets.get(f"{target.pattern}:{target.channel}")
-        return self._by_id.get(ref.id) if ref is not None else None
-
-    def _store_locked(self, target: Target, notes: list[Note], provenance: str) -> NoteSetRef:
-        ref = NoteSetRef(id=noteset_hash(notes), target=target, provenance=provenance, as_of=now())
-        self._by_id[ref.id] = notes
-        self._targets[f"{target.pattern}:{target.channel}"] = ref
-        return ref
-
-    def _save_locked(self) -> None:
-        payload = {
-            "schema_version": SCHEMA_VERSION,
-            "note_sets": {
-                ref_id: [n.model_dump(mode="json") for n in notes]
-                for ref_id, notes in self._by_id.items()
-            },
-            "targets": {key: ref.model_dump(mode="json") for key, ref in self._targets.items()},
-        }
-        self.root.mkdir(parents=True, exist_ok=True)
-        tmp = self.shadow_path.with_name(self.shadow_path.name + ".tmp")
-        tmp.write_text(json.dumps(payload, separators=(",", ":")), encoding="utf-8")
-        tmp.replace(self.shadow_path)
 
 
 # -- pure functions ---------------------------------------------------------------
@@ -188,19 +148,6 @@ def diff_notes(old: list[Note], new: list[Note]) -> NoteDelta:
         removed=[n for n in removed if note_hash(n) not in paired_from],
         moved=moved,
     )
-
-
-def apply_delta(notes: list[Note], delta: NoteDelta) -> list[Note]:
-    """A new list with the delta applied; the input is untouched."""
-    by_hash = {note_hash(n): n for n in notes}
-    for note in delta.removed:
-        by_hash.pop(note_hash(note), None)
-    for move in delta.moved:
-        by_hash.pop(note_hash(move.from_), None)
-        by_hash[note_hash(move.to)] = move.to
-    for note in delta.added:
-        by_hash[note_hash(note)] = note
-    return list(by_hash.values())
 
 
 # -- the one helper ----------------------------------------------------------------

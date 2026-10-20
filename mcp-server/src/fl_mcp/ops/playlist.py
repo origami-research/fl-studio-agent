@@ -12,7 +12,6 @@ from fl_mcp.core.router import (
     CapabilityTag,
     Mode,
     Operation,
-    Receipt,
     Routable,
     Target,
     route,
@@ -30,7 +29,7 @@ WRITE = Operation.spec(
 )
 
 
-def write_playlist(session: Routable, clips: Sequence[Any], mode: Mode = "replace") -> Receipt:
+def write_playlist(session: Routable, clips: Sequence[Any], mode: Mode = "replace") -> Any:
     # Arrangement-level: clips carry their own track/position, so the target
     # names no finer coordinate.
     op = WRITE.at(Target(), mode=mode)

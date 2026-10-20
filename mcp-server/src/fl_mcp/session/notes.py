@@ -1,4 +1,4 @@
-"""The note lanes (docs/30 Surface 3 concrete Lanes).
+"""The note lanes (docs/30 Surface 3 concrete Lanes) and the session's note state.
 
 - **FileLane ("project-write")**: raw surgery via flpkit + an FL reload. The
   only lane that honors a pattern/channel target by construction - the
@@ -7,9 +7,14 @@
   receipts on writes that all landed in one roll (dogfood, docs/21 A12).
 - **BridgeLane ("bridge")**: live targeted notes via the native Bridge plugin
   over the transport. Eligible per call from evidence only - its ``can_serve``
-  is the one-liner over ``core.router.bridge_provides``; when a readable project
-  exists it saves FL's live state before parsing its receipt, never trusting a
-  lagging file or echo.
+  is the one-liner over ``core.router.bridge_provides``.
+
+Note state (docs/27 "Note state"): FL has no live note getter, so a lane
+returns the target's notes as FL now has them - the file lane re-reads the
+bytes it wrote; the bridge lane takes FL's acknowledgement of the command as
+the confirmation and, when FL can save, re-reads the saved project instead.
+That state is recorded in the store, and ``read_notes``/``all_notes`` overlay
+it on the project FL loaded, so a read always returns what FL has now.
 
 Routing itself is ``core.router.route`` via ``fl_mcp.ops.notes`` - no note
 branch lives here. A lane failure RAISES; it never silently falls through - a
@@ -23,6 +28,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Sequence
+from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, Literal
 
 from fl_mcp import errors, flp
@@ -36,7 +42,7 @@ from fl_mcp.core.router import (
 )
 from fl_mcp.errors import NotePlaneUnavailable, WriteRejected
 from fl_mcp.fl.process import bridge_pid, fl_process_running, pid_alive
-from fl_mcp.schemas import Note, NoteDelta, NoteWriteMode, Target, WriteReceipt
+from fl_mcp.schemas import Note, Target
 
 from . import controls
 from .detect import (
@@ -79,49 +85,90 @@ def _refuse_if_session_bridge_stalled(session: FLSession) -> None:
     if not pid_alive(bridge_pid(root)):
         return  # FL itself is gone; the liveness path owns that story
     age = int(heartbeat.age)
+    log.warning("the Bridge is loaded but has not ticked for %d s; FL's GUI thread is not pumping", age)
     raise errors.ToolError(
         "note_plane_unavailable",
-        f"The FL MCP Bridge is loaded but has not ticked for {age} s: FL's GUI thread "
-        "is not pumping, so this session's notes cannot be written right now.",
-        "On macOS this happens while the screen is locked; unlock the Mac, or bring FL "
-        "out of a modal dialog, then retry. Run fl_doctor to confirm the note plane.",
+        f"FL Studio has stopped responding to note edits for {age} s, so these notes were not written.",
+        "FL is blocked, usually by a dialog or a locked screen. Wait a moment and retry the write.",
         retryable=True,
     )
 
 
+def _saved_at(session: FLSession) -> datetime | None:
+    """When the project was last written. FL saving its live state (or the
+    file lane writing it) makes the file current for every target, so it
+    supersedes every record it postdates - including a person's Cmd+S."""
+    if session.project is None:
+        return None
+    try:
+        return datetime.fromtimestamp(session.project.stat().st_mtime, tz=timezone.utc)
+    except OSError:
+        return None
+
+
+def known_notes(session: FLSession, target: Target) -> list[Note] | None:
+    """The target's notes as FL has them now: this session's confirmed write,
+    else the project (FL loaded it, or saved it since, so it holds the rest).
+    None when neither exists: the session never saw that track's notes."""
+    written = session.store.notes_at(target, _saved_at(session))
+    if written is not None:
+        return written
+    if session.project is None or not session.project.is_file():
+        return None
+    try:
+        return _project_notes(session, target)
+    except (flp.FlpError, OSError):
+        # A project caught mid-save by FL reads torn; that is "unknown", not a crash.
+        log.exception("could not read pattern %d channel %d from %s", target.pattern, target.channel, session.project)
+        return None
+
+
 def read_notes(session: FLSession, target: Target) -> list[Note]:
-    """Store first (with provenance); project-file readback on demand."""
-    stored = session.store.notes_at(target)
-    if stored is not None:
-        return stored
-    if session.project is not None:
-        return session.file_lane.read(target)
-    raise NotePlaneUnavailable(
-        f"Nothing recorded for pattern {target.pattern} channel {target.channel} and "
-        "no project file is configured to read from."
-    )
+    notes = known_notes(session, target)
+    if notes is None:
+        raise NotePlaneUnavailable(
+            f"The notes on pattern {target.pattern}, channel {target.channel} cannot be read: "
+            "this session has no copy of the song FL opened.",
+            fix="Write this track with mode='replace'; reading it back afterwards works.",
+            retryable=False,
+        )
+    return notes
 
 
-def _record(
+def all_notes(session: FLSession) -> dict[tuple[int, int], list[Note]]:
+    """Every (pattern, channel)'s notes as FL has them now: the project FL
+    loaded, with each target this session wrote replaced by its confirmed state."""
+    by_target: dict[tuple[int, int], list[Note]] = {}
+    if session.project is not None and session.project.is_file():
+        project = flp.read(session.project)
+        for note in project.notes:
+            by_target.setdefault((note.pattern, note.channel), []).append(_tool_note(note, project.ppq))
+    by_target.update(session.store.written(_saved_at(session)))
+    return by_target
+
+
+def _commit(
     session: FLSession,
-    target: Target,
-    notes: list[Note],
-    mode: NoteWriteMode,
+    op: Operation,
+    before: list[Note],
+    after: list[Note],
     backend: str,
     command_id: int,
-) -> NoteDelta:
-    """Write-through to the store for an edit that ALREADY landed.
+) -> list[Note]:
+    """Make ``after`` - the state FL confirmed - this session's state of the target.
 
-    The edit was applied and verified before this runs, so a recording
-    failure must not fail the write - but it must not be silent either
-    (found live: a store-path bug made every applied write report a
-    traceback). Logged with the traceback; the receipt then carries an
-    empty delta, meaning "applied, history unavailable"."""
+    The store sets the state before it appends to the durable action log, so
+    a failing log append cannot leave reads stale; that failure must not fail
+    an edit FL already applied, and it is logged with its traceback (found
+    live: a store-path bug made every applied write report a traceback)."""
     try:
-        return session.store.record_write(target, notes, mode, backend, command_id)
+        session.store.record_write(op.target, before, after, op.mode, backend, command_id)
     except Exception:
-        log.exception("write-through recording failed after the %s backend applied", backend)
-        return NoteDelta()
+        log.exception("action-log append failed after the %s backend applied", backend)
+    # The agent-echo suppressant (docs/27 §5): report the confirmed state so
+    # the observer's next diff never attributes this write to the user.
+    session.observer.record_agent_write(op.target, after)
+    return after
 
 
 class FileLane:
@@ -136,38 +183,25 @@ class FileLane:
     def can_serve(self, op: Operation, caps: Capabilities) -> bool:
         return op.kind in NOTE_KINDS and satisfied(op.requires, FILE_PROVIDES)
 
-    def apply(self, op: Operation, data: Sequence[Note]) -> WriteReceipt:
+    def apply(self, op: Operation, data: Sequence[Note]) -> list[Note]:
         # clear_notes IS a replace-with-empty write (ops/notes.py sends
         # data=[] and mode="replace"); one path serves both kinds.
         session = self._session
-        target, notes, mode = op.target, list(data), op.mode
-        what = op.kind.replace("_", " ")
-        fix = "The project file was restored by the readback check failing; inspect the .flp and retry."
+        target = op.target
         _refuse_if_session_bridge_stalled(session)
+        session._prepare_file_write()
+        before = known_notes(session, target) or []
         try:
-            session._prepare_file_write()
-            written = flp.write_notes(
-                session.project, notes, pattern=target.pattern, channel=target.channel, mode=mode
-            )
+            flp.write_notes(session.project, list(data), pattern=target.pattern, channel=target.channel, mode=op.mode)
         except flp.FlpError as exc:
-            raise WriteRejected(f"project-file {what} did not verify: {exc}", fix=fix) from exc
-        delta = _record(session, target, notes, mode, self.name, NO_COMMAND_ID)
-        # The agent-echo suppressant (docs/27 §5): report the READBACK so the
-        # observer's next diff never attributes this write to the user.
-        session.observer.record_agent_write(target, written)
+            log.warning("project-file %s did not verify: %s", op.kind, exc)
+            raise WriteRejected(
+                f"The notes could not be written: {exc}",
+                fix="The song was left unchanged. Retry the write.",
+            ) from exc
+        after = _commit(session, op, before, _project_notes(session, target), self.name, NO_COMMAND_ID)
         session._reload_fl()
-        return WriteReceipt(
-            backend=self.name,
-            target=target,
-            confirmed_notes=len(written),
-            delta=delta,
-        )
-
-    def read(self, target: Target) -> list[Note]:
-        session = self._session
-        notes = _project_notes(session, target)
-        session.store.mark_ground_truth(target, notes)
-        return notes
+        return after
 
 
 class BridgeLane:
@@ -179,13 +213,14 @@ class BridgeLane:
 
     def __init__(self, session: FLSession) -> None:
         self._session = session
-        self._warned_missing_file_readback = False
 
     def can_serve(self, op: Operation, caps: Capabilities) -> bool:
         return op.kind in NOTE_KINDS and satisfied(op.requires, bridge_provides(op, caps))
 
-    def apply(self, op: Operation, data: Sequence[Note]) -> WriteReceipt:
+    def apply(self, op: Operation, data: Sequence[Note]) -> list[Note] | None:
+        session = self._session
         target, notes, mode = op.target, list(data), op.mode
+        before = known_notes(session, target)
         self._select_target_channel(target.channel)
         if op.kind == "write_notes":
             # add_notes is the bridge wire's write vocabulary; clear_notes is
@@ -193,26 +228,20 @@ class BridgeLane:
             command_id = self._send("add_notes", target=target, notes=notes, mode=mode, ppq=self._ppq())
         else:
             command_id = self._send("clear_notes", target=target)
-        readback = self._live_readback(target, command_id)
-        if readback is None:
-            return WriteReceipt(
-                backend=self.name,
-                target=target,
-                confirmed_notes=None,
-                unconfirmed_write=True,
-                delta=NoteDelta(),
-            )
-        delta = _record(self._session, target, notes, mode, self.name, command_id)
-        # The persisted post-write state is authoritative over the shadow
-        # update above, whose purpose is the durable action log and delta.
-        self._session.store.mark_ground_truth(target, readback)
-        self._session.observer.record_agent_write(target, readback)
-        return WriteReceipt(
-            backend=self.name,
-            target=target,
-            confirmed_notes=len(readback),
-            delta=delta,
-        )
+        # FL acknowledged the command, so it applied it: the acknowledged edit
+        # IS the confirmed state at this boundary (FHD_AddNotesToPR has no
+        # getter). Where FL can save, its re-read save is stronger evidence.
+        after = self._saved_state(target, command_id)
+        if after is None and mode == "replace":
+            after = notes
+        elif after is None and before is not None:
+            after = [*before, *notes]
+        if after is None:
+            # A merge onto a track this session never saw: FL has the notes,
+            # but what else is on the track is unknown, so nothing is recorded.
+            log.info("bridge command %d merged onto an unknown baseline; state not recorded", command_id)
+            return None
+        return _commit(session, op, before or [], after, self.name, command_id)
 
     def _select_target_channel(self, target_channel: int | None) -> None:
         """Make the Bridge's selected-channel side effect match the target.
@@ -237,8 +266,8 @@ class BridgeLane:
                 raise errors.operation_unsafe("select_channels")
             raise errors.ToolError(
                 "fl_api_error",
-                f"FL Studio refused select_channels for channel {target_channel}: {detail}",
-                "Retry after FL finishes its current operation. No notes were sent to the Bridge.",
+                f"FL Studio would not select channel {target_channel}: {detail}. No notes were written.",
+                "Retry the write after FL finishes its current operation.",
                 retryable=True,
             )
         selected = _selected_channel(session.link)
@@ -247,15 +276,9 @@ class BridgeLane:
         actual = "an unknown channel" if selected is None else f"channel {selected}"
         raise errors.ToolError(
             "fl_api_error",
-            f"FL Studio is on {actual} after selecting channel {target_channel}; no notes were sent.",
-            "Retry after FL settles. The requested notes were not sent to the Bridge.",
+            f"FL Studio stayed on {actual} instead of channel {target_channel}, so no notes were written.",
+            "Retry the write after FL settles.",
             retryable=True,
-        )
-
-    def read(self, target: Target) -> list[Note]:
-        raise NotePlaneUnavailable(
-            "The bridge has no live note readback (PROBE_VERDICT Q1); notes are "
-            "read from the store or the project file."
         )
 
     def _send(self, op: str, **args: Any) -> int:
@@ -278,11 +301,10 @@ class BridgeLane:
                 raise
         if not resp.ok:
             session.breaker.record_soft_failure()
+            log.warning("the Bridge refused spool command %d (%s): %s", cmd.id, op, resp.err)
             raise WriteRejected(
-                f"the bridge refused spool command {cmd.id} ({op}): {resp.err}",
-                fix="Read bridge_status.txt / bridge_heartbeat.txt under the spool and "
-                "retry; the router falls back to project-write while the bridge is "
-                "unhealthy.",
+                "FL Studio refused the note edit, so nothing was written.",
+                fix="Retry the write.",
             )
         session.breaker.record_success()
         return cmd.id
@@ -300,44 +322,39 @@ class BridgeLane:
         hello = session._ensure_hello()
         return hello.ppq if hello is not None else None
 
-    def _live_readback(self, target: Target, command_id: int) -> list[Note] | None:
-        """Persist FL's live state, then parse that post-save state.
+    def _saved_state(self, target: Target, command_id: int) -> list[Note] | None:
+        """FL's saved post-write state of the target, when FL can save.
 
-        The Bridge response only proves that it dispatched its write; its
-        ``notes_written`` is an echo.  Saving through FL closes the live-to-
-        file boundary without a reload, so the parsed file is a readback of
-        the live session rather than the stale pre-write project.  A failure
-        here is a missing measurement after an applied command, not a failed
-        write, and must therefore produce an honest unconfirmed receipt.
+        Saving through FL closes the live-to-file boundary without a reload,
+        so the parsed file is a readback of the live session. A trial FL
+        cannot save, and a session without a readable project has nothing to
+        save to; both, and a failed save, leave FL's acknowledgement as the
+        confirmation (None here).
         """
-        if self._session.fl_license is FLLicense.TRIAL:
-            return None  # a trial never saves (controls.save_project): no post-write file exists
-        project = self._session.project
-        if project is None or not project.is_file():
-            if not self._warned_missing_file_readback:
-                self._warned_missing_file_readback = True
-                log.warning(
-                    "bridge commands are applied but receipts are unconfirmed: no readable project file is available for note readback"
-                )
+        session = self._session
+        project = session.project
+        if session.fl_license is FLLicense.TRIAL or project is None or not project.is_file():
             return None
         try:
-            controls.save_project(self._session)
-            return _project_notes(self._session, target)
-        except Exception:
-            log.exception("bridge command %d applied but live note readback is unavailable", command_id)
+            controls.save_project(session)
+            return _project_notes(session, target)
+        except (errors.ToolError, flp.FlpError, OSError):
+            log.exception("bridge command %d applied; its saved-state readback failed", command_id)
             return None
+
+
+def _tool_note(note: flp.FlpNote, ppq: int) -> Note:
+    """One decoded project note in tool units."""
+    return Note(
+        key=note.key,
+        start=note.position / ppq,
+        length=note.length / ppq,
+        velocity=min(note.velocity / 127, 1.0),
+        pan=note.pan / 128,
+    )
 
 
 def _project_notes(session: FLSession, target: Target) -> list[Note]:
-    """Decode one target from a project that is known current by its caller."""
+    """Decode one target from the project file."""
     ppq = flp.read(session.project).ppq
-    return [
-        Note(
-            key=n.key,
-            start=n.position / ppq,
-            length=n.length / ppq,
-            velocity=min(n.velocity / 127, 1.0),
-            pan=n.pan / 128,
-        )
-        for n in flp.notes_at(session.project, target.pattern, target.channel)
-    ]
+    return [_tool_note(n, ppq) for n in flp.notes_at(session.project, target.pattern, target.channel)]

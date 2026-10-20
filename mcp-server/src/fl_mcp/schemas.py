@@ -86,8 +86,7 @@ class NoteDelta(BaseModel):
 
 
 class RenderSpan(BaseModel):
-    """How long a render played, read from the live FL session just before the
-    capture (never from the saved .flp, which a trial FL never rewrites).
+    """How long a render played, read from FL live just before the recording.
 
     ``source`` is what FL plays in its current loop mode: the playlist
     (``"song"``) or the selected pattern (``"pattern"``, numbered by
@@ -111,19 +110,22 @@ class RenderReceipt(BaseModel):
     span: RenderSpan
 
 
-class WriteReceipt(BaseModel):
-    """What a write CONFIRMED (readback), never what was requested.
+class WriteResult(BaseModel):
+    """What one note write left in FL: the model-facing result of Track.write/clear.
 
-    ``unconfirmed_write`` means FL accepted a live bridge command but its
-    post-write state could not be read.  In that case ``confirmed_notes`` is
-    deliberately absent rather than a stale file count.
+    ``total`` is the session's confirmed state of that track's pattern after
+    the write (docs/27 "Note state"): FL acknowledged the edit, and where FL
+    can also save, the saved project was re-read to confirm it. It is None
+    only for a merge onto a track whose earlier notes this session never saw
+    (no copy of the song to count from). A write that FL refused or did not
+    acknowledge raises instead of returning this.
     """
 
-    backend: Backend
-    target: Target
-    confirmed_notes: int | None  # notes on this target in the saved/live state, post-write
-    unconfirmed_write: bool = False
-    delta: NoteDelta
+    wrote: int = Field(ge=0)  # notes this call wrote; 0 for a clear
+    track: str
+    pattern: int = Field(ge=1)
+    mode: NoteWriteMode
+    total: int | None = Field(ge=0)  # notes on this track in this pattern now
 
 
 class PluginParam(BaseModel):
@@ -188,10 +190,9 @@ class AutomationPoint(BaseModel):
     tension: float = Field(default=0.0, ge=-1, le=1)
 
 
-class AutomationReceipt(BaseModel):
-    """Automation points confirmed by reparsing the saved project file."""
+class AutomationResult(BaseModel):
+    """The automation clip's points as saved, read back after the write."""
 
-    backend: Literal["project-write"]
     channel: int = Field(ge=0)
     points: list[AutomationPoint]
 
@@ -429,15 +430,6 @@ class SessionState(BaseModel):
 
 
 # -- history ------------------------------------------------------------------
-
-
-class NoteSetRef(BaseModel):
-    """Content-addressed handle to a note set in the store."""
-
-    id: str
-    target: Target
-    provenance: Literal["shadow", "project"]
-    as_of: datetime
 
 
 class ActionEntry(BaseModel):

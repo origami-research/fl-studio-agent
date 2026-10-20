@@ -12,7 +12,6 @@ from fl_mcp.core.router import (
     Capability,
     CapabilityTag,
     Operation,
-    Receipt,
     Routable,
     Target,
     route,
@@ -30,6 +29,6 @@ SET = Operation.spec(
 )
 
 
-def set_mixer(session: Routable, track: int, values: Sequence[Any]) -> Receipt:
+def set_mixer(session: Routable, track: int, values: Sequence[Any]) -> Any:
     op = SET.at(Target(track=track))
     return route(op, session.caps, session.lanes, session.breaker).apply(op, values)

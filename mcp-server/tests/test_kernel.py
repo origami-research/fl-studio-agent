@@ -318,7 +318,7 @@ def test_fl_calls_round_trip_to_the_server_session(host, session):
     code = (
         "bass = fl.track('Bass')\n"
         "receipt = bass.write([Note(key='C4', start=0.0, length=1.0), Note(key=64, start=1.0, length=0.5)])\n"
-        "receipt.confirmed_notes, [n.key for n in bass.notes()], fl.set_tempo(128.0), fl.tempo"
+        "receipt.total, [n.key for n in bass.notes()], fl.set_tempo(128.0), fl.tempo"
     )
     assert host.run(code).result == "(2, [60, 64], 128.0, 128.0)"
     assert [n.key for n in session.read_notes(Target(pattern=1, channel=1))] == [60, 64]

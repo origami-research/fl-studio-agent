@@ -13,6 +13,7 @@ from dataclasses import dataclass
 import pytest
 
 from fl_mcp import scene
+from fl_mcp.schemas import Note
 
 
 @dataclass
@@ -96,25 +97,25 @@ def test_root_motion_is_capped_to_stay_compact():
 
 @pytest.fixture
 def fake_notes(monkeypatch):
-    """Patch the readers so these tests need no .flp on disk."""
+    """Patch the project readers so these tests need no .flp on disk; returns the rows."""
 
     def install(rows, clips=(), automations=()):
-        monkeypatch.setattr(scene, "_read_rows", lambda _path: rows)
         monkeypatch.setattr(scene, "_read_clips", lambda _path: list(clips))
         monkeypatch.setattr(scene, "_read_automations", lambda _path: list(automations))
+        return rows
 
     return install
 
 
 def test_summary_groups_by_channel_and_names_them(fake_notes):
-    fake_notes(
+    rows = fake_notes(
         [
             FakeRow(midi=60, channel=2, start_beat=0),
             FakeRow(midi=64, channel=2, start_beat=1),
             FakeRow(midi=40, channel=1, start_beat=0),
         ]
     )
-    out = scene.summarize("ignored.flp", {1: "Bass", 2: "Lead"}, tempo=128)
+    out = scene.summarize("ignored.flp", rows, {1: "Bass", 2: "Lead"}, tempo=128)
 
     assert out["note_count"] == 3
     assert [c["name"] for c in out["channels"]] == ["Bass", "Lead"]
@@ -123,13 +124,13 @@ def test_summary_groups_by_channel_and_names_them(fake_notes):
 
 
 def test_bass_register_gets_root_motion_and_lead_does_not(fake_notes):
-    fake_notes(
+    rows = fake_notes(
         [
             FakeRow(midi=40, channel=1, start_beat=0),   # E1 - bass register
             FakeRow(midi=72, channel=2, start_beat=0),   # C5 - well above it
         ]
     )
-    out = scene.summarize("ignored.flp", {1: "Bass", 2: "Lead"})
+    out = scene.summarize("ignored.flp", rows, {1: "Bass", 2: "Lead"})
     by_name = {c["name"]: c for c in out["channels"]}
 
     assert "root_motion" in by_name["Bass"]
@@ -137,10 +138,30 @@ def test_bass_register_gets_root_motion_and_lead_does_not(fake_notes):
 
 
 def test_empty_project_says_so_rather_than_failing(fake_notes):
-    fake_notes([])
-    out = scene.summarize("ignored.flp", {}, tempo=120)
+    rows = fake_notes([])
+    out = scene.summarize("ignored.flp", rows, {}, tempo=120)
     assert out["note_count"] == 0
     assert "no notes" in out["summary"]
+
+
+def test_named_channels_without_notes_read_as_empty_not_missing(fake_notes):
+    """Live run b5343990: an empty scene said channels=[], and the model
+    concluded "No channels found" and spent steps looking for them."""
+    rows = fake_notes([FakeRow(midi=36, channel=0)])
+    out = scene.summarize("ignored.flp", rows, {0: "808 Kick", 1: "808 Clap"}, tempo=100)
+    assert out["channels"][-1] == {"index": 1, "name": "808 Clap", "notes": 0}
+    assert "no notes: 808 Clap (ch1)" in out["summary"]
+
+    empty = scene.summarize("ignored.flp", fake_notes([]), {0: "808 Kick"}, tempo=100)
+    assert empty["channels"] == [{"index": 0, "name": "808 Kick", "notes": 0}]
+    assert empty["summary"] == "tempo 100, no notes yet\nno notes: 808 Kick (ch0)"
+
+
+def test_rows_from_notes_carries_each_channel_across_patterns():
+    rows = scene.rows_from_notes(
+        {(2, 1): [Note(key=40, start=4, length=1, velocity=1.0)], (1, 0): [Note(key=36, start=0, length=0.5)]}
+    )
+    assert [(r.channel, r.midi, r.start_beat, r.velocity) for r in rows] == [(0, 36, 0, 102), (1, 40, 4, 127)]
 
 
 def test_summary_is_far_cheaper_than_the_raw_notes(fake_notes):
@@ -149,8 +170,8 @@ def test_summary_is_far_cheaper_than_the_raw_notes(fake_notes):
         FakeRow(midi=60 + (i % 12), channel=0, start_beat=i * 0.25)
         for i in range(256)
     ]
-    fake_notes(rows)
-    out = scene.summarize("ignored.flp", {0: "Lead"}, tempo=130)
+    rows = fake_notes(rows)
+    out = scene.summarize("ignored.flp", rows, {0: "Lead"}, tempo=130)
 
     raw_chars = sum(len(f'{{"midi":{r.midi},"channel":{r.channel},'
                         f'"start_beat":{r.start_beat},"length_beats":{r.length_beats}}}')
@@ -172,7 +193,7 @@ def test_note_names_round_trip_the_octave_convention():
 
 
 def test_summary_lists_playlist_clips_when_few(fake_notes):
-    fake_notes(
+    rows = fake_notes(
         [FakeRow(midi=60, channel=0)],
         clips=[
             scene.ClipRow(track=2, start_beat=16.0, length_beats=16.0, pattern=2),
@@ -180,7 +201,7 @@ def test_summary_lists_playlist_clips_when_few(fake_notes):
             scene.ClipRow(track=3, start_beat=0.0, length_beats=8.0, channel=5),
         ],
     )
-    out = scene.summarize("ignored.flp", {}, tempo=120)
+    out = scene.summarize("ignored.flp", rows, {}, tempo=120)
     assert out["playlist"]["clip_count"] == 3
     assert out["playlist"]["tracks_used"] == 3
     assert out["playlist"]["span_beats"] == [0.0, 32.0]
@@ -197,22 +218,22 @@ def test_summary_digests_playlist_when_many(fake_notes):
         scene.ClipRow(track=1 + i % 7, start_beat=float(i * 4), length_beats=4.0, pattern=1)
         for i in range(scene.MAX_PLAYLIST_CLIPS_LISTED + 1)
     ]
-    fake_notes([FakeRow(midi=60, channel=0)], clips=many)
-    out = scene.summarize("ignored.flp", {})
+    rows = fake_notes([FakeRow(midi=60, channel=0)], clips=many)
+    out = scene.summarize("ignored.flp", rows, {})
     assert out["playlist"]["clip_count"] == len(many)
     assert "clips" not in out["playlist"]
 
 
 def test_summary_reports_empty_playlist_honestly(fake_notes):
-    fake_notes([FakeRow(midi=60, channel=0)], clips=[])
-    out = scene.summarize("ignored.flp", {})
+    rows = fake_notes([FakeRow(midi=60, channel=0)], clips=[])
+    out = scene.summarize("ignored.flp", rows, {})
     assert out["playlist"] == {"clip_count": 0}
     assert "playlist: empty" in out["summary"]
 
 
 def test_empty_project_still_carries_the_playlist(fake_notes):
-    fake_notes([], clips=[scene.ClipRow(track=1, start_beat=0.0, length_beats=4.0, pattern=1)])
-    out = scene.summarize("ignored.flp", {})
+    rows = fake_notes([], clips=[scene.ClipRow(track=1, start_beat=0.0, length_beats=4.0, pattern=1)])
+    out = scene.summarize("ignored.flp", rows, {})
     assert out["playlist"]["clip_count"] == 1
 
 
@@ -220,7 +241,7 @@ def test_empty_project_still_carries_the_playlist(fake_notes):
 
 
 def test_summary_reports_automation_channels(fake_notes):
-    fake_notes(
+    rows = fake_notes(
         [FakeRow(midi=60, channel=0)],
         automations=[
             scene.AutomationRow(
@@ -229,7 +250,7 @@ def test_summary_reports_automation_channels(fake_notes):
             )
         ],
     )
-    out = scene.summarize("ignored.flp", {})
+    out = scene.summarize("ignored.flp", rows, {})
     assert out["automations"] == [
         {
             "channel": 5,
@@ -243,5 +264,5 @@ def test_summary_reports_automation_channels(fake_notes):
 
 
 def test_summary_omits_automation_key_when_none(fake_notes):
-    fake_notes([FakeRow(midi=60, channel=0)])
-    assert "automations" not in scene.summarize("ignored.flp", {})
+    rows = fake_notes([FakeRow(midi=60, channel=0)])
+    assert "automations" not in scene.summarize("ignored.flp", rows, {})

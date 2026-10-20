@@ -125,7 +125,7 @@ def test_missing_bridge_port_file_is_an_actionable_error(broker, tmp_path):
     control = BrokerControl(empty, socket_path=sock)
     with pytest.raises(ToolError) as exc:
         control.send_request("ping", timeout=1.0)
-    assert "bridge port file" in exc.value.message
+    assert "not finished starting" in exc.value.message
 
 
 def test_second_broker_bind_yields_to_the_first(broker, tmp_path):

@@ -20,10 +20,10 @@ Capability acquisition is governed by the [capability acquisition model](33-capa
 
 | Capability | Coverage | Care | Path to close / note |
 |---|---|---|---|
-| Notes - read | file | T1 | **PROBE VERDICT: no readback getter exists** - reads stay file-based (Cmd+S + flpkit) |
+| Notes - read | session record + file | T1 | **PROBE VERDICT: no readback getter exists** (re-checked 2026-10-18) - reads overlay this session's confirmed writes on the project FL loaded ([docs/27 §1a](27-shared-surfaces.md#1a-note-state)) |
 | Notes - write, SELECTED target | **live** (bridge) | T1 | done 2026-08-29 (#65); FL-save-confirmed |
 | Notes - write, ANY PATTERN | **live** (bridge) | T1 | **PROBE VERDICT: PatNum honored** - bridge writes any pattern live (switches current pattern as a side effect). Retires reload for pattern-targeted notes |
-| Notes - write, ANY CHANNEL | **live** (bridge + wire select) | T1 | **LIVE:** before each mismatched write, select exactly the named channel over the control wire and verify `channels.selectedChannel()` before sending the Bridge command. Selection remains changed. When a readable project exists, FL saves then the server parses it for the receipt because FL exposes no live note getter. Without one, the Bridge acknowledgement still records an applied but unconfirmed write. |
+| Notes - write, ANY CHANNEL | **live** (bridge + wire select) | T1 | **LIVE:** before each mismatched write, select exactly the named channel over the control wire and verify `channels.selectedChannel()` before sending the Bridge command. Selection remains changed. FL exposes no live note getter, so the Bridge acknowledgement is the confirmation and the session records the result; a licensed FL with a readable project also saves and the server re-reads it. |
 | Observe user actions - transport/selection/routing | **push-capable** | T1 | **PROBE VERDICT: FL pushes SetPlaying/SongPosChanged/SetFocus/ContextInfoChanged/RoutingChanged** live |
 | Observe user actions - score edits | poll-and-diff | T1 | no edit push; poll cost ~0ms vs 8.7ms tick (affordable) |
 | Tempo / transport | live (machine-wide wire; broker in session mode) | T2 | covered; multi-session control uses BrokerControl with pid-addressed broadcast ([docs/34](34-per-session-control.md)) |

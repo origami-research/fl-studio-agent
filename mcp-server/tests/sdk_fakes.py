@@ -13,7 +13,7 @@ from session_fakes import RENDER_SPAN
 
 from fl_mcp.schemas import (
     AutomationPoint,
-    AutomationReceipt,
+    AutomationResult,
     Channel,
     ChannelLevels,
     ControlResponse,
@@ -23,7 +23,7 @@ from fl_mcp.schemas import (
     RenderReceipt,
     SessionState,
     Target,
-    WriteReceipt,
+    WriteResult,
 )
 from fl_mcp.session import FLSession
 from fl_mcp.session.link import ControlLink
@@ -62,34 +62,37 @@ class FakeSession(FLSession):
         self.link = ControlLink(control, factory=lambda: control)
         self.store = store
         self.project = None
-        self.tempo = tempo
+        self._tempo = tempo
         self.fail_next_write: Exception | None = None
         self._channels = list(channels)
         self._next_id = 0
         self.level_calls: list[tuple[int, float | None, float | None, int | None]] = []
 
-    def write_notes(self, target: Target, notes: list[Note], mode: NoteWriteMode) -> WriteReceipt:
+    def write_notes(self, target: Target, notes: list[Note], mode: NoteWriteMode) -> WriteResult:
         if self.fail_next_write is not None:
             exc, self.fail_next_write = self.fail_next_write, None
             raise exc
         self._next_id += 1
-        delta = self.store.record_write(target, notes, mode, "project-write", self._next_id)
-        confirmed = self.store.notes_at(target) or []
-        return WriteReceipt(
-            backend="project-write", target=target, confirmed_notes=len(confirmed), delta=delta
-        )
+        before = self.store.notes_at(target) or []
+        after = [*before, *notes] if mode == "merge" else list(notes)
+        self.store.record_write(target, before, after, mode, "project-write", self._next_id)
+        name = next((c.name for c in self._channels if c.index == target.channel), f"Channel {target.channel}")
+        return WriteResult(wrote=len(notes), track=name, pattern=target.pattern, mode=mode, total=len(after))
 
-    def clear_notes(self, target: Target) -> WriteReceipt:
+    def clear_notes(self, target: Target) -> WriteResult:
         return self.write_notes(target, [], "replace")
 
     def read_notes(self, target: Target) -> list[Note]:
         return self.store.notes_at(target) or []
 
+    def tempo(self) -> float | None:
+        return self._tempo
+
     def set_tempo(self, bpm: float) -> float:
         # FL stores tempo as u32 BPM x 1000; the readback is that quantized
         # value, not the caller's echo.
-        self.tempo = round(bpm * 1000) / 1000
-        return self.tempo
+        self._tempo = round(bpm * 1000) / 1000
+        return self._tempo
 
     def render_wav(self, output: Path) -> RenderReceipt:
         output.write_bytes(b"RIFF....WAVE")
@@ -105,8 +108,8 @@ class FakeSession(FLSession):
             raise errors.control_plane_unavailable("ctl.save", 0.0)
         return self.control.send_request("ctl.save").ret
 
-    def set_automation(self, channel: int, points: list[AutomationPoint]) -> AutomationReceipt:
-        return AutomationReceipt(backend="project-write", channel=channel, points=points)
+    def set_automation(self, channel: int, points: list[AutomationPoint]) -> AutomationResult:
+        return AutomationResult(channel=channel, points=points)
 
     def set_channel_levels(
         self,
@@ -146,7 +149,7 @@ class FakeSession(FLSession):
         )
 
     def snapshot(self) -> SessionState:
-        return SessionState(tempo_bpm=self.tempo, channels=list(self._channels))
+        return SessionState(tempo_bpm=self._tempo, channels=list(self._channels))
 
 
 DEFAULT_CHANNELS = (

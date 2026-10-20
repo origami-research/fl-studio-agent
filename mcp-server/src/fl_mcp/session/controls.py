@@ -24,7 +24,7 @@ from fl_mcp.errors import NotePlaneUnavailable, WriteRejected
 from fl_mcp.schemas import (
     CAPTURE_MAX_SECONDS,
     AutomationPoint,
-    AutomationReceipt,
+    AutomationResult,
     ChannelLevels,
     PluginParam,
     PluginParamModel,
@@ -78,7 +78,7 @@ def save_project(session: FLSession) -> None:
     trial license (errors.fl_trial_unsupported).
     """
     if session.fl_license is FLLicense.TRIAL:
-        raise errors.fl_trial_unsupported("saving the project")
+        raise errors.fl_trial_unsupported("saving")
     if session._ensure_hello() is None or session.control is None:
         # A failed liveness probe does not shrink the save's documented
         # budget.  In session mode that probe crosses the broker first; using
@@ -217,10 +217,11 @@ def _live_render(session: FLSession, output: Path, seconds: float) -> Path:
         started = session.transport.send("capture_start", seconds=seconds)
         start = session.transport.await_response(started, timeout=response_timeout)
     if not start.ok:
+        log.warning("the Bridge refused capture_start: %s", start.err)
         raise errors.ToolError(
             "render_failed",
-            start.err or "Bridge refused capture_start",
-            "Check the Bridge heartbeat and retry.",
+            "FL Studio could not start recording.",
+            "Retry the render in a moment.",
             retryable=True,
         )
     stop_error: errors.ToolError | None = None
@@ -268,18 +269,20 @@ def _live_render(session: FLSession, output: Path, seconds: float) -> Path:
         else ""
     )
     if not stopped.ok or not stopped.path or stopped.frames_written is None:
+        log.warning("Bridge capture_stop failed: %s%s", stopped.err, stop_detail)
         raise errors.ToolError(
             "render_failed",
-            (stopped.err or "Bridge wrote no audio frames") + stop_detail,
-            "Confirm FL audio output and retry.",
+            "The render recorded no audio.",
+            "FL's audio output may be unavailable. Retry the render.",
             retryable=True,
         )
     captured = Path(stopped.path)
     if not captured.is_file() or captured.stat().st_size <= 44:
+        log.warning("Bridge capture WAV %s is missing or empty%s", captured, stop_detail)
         raise errors.ToolError(
             "render_failed",
-            "Bridge capture WAV is missing or empty" + stop_detail,
-            "Check the spool root is writable and retry.",
+            "The render's recording is missing or empty.",
+            "Retry the render.",
             retryable=True,
         )
     expected_frames = start.frames_requested
@@ -290,22 +293,25 @@ def _live_render(session: FLSession, output: Path, seconds: float) -> Path:
         or stopped.drop_count
         or abs(stopped.frames_written - expected_frames) > expected_frames * 0.01
     ):
+        log.warning(
+            "Bridge capture did not verify: requested=%s written=%s rate=%s drops=%s%s",
+            expected_frames, stopped.frames_written, stopped.sample_rate, stopped.drop_count, stop_detail,
+        )
         raise errors.ToolError(
             "render_failed",
-            "Bridge capture did not verify: "
-            f"requested={expected_frames}, written={stopped.frames_written}, rate={stopped.sample_rate}, "
-            f"drops={stopped.drop_count}{stop_detail}",
-            "Confirm the Bridge is last on Master and FL audio is running, then retry.",
+            "The render's recording was incomplete (audio dropped out while recording).",
+            "Retry the render.",
             retryable=True,
         )
     try:
         frames, rate = audio.wav_format(captured)
         measured = audio.analyze_wav(captured)
     except (OSError, ValueError) as exc:
+        log.warning("Bridge WAV %s could not be read: %s%s", captured, exc, stop_detail)
         raise errors.ToolError(
             "render_failed",
-            f"Bridge WAV could not be read: {exc}{stop_detail}",
-            "Retry the capture after checking the spool disk.",
+            f"The render's recording could not be read: {exc}.",
+            "Retry the render.",
             retryable=True,
         ) from exc
     if (
@@ -313,11 +319,17 @@ def _live_render(session: FLSession, output: Path, seconds: float) -> Path:
         or abs(frames - expected_frames) > expected_frames * 0.01
         or measured.integrated_lufs <= -60
     ):
+        log.warning(
+            "Bridge WAV did not verify: frames=%s/%s rate=%s/%s lufs=%.1f%s",
+            frames, expected_frames, rate, start.sample_rate, measured.integrated_lufs, stop_detail,
+        )
+        silent = measured.integrated_lufs <= -60
         raise errors.ToolError(
             "render_failed",
-            f"Bridge WAV did not verify: frames={frames}/{expected_frames}, rate={rate}/{start.sample_rate}, "
-            f"lufs={measured.integrated_lufs:.1f}{stop_detail}",
-            "Confirm FL audio output and Master Bridge routing, then retry.",
+            "The render recorded silence." if silent else "The render's recording was incomplete.",
+            "Check that the song has notes on channels that make sound, then render again."
+            if silent
+            else "Retry the render.",
             retryable=True,
         )
     if stop_error is not None:
@@ -341,10 +353,11 @@ def render_wav(session: FLSession, output: Path) -> RenderReceipt:
     masking it with an offline export.
     """
     if not session.caps.bridge_live:
+        log.warning("render refused: the Master-insert Bridge is not live (check bridge_heartbeat.txt)")
         raise errors.ToolError(
             "render_failed",
-            "Bridge is not live; render needs the Master-insert Bridge and FL audio output.",
-            "Start FL with an audio output device and confirm bridge_heartbeat.txt, then retry.",
+            "FL Studio cannot record right now.",
+            "FL may still be starting. Retry the render in a moment.",
             retryable=True,
         )
     span = live_arrangement_span(session)
@@ -355,12 +368,12 @@ def render_wav(session: FLSession, output: Path) -> RenderReceipt:
 def export_offline(session: FLSession, output: Path) -> Path:
     """Boot a second FL and export with -R, for offline deliverables only."""
     if session.fl_license is FLLicense.TRIAL:
-        raise errors.fl_trial_unsupported("export_offline (a second FL rendering the saved .flp)")
+        raise errors.fl_trial_unsupported("offline export")
     if session.project is None:
         raise errors.ToolError(
             "render_failed",
-            "Cannot export without a configured saved FL project.",
-            "Configure an existing .flp project, then retry.",
+            "This session has no saved song to export.",
+            "Use render to record the song instead.",
         )
     output = output.expanduser().resolve()
     project = session.project.expanduser().resolve()
@@ -398,9 +411,8 @@ def set_tempo(session: FLSession, bpm: float) -> float:
         readback = session.control.send_request("mixer.getCurrentTempo", timeout=LIVE_READ_TIMEOUT_SECONDS)
         if not readback.ok or readback.ret is None:
             raise WriteRejected(
-                f"tempo was sent but the readback did not answer ({readback.err}); "
-                "the change is UNCONFIRMED.",
-                fix="Run fl_doctor, then retry.",
+                f"FL Studio took the tempo but did not report it back ({readback.err}).",
+                fix="Read fl.tempo, and set the tempo again if it is not what you want.",
             )
         return float(readback.ret) / 1000.0
 
@@ -410,9 +422,8 @@ def set_tempo(session: FLSession, bpm: float) -> float:
         session._reload_fl()
         return confirmed
 
-    raise NotePlaneUnavailable(
-        "No backend can set the tempo: the control plane is not connected and no project file is configured."
-    )
+    log.warning("set_tempo: the control wire is not connected and no project file is configured")
+    raise NotePlaneUnavailable("FL Studio is not accepting a tempo change right now.")
 
 
 def set_channel_levels(
@@ -461,8 +472,8 @@ def set_channel_levels(
             resp = session.control.send_request(op, args=args, timeout=LIVE_READ_TIMEOUT_SECONDS)
             if not resp.ok or resp.ret is None:
                 raise WriteRejected(
-                    f"levels were applied but {op} did not answer ({resp.err}); the result is UNCONFIRMED.",
-                    fix="Run fl_doctor, then retry.",
+                    f"FL Studio took the levels but did not report {op} back ({resp.err}).",
+                    fix="Set the levels again to be sure they are what you want.",
                 )
             readbacks[field_name] = resp.ret
         return ChannelLevels(
@@ -480,13 +491,11 @@ def set_channel_levels(
         session._reload_fl()
         return confirmed
 
-    raise NotePlaneUnavailable(
-        "No backend can set channel levels: the control plane is not connected and "
-        "no project file is configured."
-    )
+    log.warning("set_channel_levels: the control wire is not connected and no project file is configured")
+    raise NotePlaneUnavailable("FL Studio is not accepting a level change right now.")
 
 
-def set_automation(session: FLSession, channel: int, points: list[AutomationPoint]) -> AutomationReceipt:
+def set_automation(session: FLSession, channel: int, points: list[AutomationPoint]) -> AutomationResult:
     """Replace an existing automation clip and return its saved-file readback.
 
     There is no verified live automation writer.  ``flpkit`` carries the
@@ -495,8 +504,9 @@ def set_automation(session: FLSession, channel: int, points: list[AutomationPoin
     """
     if session.project is None:
         raise NotePlaneUnavailable(
-            "No backend can write automation: no project file is configured. "
-            "Automation clips currently require an existing FL-authored clip."
+            "Automation clips cannot be written in this session: there is no saved song to edit.",
+            fix="Shape the sound with Track.set_param or levels instead.",
+            retryable=False,
         )
     try:
         session._prepare_file_write()
@@ -505,18 +515,17 @@ def set_automation(session: FLSession, channel: int, points: list[AutomationPoin
         confirmed = next(item.automation for item in project.channels if item.index == channel)
     except (flp.FlpError, IndexError, StopIteration) as exc:
         raise WriteRejected(
-            f"project-file automation write did not verify: {exc}",
-            fix="Use an existing automation channel and inspect the project file before retrying.",
+            f"The automation clip could not be written: {exc}",
+            fix="Use a channel that already has an automation clip, then retry.",
         ) from exc
     if confirmed != saved:
+        log.warning("automation write on channel %d read back differently on the session parse", channel)
         raise WriteRejected(
-            "project-file automation write read back differently on the session parse; "
-            "the result is UNCONFIRMED.",
-            fix="Inspect the project file before retrying.",
+            "The automation clip did not save as written, so FL was not reopened.",
+            fix="Retry the write.",
         )
     session._reload_fl()
-    return AutomationReceipt(
-        backend="project-write",
+    return AutomationResult(
         channel=channel,
         points=[AutomationPoint(position=p.position, value=p.value, tension=p.tension) for p in confirmed],
     )

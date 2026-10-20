@@ -59,8 +59,8 @@ def reload_fl(
     # relaunch failed - say exactly that, never "the write failed".
     raise errors.ToolError(
         "fl_api_error",
-        f"The change IS in {project.name}, but FL Studio could not be "
-        f"relaunched to show it after {FL_OPEN_ATTEMPTS} attempts: {last}",
-        "Open the project in FL Studio manually, then run fl_doctor.",
+        f"The change is saved in the song, but FL Studio could not be "
+        f"reopened to show it after {FL_OPEN_ATTEMPTS} attempts: {last}",
+        "Reopen the song in FL Studio, then continue.",
         retryable=True,
     )

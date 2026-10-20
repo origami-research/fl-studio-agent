@@ -95,8 +95,6 @@ class NotesSummary(BaseModel):
 
 class GetNotesResult(BaseModel):
     target: Target
-    provenance: str | None
-    as_of: str | None
     note_count: int
     notes: list[Note] | None = None
     summary: NotesSummary | None = None

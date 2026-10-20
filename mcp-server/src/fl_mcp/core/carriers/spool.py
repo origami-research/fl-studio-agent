@@ -122,10 +122,9 @@ class SpoolCarrier:
         self._forget(cmd_id, tombstone=True)
         raise errors.ToolError(
             "note_plane_unavailable",
-            f"No response to spool command {cmd_id} within {timeout:g}s; "
-            "the command was cancelled and will not apply later.",
-            "In FL Studio: open the piano roll and run Tools > Scripting > "
-            "'MCP Write Notes', then retry. Run fl_doctor if it keeps failing.",
+            f"FL Studio did not take edit {cmd_id} within {timeout:g}s; "
+            "it was cancelled and will not apply later.",
+            "FL may be busy (a dialog or a long operation). Retry in a moment.",
             retryable=True,
         )
 

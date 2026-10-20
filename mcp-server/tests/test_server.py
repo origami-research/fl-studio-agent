@@ -11,7 +11,6 @@ import json
 import logging
 import os
 import sys
-from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -28,29 +27,15 @@ from fl_mcp.errors import ToolError
 from fl_mcp.kernel.host import RUN_CELL_TIMEOUT_SECONDS, KernelHost
 from fl_mcp.kernel.launch import PosixLauncher, Workspace
 from fl_mcp.platform import MacPlatform
-from fl_mcp.schemas import DoctorReport, Note, NoteSetRef, PlaneStatus, RenderReceipt, Target
-
-
-class _FakeStore:
-    def __init__(self, ref: NoteSetRef | None):
-        self._ref = ref
-
-    def ref_at(self, target: Target) -> NoteSetRef | None:
-        return self._ref
+from fl_mcp.schemas import DoctorReport, Note, PlaneStatus, RenderReceipt, Target
 
 
 class _FakeSession:
-    """Just the surface server.py touches: read_notes, store.ref_at, doctor."""
+    """Just the surface server.py touches: read_notes, doctor."""
 
-    def __init__(
-        self,
-        notes: list[Note] | None = None,
-        ref: NoteSetRef | None = None,
-        error: ToolError | None = None,
-    ):
+    def __init__(self, notes: list[Note] | None = None, error: ToolError | None = None):
         self._notes = notes or []
         self._error = error
-        self.store = _FakeStore(ref)
         self.read_targets: list[Target] = []
         self.control = None
         self.platform = MacPlatform()
@@ -172,22 +157,11 @@ def _notes(count: int) -> list[Note]:
     return [Note(key=60 + (i % 12), start=float(i), length=1.0) for i in range(count)]
 
 
-def _ref(target: Target) -> NoteSetRef:
-    return NoteSetRef(
-        id="abc123",
-        target=target,
-        provenance="project",
-        as_of=datetime(2026, 8, 27, tzinfo=timezone.utc),
-    )
-
-
-def test_get_notes_small_returns_the_full_list_with_provenance():
+def test_get_notes_small_returns_the_full_list():
     target = Target(pattern=2, channel=3)
-    session = _FakeSession(notes=_notes(3), ref=_ref(target))
+    session = _FakeSession(notes=_notes(3))
     result = server.get_notes(2, 3, _ctx(session=session))
     assert result.target == target
-    assert result.provenance == "project"
-    assert result.as_of == "2026-08-27T00:00:00+00:00"
     assert result.note_count == 3
     assert len(result.notes) == 3
     assert result.notes[0].key == 60
@@ -209,7 +183,6 @@ def test_get_notes_tolerates_numeric_string_channel():
     session = _FakeSession(notes=[])
     result = server.get_notes(1, "3", _ctx(session=session))
     assert result.target == Target(pattern=1, channel=3)
-    assert result.provenance is None
 
 
 def test_get_notes_rejects_a_bad_target_with_a_fix():
@@ -319,7 +292,7 @@ def test_run_namespace_can_actually_write_notes(kernel, fake_session):
     crosses the kernel wire and lands in the server's session store.
     """
     out = server.run(
-        "notes = [Note(key='C4', start=0.0, length=1.0)]\nfl.track('Bass').write(notes, mode='replace').confirmed_notes",
+        "notes = [Note(key='C4', start=0.0, length=1.0)]\nfl.track('Bass').write(notes, mode='replace').total",
         _ctx(kernel=kernel),
     )
 
@@ -361,15 +334,15 @@ def test_tools_register_with_ctx_injected_and_absent_from_the_schema():
 
 
 class _RenderFl:
-    """SDK stub: render writes a tiny WAV; analyze measures a given path."""
+    """SDK and session stub: render writes a tiny WAV; analyze measures a given path."""
 
     def __init__(self) -> None:
         self.analyzed: list[Path] = []
 
     def render(self, output: Path) -> Path:
-        return self.render_receipt(output).path
+        return self.render_wav(output).path
 
-    def render_receipt(self, output: Path) -> RenderReceipt:
+    def render_wav(self, output: Path) -> RenderReceipt:
         import wave
 
         import numpy as np
@@ -401,7 +374,8 @@ def test_render_returns_path_wav_base64_and_live_span(tmp_path):
     import base64
 
     kernel = _workspace_only(tmp_path)
-    result = server.render(_ctx(fl=_RenderFl(), kernel=kernel))
+    stub = _RenderFl()
+    result = server.render(_ctx(fl=stub, session=stub, kernel=kernel))
     assert Path(result.path).exists()
     # In the renders folder, so model code in run can read the same WAV.
     assert Path(result.path).is_relative_to(kernel.workspace.renders)
@@ -411,7 +385,7 @@ def test_render_returns_path_wav_base64_and_live_span(tmp_path):
 
 def test_analyze_defaults_to_the_most_recent_render(tmp_path):
     fl = _RenderFl()
-    ctx = _ctx(fl=fl, kernel=_workspace_only(tmp_path))
+    ctx = _ctx(fl=fl, session=fl, kernel=_workspace_only(tmp_path))
     rendered = server.render(ctx)
     metrics = server.analyze(ctx)
     assert metrics.bpm == 140.0

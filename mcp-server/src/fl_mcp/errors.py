@@ -4,15 +4,23 @@ Every tool-facing failure is structured and names the fix, so the model can
 act on it instead of retrying blindly:
 
     { "error": "note_plane_unavailable",
-      "message": "The FL MCP Bridge plugin didn't pick up the command within 2s.",
-      "fix": "In FL Studio: open the mixer (F9)...",
+      "message": "FL Studio did not take the note edit within 10s.",
+      "fix": "FL may be busy. Retry the write...",
       "retryable": true }
+
+``message`` and ``fix`` are read by the model, so they speak about FL Studio,
+tracks and the song - never about the engine's internals (the Bridge, lanes,
+spools, the project file); those details go to the log. A test scans every
+error string for that vocabulary.
 """
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 from typing import Literal
+
+log = logging.getLogger(__name__)
 
 ErrorCategory = Literal[
     "concurrent_write",
@@ -67,22 +75,16 @@ class ToolError(Exception):
         return payload
 
 
-# The default fix when no note backend exists. The pyscript name matches
-# install.SCRIPT_FILENAME (a frozen FL-side surface, duplicated like spool.py's
-# copy because errors must stay a leaf module).
-_SETUP_FIX = (
-    "Either launch FL Studio with the FLMCP controller script configured (edits then "
-    "apply via the 'MCP Write Notes' piano-roll script), or "
-    "configure a project file the agent may rewrite: run "
-    "`python -m fl_mcp.make_agent_project`, or set FLMCP_AGENT_PROJECT to a .flp path."
-)
+# The default fix when FL cannot take an edit at all (setup is the operator's
+# job; fl_doctor and the log name the missing piece).
+_SETUP_FIX = "FL Studio may still be starting. Wait a moment and retry."
 
 
 class NotePlaneUnavailable(ToolError):
-    """No backend can apply this change; the fix names exactly what to set up."""
+    """FL cannot take this change now; by default that is transient (FL starting)."""
 
-    def __init__(self, message: str, fix: str = _SETUP_FIX) -> None:
-        super().__init__("note_plane_unavailable", message, fix)
+    def __init__(self, message: str, fix: str = _SETUP_FIX, *, retryable: bool = True) -> None:
+        super().__init__("note_plane_unavailable", message, fix, retryable=retryable)
 
 
 class WriteRejected(ToolError):
@@ -102,9 +104,9 @@ class ConcurrentWrite(ToolError):
 def note_plane_unavailable(command_id: int, timeout: float) -> ToolError:
     return ToolError(
         "note_plane_unavailable",
-        f"The FL MCP Bridge plugin didn't pick up command {command_id} within {timeout:g}s.",
-        "In FL Studio: open the mixer (F9), select the 'MCP' insert, and confirm "
-        "'FL MCP Bridge' is loaded. Run fl_doctor after.",
+        f"FL Studio did not take note edit {command_id} within {timeout:g}s.",
+        "FL may be busy (a dialog or a long operation). Retry the write, preferably with "
+        "mode='replace' so an edit that lands late cannot duplicate notes.",
         retryable=True,
     )
 
@@ -112,9 +114,8 @@ def note_plane_unavailable(command_id: int, timeout: float) -> ToolError:
 def control_plane_unavailable(op: str, timeout: float) -> ToolError:
     return ToolError(
         "control_plane_unavailable",
-        f"No response to '{op}' from the controller script within {timeout:g}s.",
-        "In FL Studio: open MIDI settings and confirm 'FLMCP Req'/'FLMCP Res' are "
-        "assigned to the FLMCP controller script. Run fl_doctor after.",
+        f"FL Studio did not answer '{op}' within {timeout:g}s.",
+        "FL may be busy or still starting. Retry in a moment.",
         retryable=True,
     )
 
@@ -126,34 +127,35 @@ def control_plane_busy(op: str, timeout: float) -> ToolError:
     wire as live (the op just needs a retry), rather than declaring FL gone."""
     return ToolError(
         "control_plane_busy",
-        f"The control wire was busy for {timeout:g}s and did not free for '{op}'.",
-        "Another session's control op held the shared wire; retry.",
+        f"FL Studio stayed busy for {timeout:g}s and did not take '{op}'.",
+        "Retry.",
         retryable=True,
     )
 
 
 def concurrency_guard_unavailable(project: Path, detail: str) -> ToolError:
+    log.warning("cannot check %s for concurrent user edits: %s", project, detail)
     return ToolError(
         "operation_unsafe",
-        f"Cannot verify whether the user has unsaved score edits in {project.name}: {detail}.",
-        "Retry after FL finishes saving, or run fl_doctor and restore access to the project file. "
-        "The write is refused because clobbering a user's concurrent edit would be unsafe.",
+        "Could not check whether someone is editing this track in FL right now, so the "
+        "write was not made (it could overwrite their edit).",
+        "Retry the write in a moment.",
         retryable=True,
     )
 
 
 def concurrent_write(action: str) -> ToolError:
     return ConcurrentWrite(
-        f"{action} refused because another FL MCP write is already in progress.",
-        "Wait for the in-flight write and FL reload/readback to finish, then retry.",
+        f"Another edit is still being applied, so {action} was not started.",
+        "Retry when it finishes.",
     )
 
 
 def concurrent_write_wait_expired(action: str, remaining_action: str, retry_seconds: float) -> ToolError:
     """A render's bounded wait for the active write elapsed."""
     return ConcurrentWrite(
-        f"{action} waited {retry_seconds:g}s for in-flight FL MCP write "
-        f"'{remaining_action}', which is still in progress.",
+        f"{action} waited {retry_seconds:g}s for the edit '{remaining_action}', "
+        "which is still being applied.",
         f"Retry in {retry_seconds:g} seconds after '{remaining_action}' finishes.",
     )
 
@@ -174,8 +176,7 @@ def fl_api_error(op: str, detail: str) -> ToolError:
     return ToolError(
         "fl_api_error",
         f"'{op}' failed inside FL Studio: {detail}",
-        "This is FL's own error, verbatim from the controller script. Check the "
-        "arguments (target name/index) and retry.",
+        "This is FL Studio's own error message. Check the arguments (track name or index) and retry.",
     )
 
 
@@ -217,35 +218,15 @@ def operation_unsafe(op: str) -> ToolError:
     )
 
 
-def stale_handle(kind: str, name: str | int) -> ToolError:
-    return ToolError(
-        "stale_handle",
-        f"This {kind} handle for {name!r} was resolved before the project layout changed "
-        "(reload, undo, or a structure signal from FL) and can no longer be trusted.",
-        f"Get a fresh handle - call fl.track({name!r}) again - before retrying this cell.",
-        retryable=True,
-    )
-
-
-def unsupported_in_live_session(action: str) -> ToolError:
-    return ToolError(
-        "unsupported_in_live_session",
-        f"{action} is not possible while FL Studio is running with a live session.",
-        "This requires the template project convention (docs/07) - set it up at "
-        "project-creation time, not during a live session.",
-    )
-
-
 def fl_trial_unsupported(action: str) -> ToolError:
-    """A trial FL cannot reopen a saved project, and answers Save with a modal Buy dialog."""
+    """A trial FL cannot reopen a saved project, and answers Save with a modal
+    Buy dialog that freezes the controller (FLMCP_FL_LICENSE=trial)."""
     return ToolError(
         "fl_trial_unsupported",
-        f"FL Studio is configured as a trial (FLMCP_FL_LICENSE=trial). A trial cannot reopen a saved "
-        f"project, and answers Save with a modal 'Buy FL Studio' dialog that freezes the controller, "
-        f"so {action} was refused before anything changed.",
-        "Use live lanes: notes through the Bridge; tempo, plugin parameters, and channel levels "
-        "through the control wire; render_wav for audio (Bridge capture). Saving, automation clips, "
-        "adding effects, and export_offline need a licensed FL.",
+        f"This FL Studio is a trial, which cannot save or reopen songs, so {action} is not available.",
+        "Nothing is lost: your edits are live in FL and render plays them. Notes, tempo, "
+        "parameters and levels all work; saving, automation clips, adding effects and offline "
+        "export do not.",
         retryable=False,
     )
 
@@ -254,9 +235,8 @@ def file_lane_requires_reload() -> ToolError:
     """Session mode has no safe in-place project reload primitive."""
     return ToolError(
         "file_lane_requires_reload",
-        "This edit requires reopening the project file, which is unavailable during a live session.",
-        "Use live lanes during the match: notes through the Bridge; tempo, plugin parameters, and "
-        "channel levels through the control wire. Automation clips and adding effects have no live "
-        "equivalent yet. Retry after the session ends.",
-        retryable=True,
+        "This edit rewrites the saved song, which FL would have to reopen; FL is never reopened during a match.",
+        "Notes, tempo, parameters and levels work live. Automation clips and adding effects are "
+        "not available during a match.",
+        retryable=False,
     )

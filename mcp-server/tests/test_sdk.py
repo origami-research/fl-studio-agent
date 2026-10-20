@@ -28,7 +28,7 @@ from sdk_fakes import DEFAULT_CHANNELS, FakeSession
 from session_fakes import make_session
 
 from fl_mcp import errors, sdk, theory
-from fl_mcp.schemas import AutomationPoint, ChannelLevels, Note, Target
+from fl_mcp.schemas import AutomationPoint, ChannelLevels, Note, Target, WriteResult
 from fl_mcp.sdk import ChannelNotFound, connect
 
 
@@ -107,30 +107,29 @@ def test_write_applies_immediately_no_flush_exists(fl, fake_session):
 
     # v1 queued until flush(); v2 has no flush - the state is already there.
     assert fake_session.read_notes(Target(pattern=1, channel=1))[0].key == 60
-    assert receipt.confirmed_notes == 1
+    assert receipt.total == 1
     assert not hasattr(fl, "flush")
     assert not hasattr(fl, "cell")
 
 
-def test_write_receipt_carries_readback_count_and_backend(fl):
+def test_write_result_says_what_was_written_where_and_the_total(fl):
     fl.track("Bass").write(make_notes("C4"), mode="replace")
-    receipt = fl.track("Bass").write(make_notes("E4", "G4"), mode="merge")
+    result = fl.track("Bass").write(make_notes("E4", "G4"), mode="merge")
 
-    assert receipt.confirmed_notes == 3  # readback of the whole target, not the request
-    assert receipt.backend == "project-write"
-    assert len(receipt.delta.added) == 2
+    # The whole target's state, not the request echo; named like the model named it.
+    assert result == WriteResult(wrote=2, track="Bass", pattern=1, mode="merge", total=3)
 
 
 def test_write_mode_defaults_to_merge(fl):
     fl.track("Bass").write(make_notes("C4"))
     receipt = fl.track("Bass").write(make_notes("E4"))
-    assert receipt.confirmed_notes == 2
+    assert receipt.total == 2
 
 
 def test_write_normalizes_raw_note_inputs_at_the_sdk_boundary(fl):
     receipt = fl.track("Bass").write([{"key": "C4", "start": 0, "length": 1}], mode="replace")
 
-    assert receipt.confirmed_notes == 1
+    assert receipt.total == 1
     assert fl.track("Bass").notes()[0] == Note(key=60, start=0, length=1)
 
 
@@ -181,7 +180,7 @@ def test_rejection_halts_a_script_before_later_writes(fl, fake_session):
 def test_clear_applies_immediately(fl):
     fl.track("Bass").write(make_notes("C4"))
     receipt = fl.track("Bass").clear()
-    assert receipt.confirmed_notes == 0
+    assert receipt.total == 0
     assert fl.track("Bass").notes() == []
 
 
@@ -433,13 +432,13 @@ def test_drums_pattern_writes_through_track(fl):
     # theory.drums returns v2 schemas.Note since the cutover, so its output
     # composes with Track.write directly - no conversion step exists anymore.
     receipt = fl.track("Kick").write(theory.drums("x---x---x---x---"), mode="replace")
-    assert receipt.confirmed_notes == 4
+    assert receipt.total == 4
 
 
 def test_chord_composes_with_write(fl):
     notes = [Note(key=k, start=0, length=4) for k in theory.chord("C4", "maj7")]
     receipt = fl.track("Bass").write(notes, mode="replace")
-    assert receipt.confirmed_notes == 4
+    assert receipt.total == 4
     assert {n.key for n in fl.track("Bass").notes()} == {60, 64, 67, 71}
 
 
@@ -447,5 +446,5 @@ def test_transpose_round_trips_through_confirmed_reads(fl):
     fl.track("Lead").write(make_notes("C4", "E4"), mode="replace")
     shifted = theory.transpose(fl.track("Lead").notes(), 12)
     receipt = fl.track("Lead").write(shifted, mode="replace")
-    assert receipt.confirmed_notes == 2
+    assert receipt.total == 2
     assert {n.key for n in fl.track("Lead").notes()} == {72, 76}

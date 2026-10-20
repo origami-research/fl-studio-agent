@@ -8,6 +8,7 @@ pyscript/spool lane is TARGET-BLIND, dogfood docs/21 A12).
 
 from __future__ import annotations
 
+import shutil
 from pathlib import Path
 
 import pytest
@@ -23,8 +24,9 @@ from session_fakes import (
 )
 
 from fl_mcp import errors, flp
-from fl_mcp.schemas import Note
+from fl_mcp.schemas import Note, WriteResult
 from fl_mcp.session import FLSession, NotePlaneUnavailable, WriteRejected
+from fl_mcp.template import template_path
 
 
 @pytest.fixture(autouse=True)
@@ -40,17 +42,30 @@ def no_reload(monkeypatch):
     return calls
 
 
-def test_notes_go_project_write_even_when_control_is_connected(monkeypatch, tmp_path, no_reload):
-    project = tmp_path / "agent.flp"
-    monkeypatch.setattr(flp, "write_notes", lambda path, notes, *, pattern, channel, mode: list(notes))
+@pytest.fixture()
+def project(tmp_path) -> Path:
+    """A real copy of the session template (5 channels, no notes): the file
+    lane's surgery and readback run unpatched."""
+    path = tmp_path / "agent.flp"
+    shutil.copyfile(template_path(), path)
+    return path
+
+
+def keys(notes) -> list[tuple[int, float]]:
+    return [(n.key, n.start) for n in notes]
+
+
+def test_notes_go_project_write_even_when_control_is_connected(project, no_reload):
     spool = FakeSpool()
     session, store = make_session(control=FakeControl(hello=HELLO), transport=spool, project=project)
 
-    receipt = session.write_notes(TARGET, NOTES, "merge")
+    result = session.write_notes(TARGET, NOTES, "merge")
 
-    assert receipt.backend == "project-write"
+    assert result == WriteResult(wrote=1, track="808 Kick", pattern=1, mode="merge", total=1)
     assert spool.sent == [], "the target-blind pyscript lane must never see a targeted write"
-    assert store.writes == [(TARGET, NOTES, "merge", "project-write", 0)]
+    (write,) = store.writes
+    assert write[0] == TARGET and write[3:] == ("merge", "project-write", 0)
+    assert keys(write[2]) == keys(NOTES), "the recorded state is the file's readback"
     assert no_reload == [True]
 
 
@@ -62,12 +77,10 @@ def test_notes_without_a_project_raise_even_when_control_is_connected():
     assert store.writes == []
 
 
-def test_recording_failure_never_fails_an_applied_write(monkeypatch, tmp_path, no_reload, caplog):
+def test_recording_failure_never_fails_an_applied_write(project, no_reload, caplog):
     """Found live: the store crashed AFTER the file write landed, so every
-    applied write reported a traceback. Recording is memory - it logs and
-    yields an empty delta, and the receipt still reports the readback."""
-    project = tmp_path / "agent.flp"
-    monkeypatch.setattr(flp, "write_notes", lambda path, notes, *, pattern, channel, mode: list(notes))
+    applied write reported a traceback. The action log is history - its
+    failure logs, and the result still reports the readback."""
     session, store = make_session(project=project)
 
     def boom(*a, **k):
@@ -75,46 +88,33 @@ def test_recording_failure_never_fails_an_applied_write(monkeypatch, tmp_path, n
 
     store.record_write = boom
     with caplog.at_level("ERROR"):
-        receipt = session.write_notes(TARGET, NOTES, "merge")
+        result = session.write_notes(TARGET, NOTES, "merge")
 
-    assert receipt.backend == "project-write" and receipt.confirmed_notes == 1
-    assert receipt.delta.is_empty()
-    assert any("recording failed" in r.message for r in caplog.records)
+    assert result.total == 1
+    assert any("action-log append failed" in r.message for r in caplog.records)
 
 
-def test_project_write_records_then_reloads(monkeypatch, tmp_path, no_reload):
-    project = tmp_path / "agent.flp"
-    seen: list[tuple] = []
-
-    def fake_write(path, notes, *, pattern, channel, mode):
-        seen.append((path, list(notes), pattern, channel, mode))
-        return [object(), object()]  # the readback: 2 notes now in the file
-
-    monkeypatch.setattr(flp, "write_notes", fake_write)
+def test_project_write_records_the_readback_then_reloads(project, no_reload):
     session, store = make_session(project=project)
+    session.write_notes(TARGET, NOTES, "replace")
 
-    receipt = session.write_notes(TARGET, NOTES, "merge")
+    result = session.write_notes(TARGET, [Note(key=64, start=1, length=1)], "merge")
 
-    assert receipt.backend == "project-write"
-    assert receipt.confirmed_notes == 2
-    assert seen == [(project, NOTES, 1, 0, "merge")]
-    assert store.writes == [(TARGET, NOTES, "merge", "project-write", 0)]
-    assert no_reload == [True], "FL reloads exactly once, after the store recorded"
+    assert result.total == 2
+    before, after = store.writes[1][1], store.writes[1][2]
+    assert keys(before) == [(60, 0)] and keys(after) == [(60, 0), (64, 1)]
+    assert keys(session.read_notes(TARGET)) == [(60, 0), (64, 1)]
+    assert no_reload == [True, True], "FL reloads once per write, after the store recorded"
 
 
-def test_project_write_saves_live_state_before_writing_and_reloading(monkeypatch, tmp_path):
+def test_project_write_saves_live_state_before_writing_and_reloading(monkeypatch, project):
     from fl_mcp.session import controls, lifecycle
 
     events = []
-    project = tmp_path / "agent.flp"
     control = FakeControl(hello=HELLO)
     session, _ = make_session(control=control, project=project)
     monkeypatch.setattr(controls, "save_project", lambda session: events.append("save"))
-    monkeypatch.setattr(
-        flp,
-        "write_notes",
-        lambda *args, **kwargs: events.append("write") or list(NOTES),
-    )
+    monkeypatch.setattr(flp, "write_notes", lambda *args, **kwargs: events.append("write") or [])
     monkeypatch.setattr(lifecycle, "reload_fl", lambda project, link: events.append("reload"))
 
     session.write_notes(TARGET, NOTES, "merge")
@@ -122,17 +122,13 @@ def test_project_write_saves_live_state_before_writing_and_reloading(monkeypatch
     assert events == ["save", "write", "reload"]
 
 
-def test_project_write_skips_save_without_live_control(monkeypatch, tmp_path):
+def test_project_write_skips_save_without_live_control(monkeypatch, project):
     from fl_mcp.session import controls, lifecycle
 
     events = []
-    session, _ = make_session(project=tmp_path / "agent.flp")
+    session, _ = make_session(project=project)
     monkeypatch.setattr(controls, "save_project", lambda session: events.append("save"))
-    monkeypatch.setattr(
-        flp,
-        "write_notes",
-        lambda *args, **kwargs: events.append("write") or list(NOTES),
-    )
+    monkeypatch.setattr(flp, "write_notes", lambda *args, **kwargs: events.append("write") or [])
     monkeypatch.setattr(lifecycle, "reload_fl", lambda project, link: events.append("reload"))
 
     session.write_notes(TARGET, NOTES, "merge")
@@ -140,25 +136,25 @@ def test_project_write_skips_save_without_live_control(monkeypatch, tmp_path):
     assert events == ["write", "reload"]
 
 
-def test_project_write_readback_mismatch_raises(monkeypatch, tmp_path, no_reload):
+def test_project_write_readback_mismatch_raises(monkeypatch, project, no_reload):
     def failing_write(path, notes, *, pattern, channel, mode):
         raise flp.FlpError("readback mismatch at note 3")
 
     monkeypatch.setattr(flp, "write_notes", failing_write)
-    session, store = make_session(project=tmp_path / "agent.flp")
+    session, store = make_session(project=project)
 
-    with pytest.raises(WriteRejected, match="did not verify"):
+    with pytest.raises(WriteRejected, match="could not be written"):
         session.write_notes(TARGET, NOTES, "merge")
     assert store.writes == []
     assert no_reload == [], "an unverified write must not reload FL"
 
 
-def test_no_backend_raises_named_fix():
+def test_no_backend_raises_plainly_and_logs_the_setup_gap(caplog):
     session, _ = make_session()
-    with pytest.raises(NotePlaneUnavailable) as excinfo:
+    with caplog.at_level("WARNING"), pytest.raises(NotePlaneUnavailable) as excinfo:
         session.write_notes(TARGET, NOTES, "merge")
-    assert "make_agent_project" in excinfo.value.fix
-    assert "FLMCP_AGENT_PROJECT" in excinfo.value.fix
+    assert "retry" in excinfo.value.fix.lower()
+    assert any("no project file is configured" in r.message for r in caplog.records)
 
 
 def test_concurrent_session_write_raises_retryable_error(tmp_path):
@@ -173,39 +169,30 @@ def test_concurrent_session_write_raises_retryable_error(tmp_path):
     assert excinfo.value.retryable is True
 
 
-def test_clear_notes_is_project_write_even_when_connected(monkeypatch, tmp_path, no_reload):
-    project = tmp_path / "agent.flp"
-    project.write_bytes(b"FLhd")
-    monkeypatch.setattr(
-        flp,
-        "read",
-        lambda path: flp.FlpProject(ppq=96, tempo=120.0, channels=(), notes=()),
-    )
-    monkeypatch.setattr(flp, "write_notes", lambda path, notes, *, pattern, channel, mode: [])
+def test_clear_notes_is_project_write_even_when_connected(project, no_reload):
     spool = FakeSpool()
-    session, store = make_session(
-        control=FakeControl(hello=HELLO), transport=spool, project=project
-    )
+    session, _ = make_session(control=FakeControl(hello=HELLO), transport=spool, project=project)
+    session.write_notes(TARGET, NOTES, "replace")
 
-    receipt = session.clear_notes(TARGET)
+    result = session.clear_notes(TARGET)
 
-    assert receipt.backend == "project-write" and receipt.confirmed_notes == 0
+    assert result == WriteResult(wrote=0, track="808 Kick", pattern=1, mode="replace", total=0)
+    assert session.read_notes(TARGET) == []
     assert spool.sent == []
 
 
-def test_read_notes_prefers_the_store(monkeypatch):
+def test_read_notes_prefers_the_store(monkeypatch, project):
     store = FakeStore()
-    store.preloaded[(1, 0)] = NOTES
+    store.record_write(TARGET, [], NOTES, "replace", "bridge", 1)
     monkeypatch.setattr(
         flp, "notes_at", lambda *a: pytest.fail("must not touch the file when the store answers")
     )
-    session, _ = make_session(store=store, project=Path("/tmp/agent.flp"))
+    session, _ = make_session(store=store, project=project)
 
     assert session.read_notes(TARGET) == NOTES
 
 
-def test_read_notes_falls_back_to_file_and_marks_ground_truth(monkeypatch, tmp_path):
-    project = tmp_path / "agent.flp"
+def _one_file_note(monkeypatch, velocity: int) -> None:
     monkeypatch.setattr(
         flp,
         "read",
@@ -215,32 +202,26 @@ def test_read_notes_falls_back_to_file_and_marks_ground_truth(monkeypatch, tmp_p
         flp,
         "notes_at",
         lambda path, pattern, channel: [
-            flp.FlpNote(position=96, length=48, key=60, channel=0, velocity=127, pan=64)
+            flp.FlpNote(position=96, length=48, key=60, channel=0, velocity=velocity, pan=64)
         ],
     )
+
+
+def test_an_unwritten_target_reads_the_project_every_time(monkeypatch, project):
+    """No caching: the store holds only this session's writes, so a project
+    re-read (after FL saved, say) is never shadowed by an old read."""
+    _one_file_note(monkeypatch, 127)
     session, store = make_session(project=project)
 
     notes = session.read_notes(TARGET)
 
     assert notes == [Note(key=60, start=1.0, length=0.5, velocity=1.0, pan=0.5)]
-    assert store.ground_truths == [(TARGET, notes)]
+    assert store.writes == [] and store.written() == {}
 
 
-def test_read_notes_clamps_fl_raw_velocity_128(monkeypatch, tmp_path):
+def test_read_notes_clamps_fl_raw_velocity_128(monkeypatch, project):
     """FL's 128 byte value decodes to the SDK's full-scale unit value."""
-    project = tmp_path / "agent.flp"
-    monkeypatch.setattr(
-        flp,
-        "read",
-        lambda path: flp.FlpProject(ppq=96, tempo=None, channels=(), notes=()),
-    )
-    monkeypatch.setattr(
-        flp,
-        "notes_at",
-        lambda path, pattern, channel: [
-            flp.FlpNote(position=0, length=96, key=60, channel=0, velocity=128, pan=64)
-        ],
-    )
+    _one_file_note(monkeypatch, 128)
     session, _store = make_session(project=project)
 
     assert session.read_notes(TARGET)[0].velocity == 1.0
