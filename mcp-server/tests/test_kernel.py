@@ -536,3 +536,24 @@ def test_every_python_the_kernel_starts_gets_the_private_mkdir_fix_on_windows(wo
     )
     out = subprocess.run([sys.executable, "-c", probe], capture_output=True, text=True, check=True)
     assert out.stdout.strip() == "share_private_dirs.<locals>.mkdir"
+
+
+# -- a kernel without FL ------------------------------------------------------
+
+
+def test_a_kernel_without_an_fl_session_runs_python_and_refuses_fl(workspace):
+    """The box lockdown probes the boundary with a kernel that has no FL session.
+
+    It crashed every cell ("'NoneType' object has no attribute 'track_name'")
+    once tool results started listing actions, so the lockdown could not be
+    verified on a box (2026-10-20 dev rehearsal)."""
+    kernel = _host(None, workspace, cell_timeout=5.0, interrupt_grace=1.0)
+    try:
+        plain = kernel.run("1 + 1")
+        assert plain.outcome == "ok" and plain.actions == []
+        assert "2" in (plain.result or plain.stdout)
+        refused = kernel.run("fl.tempo")
+        assert refused.outcome == "error" and refused.actions == []
+        assert "not connected to FL Studio" in (refused.traceback or "")
+    finally:
+        kernel.close()

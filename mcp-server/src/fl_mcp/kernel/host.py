@@ -142,7 +142,7 @@ class _FileEdits:
     reopens, so ``actions`` holds them until then and drops them if it fails.
     """
 
-    def __init__(self, session: FLSession, actions: ActionLog) -> None:
+    def __init__(self, session: FLSession | None, actions: ActionLog) -> None:
         self._session = session
         self._actions = actions
         self._open: list[contextlib.ExitStack] = []
@@ -181,8 +181,8 @@ class _FileEdits:
 class _Cell:
     """What one cell's fl calls leave behind: open file_edit blocks and what FL did."""
 
-    def __init__(self, session: FLSession) -> None:
-        self.actions = ActionLog(session.track_name)
+    def __init__(self, session: FLSession | None) -> None:
+        self.actions = ActionLog(session.track_name if session is not None else None)
         self.edits = _FileEdits(session, self.actions)
 
 
@@ -191,7 +191,7 @@ class KernelHost:
 
     def __init__(
         self,
-        session: FLSession,
+        session: FLSession | None,
         workspace: Workspace,
         launcher: Launcher,
         environ: Mapping[str, str],
@@ -372,6 +372,13 @@ class KernelHost:
         return wire.Reply(id=call.id, value=value)
 
     def _dispatch(self, call: wire.Call, cell: _Cell) -> Any:
+        if self._session is None:
+            # A kernel without FL (the box lockdown's boundary probe): plain Python works, fl does not.
+            raise errors.ToolError(
+                "control_plane_unavailable",
+                "This Python session is not connected to FL Studio.",
+                "Use plain Python here; FL calls need the engine's FL session.",
+            )
         if call.method == wire.FILE_EDIT_ENTER:
             return cell.edits.enter()
         if call.method == wire.FILE_EDIT_EXIT:
