@@ -30,6 +30,7 @@ from session_fakes import make_session
 from fl_mcp import errors, sdk, theory
 from fl_mcp.schemas import AutomationPoint, ChannelLevels, Note, Target, WriteResult
 from fl_mcp.sdk import ChannelNotFound, connect
+from fl_mcp.session.link import TRANSIENT_RETRY_DELAYS
 
 
 @pytest.fixture
@@ -295,10 +296,14 @@ def test_notes_on_untouched_target_is_empty(fl):
     assert fl.track("Lead").notes() == []
 
 
-def test_snapshot_returns_session_state(fl):
-    snap = fl.snapshot()
-    assert [c.name for c in snap.channels] == ["Kick", "Bass", "Lead"]
-    assert snap.tempo_bpm == 120.0
+def test_channels_lists_what_fl_has(fl):
+    assert [c.name for c in fl.channels] == ["Kick", "Bass", "Lead"]
+
+
+def test_check_reports_what_the_session_heard(fl):
+    result = fl.check(bars=1, start_bar=2)
+    assert (result.start_bar, result.bars) == (2, 1)
+    assert result.summary == "1 of 1 channels sounded in bars 2-2."
 
 
 # -- tempo ---------------------------------------------------------------------
@@ -382,45 +387,40 @@ def test_set_param_accepts_index_or_name_and_returns_readback(fl):
 # -- transport -----------------------------------------------------------------
 
 
-def test_play_stop_round_trip(fl, control):
-    fl.play()
-    assert control.playing is True
-    fl.stop()
-    assert control.playing is False
-    assert control.ops == ["transport.start", "transport.stop"]
-
-
 def test_undo_sends_fl_undo(fl, control):
     fl.undo()
     assert control.ops == ["general.undo"]
 
 
-@pytest.mark.parametrize("method", ["play", "stop", "undo"])
-def test_transport_requires_control_plane(tmp_path, method):
+def test_undo_requires_control_plane(tmp_path):
     from fl_mcp.store import Store
 
     session = FakeSession(store=Store("test", root=tmp_path), channels=DEFAULT_CHANNELS, control=None)
-    fl = connect(session)
     with pytest.raises(errors.ToolError) as exc_info:
-        getattr(fl, method)()
+        connect(session).undo()
     assert exc_info.value.category == "control_plane_unavailable"
 
 
-def test_operation_unsafe_is_surfaced_as_retryable(fl, control):
+def test_a_persistent_operation_unsafe_surfaces_once_retries_run_out(fl, control):
     """docs/14: FL rejects some mutating ops mid-engine-cycle with its own
-    'Operation unsafe at current time' - the sdk must surface the dedicated
-    retryable category, not a generic fl_api_error."""
+    'Operation unsafe at current time'. The engine retries it (it applied
+    nothing); only a refusal that outlives every retry reaches the model, as
+    the dedicated retryable category with a plain sentence."""
     control.fail_with = "RuntimeError: Operation unsafe at current time"
     with pytest.raises(errors.ToolError) as exc_info:
-        fl.play()
+        fl.undo()
     assert exc_info.value.category == "operation_unsafe"
     assert exc_info.value.retryable is True
+    assert exc_info.value.message == (
+        "FL Studio stayed busy for several seconds and did not take this action, so nothing changed."
+    )
+    assert control.ops == ["general.undo"] * (len(TRANSIENT_RETRY_DELAYS) + 1)
 
 
 def test_other_control_failures_surface_as_fl_api_error(fl, control):
     control.fail_with = "TypeError: something real"
     with pytest.raises(errors.ToolError) as exc_info:
-        fl.stop()
+        fl.undo()
     assert exc_info.value.category == "fl_api_error"
     assert "something real" in exc_info.value.message
 

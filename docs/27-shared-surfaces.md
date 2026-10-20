@@ -26,7 +26,7 @@ So the engine's record of applied writes is the source of truth for the notes it
   A refusal or a timeout raises and records nothing.
 - **Record.** The store keeps that state per (pattern, channel), in memory for this session only: a later server must not inherit claims about an FL that has since been reset.
   The action log stays durable history.
-- **Read.** `read_notes`, `get_notes`, `get_scene`, and `Track.notes()` overlay the record on the project FL loaded.
+- **Read.** `read_notes`, `get_scene`, and `Track.notes()` overlay the record on the project FL loaded.
   A target this session never wrote reads from the project, which still describes it.
   A save of the project newer than a record (FL saving its live state, including a person's Cmd+S) supersedes that record, because the save holds everything FL had then.
   Tempo is read live from FL whenever FL is connected.

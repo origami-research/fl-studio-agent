@@ -166,13 +166,11 @@ class MidiControl:
         # parked the call "unsafe at current time" - busy, not absent.
         if self._hello is None:
             raise control_plane_unavailable(op, timeout)
+        log.warning("no response to %r within %gs although the controller said hello: FL is busy", op, timeout)
         raise ToolError(
             "control_plane_unavailable",
-            f"No response to {op!r} within {timeout:g}s, but the controller IS "
-            "attached (hello received) - FL is likely busy, not disconnected.",
-            "FL parks calls that arrive 'unsafe at current time' for OnIdle retry "
-            "(common right after a project load) and the controller gives up after "
-            "~4s. Retry, with a longer timeout if this was the first engine call.",
+            "FL Studio is busy and did not answer in time.",
+            "Retry in a moment; FL is still connected.",
             retryable=True,
         )
 
@@ -241,7 +239,7 @@ class MidiControl:
     @property
     def dropped_frames(self) -> int:
         """Malformed frames swallowed by the C callback since open - surfaced
-        in fl_doctor so 'every frame rejected' is diagnosable, not a mystery
+        in fl-mcp-doctor so 'every frame rejected' is diagnosable, not a mystery
         timeout."""
         return self._dropped_frames
 
@@ -317,7 +315,7 @@ def _port_number(port: Any, name: str) -> int:
     problem = "is missing" if not matches else "is listed more than once"
     raise ControlUnavailable(
         f"loopMIDI port {name!r} {problem}. Run loopMIDI in this user session with exactly one "
-        f"'FLMCP Req' and one 'FLMCP Res' port, then retry fl_doctor. Available ports: {names or 'none'}."
+        f"'FLMCP Req' and one 'FLMCP Res' port, then rerun fl-mcp-doctor. Available ports: {names or 'none'}."
     )
 
 

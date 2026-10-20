@@ -1,5 +1,7 @@
 """Thin MCP layer. The product surface is the SDK; tools exist to (1) run
-Python against it, (2) read state cheaply, (3) diagnose setup.
+Python against it, (2) read the song cheaply, (3) prove it sounds: check in
+seconds, render to hear it. Setup diagnostics are the operator's
+(``fl-mcp-doctor``), not a model tool. The surface is docs/06 "Tool surface".
 
 LANE W implements this module (docs/21). No module globals: the session is
 built in the lifespan and injected into tools via the framework's Context
@@ -21,13 +23,11 @@ from typing import Any
 
 from mcp.server.mcpserver import Context, MCPServer
 from mcp.types import CallToolResult, TextContent
-from pydantic import ValidationError
 
 from fl_mcp import __version__
 from fl_mcp.audio import AudioAnalysis
 from fl_mcp.contract import (
     ENV_KERNEL_ROOT,
-    GetNotesResult,
     GetSceneResult,
     RenderResult,
     RunResult,
@@ -41,17 +41,13 @@ from fl_mcp.kernel.host import KernelHost
 from fl_mcp.kernel.launch import Workspace
 
 from . import scene, sdk
-from .schemas import DoctorReport, Target
+from .schemas import CheckResult
 from .session import create_session
 
 log = logging.getLogger(__name__)
 
 SERVER_NAME = "fl-studio"
 LOG_LEVEL_ENV = "FL_MCP_LOG"
-# Above this, get_notes returns a summary instead of the full list - a model
-# should not have to page through 4000 notes to learn the shape of a part.
-GET_NOTES_FULL_LIST_MAX = 200
-GET_NOTES_SAMPLE_SIZE = 20
 
 
 @contextlib.asynccontextmanager
@@ -71,8 +67,7 @@ async def lifespan(server: Any) -> Any:
         kernel = KernelHost(
             session, Workspace.create(Path(root)), session.platform.kernel_launcher(), os.environ
         )
-        # "session" rides along because doctor() and provenance reads are session
-        # surface, deliberately not exposed on the SDK object the model drives.
+        # "session" rides along for the reads and checks the tools make directly.
         try:
             yield {"fl": fl, "session": session, "kernel": kernel}
         finally:
@@ -121,14 +116,15 @@ def run(code: str, ctx: Context) -> RunResult:
     the kernel process died or was killed (os._exit, a crash, or ignoring the
     interrupt) - its variables are gone, files stay, the next run starts fresh.
 
-    How the session behaves: every fl call applies to FL immediately and
-    returns once FL has it, or raises with the reason. A read right after a
-    write returns the written notes; there is nothing to wait for, save, or
-    reopen. To hear the result, render.
+    How to work: write, check at milestones, render at the end. Every fl call
+    applies to FL immediately and returns once FL has it, or raises with the
+    reason; its result is what FL now has. There is nothing to wait for, save,
+    reopen or re-read. To prove parts are audible, check (a few seconds); to
+    hear the song, render once when the pass is done.
 
     The SDK (no introspection needed):
     - fl.set_tempo(140.0) -> the tempo FL now has; fl.tempo reads it.
-    - fl.channels -> [Channel(index, name), ...].
+    - fl.channels -> [Channel(index, name, ...), ...].
     - fl.track("Bass") / fl.track(2, pattern=1) -> Track (exact name, index, or
       unique substring; pattern defaults to 1).
     - Track.write([Note(...), ...], mode="merge"|"replace") -> WriteResult(wrote,
@@ -141,16 +137,15 @@ def run(code: str, ctx: Context) -> RunResult:
       pan -1..1, pitch whole semitones -48..48; returns FL's values.
     - Track.params(query="cutoff") / Track.set_param("cutoff", 0.55) - the
       instrument's parameters, values normalized 0..1.
+    - fl.check(bars=2, start_bar=1) -> CheckResult: plays those bars and reads
+      FL's mixer meters; per channel whether it sounded, its peak dBFS, and why
+      it was silent (muted, no notes in those bars, ...); .summary is one line.
     - fl.render("mix.wav") -> Path of the WAV. Only the file name is used: it
       lands in the session's renders folder, which you can read but not write.
+      A render plays the whole song in real time (FL's loop mode decides: the
+      playlist in song mode, only the selected pattern in pattern mode).
       fl.analyze(path) -> bpm/key/LUFS/spectral balance; fl.read_wav(path) ->
       (samples: numpy.ndarray, sample_rate: int).
-      A render plays the song in real time (FL's loop mode decides: the
-      playlist in song mode, only the selected pattern in pattern mode), so
-      render once when the pass is done; the harness listens back after you
-      say you are done. To check notes and tempo, use get_notes/get_scene
-      (instant) instead.
-    - fl.snapshot() -> tempo + channels.
     - During a match FL is never reopened: fl.save() is not needed (and a
       trial FL cannot save), and Track.set_automation, fl.add_effect and
       fl.file_edit() are unavailable because they rewrite the saved song.
@@ -166,51 +161,19 @@ def run(code: str, ctx: Context) -> RunResult:
 
 
 @_tool_boundary
-def get_notes(pattern: int, channel: int | str, ctx: Context) -> GetNotesResult:
-    """The notes on one channel's pattern as FL has them now, including every
-    write made this session. A list when small, a summary when large.
+def check(ctx: Context, bars: int = 2, start_bar: int = 1) -> CheckResult:
+    """Prove the parts are audible in a few seconds: play ``bars`` bars (1 to 8,
+    default 2) from ``start_bar`` (default 1) and read FL's own mixer meters.
+    FL stops afterwards and nothing in the song changes.
 
-    ``channel`` is an index; for a channel by name use run with
-    fl.track("Lead").notes().
-    """
+    Returns per channel: name, sounded (true/false), peak_dbfs, and the reason
+    when it was silent and FL shows why (muted, its mixer track muted, volume 0,
+    no notes in those bars); sounded is null only for a channel that plays
+    straight into the master, which cannot be measured on its own. Also the
+    master's peak and a one-line summary. Check after a batch of writes; render
+    once at the end to hear the song."""
     session = ctx.request_context.lifespan_context["session"]
-    try:
-        target = Target(pattern=pattern, channel=channel)  # pydantic coerces "3" -> 3
-        notes = session.read_notes(target)
-    except ValidationError as exc:
-        return _tool_error_response(
-            ToolErrorResult(
-                error="invalid_argument",
-                message=str(exc),
-                fix='pattern >= 1 and channel >= 0, as integers. For a channel by name, use run: fl.track("Lead").notes()',
-                retryable=False,
-            )
-        )
-    except ToolError as exc:
-        return _tool_error_response(_tool_error_result(exc))
-
-    result: dict[str, Any] = {"target": target.model_dump(), "note_count": len(notes)}
-    if len(notes) <= GET_NOTES_FULL_LIST_MAX:
-        result["notes"] = [n.canonical() for n in notes]
-        return GetNotesResult.model_validate(result)
-    result["summary"] = {
-        "keys": {"min": min(n.key for n in notes), "max": max(n.key for n in notes)},
-        "span_beats": {
-            "start": min(n.start for n in notes),
-            "end": max(n.start + n.length for n in notes),
-        },
-        "sample": [n.canonical() for n in sorted(notes, key=lambda n: n.start)[:GET_NOTES_SAMPLE_SIZE]],
-        "note": f"{len(notes)} notes is too many to list; this is a summary. Filter in run() for detail.",
-    }
-    return GetNotesResult.model_validate(result)
-
-
-@_tool_boundary
-def fl_doctor(ctx: Context) -> DoctorReport:
-    """Setup diagnostics for whoever runs this engine. Not needed to check your
-    work: edits apply immediately and reads return what FL has."""
-    session = ctx.request_context.lifespan_context["session"]
-    return session.doctor()
+    return session.check(start_bar, bars)
 
 
 # A render is only listenable if the caller can retrieve it; wavBase64 is
@@ -227,7 +190,8 @@ def render(ctx: Context) -> RenderResult:
     selected pattern in pattern mode. Returns {"path", "wavBase64", "span"}:
     wavBase64 is the WAV in base64 (omitted with a note past the size cap); span
     says what played (source "song" or "pattern"), its live beats and tempo, and
-    the seconds recorded. A render takes about that long, ten minutes at most.
+    the seconds recorded. A render takes about that long, ten minutes at most,
+    so render once when the pass is done (check proves audibility in seconds).
     Call analyze afterwards for measurements."""
     session = ctx.request_context.lifespan_context["session"]
     try:
@@ -273,9 +237,12 @@ def analyze(ctx: Context, wav: str | None = None) -> AudioAnalysis:
 
 
 @_tool_boundary
-def get_scene(ctx: Context, detail: str = "summary", channel: int | None = None) -> GetSceneResult:
+def get_scene(
+    ctx: Context, detail: str = "summary", channel: int | None = None, pattern: int | None = None
+) -> GetSceneResult:
     """Read what is in FL now - tempo, key, and what each channel has, including
-    every write made this session and the current live tempo.
+    every write made this session and the current live tempo. This is the one
+    read: its answer is current, so there is no need to read again after a write.
 
     Call this before writing, so additions fit what is already there. It returns
     an analysis rather than a note dump: a 56-note project summarises to about
@@ -289,6 +256,7 @@ def get_scene(ctx: Context, detail: str = "summary", channel: int | None = None)
             listed as such. Use "notes" only when you need individual notes,
             such as harmonising an existing line.
         channel: With detail="notes", limit to one channel index.
+        pattern: With detail="notes", limit to one pattern number.
 
     Returns:
         For "summary", a `summary` string is included that is already formatted
@@ -312,14 +280,14 @@ def get_scene(ctx: Context, detail: str = "summary", channel: int | None = None)
             ToolErrorResult(
                 error="invalid_argument",
                 message="The song's layout cannot be read in this session.",
-                fix="Use get_notes or run with fl.track(...).notes() to read notes.",
+                fix='Read a track\'s notes with run: fl.track("Bass").notes().',
                 retryable=False,
             )
         )
     rows = scene.rows_from_notes(session.all_notes())
     if detail == "notes":
         return GetSceneResult.from_notes(
-            SceneNotesResult.model_validate({"notes": scene.notes_detail(rows, channel)})
+            SceneNotesResult.model_validate({"notes": scene.notes_detail(rows, channel, pattern)})
         )
     names = {c.index: c.name for c in session.channel_names()}
     return GetSceneResult.from_summary(
@@ -335,7 +303,7 @@ def _fresh_render_path(ctx: Context) -> Path:
 
 def tool_definitions() -> tuple[Any, ...]:
     """The engine's complete MCP tool surface, in stable presentation order."""
-    return run, get_notes, get_scene, render, analyze, fl_doctor
+    return run, get_scene, check, render, analyze
 
 
 def _tool_error_result(exc: ToolError) -> ToolErrorResult:

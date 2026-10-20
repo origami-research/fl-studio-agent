@@ -523,7 +523,7 @@ def test_bridge_writes_without_a_project_file_count_from_this_sessions_writes(
     still land, a replace is fully known, and later reads count from it."""
     monkeypatch.setattr(flp, "read", lambda *_args: pytest.fail("no project must be opened"))
     snapshot = {"tempo": 100000, "ppq": 96, "playing": False, "current_pattern": 1, "mixer": [],
-                "channels": [{"idx": 0, "name": "Kick", "vol": 0.78, "pan": 0.0, "muted": False}]}
+                "channels": [{"idx": 0, "name": "Kick", "vol": 0.78, "pan": 0.0, "muted": False, "target_mixer_track": 1}]}
     control = FakeControl(
         hello=HELLO, handlers={"channels.selectedChannel": lambda args: 0, "state.snapshot": lambda args: snapshot}
     )

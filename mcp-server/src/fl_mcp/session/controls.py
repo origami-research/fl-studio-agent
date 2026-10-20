@@ -42,8 +42,6 @@ if TYPE_CHECKING:
 # (E2: set 0.42 -> stored 0.41875), and big synths are big - bound the listing.
 PLUGIN_PARAMS_DEFAULT_LIMIT = 40
 PLUGIN_PARAM_TOLERANCE = 0.02
-SAVE_BUSY_RETRIES = 2
-SAVE_BUSY_RETRY_SECONDS = 0.25
 RENDER_TIMEOUT_SECONDS = 300.0
 # A render's capture, this decay tail included, stops at CAPTURE_MAX_SECONDS
 # because it holds the tool call for its whole length.
@@ -85,19 +83,7 @@ def save_project(session: FLSession) -> None:
         # 0 here made the resulting ctl.save error claim an expired request
         # even though no save request had received a zero-second timeout.
         raise errors.control_plane_unavailable("ctl.save", LIVE_SET_TIMEOUT_SECONDS)
-    for attempt in range(SAVE_BUSY_RETRIES + 1):
-        try:
-            response = session.control.send_request("ctl.save", timeout=LIVE_SET_TIMEOUT_SECONDS)
-            break
-        except errors.ToolError as exc:
-            if exc.category != "control_plane_busy" or attempt == SAVE_BUSY_RETRIES:
-                raise
-            time.sleep(SAVE_BUSY_RETRY_SECONDS)
-    if not response.ok:
-        detail = response.err or "no detail"
-        if errors.is_operation_unsafe(detail):
-            raise errors.operation_unsafe("ctl.save")
-        raise errors.fl_api_error("ctl.save", detail)
+    session.link.command("ctl.save")
 
 
 def _render_saved_project(session: FLSession, project: Path) -> Path:
@@ -145,13 +131,7 @@ def _live_read(session: FLSession, op: str, args: list) -> object:
     """One live controller read: FL's answer, or a typed error naming why not."""
     if session._ensure_hello() is None or session.control is None:
         raise errors.control_plane_unavailable(op, LIVE_READ_TIMEOUT_SECONDS)
-    resp = session.control.send_request(op, args=args, timeout=LIVE_READ_TIMEOUT_SECONDS)
-    if not resp.ok:
-        detail = resp.err or "no detail"
-        if errors.is_operation_unsafe(detail):
-            raise errors.operation_unsafe(op)
-        raise errors.fl_api_error(op, detail)
-    return resp.ret
+    return session.link.call(op, args, timeout=LIVE_READ_TIMEOUT_SECONDS)
 
 
 def _live_int(session: FLSession, op: str, args: list | None = None) -> int:
@@ -228,11 +208,7 @@ def _live_render(session: FLSession, output: Path, seconds: float) -> Path:
     try:
         # Position is a controller operation, so it remains on the control wire
         # rather than reaching from the Bridge into FL on a mixer callback.
-        if session.control is None:
-            raise errors.control_plane_unavailable("transport.setSongPos", 0.0)
-        positioned = session.control.send_request(
-            "transport.setSongPos", args=[0], timeout=LIVE_SET_TIMEOUT_SECONDS
-        )
+        positioned = session.link.request("transport.setSongPos", [0], timeout=LIVE_SET_TIMEOUT_SECONDS)
         if not positioned.ok:
             raise errors.ToolError(
                 "render_failed",
@@ -396,9 +372,7 @@ def set_tempo(session: FLSession, bpm: float) -> float:
     """Live-first (confirmed via getCurrentTempo readback, BPM x 1000);
     else the project file (flp.set_tempo) + reload. Returns the readback."""
     if session._ensure_hello() is not None and session.control is not None:
-        resp = session.control.send_request(
-            "mixer.setCurrentTempo", args=[bpm, 1], timeout=LIVE_SET_TIMEOUT_SECONDS
-        )
+        resp = session.link.request("mixer.setCurrentTempo", [bpm, 1], timeout=LIVE_SET_TIMEOUT_SECONDS)
         if not resp.ok:
             # Unsafe-at-current-time means busy (warm-up window after a
             # load, addendum A6) - retryable, and NEVER a fallthrough.
@@ -408,7 +382,7 @@ def set_tempo(session: FLSession, bpm: float) -> float:
                 f"mixer.setCurrentTempo({bpm}) failed inside FL: {resp.err}",
                 fix="Check the value (10-999 BPM) and retry.",
             )
-        readback = session.control.send_request("mixer.getCurrentTempo", timeout=LIVE_READ_TIMEOUT_SECONDS)
+        readback = session.link.request("mixer.getCurrentTempo", timeout=LIVE_READ_TIMEOUT_SECONDS)
         if not readback.ok or readback.ret is None:
             raise WriteRejected(
                 f"FL Studio took the tempo but did not report it back ({readback.err}).",
@@ -452,7 +426,7 @@ def set_channel_levels(
         for field_name, op, args in requested:
             if args[1] is None:
                 continue
-            resp = session.control.send_request(op, args=args, timeout=LIVE_SET_TIMEOUT_SECONDS)
+            resp = session.link.request(op, args, timeout=LIVE_SET_TIMEOUT_SECONDS)
             if not resp.ok:
                 if errors.is_operation_unsafe(resp.err or ""):
                     raise errors.operation_unsafe(op)  # busy, not broken (A6)
@@ -469,7 +443,7 @@ def set_channel_levels(
             ("pan", "channels.getChannelPan", [channel]),
             ("pitch_semitones", "channels.getChannelPitch", [channel, 1]),
         ):
-            resp = session.control.send_request(op, args=args, timeout=LIVE_READ_TIMEOUT_SECONDS)
+            resp = session.link.request(op, args, timeout=LIVE_READ_TIMEOUT_SECONDS)
             if not resp.ok or resp.ret is None:
                 raise WriteRejected(
                     f"FL Studio took the levels but did not report {op} back ({resp.err}).",
@@ -689,17 +663,11 @@ def set_plugin_param(session: FLSession, channel: int, param: int | str, value: 
     name = str(_live_read(session, "plugins.getParamName", [index, channel, GENERATOR_SLOT]))
     requested = _resolve_value(value, _spec(model, index, name))
 
-    if session.control is None:
-        raise errors.control_plane_unavailable("plugins.setParamValue", 0.0)
-    resp = session.control.send_request(
-        "plugins.setParamValue",
-        # FL's generic plugin API is positional: value first, then the index
-        # advertised by getParamCount/getParamName/getParamValue.
-        args=[requested, index, channel, GENERATOR_SLOT],
-        timeout=LIVE_SET_TIMEOUT_SECONDS,
+    # FL's generic plugin API is positional: value first, then the index
+    # advertised by getParamCount/getParamName/getParamValue.
+    session.link.call(
+        "plugins.setParamValue", [requested, index, channel, GENERATOR_SLOT], timeout=LIVE_SET_TIMEOUT_SECONDS
     )
-    if not resp.ok:
-        raise errors.fl_api_error("plugins.setParamValue", resp.err or "no detail")
 
     confirmed = float(_live_read(session, "plugins.getParamValue", [index, channel, GENERATOR_SLOT]))
     if abs(confirmed - requested) > PLUGIN_PARAM_TOLERANCE:

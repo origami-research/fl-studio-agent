@@ -8,19 +8,20 @@ live controller operations.
 
 ## Tools
 
-The server exposes six tools:
+The server exposes five tools, one per job:
 
 | Tool | Purpose |
 | --- | --- |
-| `run` | Execute Python against the FL SDK. Its docstring is the SDK cheatsheet. |
-| `get_notes` | Read the notes FL has now on one channel's pattern. |
-| `get_scene` | Read a compact musical summary of what FL has now. |
+| `run` | Execute Python against the FL SDK: write and clear notes, tempo, levels, parameters. Its docstring is the SDK cheatsheet. |
+| `get_scene` | Read what FL has now: a compact musical summary, or the notes (`detail="notes"`, by channel and pattern). |
+| `check` | Play a few bars and read FL's mixer meters: which channels sounded, their peaks, and why a silent one is silent. |
 | `render` | Play the live arrangement once and record the mix to WAV. |
 | `analyze` | Analyze a WAV deterministically. |
-| `fl_doctor` | Report live-lane readiness and actionable fixes. |
 
-Use `run` for composition and SDK operations. Every write returns confirmed
-readback where the underlying lane can provide it.
+The working rhythm is write, check at milestones, render at the end.
+Every result is what FL now has, so nothing needs waiting for, saving, or re-reading.
+FL's transient refusals ("operation unsafe at current time", a busy control wire) are retried inside the engine; a model sees only errors it can act on.
+Setup diagnostics are for the operator, not the model: `fl-mcp-doctor` prints the same report as JSON.
 
 ## Install and verify
 

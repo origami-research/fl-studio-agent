@@ -76,7 +76,7 @@ class ToolError(Exception):
 
 
 # The default fix when FL cannot take an edit at all (setup is the operator's
-# job; fl_doctor and the log name the missing piece).
+# job; fl-mcp-doctor and the log name the missing piece).
 _SETUP_FIX = "FL Studio may still be starting. Wait a moment and retry."
 
 
@@ -112,9 +112,10 @@ def note_plane_unavailable(command_id: int, timeout: float) -> ToolError:
 
 
 def control_plane_unavailable(op: str, timeout: float) -> ToolError:
+    log.info("FL did not answer %r within %gs", op, timeout)
     return ToolError(
         "control_plane_unavailable",
-        f"FL Studio did not answer '{op}' within {timeout:g}s.",
+        "FL Studio did not answer in time.",
         "FL may be busy or still starting. Retry in a moment.",
         retryable=True,
     )
@@ -124,11 +125,13 @@ def control_plane_busy(op: str, timeout: float) -> ToolError:
     """The shared wire was held by another session's op - contended, NOT dead.
 
     Distinct from control_plane_unavailable so liveness checks treat a busy
-    wire as live (the op just needs a retry), rather than declaring FL gone."""
+    wire as live (the op just needs a retry), rather than declaring FL gone.
+    session.link.request retries it before a caller sees it."""
+    log.info("the control wire stayed held for %gs; %r was not sent", timeout, op)
     return ToolError(
         "control_plane_busy",
-        f"FL Studio stayed busy for {timeout:g}s and did not take '{op}'.",
-        "Retry.",
+        "FL Studio stayed busy and did not take this action, so nothing changed.",
+        "Retry it in a few seconds.",
         retryable=True,
     )
 
@@ -209,11 +212,13 @@ def is_operation_unsafe(detail: str) -> bool:
 
 
 def operation_unsafe(op: str) -> ToolError:
+    """FL kept refusing a call as unsafe for the whole bounded retry
+    (session.link.request), so nothing changed. The op goes to the log."""
+    log.warning("FL refused %r as unsafe at the current time through every retry", op)
     return ToolError(
         "operation_unsafe",
-        f"FL Studio refused '{op}': operation unsafe at current time.",
-        "FL's own scripting-thread-safety guard - it rejects some mutating calls made "
-        "mid-engine-cycle. Retrying (optionally after a short delay) usually succeeds.",
+        "FL Studio stayed busy for several seconds and did not take this action, so nothing changed.",
+        "Retry it in a few seconds.",
         retryable=True,
     )
 

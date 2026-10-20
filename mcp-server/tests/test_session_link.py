@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import shutil
 from pathlib import Path
+from typing import Any
 
 import pytest
 from session_fakes import (
@@ -291,3 +292,116 @@ def test_settle_times_out_quietly_when_fl_never_answers(monkeypatch, caplog):
     monkeypatch.setattr(link_mod, "FL_BOOT_TIMEOUT_SECONDS", 0.05)
     session.link.settle()  # must not raise: the reload itself succeeded
     assert any("settle" in r.message for r in caplog.records)
+
+
+# --- transient FL refusals are absorbed by the link ---------------------------
+
+UNSAFE = ControlResponse(id=1, ok=False, err="RuntimeError: Operation unsafe at current time")
+
+
+def _flaky(failures: list[ControlResponse | Exception], answer: object) -> Any:
+    """A controller handler that fails with each scripted failure in turn, then answers."""
+    pending = list(failures)
+
+    def handler(args: list[Any]) -> object:
+        if pending:
+            failure = pending.pop(0)
+            if isinstance(failure, Exception):
+                raise failure
+            return failure
+        return answer
+
+    return handler
+
+
+def _link(handlers: dict[str, Any]) -> tuple[ControlLink, FakeControl, FakeClock]:
+    clock = FakeClock()
+    control = FakeControl(hello=HELLO, handlers=handlers)
+    return ControlLink(control, factory=lambda: control, clock=clock, sleep=clock.sleep), control, clock
+
+
+def test_an_unsafe_refusal_is_retried_with_backoff_until_fl_takes_it():
+    """FL's 'unsafe at current time' applied nothing, so the engine retries it
+    and the caller never sees the hiccup (owner, 2026-10-18)."""
+    link, control, clock = _link({"state.snapshot": _flaky([UNSAFE, UNSAFE], "snap")})
+    assert link.call("state.snapshot") == "snap"
+    assert [op for op, _ in control.calls] == ["state.snapshot"] * 3
+    assert clock.sleeps == list(link_mod.TRANSIENT_RETRY_DELAYS[:2])
+
+
+def test_a_busy_wire_is_retried_because_the_request_was_never_sent():
+    busy = errors.control_plane_busy("mixer.getCurrentTempo", 2.0)
+    link, control, clock = _link({"mixer.getCurrentTempo": _flaky([busy], 120_000)})
+    assert link.call("mixer.getCurrentTempo") == 120_000
+    assert len(control.calls) == 2 and clock.sleeps == [link_mod.TRANSIENT_RETRY_DELAYS[0]]
+
+
+def test_retries_are_bounded_and_then_one_plain_error_surfaces():
+    link, control, clock = _link({"general.undo": lambda args: UNSAFE})
+    with pytest.raises(errors.ToolError) as excinfo:
+        link.command("general.undo")
+    assert excinfo.value.category == "operation_unsafe"
+    assert excinfo.value.fix == "Retry it in a few seconds."
+    assert len(control.calls) == len(link_mod.TRANSIENT_RETRY_DELAYS) + 1
+    assert clock.sleeps == list(link_mod.TRANSIENT_RETRY_DELAYS)
+    assert sum(clock.sleeps) < 10, "bounded: a model waits seconds, not minutes"
+
+
+def test_a_timeout_is_never_retried_because_fl_may_still_apply_it():
+    """Issue #47: a parked call can land late, so repeating it could apply twice."""
+    timeout = errors.control_plane_unavailable("mixer.setCurrentTempo", 8.0)
+    link, control, clock = _link({"mixer.setCurrentTempo": _flaky([timeout], None)})
+    with pytest.raises(errors.ToolError) as excinfo:
+        link.call("mixer.setCurrentTempo", [100, 1])
+    assert excinfo.value.category == "control_plane_unavailable"
+    assert len(control.calls) == 1 and clock.sleeps == []
+
+
+def test_a_real_refusal_is_not_retried():
+    boom = ControlResponse(id=1, ok=False, err="TypeError: bad argument")
+    link, control, clock = _link({"channels.getChannelName": lambda args: boom})
+    with pytest.raises(errors.ToolError) as excinfo:
+        link.call("channels.getChannelName", [99])
+    assert excinfo.value.category == "fl_api_error"
+    assert len(control.calls) == 1 and clock.sleeps == []
+
+
+def test_set_tempo_lands_through_a_transient_refusal():
+    """The whole session path: the model's set_tempo returns FL's tempo, not an error."""
+    tempo = {"value": 130_000}
+    attempts: list[list[Any]] = []
+
+    def set_tempo(args: list[Any]) -> ControlResponse | None:
+        attempts.append(args)
+        if len(attempts) == 1:
+            return UNSAFE
+        tempo["value"] = round(args[0] * 1000)
+        return None
+
+    control = FakeControl(
+        hello=HELLO,
+        handlers={"mixer.setCurrentTempo": set_tempo, "mixer.getCurrentTempo": lambda args: tempo["value"]},
+    )
+    session, _ = make_session(control=control)
+    assert session.set_tempo(100.0) == 100.0
+    assert len(attempts) == 2
+
+
+def test_a_busy_wire_that_waits_out_each_timeout_is_bounded_by_the_window():
+    """A busy answer comes only after the call waited its whole timeout for the
+    wire, so retries are bounded by elapsed time, not attempts: a model waits
+    seconds, never a minute (review of this change, 2026-10-18)."""
+    clock = FakeClock()
+
+    def held(args: list[Any]) -> object:
+        clock.now += 2.0  # the lock wait a busy wire costs a 2 s read
+        raise errors.control_plane_busy("mixer.getCurrentTempo", 2.0)
+
+    control = FakeControl(hello=HELLO, handlers={"mixer.getCurrentTempo": held})
+    link = ControlLink(control, factory=lambda: control, clock=clock, sleep=clock.sleep)
+    started = clock.now
+    with pytest.raises(errors.ToolError) as excinfo:
+        link.call("mixer.getCurrentTempo")
+    assert excinfo.value.category == "control_plane_busy"
+    assert len(control.calls) == 3
+    assert clock.now - started <= link_mod.TRANSIENT_RETRY_WINDOW_SECONDS + 2.0

@@ -22,7 +22,7 @@ uv run fl-mcp-install                         # note script + controller script 
 ```
 
 The server derives its expected controller protocol version from the exact controller source that
-`fl-mcp-install` deploys. If `fl_doctor` reports a stale controller, run `fl-mcp-install` and
+`fl-mcp-install` deploys. If `fl-mcp-doctor` reports a stale controller, run `fl-mcp-install` and
 restart FL Studio; the warning is advisory so compatible minor mismatches can still operate.
 
 Open FL Studio first, then start the Claude session. Its MIDI ports appear while FL is running,
@@ -54,7 +54,7 @@ Absolute path required. Restart the session. Then ask: "make a 4-bar chord loop.
 ---
 
 ## What you can ask for
-Compose (notes to any pattern), shape the sound (live synth params), read/understand the project (key, arrangement, automation), set tempo, play/stop, and render to WAV. Full list: `docs/24-coverage-map.md`.
+Compose (notes to any pattern), shape the sound (live synth params), read/understand the project (key, arrangement, automation), set tempo, check which channels sound, and render to WAV. Full list: `docs/24-coverage-map.md`.
 
 ## Honest notes
 - It drives **your** FL on **your** machine; live operations take over screen focus and restart FL around file writes.

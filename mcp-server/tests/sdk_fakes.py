@@ -15,7 +15,9 @@ from fl_mcp.schemas import (
     AutomationPoint,
     AutomationResult,
     Channel,
+    ChannelCheck,
     ChannelLevels,
+    CheckResult,
     ControlResponse,
     Note,
     NoteWriteMode,
@@ -59,7 +61,7 @@ class FakeSession(FLSession):
     """
 
     def __init__(self, *, store: Store, channels=(), control=None, tempo: float | None = 120.0):
-        self.link = ControlLink(control, factory=lambda: control)
+        self.link = ControlLink(control, factory=lambda: control, sleep=lambda seconds: None)
         self.store = store
         self.project = None
         self._tempo = tempo
@@ -150,6 +152,18 @@ class FakeSession(FLSession):
 
     def snapshot(self) -> SessionState:
         return SessionState(tempo_bpm=self._tempo, channels=list(self._channels))
+
+    def check(self, start_bar: int = 1, bars: int = 2) -> CheckResult:
+        span = f"bars {start_bar}-{start_bar + bars - 1}"
+        heard = ChannelCheck(channel=0, name="Kick", sounded=True, peak_dbfs=-6.0, mixer_track=1)
+        return CheckResult(
+            start_bar=start_bar,
+            bars=bars,
+            seconds=bars * 2.0,
+            master_peak_dbfs=-6.0,
+            channels=[heard],
+            summary=f"1 of 1 channels sounded in {span}.",
+        )
 
 
 DEFAULT_CHANNELS = (

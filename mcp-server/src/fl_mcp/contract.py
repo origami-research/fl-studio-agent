@@ -14,7 +14,7 @@ from mcp.server.mcpserver.tools.base import Tool
 from pydantic import BaseModel, Field, model_validator
 
 from fl_mcp import __version__
-from fl_mcp.schemas import Note, RenderSpan, Target
+from fl_mcp.schemas import RenderSpan
 
 ENV_SPOOL_ROOT = "FLMCP_SPOOL_ROOT"
 ENV_AGENT_PROJECT = "FLMCP_AGENT_PROJECT"
@@ -86,28 +86,9 @@ class RunResult(BaseModel):
         return self
 
 
-class NotesSummary(BaseModel):
-    keys: dict[Literal["min", "max"], int]
-    span_beats: dict[Literal["start", "end"], float]
-    sample: list[Note]
-    note: str
-
-
-class GetNotesResult(BaseModel):
-    target: Target
-    note_count: int
-    notes: list[Note] | None = None
-    summary: NotesSummary | None = None
-
-    @model_validator(mode="after")
-    def _has_notes_or_summary(self) -> GetNotesResult:
-        if (self.notes is None) == (self.summary is None):
-            raise ValueError("get_notes result requires exactly one of notes or summary")
-        return self
-
-
 class SceneNote(BaseModel):
     channel: int
+    pattern: int
     key: str
     midi: int
     start: float

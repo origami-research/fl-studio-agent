@@ -8,6 +8,7 @@ The stable public surface is deliberately small:
 
 - `fl.track(...).write(...)`, `clear()`, and `notes()` for channel/pattern notes.
 - `fl.set_tempo(...)` for confirmed tempo changes.
+- `fl.check(...)` to prove in seconds which channels sound.
 - `fl.render(...)`, `fl.read_wav(...)`, and `fl.analyze(...)` for render/audio workflows.
 - `fl.track(...).set_automation(...)` for existing FL-authored automation clips.
 - `with fl.file_edit(): ...` to batch file-lane edits into a single FL reload in development mode.
@@ -106,8 +107,8 @@ would pass ten minutes, and after recording if the WAV does not verify.
 The `render` MCP tool also returns the span it recorded (`RenderSpan`).
 
 A render plays in real time and produces the real mix, so render once when the
-pass is done; the harness listens back after you say you are done; use
-`get_notes`/`get_scene` (cheap, live) to check work instead.
+pass is done; the harness listens back after you say you are done. Use
+`get_scene` to read work and `fl.check()` to prove it sounds instead.
 
 ```python
 wav = fl.render("/tmp/mix.wav")
@@ -147,27 +148,32 @@ analysis = fl.analyze("/tmp/mix.wav")
 print(analysis.integrated_lufs, analysis.key)
 ```
 
-### `fl.play() -> None`, `fl.stop() -> None`, `fl.undo() -> None`
+### `fl.check(bars: int = 2, start_bar: int = 1) -> CheckResult`
 
-**Availability:** live-only. Start transport, stop transport, or invoke FL's
-undo command respectively.
+**Availability:** live-only. Plays `bars` bars (1 to 8) from `start_bar` and
+polls FL's own mixer meters (`mixer.getTrackPeaks`) for each channel's mixer
+track and the master, keeping the loudest reading. FL is stopped afterwards
+(stopped first if it was playing); no mute, solo or note changes. It takes
+about the span's length in real time.
+
+Each `ChannelCheck` has `name`, `sounded`, `peak_dbfs`, `mixer_track` and
+`reason`. A silent channel names why when FL or the session's note record says
+so: muted, its mixer track muted, zero volume,
+or no notes in the bars played; otherwise it "made no sound". Channels sharing
+a mixer track are measured together and say so. A channel routed straight to
+the master has `sounded=None`: the master meter is the whole mix, so it cannot
+be measured on its own. `summary` is one line to read.
 
 ```python
-fl.play()
-fl.stop()
-fl.undo()
+print(fl.check().summary)
+# 4 of 5 channels sounded in bars 1-2; the master peaked at -3.1 dBFS.
+# Silent: FLEX Bass (it has no notes in bars 1-2).
 ```
 
-### `fl.snapshot() -> SessionState`
+### `fl.undo() -> None`
 
-**Availability:** live snapshot when connected, otherwise a project-file
-snapshot. Returns one confirmed backend view; it never combines live and file
-state in the same result.
-
-```python
-state = fl.snapshot()
-print(state.playing, state.current_pattern)
-```
+**Availability:** live-only. Invokes FL's undo command. The session's note
+record does not follow it, so write the track again to set its notes for certain.
 
 ## `Track`
 

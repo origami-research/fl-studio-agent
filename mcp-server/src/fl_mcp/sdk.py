@@ -29,10 +29,10 @@ from .schemas import (
     AutomationResult,
     Channel,
     ChannelLevels,
+    CheckResult,
     Note,
     NoteWriteMode,
     PluginParam,
-    SessionState,
     Target,
     WriteResult,
 )
@@ -181,20 +181,20 @@ class FL:
         """Load PCM WAV samples and sample rate for NumPy processing."""
         return _read_wav(Path(path))
 
-    def play(self) -> None:
-        self._session.play()
+    def check(self, bars: int = 2, start_bar: int = 1) -> CheckResult:
+        """Play ``bars`` bars (1 to 8) from ``start_bar`` and report which channels
+        made sound, from FL's own mixer meters. Takes about that long; FL is
+        stopped afterwards and nothing in the song changes.
 
-    def stop(self) -> None:
-        self._session.stop()
+        Returns each channel's name, ``sounded``, ``peak_dbfs`` and the ``reason``
+        it was silent when FL shows one, plus ``summary``: one line to read.
+        """
+        return self._session.check(start_bar, bars)
 
     def undo(self) -> None:
         """Undo FL's last action. Notes this session wrote still read as written:
         write the track again to set its notes for certain."""
         self._session.undo()
-
-    def snapshot(self) -> SessionState:
-        """FL's tempo, transport and channels now."""
-        return self._session.snapshot()
 
     def file_edit(self) -> AbstractContextManager[None]:
         """Batch edits that rewrite the saved song (automation, effects) into one FL reopen.

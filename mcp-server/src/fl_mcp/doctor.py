@@ -1,4 +1,4 @@
-"""``fl-mcp-doctor``: the fl_doctor report for this user's running FL, as JSON.
+"""``fl-mcp-doctor``: the operator's setup report for this user's running FL, as JSON.
 
 It builds the same session the MCP server builds (same environment, same
 defaults), so a box install can prove what a later ``fl-mcp`` will see without

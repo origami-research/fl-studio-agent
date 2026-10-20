@@ -68,14 +68,9 @@ def snapshot(session: FLSession) -> SessionState:
     A5). Else: decoded from the project file. One backend per call, so a
     stale file never contaminates a live view or vice versa."""
     if session._ensure_hello() is not None and session.control is not None:
-        resp = session.control.send_request("state.snapshot", timeout=SNAPSHOT_TIMEOUT_SECONDS)
-        if not resp.ok:
-            detail = resp.err or "no detail"
-            if errors.is_operation_unsafe(detail):
-                raise errors.operation_unsafe("state.snapshot")
-            raise errors.fl_api_error("state.snapshot", detail)
+        snap = session.link.call("state.snapshot", timeout=SNAPSHOT_TIMEOUT_SECONDS)
         try:
-            return SessionState.from_wire(resp.ret)
+            return SessionState.from_wire(snap)
         except (KeyError, TypeError, ValueError) as exc:
             raise errors.fl_api_error("state.snapshot", f"malformed snapshot payload ({exc!r})") from exc
 
@@ -113,7 +108,7 @@ def doctor(session: FLSession, *, clock: Callable[[], float] = time.time) -> Doc
         return PlaneStatus(
             connected=False,
             detail=detail,
-            fix=f"{detail}. Restore that component, then run fl_doctor again.",
+            fix=f"{detail}. Restore that component, then run fl-mcp-doctor again.",
         )
 
     try:

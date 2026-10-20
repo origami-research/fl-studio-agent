@@ -128,6 +128,39 @@ class WriteResult(BaseModel):
     total: int | None = Field(ge=0)  # notes on this track in this pattern now
 
 
+# A check plays a short span; past this a render is the right tool.
+CHECK_MAX_BARS = 8
+
+
+class ChannelCheck(BaseModel):
+    """Whether one channel made sound during fl.check(), from FL's mixer meters.
+
+    ``sounded`` is None only when the channel plays straight into the master,
+    where its sound cannot be told apart from the rest of the mix.
+    ``peak_dbfs`` is the loudest level its mixer track reached (None: silence,
+    or not measurable on its own).
+    ``reason`` says why it was silent when FL shows why, or how it was measured.
+    """
+
+    channel: int
+    name: str
+    sounded: bool | None
+    peak_dbfs: float | None
+    mixer_track: int
+    reason: str | None = None
+
+
+class CheckResult(BaseModel):
+    """What fl.check() heard: each channel, the master's peak, and a summary line."""
+
+    start_bar: int
+    bars: int
+    seconds: float
+    master_peak_dbfs: float | None
+    channels: list[ChannelCheck]
+    summary: str
+
+
 class PluginParam(BaseModel):
     """One plugin parameter, with its normalized live value and known semantics.
 
@@ -375,6 +408,8 @@ class Channel(BaseModel):
     volume: float = 0.78
     pan: float = 0.0
     muted: bool = False
+    # The mixer track FL routes this channel to (0 is the master); live reads only.
+    mixer_track: int | None = None
 
 
 class MixerTrack(BaseModel):
@@ -413,6 +448,7 @@ class SessionState(BaseModel):
                     volume=float(c["vol"]),
                     pan=float(c["pan"]),
                     muted=bool(c["muted"]),
+                    mixer_track=int(c["target_mixer_track"]),
                 )
                 for c in snap["channels"]
             ],

@@ -318,7 +318,7 @@ def test_save_project_uses_the_control_lane():
     assert seen_timeouts[-1] == controls.LIVE_SET_TIMEOUT_SECONDS
 
 
-def test_save_project_retries_a_busy_control_wire(monkeypatch):
+def test_save_project_retries_a_busy_control_wire():
     attempts = 0
 
     def save(args):
@@ -328,7 +328,6 @@ def test_save_project_retries_a_busy_control_wire(monkeypatch):
             raise errors.control_plane_busy("ctl.save", 8.0)
         return 8
 
-    monkeypatch.setattr(controls.time, "sleep", lambda seconds: None)
     control = FakeControl(hello=HELLO, handlers={"ctl.save": save})
     session, _ = make_session(control=control)
 
@@ -342,7 +341,7 @@ def test_save_project_requires_control_plane():
     with pytest.raises(errors.ToolError) as excinfo:
         session.save_project()
     assert excinfo.value.category == "control_plane_unavailable"
-    assert f"within {controls.LIVE_SET_TIMEOUT_SECONDS:g}s" in excinfo.value.message
+    assert excinfo.value.message == "FL Studio did not answer in time."
 
 
 def test_set_tempo_live_unconfirmed_raises():
@@ -512,38 +511,35 @@ def test_automation_requires_a_project_file():
         session.set_automation(2, [])
 
 
-# --- play / stop / undo (addendum A11) ---------------------------------------
+# --- undo (addendum A11) ------------------------------------------------------
 
 
-@pytest.mark.parametrize(
-    ("method", "op"),
-    [("play", "transport.start"), ("stop", "transport.stop"), ("undo", "general.undo")],
-)
-def test_transport_methods_send_their_op_and_return_none(method, op):
-    control = FakeControl(hello=HELLO, handlers={op: lambda args: 0})
+def test_undo_sends_its_op_and_returns_none():
+    control = FakeControl(hello=HELLO, handlers={"general.undo": lambda args: 0})
     session, _ = make_session(control=control)
 
-    assert getattr(session, method)() is None
-    assert control.calls == [(op, [])]
+    assert session.undo() is None
+    assert control.calls == [("general.undo", [])]
 
 
-@pytest.mark.parametrize("method", ["play", "stop", "undo"])
-def test_transport_methods_raise_without_a_control_plane(method):
+def test_undo_raises_without_a_control_plane():
     session, _ = make_session()
     with pytest.raises(errors.ToolError) as excinfo:
-        getattr(session, method)()
+        session.undo()
     assert excinfo.value.category == "control_plane_unavailable"
 
 
-def test_transport_unsafe_refusal_is_retryable_operation_unsafe():
-    """Addendum A6: unsafe-at-current-time means busy, not broken."""
-    control = FakeControl(hello=HELLO, handlers={"transport.start": lambda args: UNSAFE})
+def test_a_persistent_unsafe_refusal_is_retryable_operation_unsafe():
+    """Addendum A6: unsafe-at-current-time means busy, not broken. The link
+    retried it to exhaustion; what surfaces is one plain, retryable sentence."""
+    control = FakeControl(hello=HELLO, handlers={"general.undo": lambda args: UNSAFE})
     session, _ = make_session(control=control)
 
     with pytest.raises(errors.ToolError) as excinfo:
-        session.play()
+        session.undo()
     assert excinfo.value.category == "operation_unsafe"
     assert excinfo.value.retryable is True
+    assert "general.undo" not in excinfo.value.message
 
 
 def test_transport_other_refusals_surface_fl_detail():

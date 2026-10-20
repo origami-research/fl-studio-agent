@@ -29,8 +29,8 @@ claude mcp add fl-studio -- /absolute/path/to/mcp-server/.venv/bin/python -m fl_
 
 ## Tools and SDK
 
-The server exposes `run`, `get_notes`, `get_scene`, `render`, `analyze`, and
-`fl_doctor`. The `run` tool docstring is the SDK cheatsheet: it documents
+The server exposes `run`, `get_scene`, `check`, `render`, and `analyze`; the
+operator's setup report is the `fl-mcp-doctor` command. The `run` tool docstring is the SDK cheatsheet: it documents
 `fl`, `theory`, `Note`, and each supported operation. `run` executes cells in a
 persistent kernel process with full Python, confined by the OS to its workspace
 on Windows; see [../docs/38-python-kernel.md](../docs/38-python-kernel.md).

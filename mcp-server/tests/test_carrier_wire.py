@@ -284,7 +284,7 @@ def test_timeout_after_hello_reads_as_busy_not_absent(rig):
     err = exc_info.value
     assert err.category == "control_plane_unavailable"
     assert err.retryable is True
-    assert "attached" in err.message and "busy" in err.message
+    assert err.message == "FL Studio is busy and did not answer in time."
 
 
 def test_response_with_wrong_id_never_satisfies_the_call(rig):

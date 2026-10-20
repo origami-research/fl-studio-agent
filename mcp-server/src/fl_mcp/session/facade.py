@@ -40,6 +40,7 @@ from fl_mcp.schemas import (
     AutomationResult,
     Channel,
     ChannelLevels,
+    CheckResult,
     DoctorReport,
     HelloEvent,
     Note,
@@ -53,6 +54,7 @@ from fl_mcp.schemas import (
 )
 from fl_mcp.store import Store
 
+from . import check as check_mod
 from . import controls, lifecycle, state
 from . import notes as note_ops
 from .detect import (
@@ -181,8 +183,14 @@ class FLSession:
         plugin_param_models: tuple[PluginParamModel, ...] = (),
         session_spool_root: Path | None = None,
         clock: Callable[[], float] = time.time,
+        monotonic: Callable[[], float] = time.monotonic,
+        sleep: Callable[[float], None] = time.sleep,
     ) -> None:
-        self.link = ControlLink(control, factory=control_factory)
+        # The durations the session measures (the link's retry window, how long
+        # a check plays) run on ``monotonic`` and wait through ``sleep``.
+        self._monotonic = monotonic
+        self._sleep = sleep
+        self.link = ControlLink(control, factory=control_factory, clock=monotonic, sleep=sleep)
         # The wall clock every Bridge heartbeat freshness check reads (the
         # heartbeat stamps unix_time), injected so it is one clock, not three.
         self._clock = clock
@@ -476,18 +484,12 @@ class FLSession:
         with self._write_guard("set_plugin_param"):
             return controls.set_plugin_param(self, channel, param, value)
 
-    # -- transport (manager sign-off, addendum A11) ---------------------------
-    #
-    # These exist so the SDK never reaches through to the wire. Each sends the
-    # control op and RAISES on failure (link.command is the one conversion).
+    # -- transport ------------------------------------------------------------
 
-    def play(self) -> None:
-        """``transport.start``."""
-        self.link.command("transport.start")
-
-    def stop(self) -> None:
-        """``transport.stop``."""
-        self.link.command("transport.stop")
+    def check(self, start_bar: int = 1, bars: int = 2) -> CheckResult:
+        """Play a short span and report which channels sounded (session/check.py)."""
+        with self._write_guard("check"):
+            return check_mod.check(self, start_bar, bars, clock=self._monotonic, sleep=self._sleep)
 
     def undo(self) -> None:
         """``general.undo``. The note record does not follow it (docs/27 §1a known gap)."""

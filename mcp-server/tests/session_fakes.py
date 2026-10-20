@@ -184,6 +184,8 @@ def make_session(
     platform: FakePlatform | None = None,
     fl_license: FLLicense = FLLicense.LICENSED,
     clock: Callable[[], float] = time.time,
+    monotonic: Callable[[], float] = time.monotonic,
+    sleep: Callable[[float], None] = lambda seconds: None,
 ) -> tuple[FLSession, FakeStore]:
     store = store or FakeStore()
     # The fakes implement exactly the surface FLSession consumes; the casts are
@@ -202,6 +204,10 @@ def make_session(
         platform=cast(Platform, platform or FakePlatform()),
         fl_license=fl_license,
         clock=clock,
+        # The suite never really waits: a retry or a check's polling pause is
+        # recorded by the caller's clock double when it needs to observe it.
+        monotonic=monotonic,
+        sleep=sleep,
     )
     return session, store
 

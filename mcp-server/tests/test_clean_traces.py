@@ -60,16 +60,20 @@ ACK = {
 
 
 def trial_fl() -> FakeControl:
-    """FL's controller as a trial box answers it: live tempo and channel selection."""
-    state = {"tempo": 130_000, "selected": 0}
+    """FL's controller as a trial box answers it: live tempo, channel selection,
+    transport, and meters where the kick's mixer track sounds while playing."""
+    state = {"tempo": 130_000, "selected": 0, "playing": False}
     snapshot = lambda args: {  # noqa: E731 - one expression, read in place
         "tempo": state["tempo"],
         "ppq": 96,
-        "playing": False,
+        "playing": state["playing"],
         "current_pattern": 1,
-        "mixer": [],
+        "mixer": [
+            {"idx": i, "name": name, "vol": 0.8, "pan": 0.0, "muted": False, "solo": False}
+            for i, name in enumerate(["Master", *TEMPLATE_CHANNELS])
+        ],
         "channels": [
-            {"idx": i, "name": name, "vol": 0.78, "pan": 0.0, "muted": False}
+            {"idx": i, "name": name, "vol": 0.78, "pan": 0.0, "muted": False, "target_mixer_track": i + 1}
             for i, name in enumerate(TEMPLATE_CHANNELS)
         ],
     }
@@ -81,8 +85,27 @@ def trial_fl() -> FakeControl:
             "channels.selectedChannel": lambda args: state["selected"],
             "select_channels": lambda args: state.update(selected=args[0][0]),
             "state.snapshot": snapshot,
+            "transport.getLoopMode": lambda args: 0,
+            "patterns.getPatternLength": lambda args: 64,
+            "transport.setSongPos": lambda args: None,
+            "transport.start": lambda args: state.update(playing=True),
+            "transport.stop": lambda args: state.update(playing=False),
+            "mixer.getTrackPeaks": lambda args: 0.5 if state["playing"] and args[0] in (0, 1) else 0.0,
         },
     )
+
+
+class TrialClock:
+    """Time that moves only when the engine waits, so a check plays instantly."""
+
+    def __init__(self) -> None:
+        self.now = 0.0
+
+    def __call__(self) -> float:
+        return self.now
+
+    def sleep(self, seconds: float) -> None:
+        self.now += seconds
 
 
 @pytest.fixture
@@ -97,7 +120,10 @@ def box(tmp_path, monkeypatch):
     project = tmp_path / "FLMCP Agent.flp"
     shutil.copyfile(template_path(), project)
     control = trial_fl()
+    clock = TrialClock()
     session, _ = make_session(
+        monotonic=clock,
+        sleep=clock.sleep,
         control=control,
         transport=FakeSpool(responses=dict(ACK)),
         store=Store("trial", root=tmp_path / "store"),
@@ -133,7 +159,7 @@ def run(box: Any, code: str) -> Any:
 def test_write_then_read_on_a_trial_fl_is_definitive_and_plain(box):
     # Run bdea5e90 steps 0-3: look, set the tempo, write the kick.
     call(box, server.get_scene)
-    run(box, "print(fl.snapshot()); print(fl.channels)")
+    run(box, "print(fl.channels)")
     wrote = run(
         box,
         'print(fl.set_tempo(100.0))\n'
@@ -145,9 +171,9 @@ def test_write_then_read_on_a_trial_fl_is_definitive_and_plain(box):
 
     # Step 4 ("That status is still unconfirmed"): an immediate read returns it.
     assert run(box, 'print(len(fl.track("808 Kick").notes())); print(fl.tempo)').stdout == "16\n100.0\n"
-    # Step 6: get_notes, with the channel as the model sent it (a string).
-    notes = call(box, server.get_notes, pattern=1, channel="0")
-    assert notes.note_count == 16 and len(notes.notes) == 16
+    # Step 6 read the track's notes with a tool: get_scene is the one read.
+    notes = call(box, server.get_scene, detail="notes", channel=0, pattern=1)
+    assert len(notes.notes) == 16
 
     # Run b5343990 step 5 ("The scene seems stale, showing tempo 130 but no notes").
     scene = call(box, server.get_scene)
@@ -182,6 +208,21 @@ def test_write_then_read_on_a_trial_fl_is_definitive_and_plain(box):
         assert not INTERNAL_WORDS.search(payload), payload
 
 
+def test_check_proves_what_sounds_in_plain_words(box):
+    """The cheap proof a model was missing: write, then check, instead of a full render."""
+    run(box, 'fl.track("808 Kick").write(theory.drums("x...x...x...x...", key="C1"), mode="replace")')
+    checked = call(box, server.check)
+    by_name = {c.name: c for c in checked.channels}
+    assert (by_name["808 Kick"].sounded, by_name["808 Kick"].peak_dbfs) == (True, -6.0)
+    assert by_name["FLEX Bass"].reason == "it has no notes in bars 1-2"
+    assert checked.summary.startswith("1 of 5 channels sounded in bars 1-2; the master peaked at -6 dBFS.")
+    # The same check from code crosses the kernel and reads the same.
+    assert run(box, "print(fl.check().summary)").stdout == checked.summary + "\n"
+    assert box.control.calls[-1] == ("transport.stop", []), "FL is left stopped"
+    for payload in box.payloads:
+        assert not INTERNAL_WORDS.search(payload), payload
+
+
 def test_a_refused_write_is_a_plain_error_and_reads_stay_true(box):
     """A refusal raises (never a maybe), and the track still reads what FL has."""
     box.ctx.request_context.lifespan_context["session"].transport.responses["add_notes"] = SpoolResponse(
@@ -190,7 +231,7 @@ def test_a_refused_write_is_a_plain_error_and_reads_stay_true(box):
     refused = call(box, server.run, code='fl.track("808 Kick").write([Note(key=36, start=0, length=1)])')
     assert refused.outcome == "error"
     assert "FL Studio refused the note edit, so nothing was written." in refused.traceback
-    assert call(box, server.get_notes, pattern=1, channel=0).note_count == 0
+    assert call(box, server.get_scene, detail="notes", channel=0).notes == []
     for payload in box.payloads:
         assert not INTERNAL_WORDS.search(payload), payload
 
@@ -200,11 +241,7 @@ def test_a_refused_write_is_a_plain_error_and_reads_stay_true(box):
 
 def test_tool_descriptions_and_schemas_speak_plainly():
     for tool in build_contract()["tools"]:
-        # fl_doctor's report is the operator's setup diagnostic, and harnesses
-        # read its fields (project_file.detail locates the saved song), so only
-        # its description is held to the model's vocabulary.
-        schema = "" if tool["name"] == "fl_doctor" else json.dumps(tool["outputSchema"])
-        text = tool["description"] + schema
+        text = tool["description"] + json.dumps(tool["inputSchema"]) + json.dumps(tool["outputSchema"])
         assert not INTERNAL_WORDS.search(text), (tool["name"], INTERNAL_WORDS.search(text))
 
 
@@ -216,8 +253,8 @@ def _sdk_docs() -> list[tuple[str, str]]:
         for name, member in vars(cls).items():
             if not name.startswith("_"):
                 docs.append((f"{cls.__name__}.{name}", inspect.getdoc(member) or ""))
-    returned = [Note, Target, schemas.WriteResult, schemas.Channel, schemas.SessionState, schemas.ChannelLevels,
-                schemas.PluginParam, schemas.AutomationPoint, schemas.AutomationResult]
+    returned = [Note, Target, schemas.WriteResult, schemas.Channel, schemas.ChannelLevels, schemas.CheckResult,
+                schemas.ChannelCheck, schemas.PluginParam, schemas.AutomationPoint, schemas.AutomationResult]
     for model in returned:
         docs.append((model.__name__, model.__dict__.get("__doc__") or ""))
         docs.extend((f"{model.__name__}.{field}", field) for field in model.model_fields)

@@ -128,7 +128,7 @@
   },
   "tools": [
     {
-      "description": "Run a Python cell in a persistent kernel bound to the live FL Studio\nsession, like a Jupyter notebook. Variables, imports, and functions persist\nacross calls. It is full Python: import anything, use files, numpy,\ntime.sleep, type/dir/getattr. `%pip install pkg` (or `!pip install pkg`)\ninstalls a package for later imports; `!cmd` runs a shell command. The\nworking directory is your workspace, the one place you can write; its files\nlast for the session. Pre-bound: fl (the SDK), theory, Note,\nAutomationPoint. A trailing expression is repr'd like a REPL.\n\nReturns {\"outcome\", \"stdout\", \"result\" | \"traceback\"}; stdout includes\nstderr. outcome is \"ok\", or \"error\" (read the traceback and fix the code),\nor \"interrupted\" when the cell ran past its 300 s budget (time inside fl\ncalls does not count) - the kernel and its variables are intact, or \"kernel_lost\" when\nthe kernel process died or was killed (os._exit, a crash, or ignoring the\ninterrupt) - its variables are gone, files stay, the next run starts fresh.\n\nHow the session behaves: every fl call applies to FL immediately and\nreturns once FL has it, or raises with the reason. A read right after a\nwrite returns the written notes; there is nothing to wait for, save, or\nreopen. To hear the result, render.\n\nThe SDK (no introspection needed):\n- fl.set_tempo(140.0) -> the tempo FL now has; fl.tempo reads it.\n- fl.channels -> [Channel(index, name), ...].\n- fl.track(\"Bass\") / fl.track(2, pattern=1) -> Track (exact name, index, or\n  unique substring; pattern defaults to 1).\n- Track.write([Note(...), ...], mode=\"merge\"|\"replace\") -> WriteResult(wrote,\n  track, pattern, mode, total): \"merge\" adds the notes, \"replace\" swaps the\n  pattern's notes on that track; total is how many it now has.\n  Track.notes() -> the notes it has now; Track.clear() empties it.\n- Note(key=60 or \"C4\"/\"F#3\", start=0.0, length=1.0, velocity=0.8, pan=0.5)\n  with start/length in beats from pattern start.\n- Track.set_channel_levels(volume=0.9, pan=-0.15, pitch=0) - volume 0..1,\n  pan -1..1, pitch whole semitones -48..48; returns FL's values.\n- Track.params(query=\"cutoff\") / Track.set_param(\"cutoff\", 0.55) - the\n  instrument's parameters, values normalized 0..1.\n- fl.render(\"mix.wav\") -> Path of the WAV. Only the file name is used: it\n  lands in the session's renders folder, which you can read but not write.\n  fl.analyze(path) -> bpm/key/LUFS/spectral balance; fl.read_wav(path) ->\n  (samples: numpy.ndarray, sample_rate: int).\n  A render plays the song in real time (FL's loop mode decides: the\n  playlist in song mode, only the selected pattern in pattern mode), so\n  render once when the pass is done; the harness listens back after you\n  say you are done. To check notes and tempo, use get_notes/get_scene\n  (instant) instead.\n- fl.snapshot() -> tempo + channels.\n- During a match FL is never reopened: fl.save() is not needed (and a\n  trial FL cannot save), and Track.set_automation, fl.add_effect and\n  fl.file_edit() are unavailable because they rewrite the saved song.\n- theory.chord(\"C\", \"minor\") / theory.scale(\"E\", \"minor\") -> MIDI ints;\n  theory.drums(\"x...x...x...x...\", key=\"C1\", step_beats=0.25) -> a\n  ready-to-write [Note] step grid ('x' = hit, '.' = rest).",
+      "description": "Run a Python cell in a persistent kernel bound to the live FL Studio\nsession, like a Jupyter notebook. Variables, imports, and functions persist\nacross calls. It is full Python: import anything, use files, numpy,\ntime.sleep, type/dir/getattr. `%pip install pkg` (or `!pip install pkg`)\ninstalls a package for later imports; `!cmd` runs a shell command. The\nworking directory is your workspace, the one place you can write; its files\nlast for the session. Pre-bound: fl (the SDK), theory, Note,\nAutomationPoint. A trailing expression is repr'd like a REPL.\n\nReturns {\"outcome\", \"stdout\", \"result\" | \"traceback\"}; stdout includes\nstderr. outcome is \"ok\", or \"error\" (read the traceback and fix the code),\nor \"interrupted\" when the cell ran past its 300 s budget (time inside fl\ncalls does not count) - the kernel and its variables are intact, or \"kernel_lost\" when\nthe kernel process died or was killed (os._exit, a crash, or ignoring the\ninterrupt) - its variables are gone, files stay, the next run starts fresh.\n\nHow to work: write, check at milestones, render at the end. Every fl call\napplies to FL immediately and returns once FL has it, or raises with the\nreason; its result is what FL now has. There is nothing to wait for, save,\nreopen or re-read. To prove parts are audible, check (a few seconds); to\nhear the song, render once when the pass is done.\n\nThe SDK (no introspection needed):\n- fl.set_tempo(140.0) -> the tempo FL now has; fl.tempo reads it.\n- fl.channels -> [Channel(index, name, ...), ...].\n- fl.track(\"Bass\") / fl.track(2, pattern=1) -> Track (exact name, index, or\n  unique substring; pattern defaults to 1).\n- Track.write([Note(...), ...], mode=\"merge\"|\"replace\") -> WriteResult(wrote,\n  track, pattern, mode, total): \"merge\" adds the notes, \"replace\" swaps the\n  pattern's notes on that track; total is how many it now has.\n  Track.notes() -> the notes it has now; Track.clear() empties it.\n- Note(key=60 or \"C4\"/\"F#3\", start=0.0, length=1.0, velocity=0.8, pan=0.5)\n  with start/length in beats from pattern start.\n- Track.set_channel_levels(volume=0.9, pan=-0.15, pitch=0) - volume 0..1,\n  pan -1..1, pitch whole semitones -48..48; returns FL's values.\n- Track.params(query=\"cutoff\") / Track.set_param(\"cutoff\", 0.55) - the\n  instrument's parameters, values normalized 0..1.\n- fl.check(bars=2, start_bar=1) -> CheckResult: plays those bars and reads\n  FL's mixer meters; per channel whether it sounded, its peak dBFS, and why\n  it was silent (muted, no notes in those bars, ...); .summary is one line.\n- fl.render(\"mix.wav\") -> Path of the WAV. Only the file name is used: it\n  lands in the session's renders folder, which you can read but not write.\n  A render plays the whole song in real time (FL's loop mode decides: the\n  playlist in song mode, only the selected pattern in pattern mode).\n  fl.analyze(path) -> bpm/key/LUFS/spectral balance; fl.read_wav(path) ->\n  (samples: numpy.ndarray, sample_rate: int).\n- During a match FL is never reopened: fl.save() is not needed (and a\n  trial FL cannot save), and Track.set_automation, fl.add_effect and\n  fl.file_edit() are unavailable because they rewrite the saved song.\n- theory.chord(\"C\", \"minor\") / theory.scale(\"E\", \"minor\") -> MIDI ints;\n  theory.drums(\"x...x...x...x...\", key=\"C1\", step_beats=0.25) -> a\n  ready-to-write [Note] step grid ('x' = hit, '.' = rest).",
       "inputSchema": {
         "properties": {
           "code": {
@@ -193,201 +193,7 @@
       }
     },
     {
-      "description": "The notes on one channel's pattern as FL has them now, including every\nwrite made this session. A list when small, a summary when large.\n\n``channel`` is an index; for a channel by name use run with\nfl.track(\"Lead\").notes().",
-      "inputSchema": {
-        "properties": {
-          "channel": {
-            "anyOf": [
-              {
-                "type": "integer"
-              },
-              {
-                "type": "string"
-              }
-            ],
-            "title": "Channel"
-          },
-          "pattern": {
-            "title": "Pattern",
-            "type": "integer"
-          }
-        },
-        "required": [
-          "pattern",
-          "channel"
-        ],
-        "title": "get_notesArguments",
-        "type": "object"
-      },
-      "name": "get_notes",
-      "outputSchema": {
-        "$defs": {
-          "Note": {
-            "description": "One note, in musical units. C4 = MIDI 60 = middle C.\n\n``key`` is firmly an int after construction: \"C4\"/\"F#3\" are accepted as\ninput and resolved once by ``pitch.parse_key``. Use ``pitch.key_name`` for\ndisplay. No downstream code ever sees a union.",
-            "properties": {
-              "color": {
-                "default": 0,
-                "maximum": 15,
-                "minimum": 0,
-                "title": "Color",
-                "type": "integer"
-              },
-              "key": {
-                "maximum": 127,
-                "minimum": 0,
-                "title": "Key",
-                "type": "integer"
-              },
-              "length": {
-                "exclusiveMinimum": 0,
-                "maximum": 1024,
-                "title": "Length",
-                "type": "number"
-              },
-              "pan": {
-                "default": 0.5,
-                "maximum": 1,
-                "minimum": 0,
-                "title": "Pan",
-                "type": "number"
-              },
-              "start": {
-                "minimum": 0,
-                "title": "Start",
-                "type": "number"
-              },
-              "velocity": {
-                "default": 0.8,
-                "maximum": 1,
-                "minimum": 0,
-                "title": "Velocity",
-                "type": "number"
-              }
-            },
-            "required": [
-              "key",
-              "start",
-              "length"
-            ],
-            "title": "Note",
-            "type": "object"
-          },
-          "NotesSummary": {
-            "properties": {
-              "keys": {
-                "additionalProperties": {
-                  "type": "integer"
-                },
-                "propertyNames": {
-                  "enum": [
-                    "min",
-                    "max"
-                  ]
-                },
-                "title": "Keys",
-                "type": "object"
-              },
-              "note": {
-                "title": "Note",
-                "type": "string"
-              },
-              "sample": {
-                "items": {
-                  "$ref": "#/$defs/Note"
-                },
-                "title": "Sample",
-                "type": "array"
-              },
-              "span_beats": {
-                "additionalProperties": {
-                  "type": "number"
-                },
-                "propertyNames": {
-                  "enum": [
-                    "start",
-                    "end"
-                  ]
-                },
-                "title": "Span Beats",
-                "type": "object"
-              }
-            },
-            "required": [
-              "keys",
-              "span_beats",
-              "sample",
-              "note"
-            ],
-            "title": "NotesSummary",
-            "type": "object"
-          },
-          "Target": {
-            "description": "A pattern/channel coordinate. Firmly ints: channel names and the\n\"current\" default are resolved AT THE TOOL BOUNDARY (server/sdk), never\ncarried as a union or a -1 sentinel into the core.",
-            "properties": {
-              "channel": {
-                "minimum": 0,
-                "title": "Channel",
-                "type": "integer"
-              },
-              "pattern": {
-                "minimum": 1,
-                "title": "Pattern",
-                "type": "integer"
-              }
-            },
-            "required": [
-              "pattern",
-              "channel"
-            ],
-            "title": "Target",
-            "type": "object"
-          }
-        },
-        "properties": {
-          "note_count": {
-            "title": "Note Count",
-            "type": "integer"
-          },
-          "notes": {
-            "anyOf": [
-              {
-                "items": {
-                  "$ref": "#/$defs/Note"
-                },
-                "type": "array"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null,
-            "title": "Notes"
-          },
-          "summary": {
-            "anyOf": [
-              {
-                "$ref": "#/$defs/NotesSummary"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null
-          },
-          "target": {
-            "$ref": "#/$defs/Target"
-          }
-        },
-        "required": [
-          "target",
-          "note_count"
-        ],
-        "title": "GetNotesResult",
-        "type": "object"
-      }
-    },
-    {
-      "description": "Read what is in FL now - tempo, key, and what each channel has, including\nevery write made this session and the current live tempo.\n\nCall this before writing, so additions fit what is already there. It returns\nan analysis rather than a note dump: a 56-note project summarises to about\n20 tokens instead of ~960, and the summary answers the questions that\nactually get asked.\n\nArgs:\n    detail: \"summary\" (default) for tempo, inferred key and a per-channel\n        digest - note count, span in beats, register, pitch classes, and for\n        bass-register parts the root motion; channels with no notes are\n        listed as such. Use \"notes\" only when you need individual notes,\n        such as harmonising an existing line.\n    channel: With detail=\"notes\", limit to one channel index.\n\nReturns:\n    For \"summary\", a `summary` string is included that is already formatted\n    for reading. Key inference carries a confidence and can be wrong on\n    modal or chromatic material - treat \"low\" as \"no reliable key\".",
+      "description": "Read what is in FL now - tempo, key, and what each channel has, including\nevery write made this session and the current live tempo. This is the one\nread: its answer is current, so there is no need to read again after a write.\n\nCall this before writing, so additions fit what is already there. It returns\nan analysis rather than a note dump: a 56-note project summarises to about\n20 tokens instead of ~960, and the summary answers the questions that\nactually get asked.\n\nArgs:\n    detail: \"summary\" (default) for tempo, inferred key and a per-channel\n        digest - note count, span in beats, register, pitch classes, and for\n        bass-register parts the root motion; channels with no notes are\n        listed as such. Use \"notes\" only when you need individual notes,\n        such as harmonising an existing line.\n    channel: With detail=\"notes\", limit to one channel index.\n    pattern: With detail=\"notes\", limit to one pattern number.\n\nReturns:\n    For \"summary\", a `summary` string is included that is already formatted\n    for reading. Key inference carries a confidence and can be wrong on\n    modal or chromatic material - treat \"low\" as \"no reliable key\".",
       "inputSchema": {
         "properties": {
           "channel": {
@@ -406,6 +212,18 @@
             "default": "summary",
             "title": "Detail",
             "type": "string"
+          },
+          "pattern": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Pattern"
           }
         },
         "title": "get_sceneArguments",
@@ -432,6 +250,10 @@
                 "title": "Midi",
                 "type": "integer"
               },
+              "pattern": {
+                "title": "Pattern",
+                "type": "integer"
+              },
               "start": {
                 "title": "Start",
                 "type": "number"
@@ -443,6 +265,7 @@
             },
             "required": [
               "channel",
+              "pattern",
               "key",
               "midi",
               "start",
@@ -581,7 +404,138 @@
       }
     },
     {
-      "description": "Play the song once from its start and record the mix to a WAV: how to hear\nyour edits. FL's loop mode decides what plays: the playlist in song mode, the\nselected pattern in pattern mode. Returns {\"path\", \"wavBase64\", \"span\"}:\nwavBase64 is the WAV in base64 (omitted with a note past the size cap); span\nsays what played (source \"song\" or \"pattern\"), its live beats and tempo, and\nthe seconds recorded. A render takes about that long, ten minutes at most.\nCall analyze afterwards for measurements.",
+      "description": "Prove the parts are audible in a few seconds: play ``bars`` bars (1 to 8,\ndefault 2) from ``start_bar`` (default 1) and read FL's own mixer meters.\nFL stops afterwards and nothing in the song changes.\n\nReturns per channel: name, sounded (true/false), peak_dbfs, and the reason\nwhen it was silent and FL shows why (muted, its mixer track muted, volume 0,\nno notes in those bars); sounded is null only for a channel that plays\nstraight into the master, which cannot be measured on its own. Also the\nmaster's peak and a one-line summary. Check after a batch of writes; render\nonce at the end to hear the song.",
+      "inputSchema": {
+        "properties": {
+          "bars": {
+            "default": 2,
+            "title": "Bars",
+            "type": "integer"
+          },
+          "start_bar": {
+            "default": 1,
+            "title": "Start Bar",
+            "type": "integer"
+          }
+        },
+        "title": "checkArguments",
+        "type": "object"
+      },
+      "name": "check",
+      "outputSchema": {
+        "$defs": {
+          "ChannelCheck": {
+            "description": "Whether one channel made sound during fl.check(), from FL's mixer meters.\n\n``sounded`` is None only when the channel plays straight into the master,\nwhere its sound cannot be told apart from the rest of the mix.\n``peak_dbfs`` is the loudest level its mixer track reached (None: silence,\nor not measurable on its own).\n``reason`` says why it was silent when FL shows why, or how it was measured.",
+            "properties": {
+              "channel": {
+                "title": "Channel",
+                "type": "integer"
+              },
+              "mixer_track": {
+                "title": "Mixer Track",
+                "type": "integer"
+              },
+              "name": {
+                "title": "Name",
+                "type": "string"
+              },
+              "peak_dbfs": {
+                "anyOf": [
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Peak Dbfs"
+              },
+              "reason": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Reason"
+              },
+              "sounded": {
+                "anyOf": [
+                  {
+                    "type": "boolean"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Sounded"
+              }
+            },
+            "required": [
+              "channel",
+              "name",
+              "sounded",
+              "peak_dbfs",
+              "mixer_track"
+            ],
+            "title": "ChannelCheck",
+            "type": "object"
+          }
+        },
+        "description": "What fl.check() heard: each channel, the master's peak, and a summary line.",
+        "properties": {
+          "bars": {
+            "title": "Bars",
+            "type": "integer"
+          },
+          "channels": {
+            "items": {
+              "$ref": "#/$defs/ChannelCheck"
+            },
+            "title": "Channels",
+            "type": "array"
+          },
+          "master_peak_dbfs": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Master Peak Dbfs"
+          },
+          "seconds": {
+            "title": "Seconds",
+            "type": "number"
+          },
+          "start_bar": {
+            "title": "Start Bar",
+            "type": "integer"
+          },
+          "summary": {
+            "title": "Summary",
+            "type": "string"
+          }
+        },
+        "required": [
+          "start_bar",
+          "bars",
+          "seconds",
+          "master_peak_dbfs",
+          "channels",
+          "summary"
+        ],
+        "title": "CheckResult",
+        "type": "object"
+      }
+    },
+    {
+      "description": "Play the song once from its start and record the mix to a WAV: how to hear\nyour edits. FL's loop mode decides what plays: the playlist in song mode, the\nselected pattern in pattern mode. Returns {\"path\", \"wavBase64\", \"span\"}:\nwavBase64 is the WAV in base64 (omitted with a note past the size cap); span\nsays what played (source \"song\" or \"pattern\"), its live beats and tempo, and\nthe seconds recorded. A render takes about that long, ten minutes at most,\nso render once when the pass is done (check proves audibility in seconds).\nCall analyze afterwards for measurements.",
       "inputSchema": {
         "properties": {},
         "title": "renderArguments",
@@ -771,107 +725,6 @@
           "spectral_balance"
         ],
         "title": "AudioAnalysis",
-        "type": "object"
-      }
-    },
-    {
-      "description": "Setup diagnostics for whoever runs this engine. Not needed to check your\nwork: edits apply immediately and reads return what FL has.",
-      "inputSchema": {
-        "properties": {},
-        "title": "fl_doctorArguments",
-        "type": "object"
-      },
-      "name": "fl_doctor",
-      "outputSchema": {
-        "$defs": {
-          "PlaneStatus": {
-            "properties": {
-              "connected": {
-                "title": "Connected",
-                "type": "boolean"
-              },
-              "detail": {
-                "anyOf": [
-                  {
-                    "type": "string"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ],
-                "default": null,
-                "title": "Detail"
-              },
-              "fix": {
-                "anyOf": [
-                  {
-                    "type": "string"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ],
-                "default": null,
-                "title": "Fix"
-              },
-              "fl_pid": {
-                "anyOf": [
-                  {
-                    "type": "integer"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ],
-                "default": null,
-                "title": "Fl Pid"
-              },
-              "fl_pid_alive": {
-                "anyOf": [
-                  {
-                    "type": "boolean"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ],
-                "default": null,
-                "title": "Fl Pid Alive"
-              }
-            },
-            "required": [
-              "connected"
-            ],
-            "title": "PlaneStatus",
-            "type": "object"
-          }
-        },
-        "properties": {
-          "control_plane": {
-            "$ref": "#/$defs/PlaneStatus"
-          },
-          "note_plane": {
-            "$ref": "#/$defs/PlaneStatus"
-          },
-          "project_file": {
-            "$ref": "#/$defs/PlaneStatus"
-          },
-          "status": {
-            "enum": [
-              "ok",
-              "degraded"
-            ],
-            "title": "Status",
-            "type": "string"
-          }
-        },
-        "required": [
-          "status",
-          "control_plane",
-          "note_plane",
-          "project_file"
-        ],
-        "title": "DoctorReport",
         "type": "object"
       }
     }

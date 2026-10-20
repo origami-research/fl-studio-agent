@@ -56,6 +56,15 @@ LIVE_READ_TIMEOUT_SECONDS = 2.0
 # reliable; measured settle was ~12s, so the bound leaves headroom.
 SETTLE_POLL_SECONDS = 1.0
 
+# Backoff between attempts when FL plainly did not take a call (see
+# ControlLink.request), inside one overall window from the first attempt: the
+# order of the window FL stays "unsafe" right after a load (the controller's own
+# OnIdle deferral covers ~4 s of it for module calls; composite ops get none).
+# The window, not the attempt count, bounds the wait: a busy wire already spent
+# the call's whole timeout waiting, so it is retried only while time remains.
+TRANSIENT_RETRY_DELAYS = (0.25, 0.5, 1.0, 2.0, 2.0)
+TRANSIENT_RETRY_WINDOW_SECONDS = 6.0
+
 
 class ControlLink:
     """Owns the control wire, its factory, and the recycle clock. Everything
@@ -207,23 +216,54 @@ class ControlLink:
         *,
         timeout: float,
     ) -> ControlResponse:
-        """Forward to the wire; no wire raises control_plane_unavailable."""
-        if self.control is None:
-            raise errors.control_plane_unavailable(op, 0.0)
-        return self.control.send_request(op, args=args, timeout=timeout)
+        """THE way a session talks to the controller: one round trip, retried
+        while FL plainly did not take it.
 
-    def command(self, op: str) -> None:
-        """THE call-to-policy conversion (addendum A11), written once: no wire
-        -> control_plane_unavailable; FL's unsafe-at-current-time refusal ->
-        operation_unsafe (retryable - it means busy, not absent, addendum A6);
-        any other refusal -> fl_api_error with FL's own detail. A send_request
-        timeout raises control_plane_unavailable from the wire and propagates."""
-        resp = self.request(op, timeout=LIVE_SET_TIMEOUT_SECONDS)
+        Two answers mean nothing was applied, so they are retried with bounded
+        backoff (TRANSIENT_RETRY_DELAYS, within TRANSIENT_RETRY_WINDOW_SECONDS) and
+        a caller never sees them unless they persist: FL's "operation unsafe at current time" refusal (its engine was
+        mid-cycle) and a wire held by another session's call (control_plane_busy:
+        the request was never sent). A timeout is NOT retried: FL may have parked
+        the call and apply it late (issue #47), so repeating it could apply twice.
+        No wire raises control_plane_unavailable."""
+        delays = list(TRANSIENT_RETRY_DELAYS)
+        deadline = self._clock() + TRANSIENT_RETRY_WINDOW_SECONDS
+        while True:
+            if self.control is None:
+                raise errors.control_plane_unavailable(op, 0.0)
+            try:
+                response = self.control.send_request(op, args=args, timeout=timeout)
+            except errors.ToolError as exc:
+                if exc.category != "control_plane_busy" or not self._may_retry(delays, deadline):
+                    raise
+                why = "the wire is busy"
+            else:
+                transient = not response.ok and errors.is_operation_unsafe(response.err or "")
+                if not transient or not self._may_retry(delays, deadline):
+                    return response
+                why = "FL refused it as unsafe at the current time"
+            delay = delays.pop(0)
+            log.info("%s: %s; retrying in %gs", op, why, delay)
+            self._sleep(delay)
+
+    def _may_retry(self, delays: list[float], deadline: float) -> bool:
+        return bool(delays) and self._clock() + delays[0] <= deadline
+
+    def call(self, op: str, args: list[Any] | None = None, *, timeout: float = LIVE_READ_TIMEOUT_SECONDS) -> Any:
+        """One controller call, converted to policy once (addendum A11): FL's
+        answer, or a typed error. A refusal that outlived the retries ->
+        operation_unsafe; any other refusal -> fl_api_error with FL's own detail."""
+        resp = self.request(op, args, timeout=timeout)
         if not resp.ok:
             detail = resp.err or "no detail"
             if errors.is_operation_unsafe(detail):
                 raise errors.operation_unsafe(op)
             raise errors.fl_api_error(op, detail)
+        return resp.ret
+
+    def command(self, op: str, args: list[Any] | None = None) -> None:
+        """A mutating call with no answer to read (transport, undo)."""
+        self.call(op, args, timeout=LIVE_SET_TIMEOUT_SECONDS)
 
     def settle(self) -> None:
         """Block until FL answers a composite read, so no live op lands in the

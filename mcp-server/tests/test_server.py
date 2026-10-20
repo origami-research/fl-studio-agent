@@ -20,23 +20,19 @@ import pytest
 from mcp.types import CallToolResult
 from session_fakes import RENDER_SPAN
 
-from fl_mcp import __version__, server
+from fl_mcp import __version__, errors, server
 from fl_mcp.audio import AudioAnalysis, SpectralBalance
 from fl_mcp.contract import build_version
-from fl_mcp.errors import ToolError
 from fl_mcp.kernel.host import RUN_CELL_TIMEOUT_SECONDS, KernelHost
 from fl_mcp.kernel.launch import PosixLauncher, Workspace
 from fl_mcp.platform import MacPlatform
-from fl_mcp.schemas import DoctorReport, Note, PlaneStatus, RenderReceipt, Target
+from fl_mcp.schemas import CheckResult, RenderReceipt, Target
 
 
 class _FakeSession:
-    """Just the surface server.py touches: read_notes, doctor."""
+    """Just the surface the lifespan and run touch."""
 
-    def __init__(self, notes: list[Note] | None = None, error: ToolError | None = None):
-        self._notes = notes or []
-        self._error = error
-        self.read_targets: list[Target] = []
+    def __init__(self) -> None:
         self.control = None
         self.platform = MacPlatform()
         self.audio_stream_started = False
@@ -47,20 +43,6 @@ class _FakeSession:
 
     def close(self) -> None:
         self.closed = True
-
-    def read_notes(self, target: Target) -> list[Note]:
-        if self._error is not None:
-            raise self._error
-        self.read_targets.append(target)
-        return self._notes
-
-    def doctor(self) -> DoctorReport:
-        return DoctorReport(
-            status="degraded",
-            control_plane=PlaneStatus(connected=False, detail="no hello", fix="open FL"),
-            note_plane=PlaneStatus(connected=True),
-            project_file=PlaneStatus(connected=True),
-        )
 
 
 def _ctx(fl: Any = None, session: Any = None, kernel: Any = None) -> Any:
@@ -150,71 +132,33 @@ def test_run_without_a_kernel_is_a_structured_error(tmp_path):
     assert "no interpreter" in payload["message"]
 
 
-# -- get_notes ----------------------------------------------------------------
+# -- the tool surface -----------------------------------------------------------
 
 
-def _notes(count: int) -> list[Note]:
-    return [Note(key=60 + (i % 12), start=float(i), length=1.0) for i in range(count)]
+def test_the_model_sees_one_tool_per_job():
+    """One way to do each thing (owner, 2026-10-18): read the song, run code,
+    prove it sounds, hear it, measure it. Setup diagnostics are the operator's
+    fl-mcp-doctor, and note reads live in get_scene and the SDK, so neither
+    fl_doctor nor get_notes is offered to a model."""
+    assert [fn.__name__ for fn in server.tool_definitions()] == ["run", "get_scene", "check", "render", "analyze"]
 
 
-def test_get_notes_small_returns_the_full_list():
-    target = Target(pattern=2, channel=3)
-    session = _FakeSession(notes=_notes(3))
-    result = server.get_notes(2, 3, _ctx(session=session))
-    assert result.target == target
-    assert result.note_count == 3
-    assert len(result.notes) == 3
-    assert result.notes[0].key == 60
-    assert session.read_targets == [target]
+def test_check_returns_the_sessions_result():
+    result = CheckResult(
+        start_bar=3, bars=1, seconds=1.85, master_peak_dbfs=-3.0, channels=[], summary="0 of 0 channels sounded."
+    )
+    session = SimpleNamespace(check=lambda start_bar, bars: result if (start_bar, bars) == (3, 1) else None)
+    assert server.check(_ctx(session=session), bars=1, start_bar=3) == result
 
 
-def test_get_notes_large_returns_a_summary_not_a_page_dump():
-    session = _FakeSession(notes=_notes(server.GET_NOTES_FULL_LIST_MAX + 100))
-    result = server.get_notes(1, 0, _ctx(session=session))
-    assert result.notes is None
-    summary = result.summary
-    assert result.note_count == server.GET_NOTES_FULL_LIST_MAX + 100
-    assert summary.keys == {"min": 60, "max": 71}
-    assert summary.span_beats["start"] == 0.0
-    assert len(summary.sample) == server.GET_NOTES_SAMPLE_SIZE
+def test_check_refusals_reach_the_model_structured():
+    def refuse(start_bar: int, bars: int) -> CheckResult:
+        raise errors.invalid_argument("check", "bars must be a whole number from 1 to 8, got 40")
 
-
-def test_get_notes_tolerates_numeric_string_channel():
-    session = _FakeSession(notes=[])
-    result = server.get_notes(1, "3", _ctx(session=session))
-    assert result.target == Target(pattern=1, channel=3)
-
-
-def test_get_notes_rejects_a_bad_target_with_a_fix():
-    response = server.get_notes(0, 0, _ctx(session=_FakeSession()))
-
+    response = server.check(_ctx(session=SimpleNamespace(check=refuse)), bars=40)
     assert isinstance(response, CallToolResult)
     assert response.is_error
-    result = json.loads(response.content[0].text)
-    assert result["error"] == "invalid_argument"
-    assert result["fix"]
-
-
-def test_get_notes_surfaces_tool_errors_structured():
-    err = ToolError("note_plane_unavailable", "no backend", "run fl_doctor", retryable=True)
-    session = _FakeSession(error=err)
-    response = server.get_notes(1, 0, _ctx(session=session))
-
-    assert isinstance(response, CallToolResult)
-    assert response.is_error
-    result = json.loads(response.content[0].text)
-    assert result["status"] == "error"
-    assert result["error"] == "note_plane_unavailable"
-
-
-# -- fl_doctor ----------------------------------------------------------------
-
-
-def test_fl_doctor_returns_the_typed_report():
-    session = _FakeSession()
-    result = server.fl_doctor(_ctx(session=session))
-    assert result == session.doctor()
-    assert result.control_plane.fix == "open FL"
+    assert json.loads(response.content[0].text)["error"] == "invalid_argument"
 
 
 def test_lifespan_builds_the_kernel_workspace_under_the_box_root(monkeypatch, tmp_path):
@@ -314,11 +258,11 @@ def test_tools_register_with_ctx_injected_and_absent_from_the_schema():
     from mcp.server.mcpserver import MCPServer
 
     srv = MCPServer(name="fl-mcp-test")
-    for fn in (server.run, server.get_notes, server.fl_doctor):
+    for fn in server.tool_definitions():
         srv.add_tool(fn)
 
     tools = {t.name: t for t in srv._tool_manager.list_tools()}
-    assert set(tools) == {"run", "get_notes", "fl_doctor"}
+    assert set(tools) == {"run", "get_scene", "check", "render", "analyze"}
     for name, tool in tools.items():
         assert tool.context_kwarg == "ctx", f"{name}: ctx not detected for injection"
         assert "ctx" not in tool.parameters.get("properties", {}), (
@@ -326,8 +270,8 @@ def test_tools_register_with_ctx_injected_and_absent_from_the_schema():
         )
     # The tools that take real arguments still expose them.
     assert "code" in tools["run"].parameters["properties"]
-    assert {"pattern", "channel"} <= set(tools["get_notes"].parameters["properties"])
-    assert tools["fl_doctor"].parameters.get("properties", {}) == {}
+    assert {"bars", "start_bar"} == set(tools["check"].parameters["properties"])
+    assert tools["render"].parameters.get("properties", {}) == {}
 
 
 # -- render / analyze -----------------------------------------------------------

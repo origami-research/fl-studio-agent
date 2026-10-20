@@ -41,6 +41,7 @@ class SceneRow:
 
     midi: int
     channel: int = 0
+    pattern: int = 1
     start_beat: float = 0.0
     length_beats: float = 1.0
     velocity: int = 100  # 0-127
@@ -52,11 +53,12 @@ def rows_from_notes(notes: Mapping[tuple[int, int], Sequence[Note]]) -> list[Sce
         SceneRow(
             midi=n.key,
             channel=channel,
+            pattern=pattern,
             start_beat=n.start,
             length_beats=n.length,
             velocity=round(n.velocity * 127),
         )
-        for (_pattern, channel), group in sorted(notes.items())
+        for (pattern, channel), group in sorted(notes.items())
         for n in group
     ]
 
@@ -68,6 +70,7 @@ def project_rows(project: Path) -> list[SceneRow]:
         SceneRow(
             midi=n.key,
             channel=n.channel,
+            pattern=n.pattern,
             start_beat=n.position / proj.ppq,
             length_beats=n.length / proj.ppq,
             velocity=n.velocity,
@@ -385,12 +388,15 @@ def summarize(
     }
 
 
-def notes_detail(rows: Sequence[SceneRow], channel: int | None = None) -> list[dict[str, Any]]:
+def notes_detail(
+    rows: Sequence[SceneRow], channel: int | None = None, pattern: int | None = None
+) -> list[dict[str, Any]]:
     """Note-level data, for the cases that genuinely need it."""
 
     return [
         {
             "channel": r.channel,
+            "pattern": r.pattern,
             "key": note_name(r.midi),
             "midi": r.midi,
             "start": r.start_beat,
@@ -398,5 +404,5 @@ def notes_detail(rows: Sequence[SceneRow], channel: int | None = None) -> list[d
             "velocity": round(r.velocity / 127, 2),  # SceneRow velocity is 0-127
         }
         for r in rows
-        if channel is None or r.channel == channel
+        if (channel is None or r.channel == channel) and (pattern is None or r.pattern == pattern)
     ]

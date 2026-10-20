@@ -188,9 +188,9 @@ def _selected_channel(link: ControlLink) -> int | None:
     if link.hello() is None or link.control is None:
         return None
     try:
-        resp = link.control.send_request(
-            "channels.selectedChannel", timeout=LIVE_READ_TIMEOUT_SECONDS
-        )
+        # A probe, read on every capability check: one attempt, never the
+        # link's retries (a busy wire would multiply into every op's latency).
+        resp = link.control.send_request("channels.selectedChannel", timeout=LIVE_READ_TIMEOUT_SECONDS)
     except errors.ToolError:
         return None
     if not resp.ok:

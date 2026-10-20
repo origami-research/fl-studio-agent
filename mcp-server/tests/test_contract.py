@@ -58,8 +58,8 @@ def test_tool_error_reaches_an_mcp_client_as_parseable_is_error(monkeypatch):
     """An anticipated engine failure remains structured after the MCP boundary."""
 
     class FailingSession:
-        def read_notes(self, _target):
-            raise ToolError("note_plane_unavailable", "bridge offline", "start FL", retryable=True)
+        def check(self, start_bar, bars):
+            raise ToolError("operation_unsafe", "FL is busy", "retry", retryable=True)
 
     @contextlib.asynccontextmanager
     async def fake_lifespan(_mcp_server):
@@ -70,14 +70,14 @@ def test_tool_error_reaches_an_mcp_client_as_parseable_is_error(monkeypatch):
     async def call() -> None:
         async with InMemoryTransport(create_server()) as (read, write), ClientSession(read, write) as client:
             await client.initialize()
-            result = await client.call_tool("get_notes", {"pattern": 1, "channel": 0})
+            result = await client.call_tool("check", {"bars": 2})
 
         assert result.is_error
         assert json.loads(result.content[0].text) == {
             "status": "error",
-            "error": "note_plane_unavailable",
-            "message": "bridge offline",
-            "fix": "start FL",
+            "error": "operation_unsafe",
+            "message": "FL is busy",
+            "fix": "retry",
             "retryable": True,
             "candidates": None,
         }
@@ -89,8 +89,8 @@ def test_unexpected_tool_error_reaches_an_mcp_client_as_structured_internal_erro
     """The SDK must never replace an engine exception with plain-text isError content."""
 
     class FailingSession:
-        def doctor(self):
-            raise RuntimeError("doctor exploded")
+        def check(self, start_bar, bars):
+            raise RuntimeError("check exploded")
 
     @contextlib.asynccontextmanager
     async def fake_lifespan(_mcp_server):
@@ -101,12 +101,12 @@ def test_unexpected_tool_error_reaches_an_mcp_client_as_structured_internal_erro
     async def call() -> None:
         async with InMemoryTransport(create_server()) as (read, write), ClientSession(read, write) as client:
             await client.initialize()
-            result = await client.call_tool("fl_doctor", {})
+            result = await client.call_tool("check", {})
 
         assert result.is_error
         payload = json.loads(result.content[0].text)
         assert payload["error"] == "internal_error"
-        assert payload["message"] == "doctor exploded"
+        assert payload["message"] == "check exploded"
         assert payload["fix"] == "Report this; the engine kept running."
         assert payload["retryable"] is False
 
@@ -131,7 +131,7 @@ def test_tools_list_validates_through_the_mcp_layer_and_every_output_schema_is_a
 
     listed = anyio.run(call)
     tools = {tool.name: tool.model_dump(by_alias=True) for tool in listed.tools}
-    assert set(tools) == {"run", "get_notes", "get_scene", "render", "analyze", "fl_doctor"}
+    assert set(tools) == {"run", "get_scene", "check", "render", "analyze"}
     for name, tool in tools.items():
         schema = tool["outputSchema"]
         assert schema.get("type") == "object", (
