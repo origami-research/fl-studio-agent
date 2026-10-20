@@ -8,13 +8,14 @@ import subprocess
 from collections.abc import Callable, Mapping
 from enum import StrEnum
 from pathlib import Path
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
 from mcp.server.mcpserver.tools.base import Tool
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from fl_mcp import __version__
-from fl_mcp.schemas import RenderSpan
+from fl_mcp.audio import AudioAnalysis
+from fl_mcp.schemas import CheckResult, RenderSpan
 
 ENV_SPOOL_ROOT = "FLMCP_SPOOL_ROOT"
 ENV_AGENT_PROJECT = "FLMCP_AGENT_PROJECT"
@@ -65,6 +66,16 @@ class ToolErrorResult(BaseModel):
     candidates: list[str] | None = None
 
 
+# Every tool result carries what the engine did during the call (fl_mcp/actions.py).
+Actions = Annotated[
+    list[str],
+    Field(
+        description="What happened in FL during this call, in order: one plain sentence per change "
+        "FL confirmed or measurement taken. Reads and failures add none."
+    ),
+]
+
+
 # ok: the cell finished. error: it raised (traceback). interrupted: it ran past its
 # time budget and was stopped, the kernel kept its state. kernel_lost: the kernel
 # process died or was killed, its state is gone and the next run starts fresh.
@@ -76,6 +87,8 @@ class RunResult(BaseModel):
     stdout: str
     result: str | None = None
     traceback: str | None = None
+    # Every fl call the cell made that FL confirmed, including those before an error.
+    actions: Actions
 
     @model_validator(mode="after")
     def _outcome_matches_payload(self) -> RunResult:
@@ -129,6 +142,7 @@ class GetSceneResult(BaseModel):
     channels: list[dict[str, Any]] | None = None
     summary: str | None = None
     notes: list[SceneNote] | None = None
+    actions: Actions  # a read: always empty
 
     @model_validator(mode="after")
     def _summary_or_notes(self) -> GetSceneResult:
@@ -138,11 +152,11 @@ class GetSceneResult(BaseModel):
 
     @classmethod
     def from_summary(cls, summary: SceneSummary) -> GetSceneResult:
-        return cls(**summary.model_dump())
+        return cls(**summary.model_dump(), actions=[])
 
     @classmethod
     def from_notes(cls, notes: SceneNotesResult) -> GetSceneResult:
-        return cls(notes=notes.notes)
+        return cls(notes=notes.notes, actions=[])
 
 
 class RenderResult(BaseModel):
@@ -151,6 +165,24 @@ class RenderResult(BaseModel):
     note: str | None = None
     # The live length the capture recorded and where FL read it (song/pattern).
     span: RenderSpan
+    actions: Actions
+
+
+# The check and analyze tools return what fl.check() and fl.analyze() do plus
+# the call's actions. They keep the published names those results already had,
+# so the contract's type names do not change under its consumers.
+class CheckToolResult(CheckResult):
+    """What check heard: each channel, the master's peak, and a summary line."""
+
+    model_config = ConfigDict(title="CheckResult")
+    actions: Actions
+
+
+class AnalyzeResult(AudioAnalysis):
+    """Measurements of a rendered WAV."""
+
+    model_config = ConfigDict(title="AudioAnalysis")
+    actions: Actions
 
 
 def build_version() -> str:

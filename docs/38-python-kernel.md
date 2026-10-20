@@ -37,7 +37,8 @@ Each text field of a result is cut at 1,000,000 characters with a note, so a hug
 
 ### Outcomes
 
-`RunResult` is `{outcome, stdout, result | traceback}`; `stdout` includes stderr.
+`RunResult` is `{outcome, stdout, result | traceback, actions}`; `stdout` includes stderr.
+`actions` lists the changes FL confirmed for the cell's `fl` calls, recorded by the server as it serves them and kept whatever the outcome ([36](36-engine-contract.md#actions)).
 
 | outcome | Meaning | Kernel state |
 | --- | --- | --- |
@@ -66,7 +67,8 @@ The server creates:
 | `<root>/renders` | read only | WAVs written by the server for `fl.render(...)` and the `render` tool |
 | `<root>/boundary-canary` | none | the probe file described below |
 
-`fl.render(name)` uses only the file name and writes `<root>/renders/<name>`.
+`fl.render(name)` uses only the file name and writes `<root>/renders/<name>`; the `render` tool writes `<root>/renders/render-<id>.wav`.
+Every render lands directly in `renders`, never in a folder made inside it, because on Windows the kernel can read a render only through the grant it inherits from `renders` (see "Private directories" below).
 The server, not the kernel, writes there, and the kernel cannot write there, so it cannot plant a link that turns a render into a server write somewhere else.
 `fl.read_wav(path)` returns `(samples: numpy.ndarray, sample_rate: int)` and runs inside the kernel, as does `fl.analyze(path)`.
 
@@ -88,6 +90,7 @@ The kernel runs in the AppContainer `FLMCP.Kernel` with one capability, `interne
   A firewall rule on the package SID blocks the instance metadata addresses explicitly.
 - Private directories: since Python 3.12.4, `os.mkdir(path, 0o700)` on Windows grants only SYSTEM, Administrators, and the owner, so the container could not use a directory it had just made (`tempfile.mkdtemp`, pip's build directories).
   In the kernel, and through a `sitecustomize` on `PYTHONPATH` in every Python it starts, such a directory inherits the workspace ACL instead (`kernel/private_dirs.py`).
+  The server is not patched, so it never makes a folder inside `renders`: until 2026-10-19 the `render` tool wrote into a `tempfile.mkdtemp` folder there, which the kernel could not open, so `fl.analyze` on the tool's path failed on boxes.
 - Process: the kernel starts suspended, joins a job object, then resumes.
   The job kills the whole tree on kill or when the server exits, runs it below normal priority so FL's audio wins the CPU, and caps it at 4 GiB and 32 processes.
 - Sessions: every kernel on a box shares the one SID, so the server revokes the SID's grants on a workspace when its session closes.

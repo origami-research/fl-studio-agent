@@ -344,7 +344,7 @@ class FLSession:
             # note. Merge writes are purely additive, so they skip the guard.
             if mode != "merge":
                 self.observer.guard_write(target)
-            track = self._track_name(target.channel)
+            track = self.track_name(target.channel)
             after = ops_notes.write_notes(self, target, notes, mode)
             return self._write_result(track, target, mode, len(notes), after)
 
@@ -352,7 +352,7 @@ class FLSession:
         with self._write_guard("clear_notes"):
             self._require_note_path()
             self.observer.guard_write(target)
-            track = self._track_name(target.channel)
+            track = self.track_name(target.channel)
             return self._write_result(track, target, "replace", 0, ops_notes.clear_notes(self, target))
 
     def read_notes(self, target: Target) -> list[Note]:
@@ -369,14 +369,14 @@ class FLSession:
                 fix="FL may still be starting. Wait a moment and retry the write.",
             )
 
-    def _track_name(self, channel: int) -> str:
-        """The channel's name for the write result, resolved BEFORE the write so
-        nothing can fail after FL applied it. A label is not worth refusing a
-        live write over: an unreadable project or a busy FL labels by index."""
+    def track_name(self, channel: int) -> str:
+        """The channel's name for results and actions. A write resolves it BEFORE
+        writing so nothing can fail after FL applied it. A label is not worth
+        refusing a live write over: an unreadable song or a busy FL labels by index."""
         try:
             channels = self.channel_names()
         except (flp.FlpError, OSError, errors.ToolError):
-            log.exception("could not read channel names for the write result")
+            log.exception("could not read channel names for a label")
             channels = []
         return next((c.name for c in channels if c.index == channel), f"Channel {channel}")
 

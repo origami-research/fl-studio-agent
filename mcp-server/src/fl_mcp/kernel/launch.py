@@ -13,6 +13,7 @@ import os
 import re
 import signal
 import subprocess
+import uuid
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -55,6 +56,12 @@ class Workspace:
     ``renders`` is written by the server (render outputs) and only read by the
     kernel, so the kernel cannot plant a link there that redirects a server
     write. ``canary`` sits outside both for the boundary probe.
+
+    Every file the server writes for the kernel lands directly in ``renders``
+    (``output_path``, ``fresh_render``), never in a folder made inside it: on
+    Windows the kernel reads a render only through the grant it inherits from
+    ``renders``, and a private folder in between (``tempfile.mkdtemp`` is mode
+    0o700, an owner-only ACL since Python 3.12.4) would cut that inheritance.
     """
 
     root: Path
@@ -95,6 +102,10 @@ class Workspace:
                 "fl.render", f"{str(requested)!r}: use a plain file name like 'mix.wav'"
             )
         return self.renders / name
+
+    def fresh_render(self) -> Path:
+        """A new file name in renders for a render the server starts itself."""
+        return self.renders / f"render-{uuid.uuid4().hex[:12]}.wav"
 
     def kernel_env(self, environ: Mapping[str, str], python: Path) -> dict[str, str]:
         """The kernel's whole environment: every per-user location is in the workspace."""

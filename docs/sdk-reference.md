@@ -294,7 +294,7 @@ with `Model.model_validate(...)`.
 
 | Shape | Fields |
 | --- | --- |
-| `Note` | `key: int` (MIDI 0–127; note names such as `"C4"` are accepted on construction), `start: float` (beats), `length: float` (beats, >0), `velocity: float` (0–1, default .8), `pan: float` (0–1, default .5), `color: int` (0–15, default 0) |
+| `Note` | Positional or keyword, in this order: `Note(60, 0, 1, 0.8)` is `Note(key=60, start=0, length=1, velocity=0.8)`. `key: int` (MIDI 0–127; note names such as `"C4"` are accepted on construction), `start: float` (beats), `length: float` (beats, >0), `velocity: float` (0–1, default .8), `pan: float` (0–1, default .5), `color: int` (0–15, default 0) |
 | `NoteWriteMode` | Literal `"merge"` or `"replace"` |
 | `AutomationPoint` | `position: float` (beats, >=0), `value: float` (normalized, -0.001–1.001), `tension: float` (-1–1, default 0) |
 | `ChannelLevels` | `channel: int`, `volume: float` (0–1), `pan: float` (-1–1), `pitch_semitones: int` (-48–48) |

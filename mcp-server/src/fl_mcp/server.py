@@ -25,9 +25,11 @@ from mcp.server.mcpserver import Context, MCPServer
 from mcp.types import CallToolResult, TextContent
 
 from fl_mcp import __version__
-from fl_mcp.audio import AudioAnalysis
+from fl_mcp.actions import ActionLog
 from fl_mcp.contract import (
     ENV_KERNEL_ROOT,
+    AnalyzeResult,
+    CheckToolResult,
     GetSceneResult,
     RenderResult,
     RunResult,
@@ -41,7 +43,7 @@ from fl_mcp.kernel.host import KernelHost
 from fl_mcp.kernel.launch import Workspace
 
 from . import scene, sdk
-from .schemas import CheckResult
+from .schemas import RenderReceipt
 from .session import create_session
 
 log = logging.getLogger(__name__)
@@ -109,12 +111,14 @@ def run(code: str, ctx: Context) -> RunResult:
     last for the session. Pre-bound: fl (the SDK), theory, Note,
     AutomationPoint. A trailing expression is repr'd like a REPL.
 
-    Returns {"outcome", "stdout", "result" | "traceback"}; stdout includes
-    stderr. outcome is "ok", or "error" (read the traceback and fix the code),
-    or "interrupted" when the cell ran past its 300 s budget (time inside fl
-    calls does not count) - the kernel and its variables are intact, or "kernel_lost" when
-    the kernel process died or was killed (os._exit, a crash, or ignoring the
-    interrupt) - its variables are gone, files stay, the next run starts fresh.
+    Returns {"outcome", "stdout", "result" | "traceback", "actions"}; stdout
+    includes stderr, and actions lists what FL did, one sentence per change,
+    even when the cell failed partway. outcome is "ok", or "error" (read the
+    traceback and fix the code), or "interrupted" when the cell ran past its
+    300 s budget (time inside fl calls does not count) - the kernel and its
+    variables are intact, or "kernel_lost" when the kernel process died or was
+    killed (os._exit, a crash, or ignoring the interrupt) - its variables are
+    gone, files stay, the next run starts fresh.
 
     How to work: write, check at milestones, render at the end. Every fl call
     applies to FL immediately and returns once FL has it, or raises with the
@@ -131,8 +135,9 @@ def run(code: str, ctx: Context) -> RunResult:
       track, pattern, mode, total): "merge" adds the notes, "replace" swaps the
       pattern's notes on that track; total is how many it now has.
       Track.notes() -> the notes it has now; Track.clear() empties it.
-    - Note(key=60 or "C4"/"F#3", start=0.0, length=1.0, velocity=0.8, pan=0.5)
-      with start/length in beats from pattern start.
+    - Note(60, 0.0, 1.0, 0.8) = Note(key=60, start=0.0, length=1.0,
+      velocity=0.8, pan=0.5): by position or name, in that order; key is a
+      MIDI int or a name like "C4"/"F#3"; start/length in beats from pattern start.
     - Track.set_channel_levels(volume=0.9, pan=-0.15, pitch=0) - volume 0..1,
       pan -1..1, pitch whole semitones -48..48; returns FL's values.
     - Track.params(query="cutoff") / Track.set_param("cutoff", 0.55) - the
@@ -161,7 +166,7 @@ def run(code: str, ctx: Context) -> RunResult:
 
 
 @_tool_boundary
-def check(ctx: Context, bars: int = 2, start_bar: int = 1) -> CheckResult:
+def check(ctx: Context, bars: int = 2, start_bar: int = 1) -> CheckToolResult:
     """Prove the parts are audible in a few seconds: play ``bars`` bars (1 to 8,
     default 2) from ``start_bar`` (default 1) and read FL's own mixer meters.
     FL stops afterwards and nothing in the song changes.
@@ -173,7 +178,10 @@ def check(ctx: Context, bars: int = 2, start_bar: int = 1) -> CheckResult:
     master's peak and a one-line summary. Check after a batch of writes; render
     once at the end to hear the song."""
     session = ctx.request_context.lifespan_context["session"]
-    return session.check(start_bar, bars)
+    checked = session.check(start_bar, bars)
+    actions = ActionLog()
+    actions.called("check", {"start_bar": start_bar, "bars": bars}, checked)
+    return CheckToolResult(**checked.model_dump(), actions=actions.sentences())
 
 
 # A render is only listenable if the caller can retrieve it; wavBase64 is
@@ -193,14 +201,13 @@ def render(ctx: Context) -> RenderResult:
     the seconds recorded. A render takes about that long, ten minutes at most,
     so render once when the pass is done (check proves audibility in seconds).
     Call analyze afterwards for measurements."""
-    session = ctx.request_context.lifespan_context["session"]
+    actions = ActionLog()
     try:
-        rendered = session.render_wav(_fresh_render_path(ctx))
+        rendered = _render(ctx, actions)
     except ToolError as exc:
         return _tool_error_response(_tool_error_result(exc))
     path = rendered.path
-    ctx.request_context.lifespan_context[_LAST_RENDER_KEY] = path
-    result: dict[str, Any] = {"path": str(path), "span": rendered.span}
+    result: dict[str, Any] = {"path": str(path), "span": rendered.span, "actions": actions.sentences()}
     data = path.read_bytes()
     if len(data) <= RENDER_WAV_BASE64_MAX_BYTES:
         result["wavBase64"] = base64.b64encode(data).decode("ascii")
@@ -212,17 +219,19 @@ def render(ctx: Context) -> RenderResult:
 
 
 @_tool_boundary
-def analyze(ctx: Context, wav: str | None = None) -> AudioAnalysis:
+def analyze(ctx: Context, wav: str | None = None) -> AnalyzeResult:
     """Measure a rendered WAV: bpm, key, integrated LUFS, true peak, and
     spectral balance. ``wav`` defaults to the most recent render (rendering
     fresh if none exists yet)."""
     fl = ctx.request_context.lifespan_context["fl"]
+    actions = ActionLog()
     try:
         path = Path(wav) if wav else ctx.request_context.lifespan_context.get(_LAST_RENDER_KEY)
         if path is None:
-            path = fl.render(_fresh_render_path(ctx))
-            ctx.request_context.lifespan_context[_LAST_RENDER_KEY] = path
-        return AudioAnalysis.model_validate(fl.analyze(path))
+            path = _render(ctx, actions).path
+        measured = fl.analyze(path)
+        actions.measured(measured, path.name if wav else "the render")
+        return AnalyzeResult(**measured.model_dump(), actions=actions.sentences())
     except ToolError as exc:
         return _tool_error_response(_tool_error_result(exc))
     except OSError as exc:
@@ -295,10 +304,14 @@ def get_scene(
     )
 
 
-def _fresh_render_path(ctx: Context) -> Path:
-    """A new WAV path in the renders folder, so run can read the result too."""
-    renders = ctx.request_context.lifespan_context["kernel"].workspace.renders
-    return Path(tempfile.mkdtemp(prefix="render-", dir=renders)) / "render.wav"
+def _render(ctx: Context, actions: ActionLog) -> RenderReceipt:
+    """Render to a new WAV in the renders folder, so run can read the result too;
+    analyze measures it next unless told otherwise."""
+    output = ctx.request_context.lifespan_context["kernel"].workspace.fresh_render()
+    rendered = ctx.request_context.lifespan_context["session"].render_wav(output)
+    actions.called("render_wav", {"output": output}, rendered)
+    ctx.request_context.lifespan_context[_LAST_RENDER_KEY] = rendered.path
+    return rendered
 
 
 def tool_definitions() -> tuple[Any, ...]:

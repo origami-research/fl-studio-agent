@@ -98,7 +98,7 @@ class Channel:
         try:
             return run_cell(cell.code, namespace)
         except KeyboardInterrupt:  # landed in run_cell's own frame, after the user code
-            return RunResult(outcome="error", stdout="", traceback="KeyboardInterrupt\n")
+            return RunResult(outcome="error", stdout="", traceback="KeyboardInterrupt\n", actions=[])
         finally:
             self._cell_running = False
 

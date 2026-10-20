@@ -26,6 +26,9 @@ Backend = Literal["live", "project-write", "bridge"]
 class Note(BaseModel):
     """One note, in musical units. C4 = MIDI 60 = middle C.
 
+    Arguments go by position or name in this order: key, start, length,
+    velocity, pan, color, so ``Note(60, 0, 1, 0.8)`` and
+    ``Note(key="C4", start=0, length=1, velocity=0.8)`` are the same note.
     ``key`` is firmly an int after construction: "C4"/"F#3" are accepted as
     input and resolved once by ``pitch.parse_key``. Use ``pitch.key_name`` for
     display. No downstream code ever sees a union.
@@ -37,6 +40,17 @@ class Note(BaseModel):
     velocity: float = Field(default=0.8, ge=0, le=1)
     pan: float = Field(default=0.5, ge=0, le=1)
     color: int = Field(default=0, ge=0, le=15)
+
+    def __init__(self, /, *args: Any, **fields: Any) -> None:
+        # Models write Note(60, 0, 1, 0.8) first; pydantic alone takes names only.
+        order = tuple(type(self).model_fields)
+        if len(args) > len(order):
+            raise TypeError(f"Note takes at most {len(order)} positional arguments ({', '.join(order)}), got {len(args)}")
+        for name, value in zip(order, args, strict=False):
+            if name in fields:
+                raise TypeError(f"Note got {name} both by position and by name")
+            fields[name] = value
+        super().__init__(**fields)
 
     @field_validator("key", mode="before")
     @classmethod

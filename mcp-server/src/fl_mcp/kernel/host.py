@@ -23,6 +23,7 @@ from typing import IO, Any
 from pydantic import ValidationError
 
 from fl_mcp import errors
+from fl_mcp.actions import ActionLog
 from fl_mcp.contract import RunResult
 from fl_mcp.errors import ToolError
 from fl_mcp.kernel import wire
@@ -135,32 +136,54 @@ class _Kernel:
 
 
 class _FileEdits:
-    """The session file_edit contexts a cell opened; all closed when the cell ends."""
+    """The session file_edit contexts a cell opened; all closed when the cell ends.
 
-    def __init__(self, session: FLSession) -> None:
+    FL takes a block's changes only when the outermost block closes and FL
+    reopens, so ``actions`` holds them until then and drops them if it fails.
+    """
+
+    def __init__(self, session: FLSession, actions: ActionLog) -> None:
         self._session = session
+        self._actions = actions
         self._open: list[contextlib.ExitStack] = []
 
     def enter(self) -> None:
         stack = contextlib.ExitStack()
         stack.enter_context(self._session.file_edit())
         self._open.append(stack)
+        self._actions.hold()
 
     def exit(self) -> None:
         if not self._open:
             raise errors.invalid_argument("fl.file_edit", "exit without a matching enter")
-        self._open.pop().close()
+        self._close_one()
 
     def close(self) -> str | None:
         """Close every context, even past a failure; return what failed, if anything."""
         failures = []
         while self._open:
             try:
-                self._open.pop().close()
+                self._close_one()
             except Exception as exc:  # the rest must still close; the cell result reports it
                 log.exception("closing a file_edit a cell left open failed")
                 failures.append(f"{type(exc).__name__}: {exc}")
         return "; ".join(failures) or None
+
+    def _close_one(self) -> None:
+        try:
+            self._open.pop().close()
+        except BaseException:
+            self._actions.release(applied=False)
+            raise
+        self._actions.release(applied=True)
+
+
+class _Cell:
+    """What one cell's fl calls leave behind: open file_edit blocks and what FL did."""
+
+    def __init__(self, session: FLSession) -> None:
+        self.actions = ActionLog(session.track_name)
+        self.edits = _FileEdits(session, self.actions)
 
 
 class KernelHost:
@@ -190,21 +213,27 @@ class KernelHost:
         self._lock = threading.Lock()  # MCP runs sync tools on worker threads
 
     def run(self, code: str) -> RunResult:
-        """Run one cell. Raises kernel_unavailable if no kernel can start."""
+        """Run one cell. Raises kernel_unavailable if no kernel can start.
+
+        Whatever the outcome, the result's actions are the fl calls FL confirmed
+        while the cell ran, recorded here as the server served them: the kernel
+        runs model code, so nothing it reports about FL is taken on its word.
+        """
         with self._lock:
             note = self._drop_dead_kernel()
             if self._kernel is None:
                 self._kernel = self._boot()
             kernel = self._kernel
+            cell = _Cell(self._session)
             try:
-                result = self._run_cell(kernel, code)
+                result = self._run_cell(kernel, code, cell)
             except BaseException:
                 self._kernel = None
                 kernel.kill()
                 raise
             if result.outcome == "kernel_lost":
                 self._kernel = None
-            return result.model_copy(update={"stdout": note + result.stdout}) if note else result
+            return result.model_copy(update={"stdout": note + result.stdout, "actions": cell.actions.sentences()})
 
     def close(self) -> None:
         """Kill the kernel without waiting for a running cell: shutdown must not hang on one."""
@@ -250,28 +279,27 @@ class KernelHost:
         log.info("kernel %d ready in %s", message.pid, self.workspace.work)
         return kernel
 
-    def _run_cell(self, kernel: _Kernel, code: str) -> RunResult:
-        edits = _FileEdits(self._session)
+    def _run_cell(self, kernel: _Kernel, code: str, cell: _Cell) -> RunResult:
         try:
-            result = self._cell_outcome(kernel, code, edits)
+            result = self._cell_outcome(kernel, code, cell)
         finally:
-            failure = edits.close()
+            failure = cell.edits.close()
         if failure is None:
             return result
         note = f"Closing the fl.file_edit block this cell left open failed: {failure}"
         if result.outcome == "ok":
-            return RunResult(outcome="error", stdout=result.stdout, traceback=note)
+            return RunResult(outcome="error", stdout=result.stdout, traceback=note, actions=[])
         return result.model_copy(update={"traceback": f"{result.traceback}\n{note}"})
 
-    def _cell_outcome(self, kernel: _Kernel, code: str, edits: _FileEdits) -> RunResult:
+    def _cell_outcome(self, kernel: _Kernel, code: str, cell: _Cell) -> RunResult:
         if not kernel.send(wire.Exec(code=code), self._write_timeout):
             return self._stalled(kernel)
-        result = self._await_done(kernel, edits, self._cell_timeout)
+        result = self._await_done(kernel, cell, self._cell_timeout)
         if result is not None:
             return result
         if not kernel.send(wire.Interrupt(), self._write_timeout):
             return self._stalled(kernel)
-        result = self._await_done(kernel, edits, self._interrupt_grace)
+        result = self._await_done(kernel, cell, self._interrupt_grace)
         if result is None:
             return self._lost(
                 kernel,
@@ -288,7 +316,7 @@ class KernelHost:
             }
         )
 
-    def _await_done(self, kernel: _Kernel, edits: _FileEdits, budget: float) -> RunResult | None:
+    def _await_done(self, kernel: _Kernel, cell: _Cell, budget: float) -> RunResult | None:
         """Serve the cell's calls until it finishes; None when ``budget`` runs out."""
         remaining = budget
         while True:
@@ -300,7 +328,7 @@ class KernelHost:
             if isinstance(message, wire.Done):
                 return message.result
             if isinstance(message, wire.Call):
-                if not kernel.send(self._serve_call(message, edits), self._write_timeout):
+                if not kernel.send(self._serve_call(message, cell), self._write_timeout):
                     return self._stalled(kernel)
             elif isinstance(message, _Garbled):
                 return self._lost(kernel, f"{message.detail}, so it was killed")
@@ -321,13 +349,14 @@ class KernelHost:
             traceback=f"The kernel process {what_happened}. Its variables and imports are gone and "
             "this cell's output was lost; files in the workspace remain. The next run starts a "
             f"fresh kernel.{kernel.stderr_note()}",
+            actions=[],
         )
 
     # -- the fl surface ---------------------------------------------------------------
 
-    def _serve_call(self, call: wire.Call, edits: _FileEdits) -> wire.Reply:
+    def _serve_call(self, call: wire.Call, cell: _Cell) -> wire.Reply:
         try:
-            value = self._dispatch(call, edits)
+            value = self._dispatch(call, cell)
         except ToolError as exc:
             return wire.Reply(id=call.id, error=wire.WireError.from_tool_error(exc))
         except Exception as exc:  # the RPC boundary: logged here, reported to the cell as its error
@@ -342,15 +371,19 @@ class KernelHost:
             )
         return wire.Reply(id=call.id, value=value)
 
-    def _dispatch(self, call: wire.Call, edits: _FileEdits) -> Any:
+    def _dispatch(self, call: wire.Call, cell: _Cell) -> Any:
         if call.method == wire.FILE_EDIT_ENTER:
-            return edits.enter()
+            return cell.edits.enter()
         if call.method == wire.FILE_EDIT_EXIT:
-            return edits.exit()
+            return cell.edits.exit()
         kwargs = wire.decode_call(call)
         if call.method in _SERVER_WRITES:
             kwargs["output"] = self.workspace.output_path(kwargs["output"])
-        return wire.encode_result(call.method, getattr(self._session, call.method)(**kwargs))
+        value = getattr(self._session, call.method)(**kwargs)
+        # Recorded the moment FL confirmed it, so it counts even if the cell
+        # never reads the reply (an interrupt, a later error, a lost kernel).
+        cell.actions.called(call.method, kwargs, value)
+        return wire.encode_result(call.method, value)
 
 
 def _breached(probe: wire.BoundaryProbe) -> bool:

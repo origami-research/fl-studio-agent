@@ -86,11 +86,16 @@ def _run_command(command: str | list[str], *, shell: bool) -> None:
 
 
 def run_cell(code: str, namespace: dict[str, Any]) -> RunResult:
-    """Execute one cell in ``namespace``; any exception, SystemExit included, is the result."""
+    """Execute one cell in ``namespace``; any exception, SystemExit included, is the result.
+
+    ``actions`` is left empty: the server fills it from the fl calls it served.
+    """
     try:
         tree = ast.parse(expand_magics(code), CELL_FILENAME, "exec")
     except SyntaxError as exc:
-        return RunResult(outcome="error", stdout="", traceback="".join(traceback.format_exception_only(exc)))
+        return RunResult(
+            outcome="error", stdout="", traceback="".join(traceback.format_exception_only(exc)), actions=[]
+        )
 
     # REPL semantics: a trailing expression is evaluated and repr'd, so
     # `fl.tempo` answers like Python instead of printing nothing.
@@ -108,11 +113,13 @@ def run_cell(code: str, namespace: dict[str, Any]) -> RunResult:
             outcome="error",
             stdout=_bounded(output.getvalue()),
             traceback=_bounded(_model_traceback(exc)),
+            actions=[],
         )
     return RunResult(
         outcome="ok",
         stdout=_bounded(output.getvalue()),
         result=None if result is None else _bounded(repr(result)),
+        actions=[],
     )
 
 

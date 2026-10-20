@@ -364,6 +364,29 @@ def test_file_edit_crosses_the_wire_and_closes_with_the_cell(host, session):
     assert session.file_edit_log == ["enter", "exit", "enter", "exit"]
 
 
+def test_a_file_edit_blocks_changes_are_listed_only_once_fl_reopened_with_them(host, session):
+    """FL takes a block's changes when it closes; a failed close lists none of them."""
+    cell = (
+        "with fl.file_edit():\n"
+        "    fl.track('Bass').set_automation([AutomationPoint(position=0, value=0.5)])\n"
+        "    fl.set_tempo(100)\n"
+        "fl.set_tempo(101)"
+    )
+    applied = host.run(cell)
+    assert applied.actions == [
+        "Replaced the automation on Bass (1 point)",
+        "Set tempo to 100 BPM",
+        "Reopened FL with the changed song",
+        "Set tempo to 101 BPM",
+    ]
+    session.file_edit_exit_failures = 1
+    failed = host.run(cell)
+    assert failed.outcome == "error" and "FL did not come back" in failed.traceback
+    assert failed.actions == []
+    left_open = host.run("block = fl.file_edit()\nblock.__enter__()\nfl.set_tempo(102)")
+    assert left_open.actions == ["Set tempo to 102 BPM"], "the server closed the block, so FL has it"
+
+
 def test_wire_methods_are_exactly_what_the_sdk_calls_on_its_session():
     """The RPC surface is the SDK's session surface: no more (attack surface), no less (breakage)."""
     used = {

@@ -34,7 +34,7 @@ from mcp.types import CallToolResult
 from pydantic import BaseModel
 from session_fakes import HELLO, FakeControl, FakeSpool, make_session
 
-from fl_mcp import schemas, sdk, server
+from fl_mcp import actions, schemas, sdk, server
 from fl_mcp.contract import FLLicense, build_contract
 from fl_mcp.kernel.host import KernelHost
 from fl_mcp.kernel.launch import PosixLauncher, Workspace
@@ -143,10 +143,14 @@ def box(tmp_path, monkeypatch):
 
 
 def call(box: Any, tool: Any, **args: Any) -> Any:
-    """Call an MCP tool as the model does and keep the payload it would see."""
+    """Call an MCP tool as the model does and keep the payload it would see.
+
+    Every action it reports must speak plainly and stay under the runaway cap."""
     result = tool(ctx=box.ctx, **args)
     text = result.content[0].text if isinstance(result, CallToolResult) else result.model_dump_json()
     box.payloads.append(text)
+    for sentence in getattr(result, "actions", []):
+        assert len(sentence) <= actions.MAX_CHARS and not INTERNAL_WORDS.search(sentence), sentence
     return result
 
 
@@ -168,6 +172,7 @@ def test_write_then_read_on_a_trial_fl_is_definitive_and_plain(box):
     )
     # Definitive: what was written, where, and the total - nothing to doubt.
     assert wrote.stdout == "100.0\nwrote=16 track='808 Kick' pattern=1 mode='replace' total=16\n"
+    assert wrote.actions == ["Set tempo to 100 BPM", "Replaced the notes on 808 Kick (16 notes)"]
 
     # Step 4 ("That status is still unconfirmed"): an immediate read returns it.
     assert run(box, 'print(len(fl.track("808 Kick").notes())); print(fl.tempo)').stdout == "16\n100.0\n"
@@ -178,6 +183,7 @@ def test_write_then_read_on_a_trial_fl_is_definitive_and_plain(box):
     # Run b5343990 step 5 ("The scene seems stale, showing tempo 130 but no notes").
     scene = call(box, server.get_scene)
     assert scene.tempo == 100.0
+    assert scene.actions == [], "a read did nothing in FL"
     by_name = {c["name"]: c for c in scene.channels}
     assert by_name["808 Kick"]["notes"] == 16
     assert by_name["FLEX Bass"]["notes"] == 0, "an empty channel reads as empty, not missing"
@@ -193,7 +199,7 @@ def test_write_then_read_on_a_trial_fl_is_definitive_and_plain(box):
 
     # Run bdea5e90 step 9: fl.save() on a trial says plainly that nothing is lost.
     saved = call(box, server.run, code="fl.save()")
-    assert saved.outcome == "error"
+    assert saved.outcome == "error" and saved.actions == [], "a refused save is an error, not an action"
     assert "This FL Studio is a trial, which cannot save" in saved.traceback
     assert saved.traceback.startswith('Traceback (most recent call last):\n  File "<fl>", line 1')
     assert "kernel" not in saved.traceback and "sdk.py" not in saved.traceback, "engine frames are hidden"
@@ -216,6 +222,7 @@ def test_check_proves_what_sounds_in_plain_words(box):
     assert (by_name["808 Kick"].sounded, by_name["808 Kick"].peak_dbfs) == (True, -6.0)
     assert by_name["FLEX Bass"].reason == "it has no notes in bars 1-2"
     assert checked.summary.startswith("1 of 5 channels sounded in bars 1-2; the master peaked at -6 dBFS.")
+    assert checked.actions == ["Checked bars 1-2: 1 of 5 tracks sound, master -6.0 dBFS"]
     # The same check from code crosses the kernel and reads the same.
     assert run(box, "print(fl.check().summary)").stdout == checked.summary + "\n"
     assert box.control.calls[-1] == ("transport.stop", []), "FL is left stopped"
@@ -229,7 +236,7 @@ def test_a_refused_write_is_a_plain_error_and_reads_stay_true(box):
         id=0, ok=False, op="add_notes", err="protocol mismatch: command is v2, bridge is v3"
     )
     refused = call(box, server.run, code='fl.track("808 Kick").write([Note(key=36, start=0, length=1)])')
-    assert refused.outcome == "error"
+    assert refused.outcome == "error" and refused.actions == []
     assert "FL Studio refused the note edit, so nothing was written." in refused.traceback
     assert call(box, server.get_scene, detail="notes", channel=0).notes == []
     for payload in box.payloads:
@@ -292,6 +299,14 @@ def _error_strings() -> list[tuple[str, str]]:
                     if isinstance(const, ast.Constant) and isinstance(const.value, str)
                 )
     return found
+
+
+def test_every_action_sentence_speaks_plainly():
+    """Action rows are model- and user-facing text too: scan every literal they are built from."""
+    tree = ast.parse(Path(actions.__file__).read_text(encoding="utf-8"))
+    sentences = [n.value for n in ast.walk(tree) if isinstance(n, ast.Constant) and isinstance(n.value, str)]
+    assert any(text.startswith("Replaced the notes on ") for text in sentences), "the scan must see the sentences"
+    assert [text for text in sentences if INTERNAL_WORDS.search(text)] == []
 
 
 def test_every_error_message_and_fix_speaks_plainly():

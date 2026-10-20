@@ -148,7 +148,8 @@ def test_check_returns_the_sessions_result():
         start_bar=3, bars=1, seconds=1.85, master_peak_dbfs=-3.0, channels=[], summary="0 of 0 channels sounded."
     )
     session = SimpleNamespace(check=lambda start_bar, bars: result if (start_bar, bars) == (3, 1) else None)
-    assert server.check(_ctx(session=session), bars=1, start_bar=3) == result
+    checked = server.check(_ctx(session=session), bars=1, start_bar=3)
+    assert CheckResult.model_validate(checked.model_dump(exclude={"actions"})) == result
 
 
 def test_check_refusals_reach_the_model_structured():
@@ -339,6 +340,23 @@ def test_analyze_defaults_to_the_most_recent_render(tmp_path):
 
 def test_analyze_renders_fresh_when_nothing_was_rendered_yet(tmp_path):
     fl = _RenderFl()
-    metrics = server.analyze(_ctx(fl=fl, kernel=_workspace_only(tmp_path)))
+    metrics = server.analyze(_ctx(fl=fl, session=fl, kernel=_workspace_only(tmp_path)))
     assert metrics.bpm == 140.0
     assert len(fl.analyzed) == 1
+
+
+def test_notes_take_positional_arguments_in_the_documented_order(kernel):
+    """Every model in the 2026-10-19 live run first wrote Note(60, 0, 1, 0.8) and lost a step to
+    a TypeError; position or name now both work, in the cheatsheet's order."""
+    same = server.run(
+        "Note(60, 0, 1, 0.8) == Note(key='C4', start=0, length=1, velocity=0.8)"
+        " == Note('C4', 0, 1, velocity=0.8) == Note(60, 0, 1, 0.8, 0.5, 0)",
+        _ctx(kernel=kernel),
+    )
+    assert same.result == "True"
+    too_many = server.run("Note(60, 0, 1, 0.8, 0.5, 0, 1)", _ctx(kernel=kernel))
+    assert "Note takes at most 6 positional arguments (key, start, length, velocity, pan, color)" in too_many.traceback
+    twice = server.run("Note(60, 0, 1, key=61)", _ctx(kernel=kernel))
+    assert "Note got key both by position and by name" in twice.traceback
+    invalid = server.run("Note(200, 0, 1)", _ctx(kernel=kernel))
+    assert invalid.outcome == "error" and "key" in invalid.traceback

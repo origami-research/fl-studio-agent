@@ -8,9 +8,13 @@ capability, the suspended-then-jobbed start, and cleanup when a step fails.
 from __future__ import annotations
 
 import os
+from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
+from session_fakes import RENDER_SPAN
 
+from fl_mcp import server
 from fl_mcp.kernel.launch import Workspace
 from fl_mcp.kernel.windows import (
     APPCONTAINER_NAME,
@@ -186,3 +190,82 @@ def test_the_host_keeps_only_its_pipe_ends(workspace):
 
 def test_env_block_is_sorted_case_insensitively_and_nul_terminated():
     assert env_block({"b": "2", "A": "1", "PATH": "x"}) == "A=1\0b=2\0PATH=x\0"
+
+
+# -- renders the kernel can open ------------------------------------------------------
+
+_PRIVATE = 0o700
+
+
+def _container_can_read(path: Path, grants: dict[Path, str], private_dirs: set[Path]) -> bool:
+    """Windows ACL inheritance as the kernel meets it.
+
+    A new file takes the inheritable grants of the folders above it, up to the
+    nearest folder that was granted explicitly. A folder made private on the way
+    (mode 0o700: an owner-only, non-inheriting ACL since Python 3.12.4) cuts
+    that chain, so nothing below it reaches the container.
+    """
+    for folder in path.parents:
+        if folder in private_dirs:
+            return False
+        rights = grants.get(folder)
+        if rights is not None:
+            return "(OI)" in rights and ("RX" in rights or "M" in rights)
+    return False
+
+
+class _Recorder:
+    """The server's own folder creation during a render, as Windows would see it."""
+
+    def __init__(self, monkeypatch) -> None:
+        self.private: set[Path] = set()
+        real_mkdir = os.mkdir
+
+        def mkdir(path, mode=0o777, *, dir_fd=None):
+            if mode == _PRIVATE:
+                self.private.add(Path(path).resolve())
+            real_mkdir(path, mode, dir_fd=dir_fd)
+
+        monkeypatch.setattr(os, "mkdir", mkdir)
+
+
+class _RenderSession:
+    def render_wav(self, output: Path):
+        from fl_mcp.schemas import RenderReceipt
+
+        output.write_bytes(b"RIFF....WAVE")
+        return RenderReceipt(path=output, span=RENDER_SPAN)
+
+
+def test_every_render_the_server_writes_is_one_the_kernel_can_open(workspace, monkeypatch):
+    """Live run 2026-10-19: on locked-down Windows boxes a model rendered, then could not
+    open the file. The render tool wrote into a tempfile.mkdtemp folder inside renders,
+    which the server (unlike the kernel) does not patch, so the folder was owner-only and
+    the container's inherited read grant never reached the WAV."""
+    api = FakeWin32()
+    _launch(api, workspace)
+    grants = {c[1]: c[3] for c in api.calls if c[0] == "grant"}
+    recorder = _Recorder(monkeypatch)
+    session = _RenderSession()
+    ctx = SimpleNamespace(
+        request_context=SimpleNamespace(
+            lifespan_context={"session": session, "kernel": SimpleNamespace(workspace=workspace)}
+        )
+    )
+
+    tool = Path(server.render(ctx).path)
+    fl_render = workspace.output_path(Path("mix.wav"))  # where fl.render("mix.wav") lands
+    session.render_wav(fl_render)
+    for path in (tool, fl_render):
+        assert path.is_file()
+        assert _container_can_read(path, grants, recorder.private), path
+        assert path.parent == workspace.renders, "no folder between renders and the WAV"
+
+
+def test_the_acl_model_rejects_a_render_in_a_private_folder(workspace):
+    """The check above would have caught the old layout."""
+    grants = {workspace.renders: RENDERS_GRANT, workspace.work: WORK_GRANT}
+    private = workspace.renders / "render-abc"
+    assert _container_can_read(workspace.renders / "mix.wav", grants, set())
+    assert not _container_can_read(private / "render.wav", grants, {private})
+    assert not _container_can_read(workspace.root / "boundary-canary", grants, set())
