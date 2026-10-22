@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import json
+import socket
 import threading
 import time
+from collections.abc import Callable
 from pathlib import Path
 
 from carrier_fakes import FakeBridge
@@ -44,13 +46,43 @@ def _session(root: Path):
     return session
 
 
-def _wait_for(path: Path) -> None:
-    deadline = time.monotonic() + 3
-    while time.monotonic() < deadline:
-        if path.exists():
-            return
-        time.sleep(0.02)
-    raise AssertionError(f"{path} was not published")
+# Waits on the lifecycle are bounded in its own passes, not in seconds (#258).
+# One pass can legitimately take about 3 s on a loaded runner: a 0.5 s UDP ping
+# that misses, a 2 s stream_start timeout on the file carrier, then the retry
+# on the next pass. A fixed 3 s deadline therefore measured the runner, not the
+# lifecycle. Counting passes ties the bound to the lifecycle's own retries
+# ("publishes within a few polls"), however slow the machine is.
+PASS_BUDGET = 10
+# Only reports a dead or wedged thread; a passing run never waits this long.
+HANG_GUARD_SECONDS = 30.0
+
+
+class _LifecyclePasses:
+    """Counts the session audio lifecycle's completed passes."""
+
+    def __init__(self, monkeypatch, session) -> None:
+        self._done = threading.Condition()
+        self._count = 0
+        run_pass = session._audio_stream_pass
+
+        def counted() -> None:
+            try:
+                run_pass()
+            finally:
+                with self._done:
+                    self._count += 1
+                    self._done.notify_all()
+
+        monkeypatch.setattr(session, "_audio_stream_pass", counted)
+
+    def wait_until(self, condition: Callable[[], bool], what: str) -> None:
+        with self._done:
+            start = self._count
+            while not condition():
+                if self._count - start >= PASS_BUDGET:
+                    raise AssertionError(f"{what} within {PASS_BUDGET} lifecycle passes")
+                if not self._done.wait(HANG_GUARD_SECONDS):
+                    raise AssertionError(f"the audio lifecycle stopped polling: {what}")
 
 
 def test_session_lifecycle_publishes_and_removes_audio_endpoint(monkeypatch, tmp_path) -> None:
@@ -60,10 +92,11 @@ def test_session_lifecycle_publishes_and_removes_audio_endpoint(monkeypatch, tmp
     session = _session(root)
     monkeypatch.setenv("FLMCP_AUDIO_STREAM", "1")
     monkeypatch.setattr(detect_mod, "spool_roots", lambda: [root])
+    passes = _LifecyclePasses(monkeypatch, session)
     try:
         session.start_audio_stream_lifecycle()
         port_file = root / "bridge_audio.json"
-        _wait_for(port_file)
+        passes.wait_until(port_file.exists, "bridge_audio.json was not published")
         payload = json.loads(port_file.read_text())
         assert payload == {"host": "127.0.0.1", "port": payload["port"], "proto": 1, "sample_rate": 44_100}
         assert any(command["op"] == "stream_start" for command in bridge.received)
@@ -85,10 +118,11 @@ def test_live_session_prewarm_and_audio_lifecycle_both_complete(monkeypatch, tmp
     session = _session(root)
     monkeypatch.setenv("FLMCP_AUDIO_STREAM", "1")
     monkeypatch.setattr(detect_mod, "spool_roots", lambda: [root])
+    passes = _LifecyclePasses(monkeypatch, session)
     try:
         session.prewarm()
         session.start_audio_stream_lifecycle()
-        _wait_for(root / "bridge_audio.json")
+        passes.wait_until((root / "bridge_audio.json").exists, "bridge_audio.json was not published")
         assert [command["op"] for command in bridge.received if "id" in command] == ["ping", "stream_start"]
     finally:
         session.close()
@@ -134,13 +168,13 @@ def test_audio_lifecycle_does_not_interleave_a_session_transport_request(monkeyp
     monkeypatch.setattr(detect_mod, "spool_roots", lambda: [root])
     try:
         session.start_audio_stream_lifecycle()
-        assert transport.stream_sent.wait(1)
+        assert transport.stream_sent.wait(HANG_GUARD_SECONDS)
         prewarm = threading.Thread(target=session.prewarm)
         prewarm.start()
         time.sleep(0.05)
         assert not transport.ping_sent.is_set()
         transport.release_stream.set()
-        prewarm.join(timeout=1)
+        prewarm.join(timeout=HANG_GUARD_SECONDS)
         assert not prewarm.is_alive()
         assert transport.ping_sent.is_set()
     finally:
@@ -154,22 +188,25 @@ def test_bridge_pid_change_restarts_and_republishes_audio_endpoint(monkeypatch, 
     _write_heartbeat(root)
     session = _session(root)
     monkeypatch.setenv("FLMCP_AUDIO_STREAM", "1")
+    passes = _LifecyclePasses(monkeypatch, session)
     try:
         session.start_audio_stream_lifecycle()
         port_file = root / "bridge_audio.json"
-        _wait_for(port_file)
-        first_port = json.loads(port_file.read_text())["port"]
+        passes.wait_until(port_file.exists, "bridge_audio.json was not published")
         first.close()
         second = FakeBridge(root, pid=2)
         _write_heartbeat(root)
-        deadline = time.monotonic() + 3
-        while time.monotonic() < deadline:
-            if port_file.exists() and json.loads(port_file.read_text())["port"] != first_port:
-                break
-            time.sleep(0.02)
-        else:
-            raise AssertionError("audio endpoint was not republished after Bridge restart")
-        assert any(command["op"] == "stream_start" for command in second.received)
+
+        # The pass that sees pid 2 unpublishes the old endpoint before it sends
+        # stream_start, so a port file seen after the new Bridge has that request
+        # is the new publish (check in that order). Comparing ports was not
+        # proof: the OS may hand the freed port straight to the new listener.
+        def republished() -> bool:
+            return any(command["op"] == "stream_start" for command in second.received) and port_file.exists()
+
+        passes.wait_until(republished, "audio endpoint was not republished after Bridge restart")
+        port = json.loads(port_file.read_text())["port"]
+        socket.create_connection(("127.0.0.1", port), timeout=HANG_GUARD_SECONDS).close()
     finally:
         session.close()
         second.close()

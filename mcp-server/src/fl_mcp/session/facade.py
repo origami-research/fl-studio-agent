@@ -276,20 +276,20 @@ class FLSession:
 
     def _run_audio_stream_lifecycle(self) -> None:
         while not self._audio_stream_stop.wait(_AUDIO_STREAM_POLL_SECONDS):
-            root = self.session_spool_root
-            if root is None:
-                return
-            heartbeat = read_heartbeat(root / "bridge_heartbeat.txt", clock=self._clock)
-            pid = bridge_pid(root)
-            if self._audio_endpoint is not None and pid != self._audio_bridge_pid:
-                self._stop_audio_stream(send_stop=False)
-            live = (
-                pid is not None and heartbeat.age <= 10.0 and heartbeat.proto == 2 and heartbeat.abi == "ok"
-            )
-            if not live:
-                continue
-            if self._audio_endpoint is None:
-                self._start_audio_stream(pid)
+            self._audio_stream_pass()
+
+    def _audio_stream_pass(self) -> None:
+        """One lifecycle poll: drop a replaced Bridge's endpoint, then start one for a live Bridge."""
+        root = self.session_spool_root
+        if root is None:
+            return
+        heartbeat = read_heartbeat(root / "bridge_heartbeat.txt", clock=self._clock)
+        pid = bridge_pid(root)
+        if self._audio_endpoint is not None and pid != self._audio_bridge_pid:
+            self._stop_audio_stream(send_stop=False)
+        live = pid is not None and heartbeat.age <= 10.0 and heartbeat.proto == 2 and heartbeat.abi == "ok"
+        if live and self._audio_endpoint is None:
+            self._start_audio_stream(pid)
 
     def _start_audio_stream(self, pid: int) -> None:
         root = self.session_spool_root

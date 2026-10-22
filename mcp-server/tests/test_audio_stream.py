@@ -45,13 +45,15 @@ def test_listen_cli_records_the_loopback_endpoint_offline(tmp_path) -> None:
     thread = threading.Thread(target=listen)
     thread.start()
     try:
-        time.sleep(0.05)  # allow the local TCP listener to connect
+        # Stream like the Bridge does, until the CLI's recording window closes.
+        # A fixed sleep guessed when the listener had connected, and on a loaded
+        # runner every packet could arrive before it did (#258).
         packet = HEADER.pack(MAGIC, 1, 48_000, 2, 1024, 0) + b"\x01\x00\xfe\xff" * 1024
+        hang_guard = time.monotonic() + 30
         with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sender:
-            for _ in range(4):
+            while thread.is_alive() and time.monotonic() < hang_guard:
                 sender.sendto(packet, ("127.0.0.1", endpoint.udp_port))
-                time.sleep(0.03)
-        thread.join(timeout=2)
+                thread.join(timeout=0.03)
     finally:
         endpoint.close()
     assert not thread.is_alive()
