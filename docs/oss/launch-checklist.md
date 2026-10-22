@@ -13,7 +13,7 @@ flpkit 0.8.1 was published on 2026-09-06; the engine depends on the released pac
 
 ## Step 7, mechanised
 
-`scripts/oss/publish-public-mirror.sh --repo <owner/name> --tag v0.1.0 --i-approve-publication` creates the fresh public repository, pushes the verified mirror's `main` and the tag, and refuses when: the latest verification report is not PASS, any removal-set path is still reachable in the mirror, the target repository already exists, or the approval flag is missing. It never touches the private repository's refs. Publishing the engine to PyPI is done afterwards from the public repository (its own trusted-publishing workflow), never from the private one.
+`scripts/oss/publish-public-mirror.sh --repo <owner/name> --tag v0.1.0 --i-approve-publication` creates the public repository (or accepts the owner-created one only while it has zero branches), pushes the verified mirror's `main` and the tag, and refuses when: the verification it runs itself is not PASS, any removal-set path is still reachable in the mirror, the target repository has branches, `docs/oss/PUBLICATION-HOLD` exists, or the approval flag is missing. It never touches the private repository's refs. Publishing the engine to PyPI is done afterwards from the public repository (its own trusted-publishing workflow), never from the private one.
 
 ## Package name
 
@@ -22,5 +22,10 @@ The PyPI name `fl-studio-mcp` is owned by a third party (rosasynthesiz, 1.0.0, M
 ## Hold
 
 2026-09-07: the owner put publication on hold until the platform is up and running.
-`docs/oss/PUBLICATION-HOLD` enforces it in the publish script.
-Everything before the push is done: mirror verified PASS (9 checks), public name `fl-studio-agent`, empty target repository created by the owner, PyPI name free.
+2026-10-22: the owner lifted the hold ("publish please"); `docs/oss/PUBLICATION-HOLD` is deleted.
+The publish script still refuses while that file exists, so a future hold is one reviewed commit that re-adds it.
+
+## Open before the push (2026-10-22)
+
+- `docs/38-python-kernel.md` (added after the hold) names the private product's machine image and infrastructure path, so it joined the history removal set; public docs that link to it carry dead links until a scrubbed copy is published.
+- Older versions of README, SETUP and several docs name the private product although public HEAD is clean; the verifier now checks every reachable file version and fails on them until the owner chooses to scrub or remove those versions.

@@ -183,7 +183,7 @@ Fix: move the codec into a small shared module that both the server and the (sta
 
 **7. One-command distribution (small, after 4+6).**
 Publish to PyPI so setup becomes exactly:
-`claude mcp add fl-studio -- uvx fl-studio-mcp`.
+`claude mcp add fl-studio -- uvx --from fl-studio-agent fl-mcp`.
 First run self-provisions FL (the three file writes `install_all()` already does), tells you to open the template, done.
 No clone, no venv, no manual anything.
 
@@ -203,7 +203,7 @@ Trace viewer: a single HTML timeline of every tool call -> wire op -> FL respons
 
 ```
 # once, ever:
-claude mcp add fl-studio -- uvx fl-studio-mcp
+claude mcp add fl-studio -- uvx --from fl-studio-agent fl-mcp
 # each session:
 open the template project, talk to Claude
 ```

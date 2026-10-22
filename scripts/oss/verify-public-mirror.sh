@@ -130,7 +130,24 @@ if [[ "$message_hits" != 0 ]]; then
   record_failure "commit messages name the private product ($message_hits line(s) match arena)"
 fi
 
-check_count=9
+# History is public too: old versions of a file must not name the private product either.
+# private-terms.txt covers public HEAD only; this covers every reachable commit (2026-10-22:
+# earlier README, SETUP and docs versions named it although HEAD was clean).
+# xargs batches the revisions; each batch must come before the pathspec separator.
+# git grep exits 1 for "no match"; anything above 1 is a scan error and fails the check.
+content_hits_file="$work_dir/content-hits"
+if ! git -C "$mirror" rev-list --all | xargs sh -c 'git -C "$0" grep -I -l -i -E "producer[ -]?arena" "$@" -- . \
+    ":(exclude)docs/oss/private-terms.txt" ":(exclude)docs/oss/history-removal-set.txt" \
+    ":(exclude)docs/oss/message-replacements.txt" ":(exclude)scripts/oss/verify-public-mirror.sh"; [ "$?" -le 1 ]' \
+    "$mirror" >"$content_hits_file"; then
+  record_failure "could not scan history for the private product name"
+fi
+content_hits=$(cut -d: -f2- "$content_hits_file" | sort -u)
+if [[ -n "$content_hits" ]]; then
+  record_failure "file content in history names the private product: $(echo "$content_hits" | paste -sd, -)"
+fi
+
+check_count=10
 status=PASS
 if ((${#failures[@]})); then
   status=FAIL

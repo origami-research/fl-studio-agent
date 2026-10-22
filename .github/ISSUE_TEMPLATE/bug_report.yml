@@ -24,6 +24,6 @@ body:
   - type: input
     id: version
     attributes:
-      label: fl-studio-mcp version or commit
+      label: fl-studio-agent version or commit
     validations:
       required: true

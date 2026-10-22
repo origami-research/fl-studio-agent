@@ -4,3 +4,4 @@ docs/32-repo-split.md
 docs/research/improvement-plan-2026-09-01.md
 docs/research/insights-2026-09-01.md
 native/control/fpsdk/
+docs/38-python-kernel.md

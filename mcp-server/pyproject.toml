@@ -31,6 +31,7 @@ authors = [{ name = "Origami Research" }]
 maintainers = [{ name = "Origami Research" }]
 
 [project.urls]
+Homepage = "https://github.com/origami-research/fl-studio-agent"
 Repository = "https://github.com/origami-research/fl-studio-agent"
 Documentation = "https://github.com/origami-research/fl-studio-agent/tree/main/docs"
 
