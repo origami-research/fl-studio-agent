@@ -56,3 +56,10 @@ The publish script still refuses while that file exists, so a future hold is one
 - `.gitignore`, `native/abi/`, `native/generated/` and `native/scripts/` are public, so the Bridge builds from the public tree with the fetched SDK.
 - Commit identities are GitHub no-reply addresses.
 - Publication waits for the co-author's MIT consent.
+
+## Published 2026-10-23
+
+- The co-author (ky11001) consented to MIT; the owner relayed it and gave the publish go.
+- `scripts/oss/publish-public-mirror.sh` ran from merged main 14887fb: verification PASS in the same invocation (13 checks, 0 skipped), then it pushed `main` (735c35d) and tag `v0.1.0` to https://github.com/origami-research/fl-studio-agent and uploaded `fl-studio-agent` 0.1.0 to https://pypi.org/project/fl-studio-agent/0.1.0/.
+- Read-back: the public default branch is `main` with `main` and `v0.1.0` at 735c35d; a clean-venv `pip install fl-studio-agent==0.1.0` installs the `fl-mcp*` commands and `fl-mcp-contract` runs.
+- The script publishes only into an empty repository, so the next release needs a path for updating the published repository (follow-up).
