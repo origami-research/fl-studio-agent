@@ -11,8 +11,9 @@ for a stale controller. Done with FL closed:
      reg.xml on macOS, HKCU\Software\Image-Line\FL Studio <N> on Windows
   5. Windows only: the two loopMIDI ports the controller talks over must exist
      (macOS needs nothing: the server opens virtual ports itself)
-  6. the native Bridge plugin: ``--bridge PATH`` installs a built library;
-     without it the step only reports whether a Bridge is installed
+  6. the native Bridge plugin: the prebuilt one from this version's GitHub
+     release, checksum-verified (fl/bridge.py); ``--bridge PATH`` installs your
+     own build instead, ``--no-bridge`` skips it
 
 FL only loads these from fixed locations under the user's Image-Line data
 folder (and the Bridge from inside FL's own install), so they are copied there
@@ -28,19 +29,18 @@ import contextlib
 import json
 import re
 import shutil
-import subprocess
 import sys
 from collections.abc import Mapping
 from importlib.resources import files
 from pathlib import Path
-from typing import Literal, Protocol
-
-from pydantic import BaseModel
+from typing import Protocol
 
 from fl_mcp.controller_version import controller_script_bytes
 
-from .paths import bridge_binary_name, bridge_plugin_dir, fl_settings_dirs, piano_roll_scripts_dir
+from . import bridge
+from .paths import bridge_binary_name, fl_settings_dirs, piano_roll_scripts_dir
 from .process import fl_process_running
+from .steps import InstallStep
 
 if sys.platform == "win32":
     import winreg
@@ -64,16 +64,6 @@ REQ_PORT_NAME = "FLMCP Req"
 RES_PORT_NAME = "FLMCP Res"
 SCRIPT_NAME = "FLMCP Bridge Script"
 CONTROL_PORT = 1  # any matching int; input and output must agree
-
-
-class InstallStep(BaseModel):
-    """One install step's outcome; ``WARN`` means the step needs a human or FL restart."""
-
-    status: Literal["OK", "WARN", "FAIL"]
-    detail: str
-
-    def __str__(self) -> str:
-        return f"{self.status} {self.detail}"
 
 
 def _ok(where: str) -> InstallStep:
@@ -381,60 +371,7 @@ def check_midi_ports() -> InstallStep:
     return InstallStep(status="OK", detail=f"loopMIDI ports '{REQ_PORT_NAME}' and '{RES_PORT_NAME}' open")
 
 
-BRIDGE_FIX = (
-    "optional: without it notes still land (FL reloads the project per write), but `render` and "
-    "live writes need it. Build it once from the source repository (SETUP.md, 'The Bridge plugin'), "
-    "then run fl-mcp-install --bridge <path to the built library>."
-)
-
-
-def bridge_status() -> InstallStep:
-    """Report whether a Bridge library is installed where FL loads it; never changes anything."""
-    installed = bridge_plugin_dir() / bridge_binary_name()
-    if installed.is_file():
-        return InstallStep(status="OK", detail=f"{installed} (installed)")
-    return _warn(f"not installed at {installed}; {BRIDGE_FIX}")
-
-
-def install_bridge(built: Path) -> InstallStep:
-    """Install a built Bridge library into FL's native Effects folder.
-
-    FL loads native plugins only from inside its own install: the app bundle on
-    macOS (group writable, and FL ships with library validation disabled so it
-    loads an unsigned dylib), Program Files on Windows (needs an elevated
-    terminal). FL must be closed: it holds the library open while running.
-    """
-    if not built.is_file():
-        return InstallStep(status="FAIL", detail=f"no Bridge library at {built}")
-    if built.name != bridge_binary_name():
-        return InstallStep(status="FAIL", detail=f"{built.name} is not this OS's Bridge library ({bridge_binary_name()})")
-    if fl_process_running():
-        # An install the user asked for that did not happen is a failure, not advice.
-        return InstallStep(status="FAIL", detail="FL Studio is running and holds the Bridge open; close it, then rerun")
-    dest_dir = bridge_plugin_dir()
-    if not dest_dir.parent.is_dir():
-        return InstallStep(status="FAIL", detail=f"FL Studio's native Effects folder not found: {dest_dir.parent} "
-                           "(set FL_APP to FL Studio's app or FL64.exe if it is installed elsewhere)")
-    from fl_mcp.profile import BRIDGE_BUILD_RECORD, detect_fl_version
-
-    try:
-        step = _place(dest_dir / bridge_binary_name(), built.read_bytes())
-        # Capital V matches the field in stock plugins' Plugin.nfo (e.g. Fruity Balance).
-        _place(dest_dir / "Plugin.nfo", b"ps_Vendorname=FL MCP\n")
-        fl_build = detect_fl_version()  # macOS only; the doctor compares it with the running FL
-        if fl_build is not None:
-            _place(dest_dir / BRIDGE_BUILD_RECORD, f"{fl_build.label()}\n".encode())
-    except OSError as exc:
-        hint = "run it from an elevated terminal" if sys.platform == "win32" else "check that folder's permissions"
-        return InstallStep(status="FAIL", detail=f"cannot write {dest_dir} ({exc}); {hint}")
-    if sys.platform == "darwin":
-        # A library copied out of a browser download keeps the quarantine flag FL refuses.
-        subprocess.run(["xattr", "-d", "com.apple.quarantine", str(dest_dir / bridge_binary_name())],
-                       capture_output=True, check=False)
-    return InstallStep(status=step.status, detail=f"{step.detail}; restart FL Studio to load it")
-
-
-def install_all(bridge: Path | None = None) -> dict[str, InstallStep]:
+def install_all(bridge_library: Path | None = None, *, with_bridge: bool = True) -> dict[str, InstallStep]:
     """Full FL-side install, each step independent: one failing never skips the rest."""
     results: dict[str, InstallStep] = {}
     for name, step in (
@@ -449,7 +386,10 @@ def install_all(bridge: Path | None = None) -> dict[str, InstallStep]:
     results["midi_assignment"] = configure_midi()
     if sys.platform == "win32":
         results["midi_ports"] = check_midi_ports()
-    results["bridge"] = install_bridge(bridge) if bridge is not None else bridge_status()
+    if bridge_library is not None:
+        results["bridge"] = bridge.install_built(bridge_library)
+    elif with_bridge:
+        results["bridge"] = bridge.install_release()
     return results
 
 
@@ -464,10 +404,12 @@ def main(argv: list[str] | None = None) -> None:
         description="Install the FL-side FL MCP files for this user. Safe to rerun; close FL Studio first."
     )
     parser.add_argument("--json", action="store_true", help="print one JSON object of step results")
-    parser.add_argument("--bridge", type=Path, metavar="PATH",
-                        help=f"also install a built Bridge library ({bridge_binary_name()}) into FL")
+    source = parser.add_mutually_exclusive_group()
+    source.add_argument("--bridge", type=Path, metavar="PATH",
+                        help=f"install this Bridge library ({bridge_binary_name()}) instead of the prebuilt release")
+    source.add_argument("--no-bridge", action="store_true", help="leave the Bridge plugin alone")
     args = parser.parse_args(argv)
-    results = install_all(bridge=args.bridge)
+    results = install_all(args.bridge, with_bridge=not args.no_bridge)
     failed = any(step.status == "FAIL" for step in results.values())
     if args.json:
         print(json.dumps({name: step.model_dump() for name, step in results.items()}))

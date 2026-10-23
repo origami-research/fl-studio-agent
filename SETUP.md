@@ -8,7 +8,7 @@ The file-based features (compose, arrange, analyze `.flp` files) need no FL runn
 
 ## What `fl-mcp-install` does
 
-Run it with FL Studio closed (start FL once first if you never have, so its settings folder exists):
+Run it with FL Studio closed (start FL once first if you never have, so its settings folder exists); on Windows, run it in a terminal opened as administrator, because the Bridge goes into FL's folder under Program Files:
 
 ```bash
 uvx --python 3.12 --from fl-studio-agent fl-mcp-install
@@ -24,7 +24,8 @@ Each step prints `OK`, `WARN` (needs you), or `FAIL` (the command then exits non
    It refuses while FL is running, because FL rewrites these settings when it exits.
 4. `midi_ports` (Windows only): opens the two loopMIDI ports the way the server will.
    macOS needs no step here: the server opens virtual MIDI ports itself, and FL picks them up while it runs.
-5. `bridge`: reports whether the Bridge plugin is installed, or installs one with `--bridge PATH` (below).
+5. `bridge`: downloads the prebuilt Bridge plugin for this OS from the GitHub release matching the package version, checks it against that release's `SHA256SUMS`, and installs it into FL's plugin folder (below).
+   `--bridge PATH` installs your own build instead, and `--no-bridge` leaves the Bridge alone.
 
 `--json` prints the same results as one JSON object.
 
@@ -39,29 +40,45 @@ Windows has no virtual MIDI ports, so [loopMIDI](https://www.tobias-erichsen.de/
 2. Add exactly two ports named `FLMCP Req` and `FLMCP Res`.
 3. Keep loopMIDI running whenever FL runs, then run `fl-mcp-install`; its `midi_ports` step confirms both ports open.
 
-Production boxes are provisioned unattended by `scripts/windows/provision.ps1` and `session-install.ps1`, which run the same `fl-mcp-install` and pin the Bridge DLL and loopMIDI by sha256.
+Production boxes are provisioned unattended by `scripts/windows/provision.ps1` and `session-install.ps1`, which run the same `fl-mcp-install` (with `--no-bridge`: the box pins its own Bridge DLL) and pin the DLL and loopMIDI by sha256.
 
 ## The Bridge plugin
 
 The Bridge is a native FL effect that performs live host operations: targeted live note writes and `render` (it records the mix while FL plays).
 Without it, notes still land through the project file, with FL reloading the project per write, and `render` is unavailable.
-It is built from source because it compiles against Image-Line's FL Studio plugin SDK, which carries no redistribution grant, so no prebuilt binary is published.
 
+`fl-mcp-install` installs it for you: each release carries a universal macOS library (Apple Silicon and Intel) and a Windows x64 DLL, built by the release workflow, with `SHA256SUMS` and a `BRIDGE-NOTICE.txt`.
+The installer downloads the one for your OS from the release matching the installed package version and installs it only if its SHA-256 matches; `fl-mcp-doctor` reports what is installed (`bridge.source`, `bridge.sha256`).
+
+FL loads native plugins only from inside its own install (the app bundle on macOS, Program Files on Windows), which is where the installer puts it; `FL_APP` points it at an FL installed somewhere unusual.
+The agent project already carries the Bridge on its Master insert.
+For another project: Mixer (F9), an insert slot, add effect, **FL MCP Bridge**, then save.
+If it does not appear, use Options > Manage plugins > Find installed plugins.
+
+The libraries are not code-signed:
+
+- macOS: FL ships with library validation disabled, so it loads the (ad-hoc signed) library.
+  A file downloaded by the installer carries no quarantine flag, and the installer clears `com.apple.quarantine` anyway, so Gatekeeper does not prompt.
+  If you copy the library in by hand from a browser download, run `xattr -d com.apple.quarantine` on it.
+- Windows: the DLL is loaded by FL, not run by you, and a file the installer downloads carries no "downloaded from the internet" mark, so SmartScreen does not prompt.
+  Antivirus software may still inspect a new unsigned DLL, and Windows 11 Smart App Control, when it is on, can block unsigned code regardless of where it came from.
+- macOS may ask to let your terminal modify apps (System Settings > Privacy & Security > App Management), because the Bridge goes inside FL Studio.app; the installer says so if the write is refused.
+
+The Bridge is built with Image-Line's FL Studio plugin SDK headers; FL Studio is a trademark of Image-Line, and this project is not affiliated with Image-Line (see [native/bridge/NOTICE.txt](native/bridge/NOTICE.txt)).
+
+### Build the Bridge yourself
+
+For contributors, or an FL build the release does not support.
 From a checkout of this repository, with CMake and a C++ toolchain:
 
 ```bash
 native/scripts/fetch_sdk.sh
 cmake -S native -B native/build -DCMAKE_BUILD_TYPE=Release
 cmake --build native/build --target bridge
-```
-
-Then install it with FL closed:
-
-```bash
 uvx --python 3.12 --from fl-studio-agent fl-mcp-install --bridge "native/build/FL MCP Bridge_x64.dylib"
 ```
 
-On Windows, build from an x64 Native Tools prompt for Visual Studio 2022 (`fetch_sdk.sh` runs in Git Bash), and run the install from an elevated terminal, because FL's plugin folder is under Program Files:
+On Windows, build from an x64 Native Tools prompt for Visual Studio 2022 (`fetch_sdk.sh` runs in Git Bash), and install from an administrator terminal:
 
 ```powershell
 cmake -S native -B native\build-windows -G "Visual Studio 17 2022" -A x64
@@ -69,10 +86,6 @@ cmake --build native\build-windows --config Release --target bridge
 uvx --python 3.12 --from fl-studio-agent fl-mcp-install --bridge "native\build-windows\Release\FL MCP Bridge_x64.dll"
 ```
 
-FL loads native plugins only from inside its own install (the app bundle on macOS), which is where the installer puts it; `FL_APP` points it at an FL installed somewhere unusual.
-The agent project already carries the Bridge on its Master insert.
-For another project: Mixer (F9), an insert slot, add effect, **FL MCP Bridge**, then save.
-If it does not appear, use Options > Manage plugins > Find installed plugins.
 The Windows build details are in [native/bridge/WINDOWS.md](native/bridge/WINDOWS.md).
 
 ## From a source checkout

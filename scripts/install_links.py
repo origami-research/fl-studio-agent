@@ -124,7 +124,9 @@ def bundle_manifest(ver: str) -> dict:
         "long_description": (
             "Lets Claude write notes into FL Studio, set tempo, levels and plugin parameters, check which "
             "channels sound, and render the mix to WAV. Before first use, close FL Studio and run "
-            f"`{SETUP_COMMAND}` once (it installs the FL-side scripts). Setup guide: {REPO_URL}#quick-start"
+            f"`{SETUP_COMMAND}` once (on Windows from an administrator terminal): it installs the FL-side scripts "
+            "and the prebuilt, checksum-verified Bridge plugin that live writes and rendering use. "
+            f"Setup guide: {REPO_URL}#quick-start"
         ),
         "author": {"name": "Origami Research", "url": REPO_URL},
         "repository": {"type": "git", "url": f"{REPO_URL}.git"},
@@ -190,18 +192,16 @@ You need FL Studio 2026 on macOS or Windows and [uv](https://docs.astral.sh/uv/g
 1. **Install uv** if you don't have it.
    macOS: `curl -LsSf https://astral.sh/uv/install.sh | sh`.
    Windows: `powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"`, then install [loopMIDI](https://www.tobias-erichsen.de/software/loopmidi.html) and add two ports named exactly `FLMCP Req` and `FLMCP Res` (Windows has no virtual MIDI ports; macOS needs nothing).
-2. **Set up FL Studio once.** Start FL once if you never have, close it, then run:
+2. **Set up FL Studio once.** Start FL once if you never have, close it, then run (on Windows, in a terminal opened as administrator, because FL's plugin folder is under Program Files):
 
    ```bash
    {SETUP_COMMAND}
    ```
 
-   It installs the controller and note scripts, assigns the controller's MIDI ports, and creates the agent's own project (`FLMCP Agent.flp`; your other projects are never touched).
+   It installs the controller and note scripts, assigns the controller's MIDI ports, creates the agent's own project (`FLMCP Agent.flp`; your other projects are never touched), and downloads the prebuilt [Bridge plugin]({REPO_URL}/blob/main/SETUP.md#the-bridge-plugin) for live writes and `render`, checking it against the release's SHA-256 sums.
    It is safe to rerun.
    To update later, run it with `{PACKAGE}@latest` in place of `{PACKAGE}` and restart FL and your client.
 3. **Add the server to your client** with a button above or a config below, open FL Studio, and ask for "a 4-bar chord loop in A minor".
-
-Live writes and `render` also need the native [Bridge plugin]({REPO_URL}/blob/main/SETUP.md#the-bridge-plugin), built once from source; without it notes still land, with FL reloading the project per write.
 
 <details>
 <summary><b>Claude Code</b></summary>
@@ -217,7 +217,7 @@ Check it with `claude mcp list`.
 <summary><b>Claude Desktop</b></summary>
 
 Download [{BUNDLE_ASSET}]({BUNDLE_URL}) and open it (or drag it into Settings > Extensions).
-Claude Desktop installs the package itself; you still run step 2 once.
+Claude Desktop installs the package itself; you still run step 2 once, which also installs the Bridge plugin into FL.
 
 Or add this to `claude_desktop_config.json` (Settings > Developer > Edit Config):
 

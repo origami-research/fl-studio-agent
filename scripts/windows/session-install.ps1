@@ -57,7 +57,8 @@ try {
     $deadline = (Get-Date).AddSeconds(30)
     while ((Get-Process -Name FL64 -ErrorAction SilentlyContinue) -and (Get-Date) -lt $deadline) { Start-Sleep -Milliseconds 500 }
 
-    $install = Invoke-Native (Join-Path $scripts 'fl-mcp-install.exe') @('--json')
+    # --no-bridge: provision.ps1 owns the Bridge DLL (pinned by sha256), so the release download stays out.
+    $install = Invoke-Native (Join-Path $scripts 'fl-mcp-install.exe') @('--json', '--no-bridge')
     $report = $install.Output | ConvertFrom-Json
     foreach ($name in 'note_script', 'controller_script') {
         $step = $report.$name

@@ -2,8 +2,10 @@ name: release
 
 # A version tag on the public repository is the last step of
 # scripts/oss/publish-public-mirror.sh, which uploads the same version to PyPI
-# first. This builds the Claude Desktop bundle, creates the GitHub release with
-# it, and publishes server.json to the MCP Registry. The registry namespace
+# first. This builds the Bridge for macOS and Windows (native.yml) and the
+# Claude Desktop bundle, creates the GitHub release with them, SHA256SUMS and
+# the Bridge NOTICE (fl-mcp-install downloads the Bridge from here and checks it
+# against SHA256SUMS), and publishes server.json to the MCP Registry. The registry namespace
 # io.github.origami-research/* is granted to workflows in that account's
 # repositories through GitHub OIDC, so no token is stored.
 on:
@@ -22,8 +24,15 @@ env:
   TAG: ${{ inputs.tag || github.ref_name }}
 
 jobs:
+  bridges:
+    if: github.repository == 'origami-research/fl-studio-agent'
+    uses: ./.github/workflows/native.yml
+    with:
+      ref: ${{ inputs.tag || github.ref_name }}
+
   release:
     if: github.repository == 'origami-research/fl-studio-agent'
+    needs: bridges
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -41,15 +50,31 @@ jobs:
           test -s "docs/releases/$TAG.md" || { echo "missing release notes docs/releases/$TAG.md"; exit 1; }
       - name: Build the Claude Desktop bundle
         run: scripts/build-mcpb.sh dist
+      - uses: actions/download-artifact@v4
+        with:
+          name: FL-MCP-Bridge-macOS-universal
+          path: bridge/macos
+      - uses: actions/download-artifact@v4
+        with:
+          name: FL-MCP-Bridge-Windows-x64
+          path: bridge/windows
+      - name: Name the Bridge assets and checksum them
+        # Asset names are fl/bridge.py RELEASE_ASSETS; fl-mcp-install verifies against SHA256SUMS.
+        run: |
+          cp "bridge/macos/FL MCP Bridge_x64.dylib" dist/fl-mcp-bridge-macos-universal.dylib
+          cp "bridge/windows/FL MCP Bridge_x64.dll" dist/fl-mcp-bridge-windows-x64.dll
+          cp native/bridge/NOTICE.txt dist/BRIDGE-NOTICE.txt
+          (cd dist && sha256sum fl-mcp-bridge-macos-universal.dylib fl-mcp-bridge-windows-x64.dll fl-studio-agent.mcpb > SHA256SUMS && cat SHA256SUMS)
       - name: Create or update the GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          assets=(dist/fl-studio-agent.mcpb dist/fl-mcp-bridge-macos-universal.dylib dist/fl-mcp-bridge-windows-x64.dll dist/SHA256SUMS dist/BRIDGE-NOTICE.txt)
           if gh release view "$TAG" >/dev/null 2>&1; then
-            gh release upload "$TAG" dist/fl-studio-agent.mcpb --clobber
+            gh release upload "$TAG" "${assets[@]}" --clobber
             gh release edit "$TAG" --notes-file "docs/releases/$TAG.md"
           else
-            gh release create "$TAG" dist/fl-studio-agent.mcpb --verify-tag --title "$TAG" --notes-file "docs/releases/$TAG.md"
+            gh release create "$TAG" "${assets[@]}" --verify-tag --title "$TAG" --notes-file "docs/releases/$TAG.md"
           fi
 
   registry:

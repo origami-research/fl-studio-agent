@@ -25,8 +25,8 @@ Before a release, bump `version` in `mcp-server/pyproject.toml`, run `python3 sc
 The publish script runs the verifier on the mirror in the same invocation, builds and smoke-tests the release wheel and sdist and packs the Claude Desktop bundle from the mirror's `main`, confirms the PyPI version is free and a token is present (`UV_PUBLISH_TOKEN` or `~/.config/pypi/token`, never printed), and checks the target repository (the tag is new and its `main` is an ancestor).
 Then it uploads to PyPI and reads it back (a clean-venv `pip install`, the commands, `fl-mcp-contract`), pushes `main`, and only then pushes the tag.
 PyPI goes first so the public README's install buttons never point at a version PyPI does not have.
-The tag starts `.github/workflows/release.yml` in the public repository: it creates the GitHub release with `fl-studio-agent.mcpb` and publishes `server.json` to the MCP Registry through GitHub OIDC (the `io.github.origami-research/*` namespace is granted to that account's workflows, so no token is stored).
-The script waits for that run and reads the release asset back.
+The tag starts `.github/workflows/release.yml` in the public repository: it builds the Bridge for macOS (universal) and Windows x64 through `.github/workflows/native.yml`, creates the GitHub release with `fl-studio-agent.mcpb`, both Bridge libraries, `SHA256SUMS` and `BRIDGE-NOTICE.txt` (`fl-mcp-install` downloads the Bridge from it), and publishes `server.json` to the MCP Registry through GitHub OIDC (the `io.github.origami-research/*` namespace is granted to that account's workflows, so no token is stored).
+The script waits for that run, downloads the release, and checks every asset against `SHA256SUMS`.
 
 Updates are fast-forward only.
 The mirror is rebuilt from the full private history every time, and `git filter-repo` is deterministic: with unchanged rules the rebuild reproduces every published commit (checked 2026-10-22: rebuilding from main de37cb9 reproduced the published 735c35d as an ancestor of the new main).
@@ -71,6 +71,14 @@ The publish script still refuses while that file exists, so a future hold is one
 - `.gitignore`, `native/abi/`, `native/generated/` and `native/scripts/` are public, so the Bridge builds from the public tree with the fetched SDK.
 - Commit identities are GitHub no-reply addresses.
 - Publication waits for the co-author's MIT consent.
+
+## Owner decision of 2026-10-22: ship the Bridge prebuilt
+
+- The owner: "just ship the bridge, do your best but it's ok, don't make it private and DIY".
+- The owner accepts the uncertainty: the FL plugin SDK carries no redistribution grant and Image-Line states no terms.
+  The Bridge compiles against the SDK headers for structure layouts and links no SDK code (`native/CMakeLists.txt`).
+- Each release therefore carries the macOS (universal) and Windows x64 Bridge, `SHA256SUMS`, and a best-effort attribution notice (`native/bridge/NOTICE.txt`); `fl-mcp-install` installs the matching one.
+- No signing identity exists, so the libraries are unsigned; SETUP.md says what users see.
 
 ## Published 2026-10-23
 

@@ -14,6 +14,9 @@ set -euo pipefail
 
 SDK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/sdk"
 MIRROR="https://github.com/Barsay/FL-Studio-SDK-CMake-Template.git"
+# Pinned: released Bridge binaries are built from this, so a change upstream must
+# be a reviewed bump here, never something a build picks up silently.
+MIRROR_COMMIT="2d01c4a786968a5d252d91bf4cd6896825a23865"
 
 if [ -f "$SDK_DIR/fp_cplug.cpp" ]; then
     echo "SDK already present: $SDK_DIR"
@@ -26,7 +29,10 @@ echo "NOTE: proprietary Image-Line code. Do not commit it; native/sdk is gitigno
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
-git clone --depth 1 --quiet "$MIRROR" "$TMP/template"
+git init --quiet "$TMP/template"
+git -C "$TMP/template" fetch --quiet --depth 1 "$MIRROR" "$MIRROR_COMMIT"
+git -C "$TMP/template" checkout --quiet FETCH_HEAD
+[ "$(git -C "$TMP/template" rev-parse HEAD)" = "$MIRROR_COMMIT" ] || { echo "fetched SDK is not commit $MIRROR_COMMIT" >&2; exit 1; }
 mkdir -p "$SDK_DIR"
 cp "$TMP/template/SDK/"*.h "$TMP/template/SDK/"*.cpp "$SDK_DIR/"
 

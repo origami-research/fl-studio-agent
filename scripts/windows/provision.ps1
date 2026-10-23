@@ -11,7 +11,7 @@
 #
 # Artifact arguments take a presigned https URL or a local path. Build the wheel and
 # its hash-locked requirements with scripts/build-wheel.sh; the Bridge DLL is the
-# native-windows workflow artifact "FL-MCP-Bridge-Windows-x64". session-install.ps1
+# native workflow artifact "FL-MCP-Bridge-Windows-x64". session-install.ps1
 # ships beside this script.
 [CmdletBinding()]
 param(

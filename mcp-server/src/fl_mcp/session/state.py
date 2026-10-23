@@ -13,7 +13,7 @@ from fl_mcp.core.carriers.spool import spool_roots
 from fl_mcp.fl.paths import piano_roll_scripts_dir
 from fl_mcp.fl.process import bridge_pid, fl_process_running, pid_alive
 from fl_mcp.profile import installed_bridge_build, profile_gate
-from fl_mcp.schemas import Channel, DoctorReport, PlaneStatus, SessionState
+from fl_mcp.schemas import BridgeInstall, Channel, DoctorReport, PlaneStatus, SessionState
 
 from . import controls
 from .detect import BRIDGE_HEARTBEAT_FILE, BRIDGE_HEARTBEAT_FRESH_SECONDS, read_heartbeat
@@ -149,7 +149,8 @@ def doctor(session: FLSession, *, clock: Callable[[], float] = time.time) -> Doc
         note_plane = PlaneStatus(
             connected=False,
             detail=detail,
-            fix="Rebuild and reinstall the Bridge against the running FL build.",
+            fix="Rerun fl-mcp-install after an FL update; if the Bridge still does not answer, "
+            "build it for this FL build (SETUP.md, 'Build the Bridge yourself').",
         )
 
     try:
@@ -168,7 +169,18 @@ def doctor(session: FLSession, *, clock: Callable[[], float] = time.time) -> Doc
         control_plane=control_plane,
         note_plane=note_plane,
         project_file=project_file,
+        bridge=_bridge_install(),
     )
+
+
+def _bridge_install() -> BridgeInstall:
+    """Presence and source of the Bridge in FL's plugin folder; a failed read is reported, not raised."""
+    from fl_mcp.fl import bridge
+
+    try:
+        return bridge.installed()
+    except Exception as exc:  # noqa: BLE001 - doctor must report failed probes
+        return BridgeInstall(installed=False, path="unknown", source=f"probe failed: {exc}")
 
 
 def _control_plane_status(session: FLSession, liveness: dict[str, int | bool | None]) -> PlaneStatus:

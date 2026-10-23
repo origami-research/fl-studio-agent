@@ -252,11 +252,22 @@ class PlaneStatus(BaseModel):
     fl_pid_alive: bool | None = None
 
 
+class BridgeInstall(BaseModel):
+    """The Bridge plugin in FL's plugin folder: informational, it does not set the doctor's status."""
+
+    installed: bool
+    path: str
+    source: str | None = None  # "fl-studio-agent vX.Y.Z release" or "local build <path>", as installed
+    sha256: str | None = None
+    installed_for: str | None = None  # the FL build recorded at install (macOS)
+
+
 class DoctorReport(BaseModel):
     status: Literal["ok", "degraded"]
     control_plane: PlaneStatus
     note_plane: PlaneStatus
     project_file: PlaneStatus
+    bridge: BridgeInstall
 
 
 # -- spool wire (server <-> code inside FL) ----------------------------------

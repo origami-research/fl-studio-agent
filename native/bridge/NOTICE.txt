@@ -1,0 +1,14 @@
+FL MCP Bridge - notice
+
+The FL MCP Bridge is part of fl-studio-agent (https://github.com/origami-research/fl-studio-agent),
+released under the MIT License (see LICENSE in that repository).
+
+The Bridge is built with Image-Line's FL Studio plugin SDK: it is compiled against the SDK's
+headers for the plugin interface's structure layouts. The SDK is Image-Line's proprietary work
+and is not included in this repository; builds fetch it separately (native/scripts/fetch_sdk.sh).
+
+FL Studio is a trademark of Image-Line Software. fl-studio-agent is an independent project and is
+not affiliated with, endorsed by, or sponsored by Image-Line.
+
+The prebuilt libraries are not code-signed. fl-mcp-install verifies each download against the
+release's SHA256SUMS before installing it.

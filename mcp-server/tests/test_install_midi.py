@@ -140,65 +140,17 @@ def test_rerun_leaves_an_assigned_reg_xml_and_its_backup_alone(reg):
 
 
 def _fake_fl(tmp_path, monkeypatch):
-    """An FL install and user-data tree under tmp_path; returns the Bridge folder."""
+    """An FL user-data tree under tmp_path with the Bridge step stubbed (it has its own tests)."""
     settings = tmp_path / "Image-Line" / "FL Studio" / "Settings"
     (settings / "Piano roll scripts").mkdir(parents=True)
-    effects = tmp_path / "FL Studio.app" / "Contents" / "Resources" / "FL" / "Plugins" / "Fruity" / "Effects"
-    effects.mkdir(parents=True)
-    bridge_dir = effects / "FL MCP Bridge"
     monkeypatch.setattr(install, "fl_settings_dirs", lambda: [settings])
     monkeypatch.setattr(install, "piano_roll_scripts_dir", lambda: settings / "Piano roll scripts")
     monkeypatch.setattr(install, "reg_xml_path", lambda: tmp_path / "missing-reg.xml")
     monkeypatch.setattr(install, "fl_process_running", lambda: False)
-    monkeypatch.setattr(install, "bridge_plugin_dir", lambda: bridge_dir)
-    monkeypatch.setattr(install, "bridge_binary_name", lambda: "FL MCP Bridge_x64.dylib")
+    monkeypatch.setattr(install.bridge, "install_release", lambda: install.InstallStep(status="OK", detail="stub"))
     from fl_mcp import make_agent_project
 
     monkeypatch.setattr(make_agent_project.flpaths, "primary_settings_dir", lambda: settings)
-    return bridge_dir
-
-
-def test_install_bridge_places_the_library_where_fl_loads_it_and_is_idempotent(tmp_path, monkeypatch):
-    bridge_dir = _fake_fl(tmp_path, monkeypatch)
-    built = tmp_path / "build" / "FL MCP Bridge_x64.dylib"
-    built.parent.mkdir()
-    built.write_bytes(b"bridge v1")
-
-    first = install.install_bridge(built)
-    again = install.install_bridge(built)
-
-    assert first.status == "OK" and "(installed)" in first.detail
-    assert again.status == "OK" and "(already current)" in again.detail
-    assert (bridge_dir / "FL MCP Bridge_x64.dylib").read_bytes() == b"bridge v1"
-    assert (bridge_dir / "Plugin.nfo").read_text() == "ps_Vendorname=FL MCP\n"
-    assert install.bridge_status().status == "OK"
-
-
-def test_install_bridge_refuses_a_wrong_library_and_a_running_fl(tmp_path, monkeypatch):
-    """FL holds the library open while running, and a Windows DLL in a macOS FL
-    (or any other file) would only fail later inside FL. Each refusal is FAIL,
-    so `fl-mcp-install --bridge` exits nonzero when the asked-for install did not happen."""
-    bridge_dir = _fake_fl(tmp_path, monkeypatch)
-    wrong = tmp_path / "FL MCP Bridge_x64.dll"
-    wrong.write_bytes(b"dll")
-    assert install.install_bridge(wrong).status == "FAIL"
-    assert install.install_bridge(tmp_path / "missing" / "FL MCP Bridge_x64.dylib").status == "FAIL"
-    right = tmp_path / "FL MCP Bridge_x64.dylib"
-    right.write_bytes(b"dylib")
-    monkeypatch.setattr(install, "fl_process_running", lambda: True)
-    assert install.install_bridge(right).status == "FAIL"
-    assert not bridge_dir.exists()
-
-
-def test_install_all_reports_a_missing_bridge_as_optional_not_failed(tmp_path, monkeypatch, capsys):
-    _fake_fl(tmp_path, monkeypatch)
-
-    install.main([])
-
-    out = capsys.readouterr().out
-    assert "[WARN] bridge: not installed" in out
-    assert "optional" in out
-    assert "Next: open FL Studio" in out
 
 
 def test_windows_install_checks_the_loopmidi_ports(tmp_path, monkeypatch):
@@ -235,7 +187,8 @@ def test_install_all_needs_only_the_installed_package(tmp_path, monkeypatch, cap
     from fl_mcp import make_agent_project
 
     monkeypatch.setattr(make_agent_project.flpaths, "primary_settings_dir", lambda: settings)
-    install.main(["--json"])
+    # The box pins its own Bridge DLL (provision.ps1), so session-install.ps1 passes --no-bridge.
+    install.main(["--json", "--no-bridge"])
 
     steps = json.loads(capsys.readouterr().out)
     assert steps["agent_project"]["status"] == "OK"

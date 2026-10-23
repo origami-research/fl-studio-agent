@@ -16,7 +16,7 @@ The native Bridge stays one CMake source tree and emits a macOS dylib or Windows
 
 ## Windows build
 
-The `native-windows` GitHub Actions job builds the DLL on `windows-latest`.
+The `native` GitHub Actions workflow builds the DLL on `windows-latest` (and the universal dylib on `macos-latest`); each release publishes both.
 It fetches the proprietary SDK into ignored `native/sdk` with the same
 `native/scripts/fetch_sdk.sh` used locally, builds with the Visual Studio 2022
 x64 generator, runs the spool/mock-host tests and the Windows FPC-layout ABI
@@ -310,7 +310,7 @@ A box needs exactly three artifacts, each pinned by sha256:
 
 - the `fl-studio-agent` wheel from `scripts/build-wheel.sh`, stamped `<version>+g<shortsha>`;
 - its hash-locked runtime requirements, written beside the wheel by the same script from `uv.lock`;
-- the Bridge DLL, the `FL-MCP-Bridge-Windows-x64` artifact of the `native-windows` workflow.
+- the Bridge DLL, the `FL-MCP-Bridge-Windows-x64` artifact of the `native` workflow (or the release asset `fl-mcp-bridge-windows-x64.dll`).
 
 The wheel carries every runtime file: the controller script and its wire codec and the piano-roll script (`fl_mcp/fl_scripts/`), the session template, and the profiles.
 The runtime closure has no git or direct references; `flpkit==0.8.1` comes from PyPI.

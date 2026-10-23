@@ -9,7 +9,7 @@ import json
 import pytest
 
 from fl_mcp import doctor
-from fl_mcp.schemas import DoctorReport, PlaneStatus
+from fl_mcp.schemas import BridgeInstall, DoctorReport, PlaneStatus
 
 
 class _Session:
@@ -26,7 +26,8 @@ class _Session:
 
 def _report(status: str) -> DoctorReport:
     plane = PlaneStatus(connected=status == "ok", detail="probe")
-    return DoctorReport(status=status, control_plane=plane, note_plane=plane, project_file=plane)
+    bridge = BridgeInstall(installed=False, path='/FL/Plugins/Fruity/Effects/FL MCP Bridge')
+    return DoctorReport(status=status, control_plane=plane, note_plane=plane, project_file=plane, bridge=bridge)
 
 
 @pytest.mark.parametrize(("status", "code"), [("ok", 0), ("degraded", 1)])

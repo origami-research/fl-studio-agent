@@ -153,7 +153,12 @@ done
 [ -n "$run_id" ] || { echo "the release workflow did not start for $TAG; start it with: gh workflow run release.yml -R $REPO -f tag=$TAG"; exit 1; }
 gh run watch "$run_id" -R "$REPO" --exit-status >/dev/null || {
   echo "the release workflow failed: gh run view $run_id -R $REPO --log-failed; rerun it with: gh run rerun $run_id -R $REPO --failed"; exit 1; }
-gh release view "$TAG" -R "$REPO" --json assets --jq '.assets[].name' | grep -qx 'fl-studio-agent.mcpb' || {
-  echo "read-back failed: release $TAG has no fl-studio-agent.mcpb"; exit 1; }
-echo "GitHub release $TAG carries fl-studio-agent.mcpb; registry publish job passed"
+# Read the release back the way fl-mcp-install uses it: every asset present and matching SHA256SUMS.
+mkdir "$WORK/release"
+gh release download "$TAG" -R "$REPO" --dir "$WORK/release" || { echo "read-back failed: could not download release $TAG"; exit 1; }
+for asset in fl-studio-agent.mcpb fl-mcp-bridge-macos-universal.dylib fl-mcp-bridge-windows-x64.dll SHA256SUMS BRIDGE-NOTICE.txt; do
+  [ -s "$WORK/release/$asset" ] || { echo "read-back failed: release $TAG has no $asset"; exit 1; }
+done
+(cd "$WORK/release" && shasum -a 256 -c SHA256SUMS >/dev/null) || { echo "read-back failed: release $TAG assets do not match its SHA256SUMS"; exit 1; }
+echo "GitHub release $TAG carries the bundle and both Bridge libraries, matching SHA256SUMS; registry publish job passed"
 echo "published: https://github.com/$REPO/releases/tag/$TAG and https://pypi.org/project/$DIST_NAME/$VERSION/"
