@@ -41,7 +41,6 @@ CI restoration remains an owner lever. Until CI is healthy, local `ruff`, unit t
 
 - [docs/23](23-flp-reverse-engineering-playbook.md): file-format evidence ladder.
 - [docs/24](24-coverage-map.md): living coverage/gap table and priority order.
-- [docs/25 capability catalog](25-fl-capability-catalog.md): cross-surface evidence catalog.
 - [docs/26](26-master-plan.md): this current execution queue.
 - [docs/27](27-shared-surfaces.md): stable contracts still cited by code/tests.
 - [docs/29](29-generic-pipelines.md): generic pipeline architecture.

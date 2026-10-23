@@ -133,7 +133,7 @@ class MacPlatform:
 
 
 class WindowsPlatform:
-    """Windows adapter; helpers delegate now, fleet-only seams land later."""
+    """Windows adapter; helpers delegate now, host-only seams land later."""
 
     def control_factory(self) -> Callable[[], "ControlCarrier"]:
         return windows_midi_control
@@ -144,7 +144,7 @@ class WindowsPlatform:
         return default_endpoint()
 
     def render_command(self, project: Path) -> Sequence[str]:
-        # VERIFY-ON-WINDOWS: FL64.exe CLI render and output naming on a fleet image.
+        # VERIFY-ON-WINDOWS: FL64.exe CLI render and output naming on a Windows host image.
         return (str(paths.fl_app()), "/R", "/Ewav", f"/F{project.parent}", str(project))
 
     def fl_install(self) -> FLInstall:
@@ -167,7 +167,7 @@ class _WindowsProcessSweep:
         if self._project is None:
             return []
         # VERIFY-ON-WINDOWS: Get-CimInstance availability and CommandLine access
-        # on the fleet account. The marker is never used without exact image name.
+        # on the hosting account. The marker is never used without exact image name.
         script = "Get-CimInstance Win32_Process -Filter \"Name='FL64.exe'\" | Select-Object ProcessId,CommandLine | ConvertTo-Json -Compress"
         try:
             result = subprocess.run(

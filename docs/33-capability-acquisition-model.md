@@ -42,4 +42,4 @@ They are either `.flp` project data or further host calls discoverable through t
 
 When a new capability arrives, classify it first, route it to one of these two engines, and extend that engine only as reusable data or a pass.
 
-Related: [coverage map](24-coverage-map.md), [FL capability catalog](25-fl-capability-catalog.md), and [reading guide](READING_GUIDE.md).
+Related: [coverage map](24-coverage-map.md) and [reading guide](READING_GUIDE.md).

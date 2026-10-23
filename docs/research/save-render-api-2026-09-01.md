@@ -1,6 +1,6 @@
 # FL Studio save and render API research
 
-**Scope.** Issue [#161](https://github.com/origami-research/fl-studio-mcp/issues/161)
+**Scope.** Engine issue 161
 needs the live project written to its existing `.flp` and a WAV artifact for the
 arena. This is documentation research only. FL Studio is not available in this
 worktree, so every proposed invocation below is **[ASSUMED - needs live
@@ -114,7 +114,7 @@ project-isolation design rather than silently rendering the wrong scope.
 - `FHD_RenderProject` [ASSUMED - needs live verification] is a native plugin
   dispatcher command, not MIDI scripting. Existing repository SDK/probe
   evidence classifies it as a modal render dialog, so it is not an unattended
-  WAV export replacement. [Citation](../25-fl-capability-catalog.md).
+  WAV export replacement.
 - Keyboard or menu automation is not an API-level renderer and cannot supply a
   destination path or completion receipt. Do not add it as a fallback.
 

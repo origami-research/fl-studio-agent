@@ -52,7 +52,7 @@
 #include <cstdint>
 #include <cstring>
 
-#include "fp_plugclass.h"
+#include FL_MCP_PLUGIN_API_HEADER  // the SDK plugin API header (CMakeLists.txt names it)
 
 namespace fl_abi {
 
@@ -110,7 +110,7 @@ inline constexpr std::size_t kHostVmtHeaderSlots = kFpcVmtHeaderSlots;
 #endif
 
 // Byte offset of the host's Nth declared virtual method. `TFruityPlugHost`
-// declares Dispatcher first (fp_plugclass.h), so Dispatcher is method 0.
+// declares Dispatcher first (the SDK plugin API header), so Dispatcher is method 0.
 inline constexpr std::size_t HostMethodOffset(std::size_t method_index) {
   return (kHostVmtHeaderSlots + method_index) * sizeof(void *);
 }

@@ -84,7 +84,7 @@ The kernel runs in the AppContainer `FLMCP.Kernel` with one capability, `interne
 
 - Files: an AppContainer token is denied every object that does not grant its SID or `ALL APPLICATION PACKAGES`.
   The server grants the SID `work` (modify) and `renders` (read).
-  Everything else, including `C:\PrivateProduct`, other users' profiles, and the session spool, is denied by default.
+  Everything else, including the hosting harness's own directories, other users' profiles, and the session spool, is denied by default.
 - Network: `internetClient` allows outbound internet, so pip works.
   Without `privateNetworkClientServer` the VPC is unreachable, and AppContainers get no loopback, so the FL control broker and Bridge ports are unreachable too.
   A firewall rule on the package SID blocks the instance metadata addresses explicitly.
@@ -144,13 +144,13 @@ There is no launch-mode setting: on Windows the kernel is always an AppContainer
 3. Metadata block: `New-NetFirewallRule -DisplayName "FLMCP kernel: no instance metadata" -Direction Outbound -Action Block -RemoteAddress 169.254.169.254,fd00:ec2::254 -Package <SID> -Profile Any`.
 4. Windows Firewall: the `mpssvc` service running and the active profile enabled.
    AppContainer network isolation and the rule above both depend on it.
-5. Never grant `ALL APPLICATION PACKAGES` or the kernel SID on `C:\PrivateProduct`, user profiles, the spool root, or any parent of `FLMCP_KERNEL_ROOT`.
+5. Never grant `ALL APPLICATION PACKAGES` or the kernel SID on the hosting harness's directories, user profiles, the spool root, or any parent of `FLMCP_KERNEL_ROOT`.
 
 The FL user, which runs the MCP server, creates the AppContainer profile and grants the workspace at each kernel start; that needs no administrator rights.
 
 **Acceptance on a box** (run cells through `run` after provisioning)
 
-- `open(r"C:\PrivateProduct\<any file>")` raises `PermissionError`.
+- `open(r"<a file in the hosting harness's directory>")` raises `PermissionError`.
 - `import os; os.listdir(r"C:\Users\Administrator")` raises `PermissionError`.
 - `import urllib.request; urllib.request.urlopen("http://169.254.169.254/latest/meta-data/", timeout=3)` raises.
 - `import socket; socket.create_connection(("127.0.0.1", 445), timeout=3)` raises (no loopback).

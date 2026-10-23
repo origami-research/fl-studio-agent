@@ -7,7 +7,7 @@ Status tags: **current** describes the shipped system, **research** records evid
 | Need | Read |
 | --- | --- |
 | Install and operate the engine | [SETUP.md](../SETUP.md), then [RUNBOOK_E2E.md](../RUNBOOK_E2E.md) |
-| Check shipped capability and evidence | [24-coverage-map.md](24-coverage-map.md), [25-fl-capability-catalog.md](25-fl-capability-catalog.md) |
+| Check shipped capability and evidence | [24-coverage-map.md](24-coverage-map.md) |
 | Use the Python SDK | the `run` tool docstring, then [sdk-reference.md](sdk-reference.md) |
 | Add or verify a capability | [33-capability-acquisition-model.md](33-capability-acquisition-model.md), [23-flp-reverse-engineering-playbook.md](23-flp-reverse-engineering-playbook.md) |
 | Integrate the MCP engine | [`../contracts/fl-mcp.json`](../contracts/fl-mcp.json) |
@@ -19,7 +19,7 @@ Status tags: **current** describes the shipped system, **research** records evid
 - [SETUP.md](../SETUP.md) - **current** installation and first project.
 - [RUNBOOK_E2E.md](../RUNBOOK_E2E.md) - **current** end-to-end verification.
 - [gate.md](gate.md) - **current** local merge gate.
-- [native/bridge/RUNBOOK_BRIDGE_UDP.md](../native/bridge/RUNBOOK_BRIDGE_UDP.md), [RUNBOOK_BRIDGE_V2.md](../native/bridge/RUNBOOK_BRIDGE_V2.md), [RUNBOOK_BRIDGE_V3.md](../native/bridge/RUNBOOK_BRIDGE_V3.md), [RUNBOOK_DISCOVERY.md](../native/bridge/RUNBOOK_DISCOVERY.md), and [WINDOWS.md](../native/bridge/WINDOWS.md) - **current** Bridge build, live verification, discovery, and Windows runbooks.
+- [native/bridge/RUNBOOK_BRIDGE_UDP.md](../native/bridge/RUNBOOK_BRIDGE_UDP.md), [RUNBOOK_BRIDGE_V3.md](../native/bridge/RUNBOOK_BRIDGE_V3.md), [RUNBOOK_DISCOVERY.md](../native/bridge/RUNBOOK_DISCOVERY.md), and [WINDOWS.md](../native/bridge/WINDOWS.md) - **current** Bridge build, live verification, discovery, and Windows runbooks.
 
 ## Design and capability docs
 
@@ -45,13 +45,13 @@ Status tags: **current** describes the shipped system, **research** records evid
 - [22-bridge-udp-design.md](22-bridge-udp-design.md) - **current** Bridge transport design.
 - [23-flp-reverse-engineering-playbook.md](23-flp-reverse-engineering-playbook.md) - **current** file-lane evidence loop.
 - [24-coverage-map.md](24-coverage-map.md) - **current** capability coverage map.
-- [25-fl-capability-catalog.md](25-fl-capability-catalog.md) - **current** cross-surface evidence catalog.
 - [26-master-plan.md](26-master-plan.md) - **current** dependency-ordered plan.
 - [27-shared-surfaces.md](27-shared-surfaces.md) - **current** shared contracts.
 - [29-generic-pipelines.md](29-generic-pipelines.md) - **current** reusable pipeline contract.
 - [30-surfaces-and-readability.md](30-surfaces-and-readability.md) - **current** readability contract.
 - [33-capability-acquisition-model.md](33-capability-acquisition-model.md) - **current** evidence ladder.
 - [34-per-session-control.md](34-per-session-control.md) - **current** broker control lane.
+- [35-platform-seams.md](35-platform-seams.md) - Platform seam design and Windows port plan.
 - [oss-history-rewrite-plan.md](oss-history-rewrite-plan.md) - reviewable history-rewrite plan for a future public mirror (research).
 - [37-oss-launch-decision.md](37-oss-launch-decision.md) - owner decision 2026-09-05: Bridge open, MIT, existing open-core boundary; what is still unauthorized
 - [36-engine-contract.md](36-engine-contract.md) - generated MCP tool, error, and environment contract.
@@ -64,12 +64,10 @@ Status tags: **current** describes the shipped system, **research** records evid
 
 - [research/current-summary.md](research/current-summary.md) - **current** research classification and synthesis.
 - [research/automation-create-flp-re-2026-08-31.md](research/automation-create-flp-re-2026-08-31.md) - **research** automation gate.
-- [research/insights-2026-08-31.md](research/insights-2026-08-31.md) - **research** capability findings.
 - [research/mixer-routing-flp-re-2026-08-31.md](research/mixer-routing-flp-re-2026-08-31.md) - **research** mixer-routing gate.
-- [research/oss-readiness-2026-09-01.md](research/oss-readiness-2026-09-01.md) - **research** open-source readiness.
 - [research/plugin-add-minimal-pair-capture-checklist.md](research/plugin-add-minimal-pair-capture-checklist.md) - **research** plugin evidence checklist.
 - [research/plugin-channel-state-flp-re-2026-08-31.md](research/plugin-channel-state-flp-re-2026-08-31.md) - **research** channel-state gate.
 - [research/plugin-param-model-sytrus.md](research/plugin-param-model-sytrus.md) - **research** Sytrus parameter capture.
 - [research/plugin-ui-action-trace-harness.md](research/plugin-ui-action-trace-harness.md) - **research** inert UI-action tracing.
-- [research/r1-architecture.md](research/r1-architecture.md), [r2-ship-live.md](research/r2-ship-live.md), [r3-tier2-production.md](research/r3-tier2-production.md), and [r4-streamline-and-audit.md](research/r4-streamline-and-audit.md) - **research** implementation and discovery plans.
+- [research/r1-architecture.md](research/r1-architecture.md), [r2-ship-live.md](research/r2-ship-live.md), and [r3-tier2-production.md](research/r3-tier2-production.md) - **research** implementation and discovery plans.
 - [research/save-render-api-2026-09-01.md](research/save-render-api-2026-09-01.md) - **research** authoritative save/render verdict.

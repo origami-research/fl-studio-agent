@@ -14,6 +14,8 @@ Nothing below rests on a guess.
 |---|---|---|
 | Bridge writes notes live, no reload | YES, FL-save-confirmed | FINDINGS "Spool-consume flow"; docs/24 row "Notes - write, SELECTED target" (done 2026-08-29, #65) |
 | PatNum honored: write to ANY pattern live | YES, confirmed live | VERDICT Q2 (Pass 4: key 85 to pattern 2 landed in pattern 2) |
+| PatNum write switches FL's current pattern | YES, by construction | FINDINGS "How FL 2026 resolves the target": `if PatNum > 0 then SetCurrentPattern(PatNum)` decoded from FL's own id-17 handler |
+| ChanNum targeting | NO, refuted statically AND live | VERDICT Q2; FINDINGS: `ChanNum` is never loaded; notes land in the first selected channel |
 | Channel object reachable via dispatcher | NO | VERDICT Q2 (Pass 5 sweep: no `TPublicChannel` from any id) |
 | Live note readback | NO getter exists | VERDICT Q1 (curated getters + bounded sweep 88-105) |
 | FL pushes transport/selection/focus/context/routing | YES, confirmed live | VERDICT Q3: `FPD_SetPlaying`, `FPD_SongPosChanged`, `FPD_SetFocus` (x6), `FPD_ContextInfoChanged` (x29), `FPD_RoutingChanged`, plus `FPD_ProjLoaded`, `FPD_SetTimeSig`, `FPD_SetSampleRate/BlockSize` |
@@ -163,6 +165,7 @@ Flag for R3 (@flmcp-r3-tier2): a write-side probe that finds a select-channel ho
 
 ### 3.3 Surfacing the SetCurrentPattern side effect
 
+Writing to a non-current pattern switches FL's current pattern; FL implements PatNum as select-then-write (FINDINGS: `SetCurrentPattern` writes FL's current-pattern global).
 This is an intended, visible effect, and we do not undo it (the only lever that could switch back is another note write, which would be a second side effect pretending to be a cleanup).
 It is surfaced on three surfaces so the model can never be surprised:
 

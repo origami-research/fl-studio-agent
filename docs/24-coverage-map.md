@@ -55,6 +55,7 @@ Capability acquisition is governed by the [capability acquisition model](33-capa
 ## Enablers (T4) - not features, but they gate scale/safety
 
 - CI runs, but fails at `uv --system` on an externally managed interpreter; merges rely on local runs. OWNER lever.
+- Windows offline port landed (#113); live Windows DLL/load/ping/note-write validation remains.
 - Bridge routes by capability detection (no flag): fresh heartbeat + proto match + ping = eligible, file lane otherwise. LIVE-UNVERIFIED post-integration; the RUNBOOK_BRIDGE_V3 window is the promotion gate.
 - Bridge session isolation: `FLMCP_SPOOL_ROOT` selects one shared server/Bridge mailbox; default roots remain the measured FL fallback. FL is always started by spawning its executable with this session environment, never `open -a`, because LaunchServices makes FL single-instance. Unit-covered; two-live-FL confirmation remains an orchestrator run.
 - Robustness built offline, unverified live: bulkhead invariant set, circuit breaker, agent-vs-human guard (observer). See #54.
@@ -66,6 +67,7 @@ There is no verified in-process, non-blocking render call to wire as
 `render_slice` or `render_async`.
 
 The static FLEngine dispatcher decode for FL 2026.1.5 build 5384 gives a
+complete 0..109 command table.  Its only named project-render
 entry is `FHD_RenderProject` (id 60).  The SDK describes that entry as opening
 the rendering dialog, and the native fatal-id ledger classifies it `modal_ui`.
 It cannot be an unattended, asynchronous host render. `ui.exportWav` is not a

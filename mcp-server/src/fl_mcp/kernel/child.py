@@ -36,7 +36,7 @@ from fl_mcp.kernel import wire
 from fl_mcp.kernel.cell import new_namespace, run_cell
 from fl_mcp.kernel.private_dirs import share_private_dirs
 
-# EC2 instance metadata. The boundary probe asserts the kernel cannot reach it.
+# Cloud instance metadata. The boundary probe asserts the kernel cannot reach it.
 IMDS_ADDRESS = ("169.254.169.254", 80)
 IMDS_PROBE_TIMEOUT_SECONDS = 1.0
 # Exit status when the server sends something the kernel cannot parse.

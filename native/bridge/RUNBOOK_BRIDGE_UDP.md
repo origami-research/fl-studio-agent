@@ -40,6 +40,7 @@ cat "$D/bridge_udp.json"        # {"proto": 1, "transport": 1, "port": <same>, "
 Decision tree:
 
 - `udp_port=0` in the heartbeat and no `bridge_udp.json` -> UDP failed to start (no urandom / no writable root); the plugin is serving the file spool only. File a finding; every file-spool test still applies.
+- `bridge_udp.json` present but heartbeat not advancing -> the Bridge's `Idle_Public` tick is not running; UDP datagrams will queue but never execute. The ping test below MUST time out - that is the designed behavior, verify it does.
 - Both present and advancing -> proceed.
 
 ## 2. Liveness: ping round trip

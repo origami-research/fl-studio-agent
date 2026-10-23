@@ -13,7 +13,30 @@ flpkit 0.8.1 was published on 2026-09-06; the engine depends on the released pac
 
 ## Step 7, mechanised
 
-`scripts/oss/publish-public-mirror.sh --repo <owner/name> --tag v0.1.0 --i-approve-publication` creates the public repository (or accepts the owner-created one only while it has zero branches), pushes the verified mirror's `main` and the tag, and refuses when: the verification it runs itself is not PASS, any removal-set path is still reachable in the mirror, the target repository has branches, `docs/oss/PUBLICATION-HOLD` exists, or the approval flag is missing. It never touches the private repository's refs. Publishing the engine to PyPI is done afterwards from the public repository (its own trusted-publishing workflow), never from the private one.
+One command publishes both the repository and the package:
+
+```bash
+scripts/oss/publish-public-mirror.sh --repo origami-research/fl-studio-agent --tag v0.1.0 --mirror <verified-mirror.git> --i-approve-publication
+```
+
+It runs the verifier on the mirror in the same invocation, builds and smoke-tests the release wheel and sdist from the mirror's `main`, confirms the PyPI version is free and a token is present (`UV_PUBLISH_TOKEN` or `~/.config/pypi/token`, never printed), and checks that the target repository is empty.
+Only then does it push `main` and the tag, upload to PyPI, and read both back (default branch, refs, a clean-venv `pip install` and `fl-mcp-contract`).
+It refuses when the verification is not PASS, a removal-set path is reachable, the tag does not match the package version, the version already exists on PyPI, the target repository has branches or tags, `docs/oss/PUBLICATION-HOLD` exists, or the approval flag is missing.
+If the upload fails after the push, rerun with `--pypi-only`: it uploads only when the public `main` equals the mirror's `main`.
+It never touches the private repository's refs.
+
+## How the mirror is built
+
+`scripts/oss/build-public-mirror.sh <dest.git>` rewrites a fresh mirror clone of the private repository:
+
+1. Paths: the history removal set goes first, then only the public allowlist stays.
+2. Public HEAD must already satisfy the history redactions; the build refuses otherwise, so the published `main` is exactly what was reviewed.
+3. File contents: the private product's name and links into its repository are rewritten in every file version.
+4. History redactions: every historical Markdown version loses the lines the redaction rules name (licensing analysis, hosting and cloud-infrastructure notes, FL Studio binary offsets and addresses).
+5. Commit messages: the private product's name is rewritten.
+6. Identities: every author and committer becomes a GitHub no-reply address.
+
+The rules for steps 3, 4 and 6 live in `docs/oss/private/`, which is itself in the removal set.
 
 ## Package name
 
@@ -25,7 +48,11 @@ The PyPI name `fl-studio-mcp` is owned by a third party (rosasynthesiz, 1.0.0, M
 2026-10-22: the owner lifted the hold ("publish please"); `docs/oss/PUBLICATION-HOLD` is deleted.
 The publish script still refuses while that file exists, so a future hold is one reviewed commit that re-adds it.
 
-## Open before the push (2026-10-22)
+## Owner decisions of 2026-10-22
 
-- `docs/38-python-kernel.md` (added after the hold) names the private product's machine image and infrastructure path, so it joined the history removal set; public docs that link to it carry dead links until a scrubbed copy is published.
-- Older versions of README, SETUP and several docs name the private product although public HEAD is clean; the verifier now checks every reachable file version and fails on them until the owner chooses to scrub or remove those versions.
+- The private product is not named in any public file version, and two research documents about it and about OSS readiness leave history.
+- Licensing analysis and hosting notes moved to private-only `docs/private/`; history versions lose those lines.
+- Documents of FL Studio binary internals stay private (see the removal set); the code that needs the offsets stays public.
+- `.gitignore`, `native/abi/`, `native/generated/` and `native/scripts/` are public, so the Bridge builds from the public tree with the fetched SDK.
+- Commit identities are GitHub no-reply addresses.
+- Publication waits for the co-author's MIT consent.

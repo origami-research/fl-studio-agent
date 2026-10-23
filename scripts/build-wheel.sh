@@ -5,7 +5,7 @@
 # The version is stamped <pyproject version>+g<short commit> (--release: unstamped, for
 # PyPI), so pip never calls different code "already satisfied". Beside the wheel it writes
 # <wheel>.requirements.txt (hash-locked from uv.lock) and prints the sha256 pins
-# scripts/windows/provision.ps1 verifies. Nothing is uploaded.
+# scripts/windows/provision.ps1 verifies; --release also copies the sdist. Nothing is uploaded.
 set -euo pipefail
 
 repo_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
@@ -105,6 +105,10 @@ PY
 
 mkdir -p "$out_dir"
 cp "$wheel" "$requirements" "$out_dir/"
+# A release also ships the sdist the wheel was built from, so PyPI carries both.
+if [ "$release" -eq 1 ]; then
+  cp "$work_dir/dist/"*.tar.gz "$out_dir/"
+fi
 wheel_sha=$(shasum -a 256 "$out_dir/$name" | cut -d' ' -f1)
 requirements_sha=$(shasum -a 256 "$out_dir/$name.requirements.txt" | cut -d' ' -f1)
 echo "built $out_dir/$name (installed-wheel smoke test passed)"

@@ -1,5 +1,7 @@
+# Windows Bridge build
 
 This is the Windows build procedure for the FL MCP Bridge. It produces the
+native FL plugin DLL only; validation must happen on a Windows host with
 FL Studio installed. Do not copy the proprietary FL SDK into this repository.
 
 The bridge's portable core (spool protocol, command ledger, note conversion,
@@ -8,6 +10,7 @@ passes remain disabled: their dispatcher and Free Pascal layout evidence is
 macOS-specific. Windows UDP is also disabled until a live Windows FL run
 validates it; the durable file-spool carrier remains active.
 
+## Build host prerequisites
 
 On a supported Windows Server 2022 build host:
 
@@ -61,6 +64,7 @@ ping creates `bridge_heartbeat.txt` in the selected spool root. Set
 session; otherwise the bridge uses `%USERPROFILE%\\Documents\\Image-Line\\FL
 Studio\\Settings\\Piano roll scripts\\FLMCP` and its parent fallback.
 
+For the first live Windows validation, prove: DLL loads, heartbeat appears, ping is
 acknowledged, and a concrete pattern/channel note write reads back from FL.
 Do not enable Windows `wp_*` discovery or UDP based on a successful build.
 

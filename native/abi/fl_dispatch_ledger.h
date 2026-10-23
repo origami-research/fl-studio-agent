@@ -62,7 +62,7 @@ struct UnsafeId {
   const char *why;
 };
 
-// The maximum documented dispatcher id (fp_plugclass.h documents FHD_* 0-87).
+// The maximum documented dispatcher id (the SDK plugin API header documents FHD_* 0-87).
 // A blind sweep skips this whole range by construction (see IsDocumented) -
 // the documented ids carry no new information for a sweep and many have side
 // effects, so this is the invariant that keeps a sweep read-only and safe
@@ -180,7 +180,7 @@ inline constexpr bool IsUnsafe(int id) {
   return false;
 }
 
-// Is this a documented id (fp_plugclass.h FHD_* 0-87)? A blind sweep skips
+// Is this a documented id (the SDK plugin API header's FHD_* 0-87)? A blind sweep skips
 // the entire documented range: sweeping it gains no information and risks the
 // side effects the ledger only partially enumerates. This is the invariant
 // that makes "the sweep is read-only and safe over any range" true by

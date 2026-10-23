@@ -4,4 +4,19 @@ docs/32-repo-split.md
 docs/research/improvement-plan-2026-09-01.md
 docs/research/insights-2026-09-01.md
 native/control/fpsdk/
-docs/38-python-kernel.md
+# 2026-10-22 owner decisions: research about the private product and OSS readiness.
+docs/research/insights-2026-08-31.md
+docs/research/oss-readiness-2026-09-01.md
+# 2026-10-22: documents of FL Studio binary internals (VMT offsets, layouts, addresses).
+# The code that needs those offsets (native/abi, scrape_rtti, profiles) stays public.
+docs/24-fl-capability-catalog.md
+docs/25-fl-capability-catalog.md
+docs/research/r4-streamline-and-audit.md
+native/bridge/BRIDGE_FINDINGS.md
+native/bridge/RUNBOOK_BRIDGE_V2.md
+# Private-only material: licensing and hosting notes, and the mirror's own private rules
+# (the two policy files lived directly in docs/oss/ until 2026-10-22; their old paths go too).
+docs/oss/message-replacements.txt
+docs/oss/private-terms.txt
+docs/private/
+docs/oss/private/

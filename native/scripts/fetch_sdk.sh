@@ -15,7 +15,7 @@ set -euo pipefail
 SDK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/sdk"
 MIRROR="https://github.com/Barsay/FL-Studio-SDK-CMake-Template.git"
 
-if [ -f "$SDK_DIR/fp_plugclass.h" ]; then
+if [ -f "$SDK_DIR/fp_cplug.cpp" ]; then
     echo "SDK already present: $SDK_DIR"
     exit 0
 fi

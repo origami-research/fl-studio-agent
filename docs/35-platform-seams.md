@@ -3,13 +3,12 @@
 ## Decision
 
 Windows runner images need a persistent virtual audio output device, selected
-in FL Studio's audio settings. RDP's redirected device appears with the judge
-session and vanishes when it ends. The Bridge heartbeat must show
+in FL Studio's audio settings. A remote-desktop session's redirected device
+appears with that session and vanishes when it ends. The Bridge heartbeat must show
 `render_rate > 0` before a run starts; zero means FL's audio engine is not
 running, commonly because no output device is available.
 
-Production runs FL Studio on Windows through RDP streaming, while macOS remains the development rig.
-
+The engine runs FL Studio on Windows as well as macOS; macOS remains the development rig.
 
 The engine stays one Python codebase with an OS-neutral core and one runtime-selected `Platform` implementation at its outer boundary.
 
@@ -164,6 +163,7 @@ The CoreMIDI implementation remains valid only on macOS because it creates virtu
 
 `python-rtmidi` ships Windows support but does not provide a Windows virtual-port facility equivalent to CoreMIDI, so `MidiOut.open_virtual_port` and `MidiIn.open_virtual_port` cannot be the Windows implementation.
 
+Windows Server hosts use pre-provisioned, named loopMIDI ports. `python-rtmidi` cannot create virtual ports on Windows; Windows MIDI Services is GA on Windows 11 only and has known visibility issues, so the engine does not depend on it.
 
 The Windows factory reads names from an explicit `FLMCP_MIDI_REQUEST_PORT` and `FLMCP_MIDI_RESPONSE_PORT` configuration after provisioning, opens existing ports by name, and fails with a typed setup diagnostic that names the missing dependency and ports.
 
@@ -211,7 +211,7 @@ Add a GitHub Actions native-build matrix with `macos-14` and `windows-2022`, CMa
 
 The matrix does not claim live-FL validation because the proprietary SDK and installed FL are not public CI inputs.
 
-
+The live Windows validation described in `native/bridge/WINDOWS.md` remains the release gate for DLL load, spool heartbeat, ping acknowledgement, note write, FL readback, and only later UDP or capture.
 
 ## Native effort table
 
@@ -219,6 +219,7 @@ The matrix does not claim live-FL validation because the proprietary SDK and ins
 | --- | --- | --- |
 | `native/bridge/src/bridge_gui.cpp` | Measure FL's Windows callback-thread contract, then implement marshalling or fail closed synchronously. | Real FL GUI-thread proof on Windows. |
 | Portable bridge core and tests | Replace POSIX filesystem, temporary-directory, and sanitizer assumptions. | MSVC build and portable CTest. |
+| Windows bridge leaves | Keep spool enabled and UDP unavailable. | Live Windows spool heartbeat, ping, write, and readback. |
 
 ## Test policy
 
@@ -232,6 +233,7 @@ Use `pytest.mark.live_fl` together with `FL_E2E=1` for tests that need a real in
 
 Mac-only Mach-O scraping, AppleScript host inspection, CoreMIDI virtual-port behavior, and macOS `-R` rendering are marked `platform("darwin")`.
 
+Windows driver provisioning, loopback-TCP broker ownership, real MIDI loopback, Windows CLI rendering, DLL loading, and RDP streaming are marked `platform("win32")` and `live_fl` until live Windows evidence makes them routine.
 
 The existing fake `rtmidi` tests remain cross-platform because they verify wire framing and failure translation rather than CoreMIDI itself.
 
@@ -240,8 +242,6 @@ The existing Windows path and process tests become direct `WindowsPlatform` unit
 ## Mechanical PR sequence
 
 These steps start only after the currently parked engine PRs merge, because this document deliberately does not touch their files or create a competing seam.
-
-
 
 1. Add typed platform value objects, the `Platform` protocol, `platform_for`, and fake-platform tests without changing session behavior.
 
@@ -287,6 +287,7 @@ These steps start only after the currently parked engine PRs merge, because this
 
    Gate: pull-request CI passes on all three operating systems without claiming live-FL coverage.
 
+   VERIFY-ON-WINDOWS: run the `native/bridge/WINDOWS.md` live ladder on a live Windows host and attach versioned evidence.
 
 9. Update installation, setup, protocol, capability, and operational documents only after each corresponding boundary is live, then remove outdated macOS-first claims and historical harnesses that duplicate the canonical implementation.
 
@@ -327,6 +328,7 @@ loopMIDI has no command-line port creation; it recreates its ports from `HKCU\So
 
 ### Install
 
+`scripts/windows/provision.ps1` runs elevated, as SYSTEM from a remote-management agent or from an administrator prompt, under Windows PowerShell 5.1; its parameters are the three artifacts, the FL user, the license, and the optional loopMIDI ports export.
 It installs Python 3.12 and loopMIDI when missing, the locked closure and the wheel into `C:\FLMCP\venv`, sets the machine variable `FLMCP_FL_LICENSE`, and copies the DLL into `<FL>\Plugins\Fruity\Effects\FL MCP Bridge\`, stopping FL only when the DLL changes.
 
 It then runs `session-install.ps1` as a one-shot interactive scheduled task in the FL user's console session.

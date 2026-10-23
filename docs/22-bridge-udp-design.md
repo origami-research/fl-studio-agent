@@ -1,6 +1,7 @@
 # 22 - Bridge UDP transport: design
 
 Workstream B deliverable (2026-08-29).
+The Bridge plugin (`native/bridge/`) consumes a file spool polled from FL's extended tick (`Idle_Public`).
 File polling caps latency at the poll interval, costs filesystem writes per command, and cannot carry request/response reads.
 This document designs a localhost UDP transport inside the plugin, then the implementation follows it.
 
@@ -17,6 +18,7 @@ The file spool survives deliberately - it is the only path FL's sandboxed pyscri
 - `FHD_SetThreadSafe` exists so a plugin can declare its own thread-sync - the SDK explicitly contemplates multithreaded plugins.
 
 Nothing in the SDK grants a plugin-created thread the right to call the host.
+The tick is `Idle_Public` itself, an SDK callback FL drives from its main run loop (the call contract is in `native/abi/fl_host_abi.h`). It is therefore a `(G)` callback, and the existing spool consumer already issues its `FHD_AddNotesToPR` / `FHD_SetDirty` from exactly there - that precedent is live-verified on this machine.
 
 **Precedent for a background socket thread in audio plugins.** This is common, established practice:
 
@@ -29,6 +31,7 @@ Nothing in the SDK grants a plugin-created thread the right to call the host.
 **The discipline, distilled** (and enforced by construction in this design):
 
 1. The socket thread NEVER calls the host - not `Dispatcher`, not logging into host state, nothing. It only: `recvfrom`, authenticate, enqueue into a mutex-guarded bounded queue.
+2. All host calls (`FHD_AddNotesToPR`, `FHD_SetDirty`) happen only on the tick (`Idle_Public`), which drains the queue - the same place the file spool is already consumed.
 3. Ack datagrams are sent from the tick thread with a non-blocking `sendto`; a full socket buffer drops the ack (the client retransmits; the ledger dedupes).
 4. The queue is the ONLY shared state between the two threads, and it is a value queue (owned strings) - no pointers into either thread's stack, no host structures cross the boundary.
 
@@ -125,6 +128,7 @@ The bridge serves BOTH carriers through one code path:
 ```
 socket thread:  recvfrom -> frame check (magic+token) -> queue.Push(payload, reply_addr)
                                                               |
+idle tick:      queue.Drain(4) -> ExecuteCommand(...) --------+--> ack via sendto
                 PollOnce()      -> ExecuteCommand(...)             (responses/<id>.json always written)
 ```
 
