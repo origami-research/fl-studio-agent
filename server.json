@@ -1,0 +1,42 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.origami-research/fl-studio-agent",
+  "title": "FL Studio Agent",
+  "description": "Drive FL Studio from an AI agent: write notes, set tempo and levels, check what sounds, render.",
+  "repository": {
+    "url": "https://github.com/origami-research/fl-studio-agent",
+    "source": "github"
+  },
+  "version": "0.1.0",
+  "packages": [
+    {
+      "registryType": "pypi",
+      "registryBaseUrl": "https://pypi.org",
+      "identifier": "fl-studio-agent",
+      "version": "0.1.0",
+      "runtimeHint": "uvx",
+      "runtimeArguments": [
+        {
+          "type": "named",
+          "name": "--python",
+          "value": "3.12"
+        }
+      ],
+      "transport": {
+        "type": "stdio"
+      },
+      "environmentVariables": [
+        {
+          "name": "FLMCP_FL_LICENSE",
+          "description": "Set to 'trial' when FL Studio runs as the unregistered trial (it cannot reopen saved projects); 'licensed' otherwise.",
+          "isRequired": false,
+          "default": "licensed",
+          "choices": [
+            "licensed",
+            "trial"
+          ]
+        }
+      ]
+    }
+  ]
+}

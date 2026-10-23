@@ -609,9 +609,13 @@ def profile_gate() -> tuple[bool, str]:
     return False, f"unsupported {build.label()}; capture a profile with `python -m fl_mcp.discover`"
 
 
+# Written by fl-mcp-install --bridge beside the library; same text as profile_detail.
+BRIDGE_BUILD_RECORD = "bridge_installed_for.txt"
+
+
 def installed_bridge_build() -> str | None:
     """The exact build the installer put the native dylib beside, if recorded."""
-    record = flpaths.fl_app() / "Contents/Resources/FL/Plugins/Fruity/Effects/FL MCP Bridge/bridge_installed_for.txt"
+    record = flpaths.bridge_plugin_dir() / BRIDGE_BUILD_RECORD
     try:
         return record.read_text(encoding="utf-8").strip() or None
     except OSError:

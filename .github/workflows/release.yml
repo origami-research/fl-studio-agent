@@ -1,0 +1,83 @@
+name: release
+
+# A version tag on the public repository is the last step of
+# scripts/oss/publish-public-mirror.sh, which uploads the same version to PyPI
+# first. This builds the Claude Desktop bundle, creates the GitHub release with
+# it, and publishes server.json to the MCP Registry. The registry namespace
+# io.github.origami-research/* is granted to workflows in that account's
+# repositories through GitHub OIDC, so no token is stored.
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: existing tag to (re)release, e.g. v0.1.1
+        required: true
+
+permissions:
+  contents: read
+
+env:
+  TAG: ${{ inputs.tag || github.ref_name }}
+
+jobs:
+  release:
+    if: github.repository == 'origami-research/fl-studio-agent'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TAG }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Tag matches the package version
+        run: |
+          version=$(python3 -c "import tomllib; print(tomllib.load(open('mcp-server/pyproject.toml','rb'))['project']['version'])")
+          test "$TAG" = "v$version" || { echo "tag $TAG does not match package version $version"; exit 1; }
+          test -s "docs/releases/$TAG.md" || { echo "missing release notes docs/releases/$TAG.md"; exit 1; }
+      - name: Build the Claude Desktop bundle
+        run: scripts/build-mcpb.sh dist
+      - name: Create or update the GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" dist/fl-studio-agent.mcpb --clobber
+            gh release edit "$TAG" --notes-file "docs/releases/$TAG.md"
+          else
+            gh release create "$TAG" dist/fl-studio-agent.mcpb --verify-tag --title "$TAG" --notes-file "docs/releases/$TAG.md"
+          fi
+
+  registry:
+    if: github.repository == 'origami-research/fl-studio-agent'
+    needs: release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TAG }}
+      - name: Install mcp-publisher (pinned by sha256)
+        run: |
+          curl -fsSL -o mcp-publisher.tar.gz https://github.com/modelcontextprotocol/registry/releases/download/v1.8.1/mcp-publisher_linux_amd64.tar.gz
+          echo "a06c9096dcb9727c13555b6be26c7effa707b01f06a4c561ba7a3635443cf2cc  mcp-publisher.tar.gz" | sha256sum -c
+          tar xzf mcp-publisher.tar.gz mcp-publisher
+      - name: The PyPI release this entry points at exists
+        run: |
+          version=${TAG#v}
+          for _ in $(seq 1 30); do
+            code=$(curl -s -o /dev/null -w '%{http_code}' "https://pypi.org/pypi/fl-studio-agent/$version/json")
+            [ "$code" = 200 ] && exit 0
+            sleep 10
+          done
+          echo "fl-studio-agent $version is not on PyPI"; exit 1
+      - name: Publish server.json
+        run: |
+          ./mcp-publisher login github-oidc
+          ./mcp-publisher publish

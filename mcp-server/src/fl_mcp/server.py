@@ -606,8 +606,17 @@ def _confined() -> bool:
 
 def main(argv: Sequence[str] | None = None) -> None:
     """Entry point: logging.basicConfig(stream=sys.stderr, level from
-    $FL_MCP_LOG), construct the MCP server with the lifespan, run."""
-    parser = argparse.ArgumentParser(prog="fl-mcp", description="The FL Studio MCP server, over stdio.")
+    $FL_MCP_LOG), construct the MCP server with the lifespan, run.
+
+    MCP clients start it with no arguments; ``--help`` and ``--version`` exist
+    so a person checking an install gets an answer instead of a server waiting
+    on stdin."""
+    parser = argparse.ArgumentParser(
+        prog="fl-mcp",
+        description="The FL Studio MCP server, over stdio. Your MCP client starts it; "
+        "set up FL once with fl-mcp-install and check it with fl-mcp-doctor.",
+    )
+    parser.add_argument("--version", action="version", version=f"fl-studio-agent {__version__}")
     parser.add_argument(
         WORKSPACE_ONLY_FLAG,
         action="store_true",

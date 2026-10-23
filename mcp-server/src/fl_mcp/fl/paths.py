@@ -50,6 +50,26 @@ def fl_app() -> Path:
     return installed[0] if installed else Path("/Applications/FL Studio.app")
 
 
+BRIDGE_NAME = "FL MCP Bridge"
+
+
+def bridge_plugin_dir() -> Path:
+    """Where FL loads the native Bridge effect from: inside FL's own install,
+    the only place FL looks for native ("Fruity") plugins.
+
+    macOS: <FL Studio.app>/Contents/Resources/FL/Plugins/Fruity/Effects/FL MCP Bridge
+    Windows: <FL install>\\Plugins\\Fruity\\Effects\\FL MCP Bridge (fl_app() is FL64.exe)
+    """
+    if sys.platform == "win32":
+        return fl_app().parent / "Plugins" / "Fruity" / "Effects" / BRIDGE_NAME
+    return fl_app() / "Contents" / "Resources" / "FL" / "Plugins" / "Fruity" / "Effects" / BRIDGE_NAME
+
+
+def bridge_binary_name() -> str:
+    """The Bridge library file FL expects on this OS (FL's _x64 naming on both)."""
+    return f"{BRIDGE_NAME}_x64.dll" if sys.platform == "win32" else f"{BRIDGE_NAME}_x64.dylib"
+
+
 # Subdirectories of FL's Settings folder that hold the spool.
 #
 # FL's permissions are asymmetric and narrower for writes than reads. Measured

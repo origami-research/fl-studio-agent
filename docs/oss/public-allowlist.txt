@@ -1,4 +1,6 @@
 # Reviewed public extraction boundary. Paths ending in / include descendants.
+# Never remove or narrow an entry: the mirror is rebuilt from full history on every release and
+# must reproduce the published commits exactly, so updates stay fast-forward (publish-public-mirror.sh).
 .github/
 .gitignore
 contracts/
@@ -6,6 +8,7 @@ CONTRIBUTING.md
 docs/
 install.sh
 LICENSE
+mcpb/
 mcp-server/
 native/abi/
 native/bridge/
@@ -15,8 +18,11 @@ native/scripts/
 pyproject.toml
 README.md
 RUNBOOK_E2E.md
+server.json
+scripts/build-mcpb.sh
 scripts/build-wheel.sh
 scripts/gate.sh
+scripts/install_links.py
 scripts/oss/
 scripts/windows/
 SETUP.md

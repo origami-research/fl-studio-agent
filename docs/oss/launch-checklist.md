@@ -11,18 +11,33 @@ flpkit 0.8.1 was published on 2026-09-06; the engine depends on the released pac
 
 - 2026-09-05: the owner approved the public allowlist, the MIT license, and the history removal set (orchestrator chat, "all approved"). Step 1 is complete. The rewrite still runs only on a fresh mirror, after the freeze window the owner names, and publication needs the target repository name.
 
-## Step 7, mechanised
+## Step 7, mechanised: every release
 
-One command publishes both the repository and the package:
+One command publishes a release, the first or any later one:
 
 ```bash
-scripts/oss/publish-public-mirror.sh --repo origami-research/fl-studio-agent --tag v0.1.0 --mirror <verified-mirror.git> --i-approve-publication
+scripts/oss/build-public-mirror.sh <mirror.git>
+scripts/oss/publish-public-mirror.sh --repo origami-research/fl-studio-agent --tag vX.Y.Z --mirror <mirror.git> --i-approve-publication
 ```
 
-It runs the verifier on the mirror in the same invocation, builds and smoke-tests the release wheel and sdist from the mirror's `main`, confirms the PyPI version is free and a token is present (`UV_PUBLISH_TOKEN` or `~/.config/pypi/token`, never printed), and checks that the target repository is empty.
-Only then does it push `main` and the tag, upload to PyPI, and read both back (default branch, refs, a clean-venv `pip install` and `fl-mcp-contract`).
-It refuses when the verification is not PASS, a removal-set path is reachable, the tag does not match the package version, the version already exists on PyPI, the target repository has branches or tags, `docs/oss/PUBLICATION-HOLD` exists, or the approval flag is missing.
-If the upload fails after the push, rerun with `--pypi-only`: it uploads only when the public `main` equals the mirror's `main`.
+Before a release, bump `version` in `mcp-server/pyproject.toml`, run `python3 scripts/install_links.py` (it regenerates `server.json` and the bundle manifest with the new version), and add the release notes at `docs/releases/vX.Y.Z.md`, all merged on main.
+
+The publish script runs the verifier on the mirror in the same invocation, builds and smoke-tests the release wheel and sdist and packs the Claude Desktop bundle from the mirror's `main`, confirms the PyPI version is free and a token is present (`UV_PUBLISH_TOKEN` or `~/.config/pypi/token`, never printed), and checks the target repository (the tag is new and its `main` is an ancestor).
+Then it uploads to PyPI and reads it back (a clean-venv `pip install`, the commands, `fl-mcp-contract`), pushes `main`, and only then pushes the tag.
+PyPI goes first so the public README's install buttons never point at a version PyPI does not have.
+The tag starts `.github/workflows/release.yml` in the public repository: it creates the GitHub release with `fl-studio-agent.mcpb` and publishes `server.json` to the MCP Registry through GitHub OIDC (the `io.github.origami-research/*` namespace is granted to that account's workflows, so no token is stored).
+The script waits for that run and reads the release asset back.
+
+Updates are fast-forward only.
+The mirror is rebuilt from the full private history every time, and `git filter-repo` is deterministic: with unchanged rules the rebuild reproduces every published commit (checked 2026-10-22: rebuilding from main de37cb9 reproduced the published 735c35d as an ancestor of the new main).
+The rewrite also maps commit hashes quoted in messages ("This reverts commit ...") to their rewritten hashes, so it needs every quoted commit present: build from the default source, a fresh `git clone --mirror` of the private GitHub repository, which keeps the pull-request refs those commits can live on.
+A source without them (a plain local clone) produces different hashes from the first such message on.
+So the script refuses when the rebuilt `main` does not descend from the published `main`, which means a rule changed published history, for example a removed or narrowed allowlist entry or a changed replacement or redaction rule.
+Only add allowlist entries for paths that never existed in history; rewriting public history is a separate owner decision.
+
+It also refuses when the verification is not PASS, a removal-set path is reachable, the tag does not match the package version, the release notes are missing, the version already exists on PyPI (without `--resume`), the tag already exists, `docs/oss/PUBLICATION-HOLD` exists, or the approval flag is missing.
+If a run stops after the upload, rerun with `--resume`: it accepts a PyPI version that already has its wheel and sdist and a public `main` already equal to the mirror's `main`, and finishes the remaining steps.
+If the release workflow fails, the script prints the `gh run rerun` command; `gh workflow run release.yml -f tag=vX.Y.Z` reruns a release for an existing tag.
 It never touches the private repository's refs.
 
 ## How the mirror is built
@@ -62,4 +77,4 @@ The publish script still refuses while that file exists, so a future hold is one
 - The co-author (ky11001) consented to MIT; the owner relayed it and gave the publish go.
 - `scripts/oss/publish-public-mirror.sh` ran from merged main 14887fb: verification PASS in the same invocation (13 checks, 0 skipped), then it pushed `main` (735c35d) and tag `v0.1.0` to https://github.com/origami-research/fl-studio-agent and uploaded `fl-studio-agent` 0.1.0 to https://pypi.org/project/fl-studio-agent/0.1.0/.
 - Read-back: the public default branch is `main` with `main` and `v0.1.0` at 735c35d; a clean-venv `pip install fl-studio-agent==0.1.0` installs the `fl-mcp*` commands and `fl-mcp-contract` runs.
-- The script publishes only into an empty repository, so the next release needs a path for updating the published repository (follow-up).
+- Then the script published only into an empty repository; since the one-step-install change it also updates a published repository by fast-forward (Step 7 above).

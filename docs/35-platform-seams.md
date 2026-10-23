@@ -105,7 +105,6 @@ Lockfile wheel names are packaging metadata rather than platform behavior, and a
 | `experiments/_guard.py:14` | Identifies FL as `OsxFL`. | Historical macOS experiment helper. |
 | `experiments/e4_render_cli.py:1-71` | Proves macOS `-R`, finds `Contents/MacOS`, and uses broad `pkill`. | Render evidence and superseded process handling. |
 | `experiments/README.md:17` | Records the `OsxFL -R` macOS render result. | Render evidence. |
-| `install.sh:2,67-69` | Rejects non-Darwin installation and says Windows virtual ports are not wired. | Installer, MIDI wire factory, and open-core onboarding. |
 | `native/CMakeLists.txt:30-46` | Sets universal macOS architectures and selects macOS or Windows bridge leaves. | Native bridge build target. |
 | `native/CMakeLists.txt:92-108` | Builds one bridge target and assigns `.dylib` or `.dll`. | Native bridge build target. |
 | `native/CMakeLists.txt:146-160` | Links the GUI test to CoreFoundation only on Apple. | Native GUI-thread seam. |
@@ -118,7 +117,7 @@ Lockfile wheel names are packaging metadata rather than platform behavior, and a
 | `native/bridge/src/bridge_udp.cpp:7` and `native/bridge/src/bridge*.cpp:43-46` | Use POSIX `unistd` and `sys/stat` APIs in macOS bridge code. | Native filesystem and socket portability work. |
 | `native/bridge/tests/bridge_core_test.cpp:11-12`, `bridge_events_test.cpp:7-8`, and `bridge_udp_test.cpp:11-12` | Import POSIX filesystem headers and use `/tmp` test fixtures. | Native test portability work. |
 | `native/abi/fl_pascal.cpp:5` and `native/abi/fl_host_abi.h:1-69` | Implement and document the measured macOS Free Pascal and Mach-O host ABI. | Native macOS ABI discovery, not portable by assumption. |
-| `native/scripts/install_bridge.sh:8-81` | Finds `/Applications` bundles, installs a dylib, and clears quarantine with `xattr`. | macOS bridge installation. |
+| `mcp-server/src/fl_mcp/fl/install.py` `install_bridge` (`fl-mcp-install --bridge`; `native/scripts/install_bridge.sh` wraps it) | Installs the built library into FL's native Effects folder (app bundle on macOS, Program Files on Windows) and clears quarantine with `xattr` on macOS. | Bridge installation, both platforms. |
 | `native/scripts/check_vtable.sh:2-76` | Uses `nm` and `lipo` to inspect a Mach-O dylib. | macOS bridge ABI verification. |
 | `native/bridge/WINDOWS.md:1-67` | Documents a DLL build, private SDK, spool-first validation, and deferred capture. | Existing Windows bridge rollout record. |
 | `.github/workflows/ci.yml:1-21` | Runs only the Python fake-FL suite on Ubuntu and has no native build matrix. | CI gap. |

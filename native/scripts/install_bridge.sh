@@ -1,101 +1,15 @@
 #!/usr/bin/env bash
-# Install the production FL MCP Bridge plugin into FL Studio's native effects
-# folder.
-#
-# FL only loads native ("Fruity") plugins from inside its own app bundle - there
-# is no per-user location like there is for VSTs. That folder is group writable,
-# so no sudo is needed. FL ships with the entitlement
-# com.apple.security.cs.disable-library-validation (verified with
-# `codesign -d --entitlements` against the installed app), so it loads an
-# unsigned third-party dylib.
-#
-# The Bridge is an EFFECT: it lives on a mixer insert rather than owning a
-# channel, so every note write names its channel explicitly (TNotesParams.ChanNum
-# is always concrete - the Bridge never sends the SDK's -1 "selected channel"
-# sentinel, see bridge_core.h). It has no editor and no UI; once inserted on any
-# mixer insert it silently consumes the FLMCP note spool on its extended tick.
-#
-# Usage:
-#   install_bridge.sh [--uninstall] [--folder Effects|Generators]
-#
-# FL_APP overrides auto-detection; otherwise the newest
-# "/Applications/FL Studio*.app" is used.
-
+# Install the Bridge built in native/build into FL Studio, with the rest of the
+# FL-side setup. The install logic is `fl-mcp-install --bridge`
+# (mcp-server/src/fl_mcp/fl/install.py), shared with Windows; this wrapper only
+# names the macOS build output. Close FL Studio first.
 set -euo pipefail
-
-ACTION="install"
-FOLDER="Effects"
-while [ $# -gt 0 ]; do
-    case "$1" in
-        --uninstall) ACTION="uninstall"; shift ;;
-        --folder)    FOLDER="$2"; shift 2 ;;
-        *) echo "unknown option: $1" >&2; exit 1 ;;
-    esac
-done
-case "$FOLDER" in
-    Effects|Generators) ;;
-    *) echo "unknown --folder '$FOLDER' (want: Effects | Generators)" >&2; exit 1 ;;
-esac
-
-NAME="FL MCP Bridge"
-DYLIB="${NAME}_x64.dylib"
 NATIVE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-BUILD="$NATIVE_DIR/build/$DYLIB"
-
-if [ -z "${FL_APP:-}" ]; then
-    FL_APP="$(ls -d "/Applications/FL Studio"*.app 2>/dev/null | sort -V | tail -1)"
-fi
-if [ -z "${FL_APP:-}" ] || [ ! -d "$FL_APP" ]; then
-    echo "No FL Studio.app found under /Applications." >&2
-    echo "Set FL_APP=/path/to/FL Studio.app if installed elsewhere." >&2
-    exit 1
-fi
-
-PLUGDIR="$FL_APP/Contents/Resources/FL/Plugins/Fruity/$FOLDER"
-DEST="$PLUGDIR/$NAME"
-
-if [ "$ACTION" = "uninstall" ]; then
-    rm -rf "$DEST"
-    echo "Removed $DEST"
-    exit 0
-fi
-
-if [ ! -d "$PLUGDIR" ]; then
-    echo "FL Studio $FOLDER folder not found: $PLUGDIR" >&2
-    exit 1
-fi
-if [ ! -f "$BUILD" ]; then
+BUILT="$NATIVE_DIR/build/FL MCP Bridge_x64.dylib"
+if [ ! -f "$BUILT" ]; then
     echo "Not built yet. Run:" >&2
     echo "  cmake -S native -B native/build -DCMAKE_BUILD_TYPE=Release" >&2
     echo "  cmake --build native/build --target bridge" >&2
     exit 1
 fi
-
-mkdir -p "$DEST"
-cp "$BUILD" "$DEST/$DYLIB"
-BUILD_ID="$(defaults read "$FL_APP/Contents/Info" CFBundleShortVersionString 2>/dev/null || true)"
-BUILD_VERSION="${BUILD_ID%.*}"
-BUILD_NUMBER="${BUILD_ID##*.}"
-if [ -z "$BUILD_ID" ] || [ "$BUILD_VERSION" = "$BUILD_ID" ]; then
-    echo "Could not read FL build from $FL_APP/Contents/Info.plist" >&2
-    exit 1
-fi
-printf 'FL %s build %s (%s)\n' "$BUILD_VERSION" "$BUILD_NUMBER" "$(uname -m)" > "$DEST/bridge_installed_for.txt"
-# Capital V matches the field name in stock plugins' Plugin.nfo (e.g. Fruity
-# Balance: "ps_Vendorname=Image-Line").
-printf 'ps_Vendorname=FL MCP\n' > "$DEST/Plugin.nfo"
-xattr -d com.apple.quarantine "$DEST/$DYLIB" 2>/dev/null || true
-
-echo "Installed: $DEST/$DYLIB"
-echo "  type:   FPF_Type_Effect (base-free, 64-slot ABI)"
-echo "  folder: $FOLDER"
-echo
-echo "Next:"
-echo "  1. Restart FL Studio."
-echo "  2. Mixer (F9) > select an insert > add effect > search '$NAME'."
-echo "     If it does not appear: Options > Manage plugins > Find installed plugins."
-echo "  3. Ask the MCP server to write notes; the Bridge applies them on its"
-echo "     tick with no further trigger. Watch the spool:"
-echo "     ~/Documents/Image-Line/FL Studio/Settings/Piano roll scripts/FLMCP/"
-echo "     (bridge_status.txt, bridge_heartbeat.txt, bridge_dispatch.txt,"
-echo "      responses/<id>.json; touch bridge_debug.enable for the state dump)"
+exec uv run --project "$NATIVE_DIR/../mcp-server" fl-mcp-install --bridge "$BUILT" "$@"

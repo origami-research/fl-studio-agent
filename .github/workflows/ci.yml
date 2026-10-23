@@ -20,3 +20,19 @@ jobs:
       - run: .venv/bin/ruff check ..
       # The fake-FL suite runs anywhere; live e2e (FL_E2E) is local/nightly only.
       - run: .venv/bin/python -m pytest -q --ignore=tests/e2e
+  # The one-step install surfaces (server.json, the bundle manifest, the README
+  # install links) are generated from scripts/install_links.py; a stale one ships
+  # a wrong version or a broken install button. The bundle is the release asset.
+  install-surfaces:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: scripts/build-mcpb.sh dist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: fl-studio-agent-mcpb
+          path: dist/fl-studio-agent.mcpb
+          if-no-files-found: error

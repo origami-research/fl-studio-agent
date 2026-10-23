@@ -1,15 +1,24 @@
 r"""Install FL Studio MCP into FL's user settings, with no FL UI required.
 
-Three file operations, all done with FL closed:
-  1. the piano-roll note script  -> Settings/Piano roll scripts/
-  2. the controller script        -> Settings/Hardware/FLMCP/
-  3. the MIDI controller assignment (input+output ports) -> FL's registry:
+``fl-mcp-install`` is the one FL-side setup command. Every step is idempotent:
+it reports ``installed`` when it changed something and ``already current`` when
+it found the file already right, so rerunning it after an upgrade is the fix
+for a stale controller. Done with FL closed:
+  1. the agent project            -> <FL user data>/Projects/FLMCP Agent.flp (only if missing)
+  2. the piano-roll note script  -> Settings/Piano roll scripts/
+  3. the controller script        -> Settings/Hardware/FLMCP/
+  4. the MIDI controller assignment (input+output ports) -> FL's registry:
      reg.xml on macOS, HKCU\Software\Image-Line\FL Studio <N> on Windows
+  5. Windows only: the two loopMIDI ports the controller talks over must exist
+     (macOS needs nothing: the server opens virtual ports itself)
+  6. the native Bridge plugin: ``--bridge PATH`` installs a built library;
+     without it the step only reports whether a Bridge is installed
 
 FL only loads these from fixed locations under the user's Image-Line data
-folder, so they are copied there rather than referenced in place. The
-assignment is what removes the last manual step (assigning the controller in
-FL's MIDI settings); its fields are the ones FL writes for a hand assignment.
+folder (and the Bridge from inside FL's own install), so they are copied there
+rather than referenced in place. The assignment is what removes the last
+manual step (assigning the controller in FL's MIDI settings); its fields are
+the ones FL writes for a hand assignment.
 """
 
 from __future__ import annotations
@@ -19,6 +28,7 @@ import contextlib
 import json
 import re
 import shutil
+import subprocess
 import sys
 from collections.abc import Mapping
 from importlib.resources import files
@@ -29,7 +39,7 @@ from pydantic import BaseModel
 
 from fl_mcp.controller_version import controller_script_bytes
 
-from .paths import fl_settings_dirs, piano_roll_scripts_dir
+from .paths import bridge_binary_name, bridge_plugin_dir, fl_settings_dirs, piano_roll_scripts_dir
 from .process import fl_process_running
 
 if sys.platform == "win32":
@@ -86,30 +96,44 @@ def script_installed_path() -> Path | None:
     return path if path.is_file() else None
 
 
-def install() -> Path:
+def _place(dest: Path, data: bytes) -> InstallStep:
+    """Write ``data`` to ``dest`` unless it is already exactly that; say which."""
+    if dest.is_file() and dest.read_bytes() == data:
+        return InstallStep(status="OK", detail=f"{dest} (already current)")
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    dest.write_bytes(data)
+    return InstallStep(status="OK", detail=f"{dest} (installed)")
+
+
+def install_note_script() -> InstallStep:
     """Copy the packaged piano-roll script into Settings/Piano roll scripts/."""
     target_dir = script_dir()
     if target_dir is None:
         searched = "\n  ".join(str(p) for p in fl_settings_dirs()) or "(none)"
         raise FileNotFoundError(
-            "Could not find FL Studio's 'Piano roll scripts' folder.\nSearched:\n  " + searched
+            "Could not find FL Studio's 'Piano roll scripts' folder; start FL Studio once, then rerun.\n"
+            "Searched:\n  " + searched
         )
-
-    dest = target_dir / SCRIPT_FILENAME
-    dest.write_bytes(files("fl_mcp.fl_scripts").joinpath(SCRIPT_FILENAME).read_bytes())
-    return dest
+    return _place(target_dir / SCRIPT_FILENAME, files("fl_mcp.fl_scripts").joinpath(SCRIPT_FILENAME).read_bytes())
 
 
-def install_controller() -> Path:
+def install_controller() -> InstallStep:
     """Copy the controller (MIDI device) script into Settings/Hardware/FLMCP/."""
     settings = next((s for s in fl_settings_dirs() if s.is_dir()), None)
     if settings is None:
-        raise FileNotFoundError("Could not find FL Studio's Settings folder.")
-    dest_dir = settings / "Hardware" / CONTROLLER_SUBDIR
-    dest_dir.mkdir(parents=True, exist_ok=True)
-    dest = dest_dir / CONTROLLER_FILENAME
-    dest.write_bytes(controller_script_bytes())
-    return dest
+        raise FileNotFoundError("Could not find FL Studio's Settings folder; start FL Studio once, then rerun.")
+    return _place(settings / "Hardware" / CONTROLLER_SUBDIR / CONTROLLER_FILENAME, controller_script_bytes())
+
+
+def install_agent_project() -> InstallStep:
+    """Create the one project the agent writes into, from the packaged template.
+    An existing agent project is the user's work in progress and is kept."""
+    from fl_mcp import make_agent_project  # imports the session package; only this step needs it
+
+    target = make_agent_project.destination()
+    existed = target.is_file()
+    make_agent_project.create()
+    return InstallStep(status="OK", detail=f"{target} ({'already present' if existed else 'created'})")
 
 
 def _set_int_value(data: str, key_name: str, value_name: str, new_value: int) -> tuple[str, bool]:
@@ -271,7 +295,7 @@ def configure_midi() -> InstallStep:
     reg_xml = reg_xml_path()
     if not reg_xml.is_file():
         return _warn(f"reg.xml not found at {reg_xml}; assign the controller once in FL's MIDI settings")
-    data = reg_xml.read_text(encoding="utf-8")
+    original = data = reg_xml.read_text(encoding="utf-8")
 
     input_key = (
         f'<Key Name="{REQ_PORT_NAME}">\n'
@@ -319,42 +343,138 @@ def configure_midi() -> InstallStep:
         if not n:
             return _warn('could not locate <Key Name="MIDI output"> in reg.xml; assign controller once in FL')
 
-    shutil.copy2(reg_xml, reg_xml.with_name(f"{reg_xml.name}.bak"))
-    reg_xml.write_text(data, encoding="utf-8")
     if enabled_missing:
+        if data != original:
+            _write_reg_xml(reg_xml, data)
         return _warn(f"ports assigned, but {REQ_PORT_NAME} has no Enabled value to set; "
                      "check the controller is enabled in FL's MIDI settings")
+    if data == original:
+        return _ok("reg.xml; already current")
+    _write_reg_xml(reg_xml, data)
     return _ok("reg.xml; backup written")
 
 
-def install_all() -> dict[str, InstallStep]:
-    """Full FL-side install: note script + controller script + MIDI assignment."""
+def _write_reg_xml(reg_xml: Path, data: str) -> None:
+    shutil.copy2(reg_xml, reg_xml.with_name(f"{reg_xml.name}.bak"))
+    reg_xml.write_text(data, encoding="utf-8")
+
+
+LOOPMIDI_FIX = (
+    "Install loopMIDI (https://www.tobias-erichsen.de/software/loopmidi.html, or "
+    "`winget install TobiasErichsen.loopMIDI`), start it, add exactly two ports named "
+    f"'{REQ_PORT_NAME}' and '{RES_PORT_NAME}', and keep loopMIDI running whenever FL runs; "
+    "then rerun fl-mcp-install."
+)
+
+
+def check_midi_ports() -> InstallStep:
+    """Windows: open the two loopMIDI ports the way the server will, then close them.
+
+    WinMM has no virtual ports, so they must exist before FL and the server start;
+    loopMIDI owns them and keeps them per user session while it runs."""
+    from fl_mcp.core.carriers.wire import ControlUnavailable, windows_midi_control
+
+    try:
+        windows_midi_control().close()
+    except ControlUnavailable as exc:
+        return _warn(f"{exc} {LOOPMIDI_FIX}")
+    return InstallStep(status="OK", detail=f"loopMIDI ports '{REQ_PORT_NAME}' and '{RES_PORT_NAME}' open")
+
+
+BRIDGE_FIX = (
+    "optional: without it notes still land (FL reloads the project per write), but `render` and "
+    "live writes need it. Build it once from the source repository (SETUP.md, 'The Bridge plugin'), "
+    "then run fl-mcp-install --bridge <path to the built library>."
+)
+
+
+def bridge_status() -> InstallStep:
+    """Report whether a Bridge library is installed where FL loads it; never changes anything."""
+    installed = bridge_plugin_dir() / bridge_binary_name()
+    if installed.is_file():
+        return InstallStep(status="OK", detail=f"{installed} (installed)")
+    return _warn(f"not installed at {installed}; {BRIDGE_FIX}")
+
+
+def install_bridge(built: Path) -> InstallStep:
+    """Install a built Bridge library into FL's native Effects folder.
+
+    FL loads native plugins only from inside its own install: the app bundle on
+    macOS (group writable, and FL ships with library validation disabled so it
+    loads an unsigned dylib), Program Files on Windows (needs an elevated
+    terminal). FL must be closed: it holds the library open while running.
+    """
+    if not built.is_file():
+        return InstallStep(status="FAIL", detail=f"no Bridge library at {built}")
+    if built.name != bridge_binary_name():
+        return InstallStep(status="FAIL", detail=f"{built.name} is not this OS's Bridge library ({bridge_binary_name()})")
+    if fl_process_running():
+        # An install the user asked for that did not happen is a failure, not advice.
+        return InstallStep(status="FAIL", detail="FL Studio is running and holds the Bridge open; close it, then rerun")
+    dest_dir = bridge_plugin_dir()
+    if not dest_dir.parent.is_dir():
+        return InstallStep(status="FAIL", detail=f"FL Studio's native Effects folder not found: {dest_dir.parent} "
+                           "(set FL_APP to FL Studio's app or FL64.exe if it is installed elsewhere)")
+    from fl_mcp.profile import BRIDGE_BUILD_RECORD, detect_fl_version
+
+    try:
+        step = _place(dest_dir / bridge_binary_name(), built.read_bytes())
+        # Capital V matches the field in stock plugins' Plugin.nfo (e.g. Fruity Balance).
+        _place(dest_dir / "Plugin.nfo", b"ps_Vendorname=FL MCP\n")
+        fl_build = detect_fl_version()  # macOS only; the doctor compares it with the running FL
+        if fl_build is not None:
+            _place(dest_dir / BRIDGE_BUILD_RECORD, f"{fl_build.label()}\n".encode())
+    except OSError as exc:
+        hint = "run it from an elevated terminal" if sys.platform == "win32" else "check that folder's permissions"
+        return InstallStep(status="FAIL", detail=f"cannot write {dest_dir} ({exc}); {hint}")
+    if sys.platform == "darwin":
+        # A library copied out of a browser download keeps the quarantine flag FL refuses.
+        subprocess.run(["xattr", "-d", "com.apple.quarantine", str(dest_dir / bridge_binary_name())],
+                       capture_output=True, check=False)
+    return InstallStep(status=step.status, detail=f"{step.detail}; restart FL Studio to load it")
+
+
+def install_all(bridge: Path | None = None) -> dict[str, InstallStep]:
+    """Full FL-side install, each step independent: one failing never skips the rest."""
     results: dict[str, InstallStep] = {}
-    try:
-        results["note_script"] = InstallStep(status="OK", detail=str(install()))
-    except FileNotFoundError as exc:
-        results["note_script"] = InstallStep(status="FAIL", detail=str(exc))
-    try:
-        results["controller_script"] = InstallStep(status="OK", detail=str(install_controller()))
-    except FileNotFoundError as exc:
-        results["controller_script"] = InstallStep(status="FAIL", detail=str(exc))
+    for name, step in (
+        ("agent_project", install_agent_project),
+        ("note_script", install_note_script),
+        ("controller_script", install_controller),
+    ):
+        try:
+            results[name] = step()
+        except OSError as exc:  # a missing FL folder, or one this user cannot write
+            results[name] = InstallStep(status="FAIL", detail=str(exc))
     results["midi_assignment"] = configure_midi()
+    if sys.platform == "win32":
+        results["midi_ports"] = check_midi_ports()
+    results["bridge"] = install_bridge(bridge) if bridge is not None else bridge_status()
     return results
 
 
+NEXT_STEPS = (
+    "Next: open FL Studio, then start your MCP client (it launches the server). "
+    "Check the connection any time with fl-mcp-doctor."
+)
+
+
 def main(argv: list[str] | None = None) -> None:
-    parser = argparse.ArgumentParser(description="Install the FL-side FL MCP files for this user.")
+    parser = argparse.ArgumentParser(
+        description="Install the FL-side FL MCP files for this user. Safe to rerun; close FL Studio first."
+    )
     parser.add_argument("--json", action="store_true", help="print one JSON object of step results")
+    parser.add_argument("--bridge", type=Path, metavar="PATH",
+                        help=f"also install a built Bridge library ({bridge_binary_name()}) into FL")
     args = parser.parse_args(argv)
-    results = install_all()
+    results = install_all(bridge=args.bridge)
     failed = any(step.status == "FAIL" for step in results.values())
     if args.json:
         print(json.dumps({name: step.model_dump() for name, step in results.items()}))
     else:
         for name, step in results.items():
             print(f"  [{step.status}] {name}: {step.detail}")
-        if not failed:
-            print("\nDone. Open FL Studio first, then start your Claude session so the MIDI ports hot-plug.")
+        print("\n" + ("Some steps failed; fix them and rerun fl-mcp-install." if failed else NEXT_STEPS))
     if failed:
         raise SystemExit(1)
 

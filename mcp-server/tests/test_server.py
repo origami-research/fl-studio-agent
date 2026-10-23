@@ -220,6 +220,16 @@ def test_main_logs_to_stderr_at_the_env_level(monkeypatch):
         root.setLevel(saved_level)
 
 
+def test_version_flag_answers_without_starting_the_server(monkeypatch, capsys):
+    """A person checking an install runs `fl-mcp --version`; it must print and
+    exit, not start a stdio server that waits on the terminal forever."""
+    monkeypatch.setattr(server.MCPServer, "run", lambda self: pytest.fail("the server started"))
+    with pytest.raises(SystemExit) as exited:
+        server.main(["--version"])
+    assert exited.value.code == 0
+    assert capsys.readouterr().out.strip() == f"fl-studio-agent {server.__version__}"
+
+
 def test_server_info_uses_the_installed_package_version_and_build_description():
     mcp = server.create_server()
 

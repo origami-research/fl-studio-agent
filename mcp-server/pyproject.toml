@@ -38,6 +38,9 @@ Documentation = "https://github.com/origami-research/fl-studio-agent/tree/main/d
 [project.optional-dependencies]
 
 [project.scripts]
+# `uvx fl-studio-agent` (the MCP Registry's runtimeHint form) runs the command
+# named after the package, so the server answers to both names.
+fl-studio-agent = "fl_mcp.server:main"
 fl-mcp = "fl_mcp.server:main"
 fl-mcp-doctor = "fl_mcp.doctor:main"
 fl-mcp-contract = "fl_mcp.contract:main"

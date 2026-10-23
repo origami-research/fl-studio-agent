@@ -1,0 +1,60 @@
+{
+  "manifest_version": "0.4",
+  "name": "fl-studio-agent",
+  "display_name": "FL Studio Agent",
+  "version": "0.1.0",
+  "description": "Drive FL Studio from an AI agent: write notes, set tempo and levels, check what sounds, render.",
+  "long_description": "Lets Claude write notes into FL Studio, set tempo, levels and plugin parameters, check which channels sound, and render the mix to WAV. Before first use, close FL Studio and run `uvx --python 3.12 --from fl-studio-agent fl-mcp-install` once (it installs the FL-side scripts). Setup guide: https://github.com/origami-research/fl-studio-agent#quick-start",
+  "author": {
+    "name": "Origami Research",
+    "url": "https://github.com/origami-research/fl-studio-agent"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/origami-research/fl-studio-agent.git"
+  },
+  "homepage": "https://github.com/origami-research/fl-studio-agent",
+  "documentation": "https://github.com/origami-research/fl-studio-agent/blob/main/SETUP.md",
+  "support": "https://github.com/origami-research/fl-studio-agent/issues",
+  "license": "MIT",
+  "keywords": [
+    "fl-studio",
+    "music",
+    "daw",
+    "midi"
+  ],
+  "server": {
+    "type": "uv",
+    "entry_point": "src/server.py",
+    "mcp_config": {
+      "command": "uv",
+      "args": [
+        "run",
+        "--directory",
+        "${__dirname}",
+        "src/server.py"
+      ],
+      "env": {
+        "FLMCP_FL_LICENSE": "${user_config.fl_license}"
+      }
+    }
+  },
+  "user_config": {
+    "fl_license": {
+      "type": "string",
+      "title": "FL Studio license",
+      "description": "'licensed', or 'trial' for the unregistered trial (it cannot reopen saved projects).",
+      "default": "licensed",
+      "required": false
+    }
+  },
+  "compatibility": {
+    "platforms": [
+      "darwin",
+      "win32"
+    ],
+    "runtimes": {
+      "python": ">=3.11,<3.13"
+    }
+  }
+}
