@@ -59,6 +59,7 @@ Status tags: **current** describes the shipped system, **research** records evid
 - [39-workspace-tools.md](39-workspace-tools.md) - **current** `shell` and the file tools behind the kernel's boundary; the gate, `--workspace-only`, limits, and box acceptance.
 - [26-master-plan.md](26-master-plan.md) - **superseded** pointer to the current canon.
 - [sdk-reference.md](sdk-reference.md) - **current** SDK reference.
+- [releases/](releases/) - release notes, one file per tag (the release workflow publishes them).
 - [READING_GUIDE.md](READING_GUIDE.md) - **current** capability navigation.
 
 ## Research and evidence

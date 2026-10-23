@@ -20,7 +20,7 @@ scripts/oss/build-public-mirror.sh <mirror.git>
 scripts/oss/publish-public-mirror.sh --repo origami-research/fl-studio-agent --tag vX.Y.Z --mirror <mirror.git> --i-approve-publication
 ```
 
-Before a release, bump `version` in `mcp-server/pyproject.toml`, run `python3 scripts/install_links.py` (it regenerates `server.json` and the bundle manifest with the new version), and add the release notes at `docs/releases/vX.Y.Z.md`, all merged on main.
+Before a release, bump `version` in `mcp-server/pyproject.toml`, run `python3 scripts/install_links.py` (it regenerates `server.json` and the bundle manifest with the new version) and `uv run fl-mcp-contract > ../contracts/fl-mcp.json` from `mcp-server/` (the contract carries the version), relock with `uv lock`, and add the release notes at `docs/releases/vX.Y.Z.md`, all merged on main.
 
 The publish script runs the verifier on the mirror in the same invocation, builds and smoke-tests the release wheel and sdist and packs the Claude Desktop bundle from the mirror's `main`, confirms the PyPI version is free and a token is present (`UV_PUBLISH_TOKEN` or `~/.config/pypi/token`, never printed), and checks the target repository (the tag is new and its `main` is an ancestor).
 Then it uploads to PyPI and reads it back (a clean-venv `pip install`, the commands, `fl-mcp-contract`), pushes `main`, and only then pushes the tag.
