@@ -78,3 +78,19 @@ The publish script still refuses while that file exists, so a future hold is one
 - `scripts/oss/publish-public-mirror.sh` ran from merged main 14887fb: verification PASS in the same invocation (13 checks, 0 skipped), then it pushed `main` (735c35d) and tag `v0.1.0` to https://github.com/origami-research/fl-studio-agent and uploaded `fl-studio-agent` 0.1.0 to https://pypi.org/project/fl-studio-agent/0.1.0/.
 - Read-back: the public default branch is `main` with `main` and `v0.1.0` at 735c35d; a clean-venv `pip install fl-studio-agent==0.1.0` installs the `fl-mcp*` commands and `fl-mcp-contract` runs.
 - Then the script published only into an empty repository; since the one-step-install change it also updates a published repository by fast-forward (Step 7 above).
+
+## Released 0.1.1 on 2026-10-22
+
+- First release through the update path (#265, #266).
+- The mirror was rebuilt from merged main ef6d30e and reproduced the published `735c35d`.
+- `scripts/oss/publish-public-mirror.sh` verified it in the same run: Status PASS, including the full suite, the native build with ctest, and the release artifact.
+- It then uploaded `fl-studio-agent` 0.1.1 to PyPI and read it back, fast-forwarded the public `main` from 735c35d to f8c62a4 (4 commits), and pushed tag `v0.1.1`.
+- The tag's release workflow created https://github.com/origami-research/fl-studio-agent/releases/tag/v0.1.1 with `fl-studio-agent.mcpb`.
+  It also published `io.github.origami-research/fl-studio-agent` 0.1.1 to the MCP Registry through GitHub OIDC; the registry lists it as active.
+- User-view read-back:
+  - From a clean uv cache, `uvx --python 3.12 fl-studio-agent --version` prints 0.1.1, and the same command answers MCP `initialize` with the five tools.
+  - `claude mcp add --scope local fl-studio -- uvx --python 3.12 fl-studio-agent` shows Connected in `claude mcp list`.
+  - The published Cursor link decodes to `{"command":"uvx","args":["--python","3.12","fl-studio-agent"]}`, and the VS Code link redirects to `vscode:mcp/install` with the same entry.
+  - The released bundle, run as `uv run --directory <bundle> src/server.py`, serves 0.1.1.
+  - The README renders on GitHub with the five badges and the five client sections.
+- Not verified: installing the bundle in the Claude Desktop app (no Claude Desktop on the release machine), and the Windows install path on a real Windows FL.
