@@ -14,6 +14,12 @@ and the Bridge port-file schema. `FLMCP_KERNEL_ROOT` is the `run` kernel's
 workspace root; [38](38-python-kernel.md) has the box contract around it. The test suite fails when the checked-in file
 does not match the generated contract.
 
+`tools` is the default surface. `workspace_tools` lists `shell`, `read_file`,
+`write_file`, `edit_file`, `glob` and `grep`, served after `tools` when
+`FLMCP_WORKSPACE_TOOLS=1` and alone under `fl-mcp --workspace-only`; `server`
+names that flag and the `; confined=true|false` ending of
+`serverInfo.description` ([39](39-workspace-tools.md)).
+
 Tools publish only their success model as `outputSchema`. Anticipated engine
 failures are `ToolErrorResult` JSON in the text content of MCP `isError` tool
 results, not an alternate successful output shape. The server returns an
@@ -23,7 +29,7 @@ decoding a tool result against its output schema.
 
 ## Actions
 
-Every tool result (`run`, `get_scene`, `check`, `render`, `analyze`) carries `actions`: the plain sentences a UI can show as "what the assistant did".
+Every tool result (`run`, `get_scene`, `check`, `render`, `analyze`, and the workspace tools) carries `actions`: the plain sentences a UI can show as "what the assistant did".
 There is one past-tense sentence per change FL confirmed or measurement the engine took during the call, in order.
 Sentences are complete, listing every item; a UI shows one line and expands it, and only a pathological sentence past 2000 characters is cut with "...".
 Examples: "Set tempo to 122 BPM", "Replaced the notes on FLEX Bass (212 notes)", "Checked bars 9-10: 5 of 5 tracks sound, master -1.8 dBFS", "Rendered 0:34".
@@ -37,6 +43,7 @@ A call lists at most 200 actions, then "and N more actions", because a cell can 
 For `run`, the server records each `fl` call it serves while the cell runs, so a cell that raises partway, is interrupted, or loses its kernel still lists the changes FL already has.
 Inside `fl.file_edit()`, changes reach FL only when the block closes and FL reopens the changed song, so they are listed then, followed by "Reopened FL with the changed song"; if closing fails, none of them are listed.
 `fl.analyze` and `fl.read_wav` run inside the kernel without reaching the server, so a cell's measurements are not listed; the `analyze` tool's are.
+The workspace tools add one sentence per changing call, such as `Ran "pip install mido" (exit 0, 3.1 s)`, `Wrote notes/plan.md (1.2 KB)` and `Edited notes/plan.md (1 change)`; `read_file`, `glob` and `grep` add none.
 `fl_mcp/actions.py` holds the wording.
 
 ## Session audio relay

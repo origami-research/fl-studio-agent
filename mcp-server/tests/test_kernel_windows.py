@@ -13,85 +13,19 @@ from types import SimpleNamespace
 
 import pytest
 from session_fakes import RENDER_SPAN
+from win32_fakes import SID, FakeWin32
 
 from fl_mcp import server
-from fl_mcp.kernel.launch import Workspace
+from fl_mcp.kernel.launch import KERNEL_JOB, Workspace
 from fl_mcp.kernel.windows import (
     APPCONTAINER_NAME,
     INTERNET_CLIENT_SID,
-    KERNEL_JOB_MEMORY_BYTES,
-    KERNEL_JOB_PROCESSES,
     RENDERS_GRANT,
     WORK_GRANT,
     AppContainerLauncher,
     env_block,
     job_limits,
 )
-
-SID = "S-1-15-2-1-2-3-4-5-6-7"
-
-
-class FakeWin32:
-    def __init__(self, fail: str | None = None) -> None:
-        self.calls: list[tuple] = []
-        self.fail = fail
-        self.alive = True
-
-    def _record(self, name: str, *args) -> None:
-        self.calls.append((name, *args))
-        if name == self.fail:
-            raise OSError(f"{name} failed")
-
-    def appcontainer_sid(self, name):
-        self._record("appcontainer_sid", name)
-        return SID
-
-    def grant(self, path, sid, rights):
-        self._record("grant", path, sid, rights)
-
-    def revoke(self, path, sid):
-        self._record("revoke", path, sid)
-
-    def inheritable_handle(self, fd):
-        return 1000 + fd
-
-    def create_job(self):
-        self._record("create_job")
-        return 7
-
-    def create_process(self, command_line, *, cwd, env_block, appcontainer_sid, capabilities, std_handles):
-        self.request = {
-            "command_line": command_line,
-            "cwd": cwd,
-            "env_block": env_block,
-            "appcontainer_sid": appcontainer_sid,
-            "capabilities": tuple(capabilities),
-            "std_handles": std_handles,
-        }
-        self._record("create_process")
-        return 11, 12, 4242
-
-    def assign(self, job, process):
-        self._record("assign", job, process)
-
-    def resume(self, thread):
-        self._record("resume", thread)
-
-    def terminate_process(self, process):
-        self._record("terminate_process", process)
-
-    def terminate_job(self, job):
-        self._record("terminate_job", job)
-        self.alive = False
-
-    def wait(self, handle, timeout_ms):
-        return not self.alive
-
-    def exit_code(self, process):
-        return 1
-
-    def close(self, handle):
-        self._record("close", handle)
 
 
 @pytest.fixture
@@ -162,11 +96,42 @@ def test_release_withdraws_the_session_grants(workspace):
 
 
 def test_job_limits_protect_fl_from_the_kernel_tree():
-    basic = job_limits().BasicLimitInformation
+    limits = job_limits(KERNEL_JOB)
+    basic = limits.BasicLimitInformation
     assert basic.LimitFlags & 0x2000 and basic.LimitFlags & 0x400  # kill on close, no WER dialog
-    assert basic.LimitFlags & 0x200 and job_limits().JobMemoryLimit == KERNEL_JOB_MEMORY_BYTES
-    assert basic.LimitFlags & 0x8 and basic.ActiveProcessLimit == KERNEL_JOB_PROCESSES
+    assert basic.LimitFlags & 0x200 and limits.JobMemoryLimit == KERNEL_JOB.memory_bytes == 4 << 30
+    assert basic.LimitFlags & 0x8 and basic.ActiveProcessLimit == KERNEL_JOB.processes == 32
     assert basic.LimitFlags & 0x20 and basic.PriorityClass == 0x4000  # below normal: FL's audio wins
+
+
+def test_the_kernel_launch_asks_for_the_kernel_job(workspace):
+    """The kernel's own launch keeps its limits; the workspace tools ask for smaller ones."""
+    api = FakeWin32()
+    _launch(api, workspace)
+    assert ("create_job", KERNEL_JOB) in api.calls
+
+
+def test_a_workspace_is_granted_once_and_a_release_is_final(workspace):
+    """icacls rewrites every file below a granted folder, and the workspace tools launch
+    once per call: regranting on each launch would walk .packages every time. A launch
+    racing shutdown must not grant a finished session again (review, 2026-10-22)."""
+    api = FakeWin32()
+    launcher = AppContainerLauncher(api)
+    argv = ["python", "-I", "-m", "fl_mcp.workspace.op"]
+    for _ in range(3):
+        launcher(argv, workspace=workspace, env={})
+    assert len([c for c in api.calls if c[0] == "grant"]) == 2  # work and renders, once
+    launcher.release(workspace)
+    with pytest.raises(OSError, match="session is over"):
+        launcher(argv, workspace=workspace, env={})
+    assert len([c for c in api.calls if c[0] == "grant"]) == 2
+
+
+def test_release_attempts_both_revokes_when_the_first_fails(workspace):
+    api = FakeWin32(fail="revoke")
+    with pytest.raises(OSError):
+        AppContainerLauncher(api).release(workspace)
+    assert [c[1] for c in api.calls if c[0] == "revoke"] == [workspace.work, workspace.renders]
 
 
 def test_a_failed_job_assignment_kills_the_suspended_process(workspace):

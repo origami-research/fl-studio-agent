@@ -210,7 +210,7 @@ def test_main_logs_to_stderr_at_the_env_level(monkeypatch):
     root = logging.getLogger()
     saved_handlers, saved_level = root.handlers[:], root.level
     try:
-        server.main()
+        server.main([])
         assert ran == {"ok": True}
         assert root.level == logging.DEBUG
         streams = [h.stream for h in root.handlers if isinstance(h, logging.StreamHandler)]

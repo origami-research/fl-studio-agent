@@ -8,6 +8,10 @@
     ],
     "FLMCP_KERNEL_ROOT": "FLMCP_KERNEL_ROOT",
     "FLMCP_SPOOL_ROOT": "FLMCP_SPOOL_ROOT",
+    "FLMCP_WORKSPACE_TOOLS": [
+      "0",
+      "1"
+    ],
     "bridge_port_file_schema": {
       "description": "Endpoint published by the native Bridge in each session spool.",
       "properties": {
@@ -125,6 +129,10 @@
       "title": "ToolErrorResult",
       "type": "object"
     }
+  },
+  "server": {
+    "description": "serverInfo.description ends with '; confined=true' or '; confined=false'",
+    "workspace_only_flag": "--workspace-only"
   },
   "tools": [
     {
@@ -777,5 +785,551 @@
       }
     }
   ],
-  "version": "0.1.0"
+  "version": "0.1.0",
+  "workspace_tools": [
+    {
+      "description": "Run a shell command in your workspace folder and return its output.\nCommands run in cmd.exe on Windows (the FL Studio host) and /bin/sh on\nmacOS/Linux. python and pip are on PATH: pip installs into the workspace,\nwhere python (and run, when you have it) can import the package.\n\ncmd.exe runs one line: chain steps with &&, or write a script file and run\nit. Each call is a fresh process started in the workspace: cd, environment\nvariables and background processes do not carry over, and anything still\nrunning when the command returns is stopped. On the FL Studio host the\noperating system confines the command: it can read and write only the\nworkspace, read the renders folder, and reach the public internet.\n\nArgs:\n    command: the command line, up to 16 KB.\n    timeout_s: seconds before the command is stopped, 1 to 600 (default 120).\n\nReturns {exit_code, timed_out, stdout, stderr, truncated, full_output,\nduration_s, note, actions}. A non-zero exit_code is a normal result, not an\nerror. Output past 16,000 characters keeps its start and end: truncated is\ntrue and full_output names a file in the workspace with all of it (read it\nwith read_file or search it with grep).",
+      "inputSchema": {
+        "properties": {
+          "command": {
+            "title": "Command",
+            "type": "string"
+          },
+          "timeout_s": {
+            "default": 120,
+            "title": "Timeout S",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "command"
+        ],
+        "title": "shellArguments",
+        "type": "object"
+      },
+      "name": "shell",
+      "outputSchema": {
+        "description": "One command's outcome; a non-zero exit_code is a result, not an error.",
+        "properties": {
+          "actions": {
+            "description": "What this call changed, in plain sentences: the command it ran, or the file it wrote or edited. Reads add none.",
+            "items": {
+              "type": "string"
+            },
+            "title": "Actions",
+            "type": "array"
+          },
+          "duration_s": {
+            "title": "Duration S",
+            "type": "number"
+          },
+          "exit_code": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The command's exit code; null when it timed out.",
+            "title": "Exit Code"
+          },
+          "full_output": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The workspace file holding the whole output when it was cut.",
+            "title": "Full Output"
+          },
+          "note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Note"
+          },
+          "stderr": {
+            "title": "Stderr",
+            "type": "string"
+          },
+          "stdout": {
+            "title": "Stdout",
+            "type": "string"
+          },
+          "timed_out": {
+            "title": "Timed Out",
+            "type": "boolean"
+          },
+          "truncated": {
+            "description": "Output was cut to its start and end; full_output has all of it.",
+            "title": "Truncated",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "exit_code",
+          "timed_out",
+          "stdout",
+          "stderr",
+          "truncated",
+          "full_output",
+          "duration_s",
+          "actions"
+        ],
+        "title": "ShellResult",
+        "type": "object"
+      }
+    },
+    {
+      "description": "Read a text file with line numbers. path is relative to your workspace\n(like notes/plan.md) or absolute; offset is the first line to show (from 1,\ndefault 1) and limit how many lines (1 to 2000, default 2000). Lines longer\nthan 2000 characters are cut, and one result holds at most 16,000\ncharacters of content: note then says which offset reads on. A binary file\nreturns its size and kind (midi, audio, image, fl_song, archive, binary)\nwith a hint instead of content.\n\nReturns {path, kind, bytes, content, start_line, end_line, total_lines,\ntruncated, hint, note, actions}.",
+      "inputSchema": {
+        "properties": {
+          "limit": {
+            "default": 2000,
+            "title": "Limit",
+            "type": "integer"
+          },
+          "offset": {
+            "default": 1,
+            "title": "Offset",
+            "type": "integer"
+          },
+          "path": {
+            "title": "Path",
+            "type": "string"
+          }
+        },
+        "required": [
+          "path"
+        ],
+        "title": "read_fileArguments",
+        "type": "object"
+      },
+      "name": "read_file",
+      "outputSchema": {
+        "description": "A text file's numbered lines, or a binary file's size and kind with a hint.",
+        "properties": {
+          "actions": {
+            "description": "What this call changed, in plain sentences: the command it ran, or the file it wrote or edited. Reads add none.",
+            "items": {
+              "type": "string"
+            },
+            "title": "Actions",
+            "type": "array"
+          },
+          "bytes": {
+            "title": "Bytes",
+            "type": "integer"
+          },
+          "content": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Content"
+          },
+          "end_line": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "End Line"
+          },
+          "hint": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Hint"
+          },
+          "kind": {
+            "enum": [
+              "text",
+              "midi",
+              "audio",
+              "image",
+              "fl_song",
+              "archive",
+              "binary"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Note"
+          },
+          "path": {
+            "title": "Path",
+            "type": "string"
+          },
+          "start_line": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Start Line"
+          },
+          "total_lines": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Total Lines"
+          },
+          "truncated": {
+            "default": false,
+            "title": "Truncated",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "path",
+          "kind",
+          "bytes",
+          "actions"
+        ],
+        "title": "ReadFileResult",
+        "type": "object"
+      }
+    },
+    {
+      "description": "Write a text file in your workspace, replacing it if it exists; missing\nparent folders are created. path is relative to the workspace (like\nnotes/plan.md) or absolute. content is up to 1 MB of text, written exactly\nas given in UTF-8. The renders folder is read-only.\n\nReturns {path, bytes, created, actions}.",
+      "inputSchema": {
+        "properties": {
+          "content": {
+            "title": "Content",
+            "type": "string"
+          },
+          "path": {
+            "title": "Path",
+            "type": "string"
+          }
+        },
+        "required": [
+          "path",
+          "content"
+        ],
+        "title": "write_fileArguments",
+        "type": "object"
+      },
+      "name": "write_file",
+      "outputSchema": {
+        "properties": {
+          "actions": {
+            "description": "What this call changed, in plain sentences: the command it ran, or the file it wrote or edited. Reads add none.",
+            "items": {
+              "type": "string"
+            },
+            "title": "Actions",
+            "type": "array"
+          },
+          "bytes": {
+            "title": "Bytes",
+            "type": "integer"
+          },
+          "created": {
+            "title": "Created",
+            "type": "boolean"
+          },
+          "path": {
+            "title": "Path",
+            "type": "string"
+          }
+        },
+        "required": [
+          "path",
+          "bytes",
+          "created",
+          "actions"
+        ],
+        "title": "WriteFileResult",
+        "type": "object"
+      }
+    },
+    {
+      "description": "Replace exact text in a file. old_string must appear exactly once\n(include surrounding lines to make it unique), or set replace_all to replace\nevery occurrence. Matching is exact, including spaces, indentation and line\nendings. Each string is up to 256 KB. When old_string is missing or not\nunique, the file is left unchanged and the error says which.\n\nReturns {path, replacements, actions}.",
+      "inputSchema": {
+        "properties": {
+          "new_string": {
+            "title": "New String",
+            "type": "string"
+          },
+          "old_string": {
+            "title": "Old String",
+            "type": "string"
+          },
+          "path": {
+            "title": "Path",
+            "type": "string"
+          },
+          "replace_all": {
+            "default": false,
+            "title": "Replace All",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "path",
+          "old_string",
+          "new_string"
+        ],
+        "title": "edit_fileArguments",
+        "type": "object"
+      },
+      "name": "edit_file",
+      "outputSchema": {
+        "properties": {
+          "actions": {
+            "description": "What this call changed, in plain sentences: the command it ran, or the file it wrote or edited. Reads add none.",
+            "items": {
+              "type": "string"
+            },
+            "title": "Actions",
+            "type": "array"
+          },
+          "path": {
+            "title": "Path",
+            "type": "string"
+          },
+          "replacements": {
+            "title": "Replacements",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "path",
+          "replacements",
+          "actions"
+        ],
+        "title": "EditFileResult",
+        "type": "object"
+      }
+    },
+    {
+      "description": "Find files by name, newest first. pattern uses * (within one folder),\n** (any number of folders) and ?, for example \"**/*.mid\" or \"notes/*.md\";\npath is the folder to search (default: your workspace). At most 500 paths.\nThe workspace's own .packages, .cache, .tmp and .appdata folders are skipped\nunless path points inside them; linked folders are not followed.\n\nReturns {paths, truncated, note, actions}.",
+      "inputSchema": {
+        "properties": {
+          "path": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Path"
+          },
+          "pattern": {
+            "title": "Pattern",
+            "type": "string"
+          }
+        },
+        "required": [
+          "pattern"
+        ],
+        "title": "globArguments",
+        "type": "object"
+      },
+      "name": "glob",
+      "outputSchema": {
+        "properties": {
+          "actions": {
+            "description": "What this call changed, in plain sentences: the command it ran, or the file it wrote or edited. Reads add none.",
+            "items": {
+              "type": "string"
+            },
+            "title": "Actions",
+            "type": "array"
+          },
+          "note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Note"
+          },
+          "paths": {
+            "description": "Matching files, newest first.",
+            "items": {
+              "type": "string"
+            },
+            "title": "Paths",
+            "type": "array"
+          },
+          "truncated": {
+            "title": "Truncated",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "paths",
+          "truncated",
+          "actions"
+        ],
+        "title": "GlobResult",
+        "type": "object"
+      }
+    },
+    {
+      "description": "Search file contents line by line with a Python regular expression.\npath is a file or folder (default: your workspace); glob keeps only files\nwhose name matches (for example \"*.py\", or \"notes/**/*.md\" for a path).\noutput_mode \"files\" (default) lists matching files newest first, \"lines\"\ngives \"path:line: text\", \"count\" gives \"path: N\" matching lines per file.\nAt most 200 results. Binary files and files over 20 MB are skipped, and so\nare the workspace's .packages, .cache, .tmp and .appdata folders unless path\npoints inside them.\n\nReturns {mode, matches, truncated, note, actions}.",
+      "inputSchema": {
+        "properties": {
+          "case_insensitive": {
+            "default": false,
+            "title": "Case Insensitive",
+            "type": "boolean"
+          },
+          "glob": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Glob"
+          },
+          "output_mode": {
+            "default": "files",
+            "enum": [
+              "files",
+              "lines",
+              "count"
+            ],
+            "title": "Output Mode",
+            "type": "string"
+          },
+          "path": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Path"
+          },
+          "pattern": {
+            "title": "Pattern",
+            "type": "string"
+          }
+        },
+        "required": [
+          "pattern"
+        ],
+        "title": "grepArguments",
+        "type": "object"
+      },
+      "name": "grep",
+      "outputSchema": {
+        "properties": {
+          "actions": {
+            "description": "What this call changed, in plain sentences: the command it ran, or the file it wrote or edited. Reads add none.",
+            "items": {
+              "type": "string"
+            },
+            "title": "Actions",
+            "type": "array"
+          },
+          "matches": {
+            "description": "files: paths, newest first; lines: \"path:line: text\"; count: \"path: N\".",
+            "items": {
+              "type": "string"
+            },
+            "title": "Matches",
+            "type": "array"
+          },
+          "mode": {
+            "enum": [
+              "files",
+              "lines",
+              "count"
+            ],
+            "title": "Mode",
+            "type": "string"
+          },
+          "note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Note"
+          },
+          "truncated": {
+            "title": "Truncated",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "mode",
+          "matches",
+          "truncated",
+          "actions"
+        ],
+        "title": "GrepResult",
+        "type": "object"
+      }
+    }
+  ]
 }

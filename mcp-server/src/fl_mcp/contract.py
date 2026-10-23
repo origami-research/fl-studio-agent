@@ -22,6 +22,10 @@ ENV_AGENT_PROJECT = "FLMCP_AGENT_PROJECT"
 ENV_FL_LICENSE = "FLMCP_FL_LICENSE"
 # Where the run kernel's per-session workspace lives (docs/38). Unset: a fresh temp dir.
 ENV_KERNEL_ROOT = "FLMCP_KERNEL_ROOT"
+# "1" adds the workspace tools (docs/39) to the FL tools; unset or "0" leaves the surface as it was.
+ENV_WORKSPACE_TOOLS = "FLMCP_WORKSPACE_TOOLS"
+# The server mode that serves only the workspace tools, with no FL session (docs/39).
+WORKSPACE_ONLY_FLAG = "--workspace-only"
 BRIDGE_PORT_FILE = "bridge_udp.json"
 
 
@@ -45,6 +49,20 @@ def fl_license_from_env(environ: Mapping[str, str]) -> FLLicense:
     except ValueError as exc:
         allowed = ", ".join(member.value for member in FLLicense)
         raise ValueError(f"{ENV_FL_LICENSE} must be one of {allowed}; got {value!r}") from exc
+
+
+def workspace_tools_from_env(environ: Mapping[str, str]) -> bool:
+    """Resolve ``FLMCP_WORKSPACE_TOOLS`` once at the entry point; an unknown value is a setup error."""
+    value = environ.get(ENV_WORKSPACE_TOOLS, "0")
+    if value not in ("0", "1"):
+        raise ValueError(f"{ENV_WORKSPACE_TOOLS} must be 0 or 1; got {value!r}")
+    return value == "1"
+
+
+def server_description(confined: bool) -> str:
+    """The MCP serverInfo description. Its ``confined=`` says whether the OS confines
+    model code (run and the workspace tools) to the session workspace on this host."""
+    return f"FL Studio MCP {build_version()}; confined={'true' if confined else 'false'}"
 
 
 class BridgePortFile(BaseModel):
@@ -185,6 +203,91 @@ class AnalyzeResult(AudioAnalysis):
     actions: Actions
 
 
+# -- the workspace tools (docs/39) ----------------------------------------------------
+
+WorkspaceActions = Annotated[
+    list[str],
+    Field(
+        description="What this call changed, in plain sentences: the command it ran, or the file it "
+        "wrote or edited. Reads add none."
+    ),
+]
+
+
+class ShellResult(BaseModel):
+    """One command's outcome; a non-zero exit_code is a result, not an error."""
+
+    exit_code: int | None = Field(description="The command's exit code; null when it timed out.")
+    timed_out: bool
+    stdout: str
+    stderr: str
+    truncated: bool = Field(description="Output was cut to its start and end; full_output has all of it.")
+    full_output: str | None = Field(
+        description="The workspace file holding the whole output when it was cut."
+    )
+    duration_s: float
+    note: str | None = None
+    actions: WorkspaceActions
+
+
+FileKind = Literal["text", "midi", "audio", "image", "fl_song", "archive", "binary"]
+
+
+class ReadFileResult(BaseModel):
+    """A text file's numbered lines, or a binary file's size and kind with a hint."""
+
+    path: str
+    kind: FileKind
+    bytes: int
+    content: str | None = None
+    start_line: int | None = None
+    end_line: int | None = None
+    total_lines: int | None = None
+    truncated: bool = False
+    hint: str | None = None
+    note: str | None = None
+    actions: WorkspaceActions  # a read: always empty
+
+    @model_validator(mode="after")
+    def _text_has_content(self) -> ReadFileResult:
+        if (self.kind == "text") != (self.content is not None):
+            raise ValueError("a read_file result has content exactly when the file is text")
+        return self
+
+
+class WriteFileResult(BaseModel):
+    path: str
+    bytes: int
+    created: bool
+    actions: WorkspaceActions
+
+
+class EditFileResult(BaseModel):
+    path: str
+    replacements: int
+    actions: WorkspaceActions
+
+
+class GlobResult(BaseModel):
+    paths: list[str] = Field(description="Matching files, newest first.")
+    truncated: bool
+    note: str | None = None
+    actions: WorkspaceActions  # a read: always empty
+
+
+GrepMode = Literal["files", "lines", "count"]
+
+
+class GrepResult(BaseModel):
+    mode: GrepMode
+    matches: list[str] = Field(
+        description='files: paths, newest first; lines: "path:line: text"; count: "path: N".'
+    )
+    truncated: bool
+    note: str | None = None
+    actions: WorkspaceActions  # a read: always empty
+
+
 def build_version() -> str:
     """Package version plus the checked-out revision when available.
 
@@ -217,7 +320,7 @@ def build_version() -> str:
 
 def build_contract() -> dict[str, Any]:
     """Build the one machine-readable engine contract."""
-    from fl_mcp.server import tool_definitions
+    from fl_mcp.server import tool_definitions, workspace_tool_definitions
 
     return {
         # The checked-in contract must survive a merge unchanged. Runtime
@@ -228,10 +331,17 @@ def build_contract() -> dict[str, Any]:
             ENV_AGENT_PROJECT: ENV_AGENT_PROJECT,
             ENV_FL_LICENSE: [member.value for member in FLLicense],
             ENV_KERNEL_ROOT: ENV_KERNEL_ROOT,
+            ENV_WORKSPACE_TOOLS: ["0", "1"],
             "BRIDGE_PORT_FILE": BRIDGE_PORT_FILE,
             "bridge_port_file_schema": BridgePortFile.model_json_schema(),
         },
         "tools": [_tool_contract(fn) for fn in tool_definitions()],
+        # Served beside "tools" when FLMCP_WORKSPACE_TOOLS=1, and alone under --workspace-only.
+        "workspace_tools": [_tool_contract(fn) for fn in workspace_tool_definitions()],
+        "server": {
+            "workspace_only_flag": WORKSPACE_ONLY_FLAG,
+            "description": "serverInfo.description ends with '; confined=true' or '; confined=false'",
+        },
         "errors": {
             "categories": list(_error_categories()),
             "shape": ToolErrorResult.model_json_schema(),

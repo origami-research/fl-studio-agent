@@ -13,6 +13,8 @@ The namespace guard, its import and builtin lists, and the `restricted_namespace
 PR #196 said its filter was "not a Python security sandbox; the contestant box remains the real boundary".
 This design makes that boundary explicit and narrow: the model's code runs with less access than the engine, not the same access minus a filter.
 
+The workspace tools (`shell` and the file tools, [39](39-workspace-tools.md)) run behind the same boundary, one process per call through the same launcher.
+
 ## How it works
 
 | Part | Where | Job |
@@ -73,6 +75,7 @@ The server, not the kernel, writes there, and the kernel cannot write there, so 
 `fl.read_wav(path)` returns `(samples: numpy.ndarray, sample_rate: int)` and runs inside the kernel, as does `fl.analyze(path)`.
 
 `%pip` and `!pip` use the engine's interpreter with `PIP_TARGET=<root>/work/.packages`, which the kernel appends to `sys.path`.
+Every other Python started in the workspace (`!python`, `python` in the `shell` tool) appends it too, through the `sitecustomize` on its `PYTHONPATH`.
 The engine's own packages stay first on the path, so an install cannot replace the SDK's numpy or pydantic.
 
 The kernel's environment is built, not inherited: `PATH`, the Windows system variables, proxy settings, and workspace locations.
@@ -94,6 +97,7 @@ The kernel runs in the AppContainer `FLMCP.Kernel` with one capability, `interne
 - Process: the kernel starts suspended, joins a job object, then resumes.
   The job kills the whole tree on kill or when the server exits, runs it below normal priority so FL's audio wins the CPU, and caps it at 4 GiB and 32 processes.
 - Sessions: every kernel on a box shares the one SID, so the server revokes the SID's grants on a workspace when its session closes.
+  A workspace is granted once, on first use, because `icacls` rewrites the ACL of every file below a folder it grants; once revoked it is never granted again.
   A box runs one session at a time; two concurrent sessions on one box could read each other's workspaces while both are live.
 - Wire: the inherited anonymous stdio pipes, so no named-pipe ACL and no loopback exemption are needed.
 
@@ -146,7 +150,8 @@ There is no launch-mode setting: on Windows the kernel is always an AppContainer
    AppContainer network isolation and the rule above both depend on it.
 5. Never grant `ALL APPLICATION PACKAGES` or the kernel SID on the hosting harness's directories, user profiles, the spool root, or any parent of `FLMCP_KERNEL_ROOT`.
 
-The FL user, which runs the MCP server, creates the AppContainer profile and grants the workspace at each kernel start; that needs no administrator rights.
+The FL user, which runs the MCP server, creates the AppContainer profile and grants the workspace when it is first used; that needs no administrator rights.
+The workspace tools add one variable and one server mode; see [39's box contract](39-workspace-tools.md#box-contract).
 
 **Acceptance on a box** (run cells through `run` after provisioning)
 

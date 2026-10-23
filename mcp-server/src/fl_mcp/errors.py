@@ -202,6 +202,20 @@ def kernel_unavailable(detail: str) -> ToolError:
     )
 
 
+def workspace_unavailable(detail: str, *, retryable: bool = True) -> ToolError:
+    """The confined process for a workspace tool could not start or failed its boundary check.
+
+    The category is the run kernel's: the same launcher and OS boundary failed.
+    """
+    return ToolError(
+        "kernel_unavailable",
+        f"The workspace tools could not start: {detail}",
+        "This is an engine setup problem on this host, not your command; your files are unaffected. "
+        + ("Retry once, then report it." if retryable else "Report it; retrying will not help."),
+        retryable=retryable,
+    )
+
+
 _UNSAFE_MARKER = "operation unsafe at current time"
 
 

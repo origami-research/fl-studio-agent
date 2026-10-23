@@ -20,7 +20,6 @@ import itertools
 import os
 import queue
 import signal
-import socket
 import sys
 import threading
 import traceback
@@ -35,10 +34,8 @@ from fl_mcp.contract import RunResult
 from fl_mcp.kernel import wire
 from fl_mcp.kernel.cell import new_namespace, run_cell
 from fl_mcp.kernel.private_dirs import share_private_dirs
+from fl_mcp.kernel.probe import probe
 
-# Cloud instance metadata. The boundary probe asserts the kernel cannot reach it.
-IMDS_ADDRESS = ("169.254.169.254", 80)
-IMDS_PROBE_TIMEOUT_SECONDS = 1.0
 # Exit status when the server sends something the kernel cannot parse.
 EXIT_WIRE_ERROR = 70
 # How often a waiting fl call lets a pending interrupt land.
@@ -153,23 +150,7 @@ class RemoteSession:
 
 def boundary_probe(canary: Path) -> wire.BoundaryProbe:
     """Try what the OS boundary must deny; the server refuses a kernel that succeeds."""
-    return wire.BoundaryProbe(canary_readable=_can_read(canary), imds_reachable=_can_connect(IMDS_ADDRESS))
-
-
-def _can_read(path: Path) -> bool:
-    try:
-        path.read_bytes()
-    except OSError:
-        return False
-    return True
-
-
-def _can_connect(address: tuple[str, int]) -> bool:
-    try:
-        socket.create_connection(address, timeout=IMDS_PROBE_TIMEOUT_SECONDS).close()
-    except OSError:
-        return False
-    return True
+    return wire.BoundaryProbe.model_validate(probe(canary))
 
 
 def _take_wire() -> tuple[IO[bytes], IO[bytes]]:
@@ -193,6 +174,8 @@ def main(argv: list[str] | None = None) -> None:
     faulthandler.enable()  # a native crash leaves its stack on stderr for the server's log
     if sys.platform == "win32":
         share_private_dirs(os)
+    with contextlib.suppress(OSError):  # model code may have removed it; tempfile needs it
+        Path(os.environ["TMP"]).mkdir(exist_ok=True)
     inbound, outbound = _take_wire()
     channel = Channel(inbound, outbound)
     # -I keeps the workspace off sys.path while the kernel itself imports;

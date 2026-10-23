@@ -56,6 +56,7 @@ Status tags: **current** describes the shipped system, **research** records evid
 - [37-oss-launch-decision.md](37-oss-launch-decision.md) - owner decision 2026-09-05: Bridge open, MIT, existing open-core boundary; what is still unauthorized
 - [36-engine-contract.md](36-engine-contract.md) - generated MCP tool, error, and environment contract.
 - [38-python-kernel.md](38-python-kernel.md) - **current** the `run` kernel, its OS boundary, and the Windows box contract.
+- [39-workspace-tools.md](39-workspace-tools.md) - **current** `shell` and the file tools behind the kernel's boundary; the gate, `--workspace-only`, limits, and box acceptance.
 - [26-master-plan.md](26-master-plan.md) - **superseded** pointer to the current canon.
 - [sdk-reference.md](sdk-reference.md) - **current** SDK reference.
 - [READING_GUIDE.md](READING_GUIDE.md) - **current** capability navigation.

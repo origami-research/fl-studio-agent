@@ -247,7 +247,8 @@ def test_a_refused_write_is_a_plain_error_and_reads_stay_true(box):
 
 
 def test_tool_descriptions_and_schemas_speak_plainly():
-    for tool in build_contract()["tools"]:
+    contract = build_contract()
+    for tool in contract["tools"] + contract["workspace_tools"]:
         text = tool["description"] + json.dumps(tool["inputSchema"]) + json.dumps(tool["outputSchema"])
         assert not INTERNAL_WORDS.search(text), (tool["name"], INTERNAL_WORDS.search(text))
 
@@ -279,7 +280,15 @@ def test_returned_models_carry_no_internal_fields():
         assert not INTERNAL_WORDS.search(" ".join(model.model_fields)), model
 
 
-_ERROR_TYPES = {"ToolError", "WriteRejected", "NotePlaneUnavailable", "ConcurrentWrite", "ToolErrorResult", "WireError"}
+_ERROR_TYPES = {
+    "ToolError",
+    "WriteRejected",
+    "NotePlaneUnavailable",
+    "ConcurrentWrite",
+    "ToolErrorResult",
+    "WireError",
+    "OpError",  # the workspace tools' refusals (fl_mcp.workspace.ops)
+}
 
 
 def _error_strings() -> list[tuple[str, str]]:
@@ -306,11 +315,19 @@ def test_every_action_sentence_speaks_plainly():
     tree = ast.parse(Path(actions.__file__).read_text(encoding="utf-8"))
     sentences = [n.value for n in ast.walk(tree) if isinstance(n, ast.Constant) and isinstance(n.value, str)]
     assert any(text.startswith("Replaced the notes on ") for text in sentences), "the scan must see the sentences"
+    assert any(text.startswith("Ran ") for text in sentences), "and the workspace tools' sentences"
     assert [text for text in sentences if INTERNAL_WORDS.search(text)] == []
+
+
+def test_workspace_file_hints_speak_plainly():
+    from fl_mcp.workspace.ops import HINTS
+
+    assert [hint for hint in HINTS.values() if INTERNAL_WORDS.search(hint)] == []
 
 
 def test_every_error_message_and_fix_speaks_plainly():
     strings = _error_strings()
     assert len(strings) > 50, "the scan must actually see the engine's errors"
+    assert any(where.startswith("ops.py:") for where, _ in strings), "and the workspace tools' refusals"
     offenders = [(where, text) for where, text in strings if INTERNAL_WORDS.search(text)]
     assert offenders == []

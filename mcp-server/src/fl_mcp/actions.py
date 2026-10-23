@@ -397,3 +397,35 @@ def _duration(seconds: float) -> str:
 
 def _fit(sentence: str) -> str:
     return sentence if len(sentence) <= MAX_CHARS else sentence[: MAX_CHARS - 3].rstrip() + "..."
+
+
+# -- the workspace tools (docs/39) ----------------------------------------------------
+# Each changing call is one sentence; reads (read_file, glob, grep) add none.
+
+# How much of a command's first line its sentence shows.
+COMMAND_CHARS = 80
+
+
+def ran_command(command: str, exit_code: int | None, seconds: float, timeout_s: int) -> str:
+    """'Ran "pip install mido" (exit 0, 3.1 s)': the command's first line, clipped."""
+    first = command.strip().split("\n", 1)[0].strip()
+    if len(first) > COMMAND_CHARS or first != command.strip():
+        first = first[: COMMAND_CHARS - 3].rstrip() + "..."
+    outcome = f"timed out after {timeout_s} s" if exit_code is None else f"exit {exit_code}, {seconds:.1f} s"
+    return f'Ran "{first}" ({outcome})'
+
+
+def wrote_file(path: str, size: int) -> str:
+    return _fit(f"Wrote {path} ({file_size(size)})")
+
+
+def edited_file(path: str, replacements: int) -> str:
+    return _fit(f"Edited {path} ({_count(replacements, 'change')})")
+
+
+def file_size(size: int) -> str:
+    if size < 1024:
+        return _count(size, "byte")
+    if size < 1024 * 1024:
+        return f"{size / 1024:.1f} KB"
+    return f"{size / (1024 * 1024):.1f} MB"

@@ -233,7 +233,9 @@ class KernelHost:
                 raise
             if result.outcome == "kernel_lost":
                 self._kernel = None
-            return result.model_copy(update={"stdout": note + result.stdout, "actions": cell.actions.sentences()})
+            return result.model_copy(
+                update={"stdout": note + result.stdout, "actions": cell.actions.sentences()}
+            )
 
     def close(self) -> None:
         """Kill the kernel without waiting for a running cell: shutdown must not hang on one."""

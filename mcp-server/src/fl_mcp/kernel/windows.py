@@ -19,12 +19,13 @@ import ctypes
 import os
 import subprocess
 import sys
+import threading
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import IO, Any, ClassVar, Protocol
 
-from fl_mcp.kernel.launch import Workspace
+from fl_mcp.kernel.launch import KERNEL_JOB, JobLimits, Workspace
 
 if sys.platform == "win32":
     import msvcrt
@@ -59,12 +60,10 @@ _LIMIT_JOB_MEMORY = 0x00000200
 _LIMIT_DIE_ON_UNHANDLED_EXCEPTION = 0x00000400
 _LIMIT_KILL_ON_JOB_CLOSE = 0x00002000
 _BELOW_NORMAL_PRIORITY_CLASS = 0x00004000
-# The kernel shares the box with FL's real-time audio: it runs below normal
-# priority, its whole tree (pip, !cmd) is capped in memory and process count,
-# it dies when the job handle closes, and a crash never parks it behind an
-# error-reporting dialog on the interactive FL desktop.
-KERNEL_JOB_MEMORY_BYTES = 4 << 30
-KERNEL_JOB_PROCESSES = 32
+# Every launched tree shares the box with FL's real-time audio: it runs below
+# normal priority, is capped by its JobLimits, dies when the job handle closes,
+# and a crash never parks it behind an error-reporting dialog on the
+# interactive FL desktop.
 
 
 class Win32(Protocol):
@@ -78,7 +77,7 @@ class Win32(Protocol):
 
     def inheritable_handle(self, fd: int) -> int: ...
 
-    def create_job(self) -> int: ...
+    def create_job(self, limits: JobLimits) -> int: ...
 
     def create_process(
         self,
@@ -125,6 +124,8 @@ class Win32KernelProcess:
         self._process = process
         self._job = job
         self._exit_code: int | None = None
+        # kill (a shutdown thread) and reap (the waiting thread) must not race on the handles.
+        self._lock = threading.Lock()
         self.pid = pid
         self.stdin, self.stdout, self.stderr = pipes
 
@@ -141,28 +142,49 @@ class Win32KernelProcess:
         return self._exit_code or 0
 
     def kill(self) -> None:
-        if self._exit_code is None:
-            self._api.terminate_job(self._job)
+        with self._lock:
+            if self._exit_code is None:
+                self._api.terminate_job(self._job)
 
     def _reap(self) -> None:
-        self._exit_code = self._api.exit_code(self._process)
-        self._api.terminate_job(self._job)  # the kernel is gone; take any orphaned child with it
-        self._api.close(self._process)
-        self._api.close(self._job)
+        with self._lock:
+            if self._exit_code is not None:
+                return
+            self._exit_code = self._api.exit_code(self._process)
+            self._api.terminate_job(self._job)  # the kernel is gone; take any orphaned child with it
+            self._api.close(self._process)
+            self._api.close(self._job)
 
 
 @dataclass(frozen=True)
 class AppContainerLauncher:
     api: Win32
     confined: ClassVar[bool] = True
+    # Workspaces granted, and those released. icacls rewrites the ACL of every
+    # file below a folder it grants, so a workspace is granted once, not on
+    # every launch: the workspace tools launch one process per call. A release
+    # is final, so a launch racing shutdown cannot grant a finished session again.
+    _granted: set[Path] = field(default_factory=set, compare=False, repr=False)
+    _released: set[Path] = field(default_factory=set, compare=False, repr=False)
+    _grants_lock: threading.Lock = field(default_factory=threading.Lock, compare=False, repr=False)
 
     def __call__(
-        self, argv: Sequence[str], *, workspace: Workspace, env: dict[str, str]
+        self,
+        argv: Sequence[str],
+        *,
+        workspace: Workspace,
+        env: dict[str, str],
+        limits: JobLimits = KERNEL_JOB,
     ) -> Win32KernelProcess:
         sid = self.api.appcontainer_sid(APPCONTAINER_NAME)
-        self.api.grant(workspace.work, sid, WORK_GRANT)
-        self.api.grant(workspace.renders, sid, RENDERS_GRANT)
-        job = self.api.create_job()
+        with self._grants_lock:
+            if workspace.root in self._released:
+                raise OSError(f"{workspace.root}: its session is over and its grants were withdrawn")
+            if workspace.root not in self._granted:
+                self.api.grant(workspace.work, sid, WORK_GRANT)
+                self.api.grant(workspace.renders, sid, RENDERS_GRANT)
+                self._granted.add(workspace.root)
+        job = self.api.create_job(limits)
         pipes = [os.pipe() for _ in range(3)]
         child_ends = (pipes[0][0], pipes[1][1], pipes[2][1])
         parent_ends = (pipes[0][1], pipes[1][0], pipes[2][0])
@@ -207,11 +229,16 @@ class AppContainerLauncher:
     def release(self, workspace: Workspace) -> None:
         """Every session's kernel shares the one SID, so a finished session's grants go."""
         sid = self.api.appcontainer_sid(APPCONTAINER_NAME)
-        self.api.revoke(workspace.work, sid)
-        self.api.revoke(workspace.renders, sid)
+        with self._grants_lock:
+            self._released.add(workspace.root)
+            self._granted.discard(workspace.root)
+            try:
+                self.api.revoke(workspace.work, sid)
+            finally:
+                self.api.revoke(workspace.renders, sid)  # attempted even when the first failed
 
 
-def job_limits() -> _ExtendedLimitInformation:
+def job_limits(job: JobLimits) -> _ExtendedLimitInformation:
     limits = _ExtendedLimitInformation()
     basic = limits.BasicLimitInformation
     basic.LimitFlags = (
@@ -221,9 +248,9 @@ def job_limits() -> _ExtendedLimitInformation:
         | _LIMIT_ACTIVE_PROCESS
         | _LIMIT_PRIORITY_CLASS
     )
-    basic.ActiveProcessLimit = KERNEL_JOB_PROCESSES
+    basic.ActiveProcessLimit = job.processes
     basic.PriorityClass = _BELOW_NORMAL_PRIORITY_CLASS
-    limits.JobMemoryLimit = KERNEL_JOB_MEMORY_BYTES
+    limits.JobMemoryLimit = job.memory_bytes
     return limits
 
 
@@ -417,13 +444,13 @@ class CtypesWin32:
         os.set_handle_inheritable(handle, True)
         return handle
 
-    def create_job(self) -> int:
+    def create_job(self, limits: JobLimits) -> int:
         job = self._k32.CreateJobObjectW(None, None)
         self._check(job, "CreateJobObjectW")
-        limits = job_limits()
+        info = job_limits(limits)
         self._check(
             self._k32.SetInformationJobObject(
-                job, _JOB_OBJECT_EXTENDED_LIMIT_INFORMATION, ctypes.byref(limits), ctypes.sizeof(limits)
+                job, _JOB_OBJECT_EXTENDED_LIMIT_INFORMATION, ctypes.byref(info), ctypes.sizeof(info)
             ),
             "SetInformationJobObject",
         )

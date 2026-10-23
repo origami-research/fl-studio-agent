@@ -79,13 +79,17 @@ class Workspace:
         return self.work / ".packages"
 
     @property
+    def tmp(self) -> Path:
+        return self.work / ".tmp"
+
+    @property
     def canary(self) -> Path:
         return self.root / "boundary-canary"
 
     @classmethod
     def create(cls, root: Path) -> Workspace:
         workspace = cls(root.resolve())
-        for directory in (workspace.work, workspace.renders, workspace.packages):
+        for directory in (workspace.work, workspace.renders, workspace.packages, workspace.tmp):
             directory.mkdir(parents=True, exist_ok=True)
         workspace.canary.write_text("the kernel must not be able to read this file\n", encoding="utf-8")
         return workspace
@@ -112,8 +116,9 @@ class Workspace:
         env = {name: environ[name] for name in _INHERITED_ENV if name in environ}
         # `!pip` and `!python` mean the engine's interpreter.
         env["PATH"] = os.pathsep.join(filter(None, (str(python.parent), env.get("PATH"))))
-        home, tmp = self.work, self.work / ".tmp"
-        tmp.mkdir(exist_ok=True)
+        # The server never touches a path inside work after create (a planted file
+        # could break or redirect it): the processes recreate .tmp themselves.
+        home, tmp = self.work, self.tmp
         env.update(
             HOME=str(home),
             USERPROFILE=str(home),
@@ -129,6 +134,19 @@ class Workspace:
             PYTHONPATH=str(KERNEL_SITE),
         )
         return env
+
+
+@dataclass(frozen=True)
+class JobLimits:
+    """What one launched process tree may use; enforced on Windows by its job object."""
+
+    memory_bytes: int
+    processes: int
+
+
+# The run kernel shares the box with FL's real-time audio: its whole tree (pip,
+# !cmd) is capped in memory and process count.
+KERNEL_JOB = JobLimits(memory_bytes=4 << 30, processes=32)
 
 
 class KernelProcess(Protocol):
@@ -152,7 +170,12 @@ class Launcher(Protocol):
     confined: ClassVar[bool]
 
     def __call__(
-        self, argv: Sequence[str], *, workspace: Workspace, env: dict[str, str]
+        self,
+        argv: Sequence[str],
+        *,
+        workspace: Workspace,
+        env: dict[str, str],
+        limits: JobLimits = KERNEL_JOB,
     ) -> KernelProcess: ...
 
     def release(self, workspace: Workspace) -> None:
@@ -171,11 +194,18 @@ class _GroupPopen(subprocess.Popen[bytes]):
 
 
 class PosixLauncher:
-    """macOS/Linux dev hosts: a plain subprocess. No OS boundary (docs/38)."""
+    """macOS/Linux dev hosts: a plain subprocess. No OS boundary and no job limits (docs/38)."""
 
     confined: ClassVar[bool] = False
 
-    def __call__(self, argv: Sequence[str], *, workspace: Workspace, env: dict[str, str]) -> KernelProcess:
+    def __call__(
+        self,
+        argv: Sequence[str],
+        *,
+        workspace: Workspace,
+        env: dict[str, str],
+        limits: JobLimits = KERNEL_JOB,
+    ) -> KernelProcess:
         return _GroupPopen(
             list(argv),
             cwd=workspace.work,

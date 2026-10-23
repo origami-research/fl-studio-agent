@@ -2,6 +2,8 @@
 Python against it, (2) read the song cheaply, (3) prove it sounds: check in
 seconds, render to hear it. Setup diagnostics are the operator's
 (``fl-mcp-doctor``), not a model tool. The surface is docs/06 "Tool surface".
+Behind FLMCP_WORKSPACE_TOOLS=1, or alone under --workspace-only, it also
+serves the workspace tools: shell and file tools confined like run (docs/39).
 
 LANE W implements this module (docs/21). No module globals: the session is
 built in the lifespan and injected into tools via the framework's Context
@@ -11,6 +13,7 @@ logging to STDERR - stdout is the JSON-RPC wire, one stray line corrupts it.
 
 from __future__ import annotations
 
+import argparse
 import base64
 import contextlib
 import functools
@@ -18,29 +21,42 @@ import logging
 import os
 import sys
 import tempfile
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
 from mcp.server.mcpserver import Context, MCPServer
 from mcp.types import CallToolResult, TextContent
 
-from fl_mcp import __version__
+from fl_mcp import __version__, actions, errors
 from fl_mcp.actions import ActionLog
 from fl_mcp.contract import (
     ENV_KERNEL_ROOT,
+    WORKSPACE_ONLY_FLAG,
     AnalyzeResult,
     CheckToolResult,
+    EditFileResult,
     GetSceneResult,
+    GlobResult,
+    GrepMode,
+    GrepResult,
+    ReadFileResult,
     RenderResult,
     RunResult,
     SceneNotesResult,
     SceneSummary,
+    ShellResult,
     ToolErrorResult,
-    build_version,
+    WriteFileResult,
+    server_description,
+    workspace_tools_from_env,
 )
 from fl_mcp.errors import ToolError
 from fl_mcp.kernel.host import KernelHost
 from fl_mcp.kernel.launch import Workspace
+from fl_mcp.platform import PlatformUnsupportedError, platform_for
+from fl_mcp.workspace import ops
+from fl_mcp.workspace.runner import FILE_OP_TIMEOUT_SECONDS, SHELL_GRACE_SECONDS, OpTimeout, WorkspaceRunner
 
 from . import scene, sdk
 from .schemas import RenderReceipt
@@ -53,28 +69,52 @@ LOG_LEVEL_ENV = "FL_MCP_LOG"
 
 
 @contextlib.asynccontextmanager
-async def lifespan(server: Any) -> Any:
+async def lifespan(server: Any, *, workspace_tools: bool = False) -> Any:
     """Async context manager: build the session after FL launches so MIDI ports
     hot-plug into the running host, yield {"fl": sdk.connect(session)} and the
-    run kernel host, close both on shutdown."""
+    run kernel host (plus the workspace tools' runner when they are on), close
+    them all on shutdown."""
     session = create_session()
     session.start_audio_stream_lifecycle()
     fl = sdk.connect(session)
+    # Each close is its own callback, run in reverse order, so one that fails
+    # (a revoke icacls refuses) cannot skip the rest.
     with contextlib.ExitStack() as cleanup:
-        # The box names a per-job root and owns its lifetime; a dev run gets a
-        # temp root removed at shutdown.
-        root = os.environ.get(ENV_KERNEL_ROOT) or cleanup.enter_context(
+        workspace = Workspace.create(_kernel_root(cleanup))
+        cleanup.callback(session.close)
+        # One launcher for both, so the workspace is granted once (kernel.windows).
+        launcher = session.platform.kernel_launcher()
+        kernel = KernelHost(session, workspace, launcher, os.environ)
+        cleanup.callback(kernel.close)
+        # "session" rides along for the reads and checks the tools make directly.
+        context: dict[str, Any] = {"fl": fl, "session": session, "kernel": kernel}
+        if workspace_tools:
+            context["workspace"] = WorkspaceRunner(workspace, launcher, os.environ)
+            cleanup.callback(context["workspace"].close)
+        yield context
+
+
+@contextlib.asynccontextmanager
+async def workspace_lifespan(server: Any) -> Any:
+    """--workspace-only: no FL session, only the workspace tools' runner (docs/39)."""
+    with contextlib.ExitStack() as cleanup:
+        workspace = Workspace.create(_kernel_root(cleanup))
+        runner = WorkspaceRunner(workspace, platform_for(sys.platform).kernel_launcher(), os.environ)
+        try:
+            yield {"workspace": runner}
+        finally:
+            runner.close()
+
+
+def _kernel_root(cleanup: contextlib.ExitStack) -> Path:
+    """The box names a per-job root and owns its lifetime; a dev run gets a
+    temp root removed at shutdown."""
+    return Path(
+        os.environ.get(ENV_KERNEL_ROOT)
+        or cleanup.enter_context(
             tempfile.TemporaryDirectory(prefix="flmcp-kernel-", ignore_cleanup_errors=True)
         )
-        kernel = KernelHost(
-            session, Workspace.create(Path(root)), session.platform.kernel_launcher(), os.environ
-        )
-        # "session" rides along for the reads and checks the tools make directly.
-        try:
-            yield {"fl": fl, "session": session, "kernel": kernel}
-        finally:
-            kernel.close()
-            session.close()
+    )
 
 
 def _tool_boundary(fn: Any) -> Any:
@@ -304,6 +344,193 @@ def get_scene(
     )
 
 
+# -- the workspace tools (docs/39) ----------------------------------------------------
+# Served only when FLMCP_WORKSPACE_TOOLS=1 or under --workspace-only. Each call
+# runs in its own confined process (fl_mcp.workspace); docstring tests keep the
+# limits they state in step with fl_mcp.workspace.ops.
+
+
+@_tool_boundary
+def shell(command: str, ctx: Context, timeout_s: int = ops.SHELL_TIMEOUT_DEFAULT) -> ShellResult:
+    """Run a shell command in your workspace folder and return its output.
+    Commands run in cmd.exe on Windows (the FL Studio host) and /bin/sh on
+    macOS/Linux. python and pip are on PATH: pip installs into the workspace,
+    where python (and run, when you have it) can import the package.
+
+    cmd.exe runs one line: chain steps with &&, or write a script file and run
+    it. Each call is a fresh process started in the workspace: cd, environment
+    variables and background processes do not carry over, and anything still
+    running when the command returns is stopped. On the FL Studio host the
+    operating system confines the command: it can read and write only the
+    workspace, read the renders folder, and reach the public internet.
+
+    Args:
+        command: the command line, up to 16 KB.
+        timeout_s: seconds before the command is stopped, 1 to 600 (default 120).
+
+    Returns {exit_code, timed_out, stdout, stderr, truncated, full_output,
+    duration_s, note, actions}. A non-zero exit_code is a normal result, not an
+    error. Output past 16,000 characters keeps its start and end: truncated is
+    true and full_output names a file in the workspace with all of it (read it
+    with read_file or search it with grep)."""
+    if len(command.encode("utf-8")) > ops.SHELL_COMMAND_BYTES or not command.strip():
+        raise errors.invalid_argument("shell", "command must be 1 byte to 16 KB of text")
+    if not 1 <= timeout_s <= ops.SHELL_TIMEOUT_MAX:
+        raise errors.invalid_argument(
+            "shell", f"timeout_s must be 1 to {ops.SHELL_TIMEOUT_MAX}, got {timeout_s}"
+        )
+    runner = _workspace(ctx)
+    number = runner.next_shell_number()
+    log.info("workspace shell %d: %s", number, command[:500])
+    try:
+        found = runner.call(
+            "shell",
+            {"command": command, "timeout_s": timeout_s, "log_number": number},
+            timeout=timeout_s + SHELL_GRACE_SECONDS,
+        )
+    except OpTimeout:
+        found = {
+            "exit_code": None,
+            "timed_out": True,
+            "stdout": "",
+            "stderr": "",
+            "truncated": False,
+            "full_output": None,
+            "duration_s": float(timeout_s + SHELL_GRACE_SECONDS),
+            "note": "The command ran past its limit and was stopped; its output was lost.",
+        }
+    sentence = actions.ran_command(command, found.get("exit_code"), found.get("duration_s", 0.0), timeout_s)
+    return ShellResult.model_validate({**found, "actions": [sentence]})
+
+
+@_tool_boundary
+def read_file(path: str, ctx: Context, offset: int = 1, limit: int = ops.READ_LINES) -> ReadFileResult:
+    """Read a text file with line numbers. path is relative to your workspace
+    (like notes/plan.md) or absolute; offset is the first line to show (from 1,
+    default 1) and limit how many lines (1 to 2000, default 2000). Lines longer
+    than 2000 characters are cut, and one result holds at most 16,000
+    characters of content: note then says which offset reads on. A binary file
+    returns its size and kind (midi, audio, image, fl_song, archive, binary)
+    with a hint instead of content.
+
+    Returns {path, kind, bytes, content, start_line, end_line, total_lines,
+    truncated, hint, note, actions}."""
+    if offset < 1:
+        raise errors.invalid_argument("read_file", f"offset is a line number from 1, got {offset}")
+    if not 1 <= limit <= ops.READ_LINES:
+        raise errors.invalid_argument("read_file", f"limit must be 1 to {ops.READ_LINES}, got {limit}")
+    found = _file_op(ctx, "read_file", {"path": path, "offset": offset, "limit": limit})
+    return ReadFileResult.model_validate({**found, "actions": []})
+
+
+@_tool_boundary
+def write_file(path: str, content: str, ctx: Context) -> WriteFileResult:
+    """Write a text file in your workspace, replacing it if it exists; missing
+    parent folders are created. path is relative to the workspace (like
+    notes/plan.md) or absolute. content is up to 1 MB of text, written exactly
+    as given in UTF-8. The renders folder is read-only.
+
+    Returns {path, bytes, created, actions}."""
+    if len(content.encode("utf-8")) > ops.WRITE_BYTES:
+        raise errors.invalid_argument("write_file", "content is over 1 MB; write it in parts or with shell")
+    found = _file_op(ctx, "write_file", {"path": path, "content": content})
+    return WriteFileResult.model_validate(
+        {**found, "actions": [actions.wrote_file(found.get("path", path), found.get("bytes", 0))]}
+    )
+
+
+@_tool_boundary
+def edit_file(
+    path: str, old_string: str, new_string: str, ctx: Context, replace_all: bool = False
+) -> EditFileResult:
+    """Replace exact text in a file. old_string must appear exactly once
+    (include surrounding lines to make it unique), or set replace_all to replace
+    every occurrence. Matching is exact, including spaces, indentation and line
+    endings. Each string is up to 256 KB. When old_string is missing or not
+    unique, the file is left unchanged and the error says which.
+
+    Returns {path, replacements, actions}."""
+    for name, value in (("old_string", old_string), ("new_string", new_string)):
+        if len(value.encode("utf-8")) > ops.EDIT_STRING_BYTES:
+            raise errors.invalid_argument(
+                "edit_file", f"{name} is over 256 KB; use write_file for large changes"
+            )
+    found = _file_op(
+        ctx,
+        "edit_file",
+        {"path": path, "old_string": old_string, "new_string": new_string, "replace_all": replace_all},
+    )
+    return EditFileResult.model_validate(
+        {**found, "actions": [actions.edited_file(found.get("path", path), found.get("replacements", 0))]}
+    )
+
+
+@_tool_boundary
+def glob(pattern: str, ctx: Context, path: str | None = None) -> GlobResult:
+    """Find files by name, newest first. pattern uses * (within one folder),
+    ** (any number of folders) and ?, for example "**/*.mid" or "notes/*.md";
+    path is the folder to search (default: your workspace). At most 500 paths.
+    The workspace's own .packages, .cache, .tmp and .appdata folders are skipped
+    unless path points inside them; linked folders are not followed.
+
+    Returns {paths, truncated, note, actions}."""
+    return GlobResult.model_validate(
+        {**_file_op(ctx, "glob", {"pattern": pattern, "path": path}), "actions": []}
+    )
+
+
+@_tool_boundary
+def grep(
+    pattern: str,
+    ctx: Context,
+    path: str | None = None,
+    glob: str | None = None,
+    case_insensitive: bool = False,
+    output_mode: GrepMode = "files",
+) -> GrepResult:
+    """Search file contents line by line with a Python regular expression.
+    path is a file or folder (default: your workspace); glob keeps only files
+    whose name matches (for example "*.py", or "notes/**/*.md" for a path).
+    output_mode "files" (default) lists matching files newest first, "lines"
+    gives "path:line: text", "count" gives "path: N" matching lines per file.
+    At most 200 results. Binary files and files over 20 MB are skipped, and so
+    are the workspace's .packages, .cache, .tmp and .appdata folders unless path
+    points inside them.
+
+    Returns {mode, matches, truncated, note, actions}."""
+    args = {
+        "pattern": pattern,
+        "path": path,
+        "glob": glob,
+        "case_insensitive": case_insensitive,
+        "output_mode": output_mode,
+    }
+    return GrepResult.model_validate({**_file_op(ctx, "grep", args), "actions": []})
+
+
+def _workspace(ctx: Context) -> WorkspaceRunner:
+    return ctx.request_context.lifespan_context["workspace"]
+
+
+_NAMED_ARGS = ("path", "pattern", "glob")
+
+
+def _file_op(ctx: Context, op: str, args: dict[str, Any]) -> dict[str, Any]:
+    """A file operation in its confined process; one that runs too long is stopped and refused."""
+    for name in _NAMED_ARGS:
+        if len(args.get(name) or "") > ops.NAME_CHARS:
+            raise errors.invalid_argument(op, f"{name} is over {ops.NAME_CHARS} characters")
+    log.info("workspace %s %s", op, args.get("path") or args.get("pattern") or "")
+    try:
+        return _workspace(ctx).call(op, args, timeout=FILE_OP_TIMEOUT_SECONDS)
+    except OpTimeout as exc:
+        raise ToolError(
+            "invalid_argument",
+            f"{op} ran past {FILE_OP_TIMEOUT_SECONDS:g} s and was stopped.",
+            "Narrow the path, the pattern or the glob, or do it with shell.",
+        ) from exc
+
+
 def _render(ctx: Context, actions: ActionLog) -> RenderReceipt:
     """Render to a new WAV in the renders folder, so run can read the result too;
     analyze measures it next unless told otherwise."""
@@ -315,8 +542,13 @@ def _render(ctx: Context, actions: ActionLog) -> RenderReceipt:
 
 
 def tool_definitions() -> tuple[Any, ...]:
-    """The engine's complete MCP tool surface, in stable presentation order."""
+    """The engine's FL tool surface, in stable presentation order."""
     return run, get_scene, check, render, analyze
+
+
+def workspace_tool_definitions() -> tuple[Any, ...]:
+    """The workspace tools (docs/39), in stable presentation order."""
+    return shell, read_file, write_file, edit_file, glob, grep
 
 
 def _tool_error_result(exc: ToolError) -> ToolErrorResult:
@@ -337,26 +569,57 @@ def _tool_error_response(error: ToolErrorResult) -> CallToolResult:
     )
 
 
-def create_server() -> MCPServer:
-    """Create the versioned MCP server without opening its transport."""
+def create_server(*, workspace_only: bool = False, workspace_tools: bool = False) -> MCPServer:
+    """Create the versioned MCP server without opening its transport.
+
+    The default is the FL tools alone. ``workspace_tools`` adds the workspace
+    tools beside them; ``workspace_only`` serves the workspace tools alone,
+    with no FL session.
+    """
+    if workspace_only:
+        chosen_lifespan: Any = workspace_lifespan
+        tools = workspace_tool_definitions()
+    elif workspace_tools:
+        chosen_lifespan = functools.partial(lifespan, workspace_tools=True)
+        tools = tool_definitions() + workspace_tool_definitions()
+    else:
+        chosen_lifespan = lifespan
+        tools = tool_definitions()
     server = MCPServer(
         SERVER_NAME,
         version=__version__,
-        description=f"FL Studio MCP {build_version()}",
-        lifespan=lifespan,
+        description=server_description(_confined()),
+        lifespan=chosen_lifespan,
     )
-    for tool in tool_definitions():
+    for tool in tools:
         server.add_tool(tool)
     return server
 
 
-def main() -> None:
+def _confined() -> bool:
+    """Whether this host's launcher confines model code; an unsupported OS runs none."""
+    try:
+        return platform_for(sys.platform).kernel_launcher().confined
+    except PlatformUnsupportedError:
+        return False
+
+
+def main(argv: Sequence[str] | None = None) -> None:
     """Entry point: logging.basicConfig(stream=sys.stderr, level from
     $FL_MCP_LOG), construct the MCP server with the lifespan, run."""
+    parser = argparse.ArgumentParser(prog="fl-mcp", description="The FL Studio MCP server, over stdio.")
+    parser.add_argument(
+        WORKSPACE_ONLY_FLAG,
+        action="store_true",
+        help="serve only the workspace tools (shell and file tools), with no FL session (docs/39)",
+    )
+    args = parser.parse_args(argv)
     logging.basicConfig(
         stream=sys.stderr,
         level=os.environ.get(LOG_LEVEL_ENV, "INFO").upper(),
         format="%(asctime)s %(name)s %(levelname)s %(message)s",
         force=True,  # stdout is the JSON-RPC wire; no prior handler may hold it
     )
-    create_server().run()
+    create_server(
+        workspace_only=args.workspace_only, workspace_tools=workspace_tools_from_env(os.environ)
+    ).run()
