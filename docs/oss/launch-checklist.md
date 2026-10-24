@@ -102,3 +102,17 @@ The publish script still refuses while that file exists, so a future hold is one
   - The released bundle, run as `uv run --directory <bundle> src/server.py`, serves 0.1.1.
   - The README renders on GitHub with the five badges and the five client sections.
 - Not verified: installing the bundle in the Claude Desktop app (no Claude Desktop on the release machine), and the Windows install path on a real Windows FL.
+
+## Released 0.1.2 on 2026-10-22: the prebuilt Bridge
+
+- The release shipped from merged main 4ef3e52 (#268, #270). The rebuilt mirror's main descended from the published f8c62a4.
+- The publish script's verification passed in the same run. It uploaded 0.1.2 to PyPI, then stopped at the clean-venv read-back: the JSON API already showed 0.1.2, but uv's index did not yet.
+  `--resume` finished the release: PyPI read-back, `main` fast-forwarded to 3556e69, tag `v0.1.2`, and the release workflow passed.
+  The script now retries the install until the index catches up.
+- https://github.com/origami-research/fl-studio-agent/releases/tag/v0.1.2 carries `fl-mcp-bridge-macos-universal.dylib` (Mach-O universal: x86_64, arm64), `fl-mcp-bridge-windows-x64.dll` (PE32+ x86-64 DLL), `fl-studio-agent.mcpb`, `SHA256SUMS` and `BRIDGE-NOTICE.txt`; every asset matches `SHA256SUMS`.
+- The MCP Registry lists 0.1.2 as active and latest.
+- User-view read-back: from a clean uv cache, `uvx --python 3.12 --from fl-studio-agent==0.1.2 fl-mcp-install --help` works.
+  Against a mock FL (temporary HOME, `FL_APP` pointing at a mock app bundle), `fl-mcp-install` downloaded the macOS Bridge from v0.1.2. The installed library's SHA-256 (c4d4f50f...) equals the release's `SHA256SUMS`.
+  A rerun reported `already current`, and `fl-mcp-doctor` reported `bridge.installed: true` with source `fl-studio-agent v0.1.2 release` and the same SHA-256.
+  During a network outage the rerun reported a WARN with the build-yourself path, not a traceback.
+- Not verified: loading the prebuilt Bridge in a real FL on macOS or Windows from this release, and the Windows download and administrator-terminal path.

@@ -123,7 +123,15 @@ for _ in $(seq 1 30); do
 done
 resume_hint="rerun with --resume once fixed"
 uv venv --quiet --python 3.12 "$WORK/clean"
-(cd "$WORK" && uv pip install --quiet --no-cache --python "$WORK/clean/bin/python" "$DIST_NAME==$VERSION") || { echo "read-back failed: pip install $DIST_NAME==$VERSION; $resume_hint"; exit 1; }
+# The JSON API can show a new version minutes before the simple index installers read
+# (2026-10-22: 0.1.2 was 200 on /json while uv still found no such version), so the
+# install itself is retried until the index catches up.
+installed=0
+for _ in $(seq 1 30); do
+  if (cd "$WORK" && uv pip install --quiet --no-cache --python "$WORK/clean/bin/python" "$DIST_NAME==$VERSION" 2>/dev/null); then installed=1; break; fi
+  sleep 10
+done
+[ "$installed" = 1 ] || { echo "read-back failed: pip install $DIST_NAME==$VERSION (5 minutes); $resume_hint"; exit 1; }
 (cd "$WORK" && "$WORK/clean/bin/python" -I -c "import fl_mcp, sys; assert fl_mcp.__version__ == sys.argv[1], fl_mcp.__version__" "$VERSION") || { echo "read-back failed: installed version; $resume_hint"; exit 1; }
 (cd "$WORK" && "$WORK/clean/bin/fl-mcp-contract" > "$WORK/contract.json" && test -s "$WORK/contract.json") || { echo "read-back failed: fl-mcp-contract; $resume_hint"; exit 1; }
 for command in fl-studio-agent fl-mcp fl-mcp-doctor fl-mcp-install; do [ -x "$WORK/clean/bin/$command" ] || { echo "read-back failed: $command not installed; $resume_hint"; exit 1; }; done
