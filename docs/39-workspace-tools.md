@@ -1,6 +1,6 @@
 # Workspace tools: a coding agent's tools, confined by the OS
 
-**Status: current** (2026-10-22, engine phase of the workspace tools design).
+**Status: current** (2026-10-22, engine phase of the workspace tools design; the box acceptance below passed on a Windows box 2026-10-23).
 
 ## What changed
 
@@ -125,19 +125,20 @@ Everything in [38's box contract](38-python-kernel.md#box-contract) applies; the
 
 Acceptance on a box, in addition to [38's](38-python-kernel.md#box-contract), through the workspace tools of a `--workspace-only` server:
 
-- `shell "whoami /groups"` lists `APPLICATION PACKAGE AUTHORITY` and the `FLMCP.Kernel` SID.
+- A Python script run by `shell` finds its own token is an AppContainer (`TokenIsAppContainer`) whose package SID (`TokenAppContainerSid`) is what `fl-mcp-kernel-sid` prints. (`whoami /groups` lists neither the package SID nor an `APPLICATION PACKAGE AUTHORITY` group there, so it proves nothing.)
 - `write_file x.txt` then `read_file x.txt` round-trips.
 - `shell "python -m pip install -q six"` then `shell "python -c \"import six\""` succeeds.
 - `read_file` of a secret in the hosting harness's directory (one the FL user can read) is refused (permission denied).
 - `shell "type <a file in the hosting harness's directory>"` and `shell "echo x > <a folder the FL user can write outside the workspace>\probe"` are denied.
-- `shell "mklink /J j <the hosting harness's directory>"` then `read_file j\<a file in it>` is denied: the boundary is the OS, not a path check.
+- `shell "mklink /J j <the hosting harness's directory>"` is refused ("Access is denied"): Windows does not let a sandboxed process create a junction to a folder it cannot write.
+- A junction to the hosting harness's directory planted in the workspace by the FL user (as a computer-use model can) is no way out either: `read_file planted\<a file in it>` and `shell "type planted\<a file in it>"` are denied. The boundary is the OS, not a path check.
 - `read_file` of another session's `work\secret.txt` is refused.
 - `write_file ..\renders\x.wav` and `read_file ..\boundary-canary` are refused.
 - `shell "start /b ping -t 127.0.0.1"` returns, and afterwards `tasklist` shows no `ping.exe`.
 - `serverInfo.description` ends with `; confined=true`.
 
-## Not verified yet
+## Verified on a box, and what is not yet
 
-The Windows path is tested off Windows only: the orchestration over a recorded Win32 fake (container, capability, tool job, probe, job terminated on timeout) and the operations on macOS.
-The AppContainer itself, `cmd.exe` quoting inside it, and the acceptance list above are proved on a box by the hosting harness's lockdown check, its next phase.
-Until that passes, the `shell` description does not offer PowerShell.
+The acceptance list above passed on a Windows FL box on 2026-10-23, through the hosting harness's lockdown check (`verify-lockdown.ps1`, its workspace tools section, run as the FL user through the harness's own engine client), along with IMDS, loopback and private-network denials and the grant gone after close.
+A live MCP-mode run with the tools on that box wrote its notes through `write_file` and was collected with them.
+PowerShell inside the container is still unproven, so the `shell` description does not offer it.
