@@ -274,7 +274,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "flpkit", specifier = "==0.8.1" },
+    { name = "flpkit", specifier = "==0.9.0" },
     { name = "mcp", specifier = ">=2.0.0" },
     { name = "numpy", specifier = ">=2.0.0" },
     { name = "pip", specifier = ">=24.0" },
@@ -284,7 +284,7 @@ requires-dist = [
 
 [package.metadata.requires-dev]
 dev = [
-    { name = "flpkit", specifier = "==0.8.1" },
+    { name = "flpkit", specifier = "==0.9.0" },
     { name = "pyflp", specifier = ">=2.0" },
     { name = "pytest", specifier = ">=8.0" },
     { name = "python-rtmidi", specifier = ">=1.5" },
@@ -292,11 +292,11 @@ dev = [
 
 [[package]]
 name = "flpkit"
-version = "0.8.1"
+version = "0.9.0"
 source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/96/11/27fffbe30ac12c761a180e3abfde4a6c829d24760587c6fd17cd5f336e5c/flpkit-0.8.1.tar.gz", hash = "sha256:276193f687c1524841277af1582eb8618fe6fd9776bb4c2918cb00faf97bee5a", size = 54970, upload-time = "2026-09-06T23:10:33.221Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/d8/e3/3ee4ef913e9c1cb6822aa7a01a10f201d72e02d514b838aa147ee09c994c/flpkit-0.9.0.tar.gz", hash = "sha256:e3606de33822bfd998bf76b072004df157ce772e66c833b6dcf076992f38b227", size = 62779, upload-time = "2026-10-26T20:44:15.557Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/9d/d4/adb16ef12e6ccbe44d438798f63a9b3f30213e084aa2b35d2b0d6bfbe999/flpkit-0.8.1-py3-none-any.whl", hash = "sha256:97d65cf9540518b73266f64570379e75950f01cd5a24c0d8b288da3ba6fa4410", size = 34947, upload-time = "2026-09-06T23:10:31.991Z" },
+    { url = "https://files.pythonhosted.org/packages/ec/82/c5343590eb8063eeb769c6e4777cbe607bbb1cafe62766af4121375ca20a/flpkit-0.9.0-py3-none-any.whl", hash = "sha256:9c675aa5b2d242f0583f80d7b58c2c311231bb380c05b0ad53c6803b995ff2bf", size = 41336, upload-time = "2026-10-26T20:44:14.305Z" },
 ]
 
 [[package]]

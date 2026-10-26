@@ -454,7 +454,8 @@ class FLSession:
             )
 
     def add_effect(self, insert_index: int, plugin_name: str) -> tuple[flp.Effect, ...]:
-        """Add an FL-authored native effect record and return its file readback."""
+        """Add an FL-authored native effect record to the insert's first slot (FL's
+        slot 1) and return that slot's file readback."""
         with self._write_guard("add_effect"):
             if self.project is None:
                 raise NotePlaneUnavailable(
@@ -463,7 +464,7 @@ class FLSession:
                     retryable=False,
                 )
             self._prepare_file_write()
-            confirmed = tuple(flp.add_effect(self.project, insert_index, plugin_name))
+            confirmed = tuple(flp.add_effect(self.project, insert_index, plugin_name, slot=1))
             self._reload_fl()
             return confirmed
 

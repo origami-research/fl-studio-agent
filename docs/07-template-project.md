@@ -1,112 +1,51 @@
-# 07 - The Template Project
+# 07 - The Agent Project
 
-> **PARTIALLY SUPERSEDED (2026-08-26):** FL 2026's `ilmcp.addEffect` / `ilmcp.addChannel` make plugin loading and instrument creation programmatic.
-> The template's remaining job is the pattern bank only (pattern creation still has no API).
-> See [12-fl2026-native-surface.md](12-fl2026-native-surface.md).
+The engine works on one open FL project, the agent project: `Documents/Image-Line/FL Studio/Projects/FLMCP Agent.flp`, or the file `FLMCP_AGENT_PROJECT` names (`session/facade.py`, `make_agent_project.py`).
+Whoever launches FL opens it; the engine never opens a project itself.
+It is either the packaged session template or a user's own project prepared for the engine.
 
-Two things are impossible in a live session, from any surface (01):
+Updated 2026-10-22: this page described a planned 16-channel, 32-pattern template with a manifest that was never built.
+What follows is what ships.
 
-1. **Loading a new plugin** - the picker is human-only.
-2. **Creating a new pattern** - no API/dispatcher call exists.
+## What the engine needs from the project
 
-The template project converts both from runtime failures into setup-time conventions.
-This mirrors how producers actually work - most open a personal template, not an empty
-project - so the constraint costs almost nothing in practice and improves model
-behavior (a fixed instrument palette beats an agent guessing VST paths).
+- **The FL MCP Bridge on the Master insert, loaded when FL opens the project.**
+  The engine cannot add a plugin to an open project: FL's `ilmcp.addEffect` is unavailable from the controller interpreter ([25-fl-capability-catalog.md](25-fl-capability-catalog.md)), and no Bridge op loads plugins.
+  Without the Bridge, notes, render, `check` and the audio stream do not work.
+- **One Bridge, after every other Master effect.**
+  Render records the Bridge's own input, so effects after it on Master are not heard; two Bridges sharing one spool ledger misbehave (`native/bridge/BRIDGE_FINDINGS.md`).
+  FL stores it as an effect tuple whose internal name (event 201) is `FL MCP Bridge`; FL loads whatever binary sits in `Plugins/Fruity/Effects/FL MCP Bridge/`.
+- **A file the engine can read.** Reads overlay the saved project (`channel_names`, `get_scene`, note state), parsed with flpkit.
+- **Patterns that already exist.** The engine cannot create patterns; note writes target an existing pattern (default 1).
+- **Something on the playlist for a song-mode render** (an empty playlist refuses).
+- **A file FL's trial can open, when the box runs the trial.** A trial FL cannot reopen a project a trial saved ([35-platform-seams.md](35-platform-seams.md) "Trial mode").
 
-## Contents of `FLMCP-Template.flp`
+`check()` assumes 4/4 bars (`session/check.py`); a project in another meter gets wrong bar spans.
+PPQ and tempo are read from the project, never assumed.
 
-### Channel rack (the instrument palette)
+## The session template
 
-| # | Name | Instrument | Role |
-|---|---|---|---|
-| 0–3 | `Kick`, `Snare`, `Clap`, `Hat` | Stock one-shots (FPC or sampler channels) | Drums - step-seq friendly |
-| 4 | `Perc` | Sampler | Auxiliary percussion |
-| 5 | `808` | Stock 3xOsc/FLEX preset | Sub bass |
-| 6 | `Bass` | FLEX or user's synth | Melodic bass |
-| 7 | `Keys` | FLEX piano/EP | Chords |
-| 8 | `Lead` | FLEX lead | Melody |
-| 9 | `Pad` | FLEX pad | Atmosphere |
-| 10–15 | `User1`–`User6` | empty sampler channels | User loads anything; model can `load_sample` into them |
+`fl_mcp/assets/session-template.flp`, resolved with `fl-mcp-template` (never copied by path), SHA-256 `a080994a1b9d90b1e42b388e806d646f14f576f941ce2766ad43e7bf05daf2e4`.
+`make_agent_project.create(force=True)` copies it to the agent project path; the Windows box installer and the arena's FL launch do this before every start.
 
-Stock-plugin-only in the shipped template (everyone has them). Users are encouraged to
-save their own variant with their VSTs - the manifest (below) is regenerated, nothing
-else changes.
+- PPQ 96, 130 BPM, 4/4, no notes.
+- Five channels: `808 Kick`, `808 Clap`, `808 HiHat`, `808 Snare` (samplers on FL factory samples) and `FLEX Bass` (FLEX).
+- Pattern 1 on playlist track 1, its clip window the `0xFFFFFFFF` auto-length sentinel, so the clip grows with the pattern and a Full-song render covers everything written into Pattern 1.
+  Measured on trial FL 2026 for Windows (26.1.6): with an explicit `0..1536` window the song stayed 4 bars (7.9 s at 130 BPM) after 16 bars were written; with the sentinel it grew to 16 bars (29.54 s).
+- The FL MCP Bridge in Master slot 10 (index 9), the only Master effect.
 
-### Patterns
+It was written by tools, not saved by FL: FL's stock `Basic with limiter` template with its Emphasizer renamed to the Bridge, then the playlist clip and its window added.
+Its version event still reads FL 25.1.99.
 
-`P01`–`P32` pre-created, empty, 16 bars max length each [length semantics per Spike 1
-findings on `PatNum`/pattern length interaction]. Convention taught to the model via
-tool docs: patterns are the model's workspace; renaming (`set_pattern_name`) is how it
-labels sections ("Verse Drums", "Hook Bass").
+## A user's project as the agent project
 
-Pattern 1 is also placed on playlist track 1 at beat 0.
-The default note-write target is Pattern 1, so its notes are audible when FL renders the arrangement.
-This is a template invariant, not a render-time mutation.
+A host may start a session from a user's own project, as the arena does when a user uploads one for a matchup.
+It prepares the file before FL ever opens it, so the engine sees an ordinary agent project:
 
-The clip is stored the way FL saves a pattern clip that was never resized: its cut window (record bytes 24-31) is the `0xFFFFFFFF, 0xFFFFFFFF` sentinel, not an explicit `0..length`.
-FL sizes such a clip from its pattern when it opens the project and regrows it live whenever the pattern grows, so a Full-song render covers everything written into Pattern 1.
-The record's head length (1536 ticks) is kept for file readers; FL ignores it for this clip and opens it one bar long, the length of the empty pattern.
-An explicit window pins the clip instead: the playlist stays at its saved length however long the pattern gets.
-Measured on trial FL 2026 for Windows (v26.1.6), where the scripting API cannot place or resize clips and the engine cannot save and reopen the project:
+- flpkit splices FL's own captured Bridge tuple (`flpkit.add_effect(path, 0, "FL MCP Bridge", slot=...)`, captured from an FL 26.1.5 GUI insertion) into the Master insert's last free slot, or keeps a Bridge already on Master; the wrapper event's insert and slot are rewritten the way FL writes them.
+- It turns off the project's "show info on open" panel (`flpkit.hide_info_on_open`), which otherwise holds FL's foreground at load.
+- It refuses projects a trial FL saved, projects from a newer FL than the box's, FL 11 and older (no slot events to place the Bridge in), and a Master insert with every slot in use.
+- The host copies the prepared file to the agent project path, with a zipped loop package's samples beside it (FL looks for a missing sample in the project's folder), and launches FL on it.
 
-| Template clip window | Song length at open | After 16 bars written into Pattern 1 | Full-song export at 130 BPM |
-| --- | --- | --- | --- |
-| `0..1536` (before) | 4 bars (tick 1535) | 4 bars (tick 1535) | 7.9 s |
-| `0xFF` x 8 (now) | 1 bar (tick 383) | 16 bars (tick 6143) | 29.54 s (16 bars) |
-
-FL's own save of the grown project writes the same sentinel with head length 6144, and it is the form most pattern clips in FL's bundled demo projects carry.
-
-### Mixer
-
-- Named inserts: `Drums`, `Bass`, `Music`, `FX`, and a utility insert named `MCP`.
-- Channels pre-routed to their group inserts.
-- **`FL MCP Bridge` is pre-loaded as the last effect on the Master insert.** A Bridge
-  effect hears only its own insert, and render records its `Eff_Render` input.
-  Rendering also needs FL's audio output device, the same box dependency as RDP audio.
-- Basic send chain (reverb/delay on sends) so `set_plugin_param` has something
-  expressive to grab immediately.
-
-### Controller script
-
-Enabling `device_FLMCP.py` in MIDI settings is per-FL-install (not per-project), so the
-template can't carry it - the installer + `fl_doctor` own that step.
-
-## The manifest
-
-`FLMCP-Template.manifest.json`, shipped next to the `.flp` and regenerable from any
-project via `sync_from_project`:
-
-```json
-{
-  "template_ver": 1,
-  "channels": [
-    {"idx": 0, "name": "Kick", "kind": "drum",  "mixer_track": 1},
-    {"idx": 6, "name": "Bass", "kind": "synth", "mixer_track": 2,
-     "plugin": "FLEX", "notable_params": {"cutoff": 41, "resonance": 42}}
-  ],
-  "patterns": {"count": 32, "naming": "P01..P32"},
-  "mixer": [{"idx": 1, "name": "Drums"}, {"idx": 2, "name": "Bass"}]
-}
-```
-
-Purpose: gives the server (and through it, the model) name→index resolution and a
-curated map of *musically meaningful* parameters per instrument, without a live
-round trip. Live state always wins on conflict (`state.snapshot` cross-check at
-startup; mismatches surface in `fl_doctor` as "project drifted from manifest -
-regenerate?").
-
-## Custom templates
-
-`fl_doctor` treats "template" as: any project + matching manifest. Users make their
-own: open their project, load Bridge on an insert, run the `generate_manifest` server
-command (PyFLP parse of the saved file → manifest skeleton → user labels `kind` and
-`notable_params`). Power users get their whole VST rack under model control this way -
-loading happened at human time, control happens at model time.
-
-## Distribution
-
-The session template ships as package data at `fl_mcp/assets/session-template.flp`.
-Consumers must resolve it with `fl-mcp-template`, never copy it: this is the one
-canonical artifact used by the engine and its dev session. Its SHA-256 is
-`a080994a1b9d90b1e42b388e806d646f14f576f941ce2766ad43e7bf05daf2e4`.
+Verified live on trial FL 2026 for Windows (26.1.6, 2026-10-23): FL opened the spliced file and the Bridge's heartbeat came up fresh with one instance, for a stock demo song, an FL 12 project, a project with a missing VST, and a project with a missing sample (FL then shows "Problems loading the project", which the launcher acknowledges).
+A trial-saved project opened empty behind a Buy dialog instead.

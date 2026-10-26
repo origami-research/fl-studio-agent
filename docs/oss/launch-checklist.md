@@ -5,7 +5,7 @@ any public change.
 
 ## flpkit on PyPI
 
-flpkit 0.8.1 was published on 2026-09-06; the engine depends on the released package (`flpkit==0.8.1`) with no git source. The release smoke check can run unskipped.
+flpkit 0.8.1 was published on 2026-09-06; the engine now depends on the released package `flpkit==0.9.0` (published 2026-10-26) with no git source. The release smoke check can run unskipped.
 
 ## Approvals
 

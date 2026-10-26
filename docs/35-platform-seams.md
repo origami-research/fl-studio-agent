@@ -313,7 +313,7 @@ A box needs exactly three artifacts, each pinned by sha256:
 - the Bridge DLL, the `FL-MCP-Bridge-Windows-x64` artifact of the `native` workflow (or the release asset `fl-mcp-bridge-windows-x64.dll`).
 
 The wheel carries every runtime file: the controller script and its wire codec and the piano-roll script (`fl_mcp/fl_scripts/`), the session template, and the profiles.
-The runtime closure has no git or direct references; `flpkit==0.8.1` comes from PyPI.
+The runtime closure has no git or direct references; `flpkit==0.9.0` comes from PyPI.
 The repo-root `harness` package is not part of the runtime.
 
 The engine venv uses CPython 3.12, not the box's 3.13.

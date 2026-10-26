@@ -90,9 +90,9 @@ def test_checked_in_effect_pair_replays_through_the_plugin_agnostic_writer(tmp_p
     candidate = tmp_path / "candidate.flp"
     candidate.write_bytes((evidence / "baseline.flp").read_bytes())
 
-    saved = add_effect(candidate, 0, "Fruity Parametric EQ 2")
+    saved = add_effect(candidate, 0, "Fruity Parametric EQ 2", slot=1)
 
-    assert saved == effects_at(candidate, 0)
+    assert saved == effects_at(candidate, 0, slot=1)
     assert any(effect.name == "Fruity Parametric EQ 2" and len(effect.chunk) == 519 for effect in saved)
     with pytest.raises(FlpError):
-        add_effect(candidate, 0, "not an FL effect")
+        add_effect(candidate, 0, "not an FL effect", slot=1)

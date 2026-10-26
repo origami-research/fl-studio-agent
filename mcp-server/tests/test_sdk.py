@@ -252,8 +252,8 @@ def test_add_effect_replays_the_checked_in_fl_authored_pair(tmp_path, monkeypatc
 
     confirmed = connect(session).add_effect(0, "Fruity Parametric EQ 2")
 
-    expected = tuple(effects_at(evidence / "after-add-parametric-eq2-on-master.flp", 0))
-    assert confirmed == tuple(effects_at(candidate, 0))
+    expected = tuple(effects_at(evidence / "after-add-parametric-eq2-on-master.flp", 0, slot=1))
+    assert confirmed == tuple(effects_at(candidate, 0, slot=1))
     assert confirmed == expected  # Each opaque effect chunk is byte-exact to the FL-authored pair.
     assert reloads == [True]
 

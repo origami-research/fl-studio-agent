@@ -11,7 +11,7 @@ dependencies = [
     "python-rtmidi>=1.5.0",
     "watchdog>=6.0.0",
     "numpy>=2.0.0",
-    "flpkit==0.8.1",
+    "flpkit==0.9.0",
     # The run kernel's %pip installs with the engine's own interpreter.
     "pip>=24.0",
 ]
@@ -68,7 +68,7 @@ artifacts = ["src/fl_mcp/assets/session-template.flp"]
 
 
 [dependency-groups]
-dev = ["pytest>=8.0", "pyflp>=2.0", "python-rtmidi>=1.5", "flpkit==0.8.1"]
+dev = ["pytest>=8.0", "pyflp>=2.0", "python-rtmidi>=1.5", "flpkit==0.9.0"]
 
 [tool.ruff]
 line-length = 110

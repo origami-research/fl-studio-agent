@@ -242,8 +242,8 @@ confirmed = fl.track("Bass").set_channel_levels(volume=0.9, pan=-0.15)
 ### `fl.add_effect(insert_index: int, plugin_name: str) -> tuple[Effect, ...]`
 
 **Availability:** project write. Adds an effect using an FL-authored opaque
-record and returns the saved-file effect-chain readback. Current evidence only
-supports `fl.add_effect(0, "Fruity Parametric EQ 2")`: an empty Master slot 0.
+record and returns the saved-file readback of the slot it filled. Current evidence only
+supports `fl.add_effect(0, "Fruity Parametric EQ 2")`: Master's first slot (FL's slot 1), when empty.
 Other plugins or insert placements refuse rather than synthesize plugin state.
 
 ```python

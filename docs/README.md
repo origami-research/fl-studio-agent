@@ -30,7 +30,7 @@ Status tags: **current** describes the shipped system, **research** records evid
 - [04-native-plugin.md](04-native-plugin.md) - **superseded** original plugin design.
 - [05-controller-script.md](05-controller-script.md) - **superseded** controller-script design.
 - [06-mcp-server.md](06-mcp-server.md) - **superseded** original server surface.
-- [07-template-project.md](07-template-project.md) - **current** template-project contract.
+- [07-template-project.md](07-template-project.md) - **current** agent-project contract: what the engine needs from the open project, the session template, and a user's own project prepared by the arena.
 - [08-roadmap.md](08-roadmap.md) - **superseded** roadmap snapshot.
 - [09-references.md](09-references.md) - **research** external references.
 - [10-v0-vertical-slice.md](10-v0-vertical-slice.md) - **superseded** v0 evidence.

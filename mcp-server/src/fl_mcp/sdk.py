@@ -148,8 +148,9 @@ class FL:
         return self._session.set_tempo(bpm)
 
     def add_effect(self, insert_index: int, plugin_name: str) -> tuple[Effect, ...]:
-        """Add Fruity Parametric EQ 2 to the empty Master slot 0 (the one supported
-        placement); returns the effects now on that insert. Outside a match only.
+        """Add Fruity Parametric EQ 2 to Master's first slot, when empty (FL's slot 1,
+        the one supported placement); returns the effect now in that slot.
+        Outside a match only.
         """
         try:
             args = _AddEffectArgs(insert_index=insert_index, plugin_name=plugin_name)

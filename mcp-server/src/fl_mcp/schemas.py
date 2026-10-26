@@ -36,7 +36,10 @@ class Note(BaseModel):
 
     key: int = Field(ge=0, le=127)
     start: float = Field(ge=0)  # beats from pattern start
-    length: float = Field(gt=0, le=1024)  # beats
+    # beats; 0 is FL's own step note (a step-sequencer hit plays its sample through):
+    # FL's demos and users' projects are full of them (flpkit 8b65d9a), and reads must
+    # return them as FL has them. The Bridge writes a 0 as one tick.
+    length: float = Field(ge=0, le=1024)
     velocity: float = Field(default=0.8, ge=0, le=1)
     pan: float = Field(default=0.5, ge=0, le=1)
     color: int = Field(default=0, ge=0, le=15)

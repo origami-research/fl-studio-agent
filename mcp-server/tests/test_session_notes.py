@@ -219,6 +219,25 @@ def test_an_unwritten_target_reads_the_project_every_time(monkeypatch, project):
     assert store.writes == [] and store.written() == {}
 
 
+def test_step_notes_read_as_fl_has_them(monkeypatch, project):
+    """FL stores a step-sequencer hit as a length-0 note; users' projects are full of
+    them, so reading one must not fail validation (live: get_scene and check both
+    failed on a user's project, 2026-10-23)."""
+    monkeypatch.setattr(flp, "read", lambda path: flp.FlpProject(ppq=96, tempo=None, channels=(), notes=()))
+    monkeypatch.setattr(
+        flp,
+        "notes_at",
+        lambda path, pattern, channel: [
+            flp.FlpNote(position=96, length=0, key=36, channel=0, velocity=100, pan=64)
+        ],
+    )
+    session, _store = make_session(project=project)
+
+    (note,) = session.read_notes(TARGET)
+
+    assert (note.key, note.start, note.length) == (36, 1.0, 0.0)
+
+
 def test_read_notes_clamps_fl_raw_velocity_128(monkeypatch, project):
     """FL's 128 byte value decodes to the SDK's full-scale unit value."""
     _one_file_note(monkeypatch, 128)
