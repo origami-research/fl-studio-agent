@@ -785,7 +785,7 @@
       }
     }
   ],
-  "version": "0.1.3",
+  "version": "0.1.4",
   "workspace_tools": [
     {
       "description": "Run a shell command in your workspace folder and return its output.\nCommands run in cmd.exe on Windows (the FL Studio host) and /bin/sh on\nmacOS/Linux. python and pip are on PATH: pip installs into the workspace,\nwhere python (and run, when you have it) can import the package.\n\ncmd.exe runs one line: chain steps with &&, or write a script file and run\nit. Each call is a fresh process started in the workspace: cd, environment\nvariables and background processes do not carry over, and anything still\nrunning when the command returns is stopped. On Windows and macOS the\noperating system confines the command: it can read and write only the\nworkspace, read the renders folder, and reach the public internet, not\nthis machine's own services.\n\nArgs:\n    command: the command line, up to 16 KB.\n    timeout_s: seconds before the command is stopped, 1 to 600 (default 120).\n\nReturns {exit_code, timed_out, stdout, stderr, truncated, full_output,\nduration_s, note, actions}. A non-zero exit_code is a normal result, not an\nerror. Output past 16,000 characters keeps its start and end: truncated is\ntrue and full_output names a file in the workspace with all of it (read it\nwith read_file or search it with grep).",
