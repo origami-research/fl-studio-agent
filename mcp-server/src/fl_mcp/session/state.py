@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import time
 from collections.abc import Callable
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 from fl_mcp import errors, flp
@@ -296,7 +297,26 @@ def _note_plane_status(*, clock: Callable[[], float] = time.time) -> PlaneStatus
             stream = _stream_detail(heartbeat)
             if stream is not None:
                 return PlaneStatus(connected=True, detail=f"spool at {root}; {stream}")
+    if fl_process_running() and not any(_ticking(root, clock) for root in roots):
+        # FL is open and no Bridge ticks: the open project is not the agent
+        # project. Writes would go nowhere and render refuses, yet this said
+        # "connected" (2026-10-26, a new Windows user who opened FL as the README said).
+        # The heartbeat, not bridge_udp.json, is the test: outside a session the
+        # Bridge writes only the heartbeat.
+        return PlaneStatus(connected=False, detail=NO_BRIDGE_DETAIL, fix=NO_BRIDGE_FIX)
     return PlaneStatus(connected=True, detail=f"spool at {roots[0]}")
+
+
+def _ticking(root: Path, clock: Callable[[], float]) -> bool:
+    return read_heartbeat(root / BRIDGE_HEARTBEAT_FILE, clock=clock).age <= BRIDGE_HEARTBEAT_FRESH_SECONDS
+
+
+NO_BRIDGE_DETAIL = "FL Studio is open, but no FL MCP Bridge is running: the open project does not carry it"
+NO_BRIDGE_FIX = (
+    "Open FLMCP Agent.flp (FL Studio's Projects folder, created by fl-mcp-install) in FL Studio; "
+    "it carries the Bridge on its Master insert. To use your own project, add FL MCP Bridge "
+    "to the last free Master insert slot and reopen it."
+)
 
 
 def _stream_detail(heartbeat: object) -> str | None:

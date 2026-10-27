@@ -161,6 +161,7 @@ def test_doctor_all_connected(tmp_path, monkeypatch):
     project = tmp_path / "agent.flp"
     project.write_bytes(b"FLhd")
     monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
+    monkeypatch.setattr(state_mod, "fl_process_running", lambda: False)
 
     session, _ = make_session(control=FakeControl(hello=HELLO, dropped=3), project=project)
     report = session.doctor()
@@ -215,6 +216,43 @@ def test_note_plane_reports_a_live_bridge_with_a_stale_heartbeat(tmp_path, monke
         "The FL MCP Bridge is loaded but has not ticked for 11 s: FL's GUI thread is not pumping. "
         "On macOS this happens while the screen is locked; unlock the Mac, or bring FL out of a modal dialog."
     )
+
+
+def test_fl_open_without_a_live_bridge_says_to_open_the_agent_project(tmp_path, monkeypatch):
+    """A new user opened FL as the README said; FL showed its default song, which has no
+    Bridge, and the doctor still reported "ok" (2026-10-26 box run). Writes and render
+    need the Bridge, so FL running with none live is degraded, with the fix."""
+    _install_note_script(tmp_path)
+    (tmp_path / "bridge_udp.json").write_text('{"pid": 123}', encoding="utf-8")  # a closed FL's
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
+    monkeypatch.setattr(state_mod, "spool_roots", lambda: [tmp_path])
+    monkeypatch.setattr(state_mod, "pid_alive", lambda pid: False)
+    monkeypatch.setattr(state_mod, "fl_process_running", lambda: True)
+
+    session, _ = make_session()
+    report = state_mod.doctor(session, clock=lambda: 111.0)
+
+    assert report.status == "degraded"
+    assert report.note_plane.connected is False
+    assert report.note_plane.detail == state_mod.NO_BRIDGE_DETAIL
+    assert "Open FLMCP Agent.flp" in report.note_plane.fix
+
+    monkeypatch.setattr(state_mod, "fl_process_running", lambda: False)  # FL closed: the control plane says so
+    assert state_mod.doctor(session, clock=lambda: 111.0).note_plane.connected is True
+
+
+def test_a_ticking_bridge_outside_a_session_is_connected(tmp_path, monkeypatch):
+    """A user's own FL writes only the heartbeat (no bridge_udp.json); its fresh tick
+    is what proves the agent project is open (box run, 2026-10-26)."""
+    _install_note_script(tmp_path)
+    (tmp_path / "bridge_heartbeat.txt").write_text("tick=474\npid=1456\nunix_time=100\n", encoding="utf-8")
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
+    monkeypatch.setattr(state_mod, "spool_roots", lambda: [tmp_path])
+    monkeypatch.setattr(state_mod, "fl_process_running", lambda: True)
+
+    session, _ = make_session()
+    assert state_mod.doctor(session, clock=lambda: 102.0).note_plane.connected is True
+    assert state_mod.doctor(session, clock=lambda: 200.0).note_plane.detail == state_mod.NO_BRIDGE_DETAIL
 
 
 def test_note_plane_without_a_heartbeat_keeps_existing_script_behavior(tmp_path, monkeypatch):

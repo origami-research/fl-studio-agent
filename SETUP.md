@@ -8,7 +8,8 @@ The file-based features (compose, arrange, analyze `.flp` files) need no FL runn
 
 ## What `fl-mcp-install` does
 
-Run it with FL Studio closed (start FL once first if you never have, so its settings folder exists); on Windows, run it in a terminal opened as administrator, because the Bridge goes into FL's folder under Program Files:
+Run it with FL Studio closed (start FL once first if you never have, so its settings folder exists); on Windows, run it in a terminal opened as administrator, because the Bridge goes into FL's folder under Program Files.
+Use **Run as administrator** on your own account: the scripts and MIDI settings go into the profile of the account that runs the command, so a separate administrator account would set up its own FL instead of yours.
 
 ```bash
 uvx --python 3.12 --from fl-studio-agent fl-mcp-install
@@ -29,16 +30,18 @@ Each step prints `OK`, `WARN` (needs you), or `FAIL` (the command then exits non
 
 `--json` prints the same results as one JSON object.
 
-Open FL Studio first, then start your MCP client, which starts the server.
+Then open `FLMCP Agent.flp` in FL Studio (File > Open, FL's Projects folder), and only then start your MCP client, which starts the server.
+The engine never opens a project itself, and only a project carrying the Bridge takes writes and renders: with FL's default song open, `fl-mcp-doctor` reports that no Bridge is running.
 Check everything with `fl-mcp-doctor` while FL is open.
 
 ## Windows
 
 Windows has no virtual MIDI ports, so [loopMIDI](https://www.tobias-erichsen.de/software/loopmidi.html) provides the two ports the controller talks over:
 
-1. Install loopMIDI (`winget install TobiasErichsen.loopMIDI`, or the installer from its site) and start it.
-2. Add exactly two ports named `FLMCP Req` and `FLMCP Res`.
-3. Keep loopMIDI running whenever FL runs, then run `fl-mcp-install`; its `midi_ports` step confirms both ports open.
+1. Install loopMIDI (`winget install TobiasErichsen.loopMIDI` on Windows 10 and 11, or the installer from its site; Windows Server has no winget) and start it.
+2. Add exactly two ports named `FLMCP Req` and `FLMCP Res`: type each name into "New port-name" and click **+**.
+3. Tick **Autostart loopMIDI** in its tray menu: loopMIDI does not start with Windows otherwise, and without it the ports are gone after a restart.
+4. Keep loopMIDI running whenever FL runs, then run `fl-mcp-install`; its `midi_ports` step confirms both ports open.
 
 Production boxes are provisioned unattended by `scripts/windows/provision.ps1` and `session-install.ps1`, which run the same `fl-mcp-install` (with `--no-bridge`: the box pins its own Bridge DLL) and pin the DLL and loopMIDI by sha256.
 

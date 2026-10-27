@@ -333,7 +333,8 @@ def render_wav(session: FLSession, output: Path) -> RenderReceipt:
         raise errors.ToolError(
             "render_failed",
             "FL Studio cannot record right now.",
-            "FL may still be starting. Retry the render in a moment.",
+            "FL may still be starting; retry in a moment. If it keeps failing, the song open in FL "
+            "is not the one prepared for you: ask the user to open the FLMCP Agent song in FL Studio.",
             retryable=True,
         )
     span = live_arrangement_span(session)

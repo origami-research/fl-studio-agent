@@ -191,7 +191,8 @@ You need FL Studio 2026 on macOS or Windows and [uv](https://docs.astral.sh/uv/g
 
 1. **Install uv** if you don't have it.
    macOS: `curl -LsSf https://astral.sh/uv/install.sh | sh`.
-   Windows: `powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"`, then install [loopMIDI](https://www.tobias-erichsen.de/software/loopmidi.html) and add two ports named exactly `FLMCP Req` and `FLMCP Res` (Windows has no virtual MIDI ports; macOS needs nothing).
+   Windows: `powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"`, then open a new terminal so `uvx` is on your PATH.
+   Also on Windows, install [loopMIDI](https://www.tobias-erichsen.de/software/loopmidi.html), add two ports named exactly `FLMCP Req` and `FLMCP Res`, and tick **Autostart loopMIDI** in its tray menu so the ports come back after a restart (Windows has no virtual MIDI ports; macOS needs nothing).
 2. **Set up FL Studio once.** Start FL once if you never have, close it, then run (on Windows, in a terminal opened as administrator, because FL's plugin folder is under Program Files):
 
    ```bash
@@ -201,7 +202,9 @@ You need FL Studio 2026 on macOS or Windows and [uv](https://docs.astral.sh/uv/g
    It installs the controller and note scripts, assigns the controller's MIDI ports, creates the agent's own project (`FLMCP Agent.flp`; your other projects are never touched), and downloads the prebuilt [Bridge plugin]({REPO_URL}/blob/main/SETUP.md#the-bridge-plugin) for live writes and `render`, checking it against the release's SHA-256 sums.
    It is safe to rerun.
    To update later, run it with `{PACKAGE}@latest` in place of `{PACKAGE}` and restart FL and your client.
-3. **Add the server to your client** with a button above or a config below, open FL Studio, and ask for "a 4-bar chord loop in A minor".
+3. **Open the agent project in FL Studio**: File > Open, `FLMCP Agent.flp` in FL's Projects folder (`Documents/Image-Line/FL Studio/Projects`).
+   It carries the Bridge on its Master insert; in any other song, writes and `render` do not work.
+4. **Add the server to your client** with a button above or a config below, and ask for "a 4-bar chord loop in A minor".
 
 <details>
 <summary><b>Claude Code</b></summary>
@@ -267,8 +270,8 @@ Run the doctor while FL Studio is open:
 ```
 
 It prints one JSON report of the control plane (controller script and MIDI ports), the note plane, and the agent project, with a `fix` for anything not connected.
-The usual fixes: open FL Studio before your client starts the server; after an upgrade rerun step 2 with `{PACKAGE}@latest` (a stale controller is reported); on Windows, keep loopMIDI running with both ports.
-Using the FL Studio trial? Set `FLMCP_FL_LICENSE=trial` in the server's `env`, because the trial cannot reopen saved projects.
+The usual fixes: open `FLMCP Agent.flp` in FL Studio before your client starts the server (the doctor reports a missing Bridge when another song is open); after an upgrade rerun step 2 with `{PACKAGE}@latest` (a stale controller is reported); on Windows, keep loopMIDI running with both ports.
+Using the FL Studio trial? Set `FLMCP_FL_LICENSE=trial` in the server's `env`, and answer **No** when FL asks to save `FLMCP Agent.flp`: the trial cannot reopen a song it saved. If it was saved, delete it and rerun step 2, which creates it again.
 `uvx --python {PYTHON} {PACKAGE} --version` prints the installed version.
 {END}"""
 
