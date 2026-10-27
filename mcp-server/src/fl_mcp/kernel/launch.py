@@ -1,9 +1,10 @@
 """The kernel's workspace and how its process is launched.
 
 The launcher is the security boundary, chosen by the Platform: on Windows an
-AppContainer that can reach only its workspace (kernel.windows); on macOS and
-Linux dev hosts a plain subprocess with the workspace as its cwd and home,
-which confines nothing (docs/38).
+AppContainer that can reach only its workspace (kernel.windows), on macOS a
+Seatbelt sandbox with the same reach (kernel.seatbelt). ``PosixLauncher`` is
+a plain subprocess that confines nothing: tests use it, and a macOS developer
+gets it only by opting out (docs/38).
 """
 
 from __future__ import annotations
@@ -130,6 +131,8 @@ class Workspace:
             PIP_TARGET=str(self.packages),
             PIP_CACHE_DIR=str(home / ".cache" / "pip"),
             PIP_DISABLE_PIP_VERSION_CHECK="1",
+            # macOS: the cache /usr/bin/git and the other developer-tool shims keep.
+            xcrun_db=str(home / ".cache" / "xcrun_db"),
             # Every Python the kernel starts imports KERNEL_SITE's sitecustomize.
             PYTHONPATH=str(KERNEL_SITE),
         )
@@ -193,8 +196,21 @@ class _GroupPopen(subprocess.Popen[bytes]):
             os.killpg(self.pid, signal.SIGKILL)
 
 
+def spawn_group(argv: Sequence[str], *, workspace: Workspace, env: dict[str, str]) -> KernelProcess:
+    """A POSIX process in its own session, in the workspace, wired by its stdio pipes."""
+    return _GroupPopen(
+        list(argv),
+        cwd=workspace.work,
+        env=env,
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        start_new_session=True,
+    )
+
+
 class PosixLauncher:
-    """macOS/Linux dev hosts: a plain subprocess. No OS boundary and no job limits (docs/38)."""
+    """A plain subprocess: no OS boundary and no job limits (docs/38)."""
 
     confined: ClassVar[bool] = False
 
@@ -206,15 +222,7 @@ class PosixLauncher:
         env: dict[str, str],
         limits: JobLimits = KERNEL_JOB,
     ) -> KernelProcess:
-        return _GroupPopen(
-            list(argv),
-            cwd=workspace.work,
-            env=env,
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            start_new_session=True,
-        )
+        return spawn_group(argv, workspace=workspace, env=env)
 
     def release(self, workspace: Workspace) -> None:
         return None  # nothing was granted

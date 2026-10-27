@@ -360,9 +360,10 @@ def shell(command: str, ctx: Context, timeout_s: int = ops.SHELL_TIMEOUT_DEFAULT
     cmd.exe runs one line: chain steps with &&, or write a script file and run
     it. Each call is a fresh process started in the workspace: cd, environment
     variables and background processes do not carry over, and anything still
-    running when the command returns is stopped. On the FL Studio host the
+    running when the command returns is stopped. On Windows and macOS the
     operating system confines the command: it can read and write only the
-    workspace, read the renders folder, and reach the public internet.
+    workspace, read the renders folder, and reach the public internet, not
+    this machine's own services.
 
     Args:
         command: the command line, up to 16 KB.
@@ -599,9 +600,12 @@ def create_server(*, workspace_only: bool = False, workspace_tools: bool = False
 def _confined() -> bool:
     """Whether this host's launcher confines model code; an unsupported OS runs none."""
     try:
-        return platform_for(sys.platform).kernel_launcher().confined
+        confined = platform_for(sys.platform).kernel_launcher().confined
     except PlatformUnsupportedError:
         return False
+    if not confined:
+        log.warning("run and the workspace tools are NOT confined on this host: model code has your access")
+    return confined
 
 
 def main(argv: Sequence[str] | None = None) -> None:

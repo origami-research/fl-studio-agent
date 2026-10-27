@@ -113,3 +113,4 @@ Full list: [docs/24-coverage-map.md](docs/24-coverage-map.md).
 
 - It drives **your** FL on **your** machine; live operations take over screen focus and restart FL around file writes.
 - It runs local code that opens FL: a local setup, not a hosted product.
+- The code the model writes runs in a sandbox limited to its own folder, on macOS and Windows ([README: Security](README.md#security)).

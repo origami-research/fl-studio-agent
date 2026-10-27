@@ -1,4 +1,4 @@
-"""The kernel process: ``python -I -m fl_mcp.kernel.child [--probe CANARY]``.
+"""The kernel process: ``python -I -m fl_mcp.kernel.child [--probe CANARY --probe-home HOME --probe-port PORT]``.
 
 It owns one persistent namespace and runs cells the server sends. ``fl`` is the
 real SDK (sdk.FL) over a session whose every call crosses the wire to the
@@ -148,9 +148,9 @@ class RemoteSession:
             self._channel.call(wire.Call(method=wire.FILE_EDIT_EXIT))
 
 
-def boundary_probe(canary: Path) -> wire.BoundaryProbe:
+def boundary_probe(canary: Path, home: Path, loopback_port: int) -> wire.BoundaryProbe:
     """Try what the OS boundary must deny; the server refuses a kernel that succeeds."""
-    return wire.BoundaryProbe.model_validate(probe(canary))
+    return wire.BoundaryProbe.model_validate(probe(canary, home, loopback_port))
 
 
 def _take_wire() -> tuple[IO[bytes], IO[bytes]]:
@@ -170,6 +170,8 @@ def _take_wire() -> tuple[IO[bytes], IO[bytes]]:
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--probe", type=Path, help="canary file the boundary must hide")
+    parser.add_argument("--probe-home", type=Path, help="the user's home folder the boundary must hide")
+    parser.add_argument("--probe-port", type=int, help="a loopback port the boundary must not reach")
     args = parser.parse_args(argv)
     faulthandler.enable()  # a native crash leaves its stack on stderr for the server's log
     if sys.platform == "win32":
@@ -182,7 +184,7 @@ def main(argv: list[str] | None = None) -> None:
     # model code then gets it, and the packages it installs, like a notebook.
     sys.path.extend([str(Path.cwd()), os.environ["PIP_TARGET"]])
     namespace = new_namespace(sdk.FL(RemoteSession(channel)))
-    probe = boundary_probe(args.probe) if args.probe else None
+    probe = boundary_probe(args.probe, args.probe_home, args.probe_port) if args.probe else None
     channel.send(wire.Ready(pid=os.getpid(), probe=probe))
     channel.serve(namespace)
 

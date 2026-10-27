@@ -200,7 +200,8 @@ def test_a_launcher_claiming_confinement_must_pass_the_probe_before_anything_run
         with pytest.raises(ToolError) as caught:
             runner.call("write_file", {"path": "ran.txt", "content": "x"}, timeout=30)
         assert caught.value.category == "kernel_unavailable" and not caught.value.retryable
-        assert "canary_readable=True" in caught.value.message
+        for finding in ("canary_readable=True", "outside_writable=True", "home_readable=True", "loopback_reachable=True"):
+            assert finding in caught.value.message
     assert not (ws.work / "ran.txt").exists()
 
 
@@ -218,7 +219,14 @@ def test_shell_numbers_count_up_per_session(runner):
 
 # -- Windows orchestration over the recorded Win32 calls ------------------------------------
 
-PROBE_OK = {"ok": {"canary_readable": False, "imds_reachable": False}}
+PROBE_CLEAN = {
+    "canary_readable": False,
+    "outside_writable": False,
+    "home_readable": False,
+    "imds_reachable": False,
+    "loopback_reachable": False,
+}
+PROBE_OK = {"ok": PROBE_CLEAN}
 
 
 class AnsweringWin32(FakeWin32):
@@ -291,9 +299,9 @@ def test_the_probe_runs_once_before_the_first_call(ws):
     assert len(api.command_lines) == 3
 
 
-@pytest.mark.parametrize("breach", ["canary_readable", "imds_reachable"])
+@pytest.mark.parametrize("breach", sorted(PROBE_CLEAN))
 def test_a_failed_probe_refuses_every_call_and_launches_nothing_more(ws, breach):
-    api = AnsweringWin32([{"ok": {"canary_readable": False, "imds_reachable": False, breach: True}}])
+    api = AnsweringWin32([{"ok": {**PROBE_CLEAN, breach: True}}])
     runner = _windows_runner(ws, api)
     for _ in range(2):
         with pytest.raises(ToolError) as caught:
@@ -332,12 +340,14 @@ def test_closing_withdraws_the_workspace_grants(ws):
 
 
 def test_the_request_names_the_session_root(ws, monkeypatch):
-    """The op finds the workspace (and its canary) from the root the server sends."""
+    """The op finds the workspace (and its canary) from the root the server sends, and the probe its targets."""
     sent: list[bytes] = []
     from fl_mcp.workspace import runner as runner_module
 
     monkeypatch.setattr(runner_module, "_write_all", lambda stream, data: sent.append(data))
     api = AnsweringWin32([PROBE_OK])
     _windows_runner(ws, api)._verify_boundary()
-    assert json.loads(sent[0]) == {"op": "probe", "root": str(ws.root), "args": {}}
+    request = json.loads(sent[0])
+    assert request["op"] == "probe" and request["args"]["home"] == str(Path.home())
+    assert isinstance(request["args"]["loopback_port"], int)
     assert Path(json.loads(sent[0])["root"]) == ws.root

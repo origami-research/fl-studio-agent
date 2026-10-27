@@ -108,7 +108,9 @@ def test_main_takes_the_mode_from_its_flag_and_the_gate_from_the_environment(
 
 
 def test_server_info_says_whether_the_host_confines_model_code(monkeypatch):
-    assert server.create_server().description.endswith("; confined=false")  # dev hosts and CI
+    unconfined = SimpleNamespace(kernel_launcher=lambda: SimpleNamespace(confined=False))
+    monkeypatch.setattr(server, "platform_for", lambda _: unconfined)
+    assert server.create_server().description.endswith("; confined=false")
     confined = SimpleNamespace(kernel_launcher=lambda: SimpleNamespace(confined=True))
     monkeypatch.setattr(server, "platform_for", lambda _: confined)
     assert server.create_server().description.endswith("; confined=true")

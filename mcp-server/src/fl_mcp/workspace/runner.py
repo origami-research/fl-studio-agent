@@ -32,6 +32,7 @@ from pydantic import BaseModel, ValidationError
 from fl_mcp import errors
 from fl_mcp.errors import ToolError
 from fl_mcp.kernel.launch import JobLimits, KernelProcess, Launcher, Workspace
+from fl_mcp.kernel.probe import loopback_listener
 from fl_mcp.kernel.wire import BoundaryProbe
 
 log = logging.getLogger(__name__)
@@ -41,7 +42,7 @@ log = logging.getLogger(__name__)
 TOOL_JOB = JobLimits(memory_bytes=2 << 30, processes=16)
 # A file operation that runs this long is a pathological search or file.
 FILE_OP_TIMEOUT_SECONDS = 60.0
-# Interpreter start plus the probe's one-second metadata connect; generous for a cold Windows box.
+# Interpreter start plus the probe's one-second connects; generous for a cold Windows box.
 PROBE_TIMEOUT_SECONDS = 60.0
 # shell enforces the command's own timeout inside the op; this backstop covers
 # the op itself (its start, its answer) and is past the command's timeout.
@@ -122,12 +123,14 @@ class WorkspaceRunner:
             if self._breach is not None:
                 raise errors.workspace_unavailable(self._breach, retryable=False)
             try:
-                found = BoundaryProbe.model_validate(self._run("probe", {}, self._probe_timeout))
+                with loopback_listener() as port:
+                    targets = {"home": str(Path.home()), "loopback_port": port}
+                    found = BoundaryProbe.model_validate(self._run("probe", targets, self._probe_timeout))
             except OpTimeout as exc:
                 raise errors.workspace_unavailable("the boundary check did not finish in time.") from exc
             except ValidationError as exc:
                 raise errors.workspace_unavailable("the boundary check answered nonsense.") from exc
-            if found.canary_readable or found.imds_reachable:
+            if found.breached:
                 log.error("workspace boundary probe failed: %s", found)
                 self._breach = (
                     f"its OS boundary is not in place ({found}); refusing to run anything unconfined."

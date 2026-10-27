@@ -308,7 +308,9 @@ def test_a_kernel_claiming_confinement_must_pass_the_boundary_probe(session, wor
     with pytest.raises(ToolError) as caught:
         kernel.run("1")
     assert caught.value.category == "kernel_unavailable"
-    assert "canary_readable=True" in caught.value.message
+    for finding in ("canary_readable=True", "outside_writable=True", "home_readable=True", "loopback_reachable=True"):
+        assert finding in caught.value.message
+    assert not list(workspace.root.glob("probe-write-*"))  # the probe cleans up what it could create
 
 
 # -- the fl wire ---------------------------------------------------------------------

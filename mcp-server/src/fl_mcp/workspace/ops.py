@@ -805,8 +805,8 @@ def shell(workspace: Workspace, command: str, timeout_s: int, log_number: int) -
 # -- the boundary probe -----------------------------------------------------------------
 
 
-def probe(workspace: Workspace) -> dict[str, bool]:
-    return boundary_probe(workspace.canary)
+def probe(workspace: Workspace, home: str, loopback_port: int) -> dict[str, bool]:
+    return boundary_probe(workspace.canary, Path(home), loopback_port)
 
 
 OPS = {

@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 from fl_mcp.kernel.launch import Launcher, PosixLauncher
+from fl_mcp.kernel.seatbelt import SeatbeltLauncher
 from fl_mcp.kernel.windows import AppContainerLauncher
 from fl_mcp.platform import (
     BrokerEndpoint,
@@ -20,6 +21,7 @@ from fl_mcp.platform import (
     WindowsPlatform,
     platform_for,
 )
+from fl_mcp.platform.runtime import ENV_KERNEL_UNCONFINED
 from fl_mcp.session.link import ControlCarrier
 
 
@@ -36,9 +38,11 @@ def test_unsupported_platform_names_the_platform_and_remedy():
         platform_for("linux").fl_install()
 
 
-def test_kernel_launcher_is_confined_only_where_the_platform_can_confine_it(monkeypatch):
-    """Windows (production) is AppContainer; macOS is a dev host with no OS boundary (docs/38)."""
-    assert MacPlatform().kernel_launcher().confined is False
+def test_kernel_launcher_confines_model_code_on_every_supported_platform(monkeypatch):
+    """Windows is AppContainer and macOS is Seatbelt (docs/38); Linux runs no model code."""
+    monkeypatch.delenv(ENV_KERNEL_UNCONFINED, raising=False)
+    assert isinstance(MacPlatform().kernel_launcher(), SeatbeltLauncher)
+    assert MacPlatform().kernel_launcher().confined is True
     monkeypatch.setenv("SYSTEMROOT", r"C:\Windows")
     monkeypatch.setattr("fl_mcp.platform.runtime.CtypesWin32", lambda icacls: ("win32-api", icacls.name))
     launcher = WindowsPlatform().kernel_launcher()
@@ -47,6 +51,18 @@ def test_kernel_launcher_is_confined_only_where_the_platform_can_confine_it(monk
     assert launcher.api == ("win32-api", "icacls.exe")
     with pytest.raises(PlatformUnsupportedError):
         platform_for("linux").kernel_launcher()
+
+
+def test_a_mac_developer_can_opt_out_of_the_sandbox_and_nothing_else_does(monkeypatch):
+    """Only "1" opts out; any other value stops the server instead of guessing."""
+    monkeypatch.setenv(ENV_KERNEL_UNCONFINED, "1")
+    launcher = MacPlatform().kernel_launcher()
+    assert isinstance(launcher, PosixLauncher) and launcher.confined is False
+    monkeypatch.setenv(ENV_KERNEL_UNCONFINED, "0")
+    assert MacPlatform().kernel_launcher().confined is True
+    monkeypatch.setenv(ENV_KERNEL_UNCONFINED, "yes")
+    with pytest.raises(ValueError, match="FLMCP_KERNEL_UNCONFINED must be 0 or 1"):
+        MacPlatform().kernel_launcher()
 
 
 class _FakeSweep:

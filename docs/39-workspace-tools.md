@@ -1,12 +1,12 @@
 # Workspace tools: a coding agent's tools, confined by the OS
 
-**Status: current** (2026-10-22, engine phase of the workspace tools design; the box acceptance below passed on a Windows box 2026-10-23).
+**Status: current** (2026-10-22, engine phase of the workspace tools design; the box acceptance below passed on a Windows box 2026-10-23; macOS confined by Seatbelt since 2026-10-26).
 
 ## What changed
 
 The engine can serve six general-purpose tools beside the FL tools: `shell`, `read_file`, `write_file`, `edit_file`, `glob` and `grep`.
 They are the tools a coding agent such as Claude Code, Codex or opencode has, confined to the session's workspace folder.
-The boundary is the one the `run` kernel already has ([38](38-python-kernel.md)): on Windows every call is an AppContainer process that can reach only its workspace.
+The boundary is the one the `run` kernel already has ([38](38-python-kernel.md)): on Windows every call is an AppContainer process and on macOS a Seatbelt sandbox, and either can reach only its workspace.
 They are off unless asked for, so the fl-mcp-v1 tool surface does not change when a box pins a newer wheel.
 
 ## Turning them on
@@ -18,7 +18,8 @@ They are off unless asked for, so the fl-mcp-v1 tool surface does not change whe
 | `fl-mcp --workspace-only` | The six workspace tools alone, with no FL session: the server never starts or connects to FL. For computer-use runs, where the model reaches FL through the desktop. |
 
 The MCP `serverInfo.description` ends with `; confined=true` or `; confined=false`.
-It says whether this host's launcher confines model code (`run` and the workspace tools) to the workspace: true on Windows, false on macOS and Linux dev hosts.
+It says whether this host's launcher confines model code (`run` and the workspace tools) to the workspace: true on Windows and macOS.
+It is false only on a Mac where a developer opted out with `FLMCP_KERNEL_UNCONFINED=1` ([38](38-python-kernel.md#opting-out-for-engine-development-only)), and on an unsupported OS, which runs no model code.
 On a confined host nothing runs unconfined: if the boundary check fails, every call is refused.
 
 `contracts/fl-mcp.json` publishes the workspace tools under `workspace_tools`, the gate under `env`, and the flag and description format under `server` ([36](36-engine-contract.md)).
@@ -100,8 +101,8 @@ The server's own deadline is the command's timeout plus 15 s; past it the op is 
 When a call ends, its process tree is stopped: the job on Windows, the process group on macOS and Linux.
 A command that leaves a background process gets a note saying it was stopped.
 
-Before the first call on a confined host, the runner launches the op once as a boundary probe: it must not read `<root>/boundary-canary` or connect to `169.254.169.254:80`.
-If either succeeds, every workspace call fails with `kernel_unavailable` (not retryable) and nothing more is launched.
+Before the first call on a confined host, the runner launches the op once as the kernel's boundary probe ([38](38-python-kernel.md#verified-not-hoped)): it must not read `<root>/boundary-canary`, create a file beside it, list the user's home folder, or connect to the metadata address or a loopback port the server holds open.
+If any succeeds, every workspace call fails with `kernel_unavailable` (not retryable) and nothing more is launched.
 A probe that cannot finish is retried on the next call.
 
 The workspace is granted to the AppContainer once and revoked when the session closes, by `WorkspaceRunner.close()` as well as `KernelHost.close()`.
@@ -109,8 +110,8 @@ The launcher remembers what it granted, because `icacls` rewrites the ACL of eve
 A release is final: a launch that races shutdown is refused rather than granting the finished session again.
 The server's shutdown closes the workspace tools, the kernel and the FL session as separate steps, so one failing (a revoke `icacls` refuses) does not skip the others.
 
-On macOS dev hosts nothing confines the calls; they run with the developer's access, like the kernel ([38](38-python-kernel.md#macos-and-linux-dev-hosts)).
-A command that calls `setsid` can also leave its process group there.
+On macOS each call runs in the kernel's Seatbelt sandbox, generated for the session's workspace ([38](38-python-kernel.md#macos-boundary-seatbelt)); there is nothing to grant or revoke.
+A command that calls `setsid` can leave its process group there, so stopping the call may miss it; it stays sandboxed.
 The engine's platforms are Windows and macOS, so `--workspace-only` refuses to start on Linux.
 
 ## Box contract

@@ -162,6 +162,16 @@ Setup diagnostics are for the operator, not the model: `fl-mcp-doctor` prints th
 Three complementary lanes: [`flpkit`](https://pypi.org/project/flpkit/) edits project files, the native Bridge plugin performs live host operations, and the MIDI controller script handles live controller operations.
 [SETUP.md](SETUP.md) covers installing from a source checkout and building the Bridge.
 
+## Security
+
+The Python the model writes in `run`, and the shell and file tools when they are on, runs in a sandbox limited to its own workspace folder, on macOS and Windows.
+It can read and write that folder and reach the public internet, so `pip install` works.
+It cannot read your home folder or your other files, reach services on this computer (FL's control ports included), or touch other programs.
+The engine itself, FL Studio and the Bridge are not sandboxed; the model's code reaches FL only through the engine.
+Before any model code runs, the engine checks that the sandbox holds and refuses to run the code if it does not; the MCP server reports `confined=true`.
+On macOS the sandbox does not block other computers on your local network.
+Details: [docs/38](docs/38-python-kernel.md).
+
 ## Development
 
 For a disposable live smoke session, run `fl-mcp-dev-session`. For the local merge gate, run:

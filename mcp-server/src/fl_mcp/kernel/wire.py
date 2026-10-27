@@ -96,10 +96,17 @@ class Reply(BaseModel):
 
 
 class BoundaryProbe(BaseModel):
-    """What the kernel could reach that its OS boundary must deny."""
+    """What the kernel could reach that its OS boundary must deny (kernel.probe)."""
 
     canary_readable: bool
+    outside_writable: bool
+    home_readable: bool
     imds_reachable: bool
+    loopback_reachable: bool
+
+    @property
+    def breached(self) -> bool:
+        return any(self.model_dump().values())
 
 
 class Ready(BaseModel):

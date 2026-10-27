@@ -13,7 +13,12 @@ from typing import TYPE_CHECKING, Protocol, runtime_checkable
 from fl_mcp.core.carriers.wire import MidiControl, windows_midi_control
 from fl_mcp.fl import paths, process
 from fl_mcp.kernel.launch import Launcher, PosixLauncher
+from fl_mcp.kernel.seatbelt import SeatbeltLauncher
 from fl_mcp.kernel.windows import AppContainerLauncher, CtypesWin32, icacls_path
+
+# macOS only: "1" runs model code unconfined, with the developer's own access,
+# for working on the engine where the sandbox gets in the way (docs/38).
+ENV_KERNEL_UNCONFINED = "FLMCP_KERNEL_UNCONFINED"
 
 if TYPE_CHECKING:
     from fl_mcp.session.link import ControlCarrier
@@ -129,7 +134,10 @@ class MacPlatform:
         return _ExistingProcessSweep()
 
     def kernel_launcher(self) -> Launcher:
-        return PosixLauncher()  # a dev host: no OS boundary (docs/38)
+        value = os.environ.get(ENV_KERNEL_UNCONFINED, "0")
+        if value not in ("0", "1"):
+            raise ValueError(f"{ENV_KERNEL_UNCONFINED} must be 0 or 1; got {value!r}")
+        return PosixLauncher() if value == "1" else SeatbeltLauncher()
 
 
 class WindowsPlatform:

@@ -28,6 +28,7 @@ from fl_mcp.contract import RunResult
 from fl_mcp.errors import ToolError
 from fl_mcp.kernel import wire
 from fl_mcp.kernel.launch import KernelProcess, Launcher, Workspace
+from fl_mcp.kernel.probe import loopback_listener
 from fl_mcp.session import FLSession
 
 log = logging.getLogger(__name__)
@@ -258,9 +259,19 @@ class KernelHost:
         )
 
     def _boot(self) -> _Kernel:
-        argv = [sys.executable, "-I", "-m", "fl_mcp.kernel.child"]
-        if self._launcher.confined:
-            argv += ["--probe", str(self.workspace.canary)]
+        if not self._launcher.confined:
+            return self._start([sys.executable, "-I", "-m", "fl_mcp.kernel.child"])
+        with loopback_listener() as port:
+            return self._start(
+                [
+                    sys.executable, "-I", "-m", "fl_mcp.kernel.child",
+                    "--probe", str(self.workspace.canary),
+                    "--probe-home", str(Path.home()),
+                    "--probe-port", str(port),
+                ]
+            )  # fmt: skip
+
+    def _start(self, argv: list[str]) -> _Kernel:
         env = self.workspace.kernel_env(self._environ, python=Path(sys.executable))
         try:
             kernel = _Kernel(self._launcher(argv, workspace=self.workspace, env=env))
@@ -272,7 +283,7 @@ class KernelHost:
             code = kernel.kill()
             reason = "did not start in time" if message is None else f"exited with code {code}"
             raise errors.kernel_unavailable(f"the kernel {reason}.{kernel.stderr_note()}")
-        if self._launcher.confined and (message.probe is None or _breached(message.probe)):
+        if self._launcher.confined and (message.probe is None or message.probe.breached):
             kernel.kill()
             log.error("kernel boundary probe failed: %s", message.probe)
             raise errors.kernel_unavailable(
@@ -393,7 +404,3 @@ class KernelHost:
         # never reads the reply (an interrupt, a later error, a lost kernel).
         cell.actions.called(call.method, kwargs, value)
         return wire.encode_result(call.method, value)
-
-
-def _breached(probe: wire.BoundaryProbe) -> bool:
-    return probe.canary_readable or probe.imds_reachable

@@ -1,6 +1,6 @@
 # The run kernel: full Python, confined by the OS
 
-**Status: current** (2026-10-18, replaces the restricted `run` namespace from PR #196).
+**Status: current** (2026-10-18, replaces the restricted `run` namespace from PR #196; macOS confined by Seatbelt since 2026-10-26).
 
 ## What changed
 
@@ -8,6 +8,7 @@
 The code is full Python: every import, introspection, files, `time.sleep`, numpy, and package installs with `%pip install x` or `!pip install x`.
 The boundary is the operating system, not a Python allowlist.
 On Windows, the production FL boxes, the kernel is an AppContainer process that can reach only its own workspace.
+On macOS it is a Seatbelt sandbox with the same reach (since 2026-10-26; until then the macOS kernel ran unconfined, with the user's own access).
 The namespace guard, its import and builtin lists, and the `restricted_namespace` error are deleted.
 
 PR #196 said its filter was "not a Python security sandbox; the contestant box remains the real boundary".
@@ -22,7 +23,7 @@ The workspace tools (`shell` and the file tools, [39](39-workspace-tools.md)) ru
 | `KernelHost` | MCP server, `kernel/host.py` | Boots the kernel, sends cells, serves its `fl` calls, enforces the time budget. |
 | kernel | child process, `kernel/child.py` | One persistent namespace; runs cells with `kernel/cell.py`. |
 | wire | `kernel/wire.py` | Newline-delimited JSON over the kernel's stdin/stdout pipes. |
-| launcher | `Platform.kernel_launcher()` | Starts the process; on Windows this is the security boundary (`kernel/windows.py`). |
+| launcher | `Platform.kernel_launcher()` | Starts the process; this is the security boundary (`kernel/windows.py` on Windows, `kernel/seatbelt.py` on macOS). |
 
 The server still owns the FL session.
 Inside the kernel, `fl` is the real SDK (`sdk.FL`) over a stand-in session whose every method is a wire call to the server.
@@ -119,15 +120,76 @@ A dedicated account fails open: the same directory inherits `Users` read access 
 
 ### Verified, not hoped
 
-When the launcher is confined, the kernel runs a boundary probe before its first cell.
-It tries to read `<root>/boundary-canary` and to open a TCP connection to `169.254.169.254:80`.
-If either succeeds, the server kills the kernel and `run` fails with `kernel_unavailable`; model code never runs unconfined.
+On both platforms the kernel runs a boundary probe before its first cell (`kernel/probe.py`).
+It tries to read `<root>/boundary-canary`, to create a file beside it (outside `work`), to list the user's home folder, to open a TCP connection to the metadata address (`169.254.169.254:80` and `[fd00:ec2::254]:80`), and to connect to a loopback port the server holds open for the probe.
+If any of them succeeds, the server kills the kernel and `run` fails with `kernel_unavailable`; model code never runs unconfined.
+A launcher that cannot start the sandbox at all (for example `sandbox-exec` missing) also ends in `kernel_unavailable`.
+The write, home, IPv6 metadata and loopback checks were added with the macOS sandbox on 2026-10-26; Windows denied them before (see "Acceptance on a box"), but the probe did not check them.
+The probe checks these core properties on every user's machine at every start; the rest of the contract below (other processes, other addresses of this machine, system services) is pinned by the darwin tests, which run on development Macs, not on users' machines.
 
-### macOS and Linux dev hosts
+## macOS boundary: Seatbelt
 
-The kernel is a plain subprocess in its own process group, with the workspace as cwd and home and the same built environment.
-Nothing confines it; it runs with the developer's access.
-`sandbox-exec` was not adopted: it is deprecated and its profiles break as macOS changes, and dev hosts are not where untrusted models run.
+The kernel, and every workspace-tool call, starts under `/usr/bin/sandbox-exec` with a profile `kernel/seatbelt.py` generates for that workspace.
+The profile denies everything by default, like an AppContainer, and then allows:
+
+| Access | What |
+| --- | --- |
+| read and write | `<root>/work` |
+| read | `<root>/renders` |
+| read and run | the engine's interpreter: what it reports as `sys.executable`, `sys.prefix`, `sys.base_prefix` and its `-I` `sys.path` (uvx's environment and uv's managed Python, a venv, or an editable checkout), with every symlink on the way |
+| read and run | the system's software: `/System`, `/usr`, `/bin`, `/sbin`, `/Library/Frameworks`, `/opt/homebrew`, the selected developer tools (Xcode or the Command Line Tools), `/etc`, time zones |
+| outbound network | the internet, so pip works |
+| services | user lookup and certificate checks (pip verifies HTTPS with the system trust store) |
+
+Everything else is denied, including:
+
+- The user's home folder (`~/.ssh`, `~/Library/Keychains`, `~/.config`, `~/.aws`, browser profiles), other kernels' workspaces, the canary, and Homebrew's service data (`/opt/homebrew/var`).
+- This machine on the network: Seatbelt's `localhost` covers loopback and the machine's own addresses, so the FL control broker, the Bridge's ports and every other local service are unreachable, and so are Unix sockets other than the system DNS resolver's.
+- Other processes: the kernel can see and signal only processes in its own sandbox, so it cannot stop the server or read another process's arguments and environment (the server's environment can hold credentials).
+  Reading another process's arguments needed two rules to close: an explicit `process-info` deny and a short `sysctl-read` list; either alone let `kern.procargs2` through.
+- Apple Events, CoreMIDI, the pasteboard, the keychain and every other system service, because Mach service lookups are denied.
+  So the model's code cannot drive FL or another app around the server.
+
+The kernel's wire to the server is its inherited stdio pipes, so the sandbox needs no rule for it: `fl` calls reach the server exactly as before, and the server, FL and the Bridge are never sandboxed.
+Each path reaches the profile as a `sandbox-exec -D` parameter, never as profile text, so a workspace path cannot change the profile.
+`sandbox-exec` replaces itself with the kernel, so the kernel is still the leader of its own process group and a kill takes its whole tree, as before.
+
+### Why Seatbelt
+
+| Option | Verdict |
+| --- | --- |
+| Seatbelt through `sandbox-exec` | Chosen. Built into every macOS, with no install and no privileges. Chromium and Firefox confine their content processes with Seatbelt, and Bazel and Codex CLI run this same command. Apple marks the command deprecated, but it ships and works on macOS 26. |
+| App Sandbox entitlements | Applies to signed app bundles at launch; it cannot confine a Python child of a command-line server. |
+| A dedicated user account | Needs administrator setup and a password; allow by default for anything world-readable. |
+| A container or VM (Docker, Apple Virtualization) | A large install for every user, and the kernel would need the engine's Python inside it. |
+
+The risk with Seatbelt is a macOS release that changes what a process needs.
+A change that breaks a probed property (reading or writing outside the workspace, the home folder, loopback) shows as `kernel_unavailable` on every Mac, never as unconfined code; the darwin tests in `test_kernel_seatbelt.py` catch the rest when they run on a development Mac.
+
+### Opting out, for engine development only
+
+`FLMCP_KERNEL_UNCONFINED=1` makes the macOS kernel and workspace tools a plain subprocess with your own access, and `serverInfo` says `confined=false`.
+It exists for working on the engine itself when the sandbox is in the way; never set it where a model you do not control writes the code.
+Unset or `0` keeps the sandbox; any other value stops the server at startup.
+Windows has no such setting.
+
+### What macOS does not limit
+
+- The local network and the metadata address: Seatbelt can name only `localhost` or every address, so other machines on your network are reachable.
+  The probe's metadata check passes on a Mac because nothing answers there; a Mac in a cloud with a metadata service would fail it and refuse to run.
+- Memory, process count and disk: macOS has no per-tree cap a user can set, so the 4 GiB and 32-process job limits are Windows only, and model code can fill the disk through its workspace.
+- Who is on this Mac: user lookup is allowed (Python's `pwd` and `getpass` need it), so the local account names and the computer's name are readable; no file or secret behind them is.
+- A command that calls `setsid` can leave the kernel's process group, so a kill may miss it; it stays sandboxed.
+
+**Acceptance on a Mac** (each is a darwin test in `test_kernel_seatbelt.py`)
+
+- Writing outside `work` and listing `~` or `~/.ssh` raise `PermissionError`.
+- Reading another session's `work/secret.txt` raises `PermissionError`.
+- `socket.create_connection(...)` to a live local listener on `127.0.0.1`, `::1`, or the Mac's own network address raises `PermissionError`.
+- `fl.track(...).write(...)`, `fl.set_tempo(...)` and `fl.render(...)` work in the same kernel.
+- `%pip install six` then `import six` succeeds, and so does an HTTPS fetch (set `FLMCP_NETWORK_TESTS=1`).
+- A cell killed past its budget takes the processes it started with it.
+- In `shell`, `osascript -e 'tell application "Finder" to get version'`, `pbpaste` and `defaults read -g` print nothing.
 
 ## Box contract
 
@@ -173,6 +235,9 @@ It comes from the venv's `python.exe` redirector resolving its own path, and it 
 It lands in the server log for the kernel, and in the output of `%pip` and `!python` cells.
 
 ## Open risks
+
+- The macOS sandbox rests on `sandbox-exec`, which Apple marks deprecated; see "Why Seatbelt" for how a change would show.
+- The probe's home and loopback checks are new on Windows (2026-10-26) and not yet run on a Windows box; the box lockdown check already proved both denied.
 
 - First real-Windows run (dev box, 2026-10-18) found that the null device and 0o700 directories are denied inside the container; both are fixed above.
 - `PIP_TARGET` installs a package's dependencies even when the engine venv already has them; imports still resolve to the engine's copies first.
