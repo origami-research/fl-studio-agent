@@ -17,6 +17,7 @@ output against ``RESULT_CHARS`` measured that way and says how to get the rest.
 
 from __future__ import annotations
 
+import errno
 import fnmatch
 import io
 import json
@@ -142,12 +143,21 @@ def _not_a_folder(workspace: Workspace, path: Path, shown: str) -> None:
         raise OpError(f"{shown} is a folder, not a file.", "List it with glob.")
 
 
+# The errors pathlib's is_dir/is_file read as "no such thing" up to Python 3.13.
+_ABSENT_ERRNOS = frozenset({errno.ENOENT, errno.ENOTDIR, errno.EBADF, errno.ELOOP})
+
+
 def _is(check: Any, workspace: Workspace, path: Path, shown: str) -> bool:
-    """``path.is_dir``/``is_file``, with a denial (Python 3.12+ raises it) told plainly."""
+    """``path.is_dir``/``is_file``, with a denial told plainly. Python 3.12 and 3.13
+    raise a denial from the check, but 3.14 returns False for any OSError, which read
+    as "does not exist"; so stat first and decide from its error on every version."""
     try:
-        return bool(check())
+        path.stat()
     except OSError as exc:
+        if exc.errno in _ABSENT_ERRNOS:
+            return False
         raise _os_error(exc, workspace, path, shown) from exc
+    return bool(check())
 
 
 def _os_error(exc: OSError, workspace: Workspace, path: Path, shown: str) -> OpError:
