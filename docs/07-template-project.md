@@ -10,10 +10,10 @@ What follows is what ships.
 ## What the engine needs from the project
 
 - **The FL MCP Bridge on the Master insert, loaded when FL opens the project.**
-  The engine cannot add a plugin to an open project: FL's `ilmcp.addEffect` is unavailable from the controller interpreter ([25-fl-capability-catalog.md](25-fl-capability-catalog.md)), and no Bridge op loads plugins.
+  The engine cannot add a plugin to an open project: FL's `ilmcp.addEffect` is unavailable from the controller interpreter, and no Bridge op loads plugins.
   Without the Bridge, notes, render, `check` and the audio stream do not work.
 - **One Bridge, after every other Master effect.**
-  Render records the Bridge's own input, so effects after it on Master are not heard; two Bridges sharing one spool ledger misbehave (`native/bridge/BRIDGE_FINDINGS.md`).
+  Render records the Bridge's own input, so effects after it on Master are not heard; two Bridges sharing one spool ledger misbehave.
   FL stores it as an effect tuple whose internal name (event 201) is `FL MCP Bridge`; FL loads whatever binary sits in `Plugins/Fruity/Effects/FL MCP Bridge/`.
 - **A file the engine can read.** Reads overlay the saved project (`channel_names`, `get_scene`, note state), parsed with flpkit.
 - **Patterns that already exist.** The engine cannot create patterns; note writes target an existing pattern (default 1).
