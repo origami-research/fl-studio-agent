@@ -1,0 +1,57 @@
+name: publish
+
+# Step 7 of docs/oss/launch-checklist.md on a fresh macOS runner, started by hand
+# after the release commit is merged. It rebuilds the public mirror from a fresh
+# mirror clone of this repository and runs scripts/oss/publish-public-mirror.sh,
+# which verifies that mirror in the same run (the full suite, the macOS sandbox
+# tests and the Bridge build need macOS), uploads to PyPI, reads it back, pushes
+# the public main and tag, and waits for the public release workflow.
+#
+# Secrets (repository Actions secrets, never printed):
+#   PYPI_API_TOKEN       the PyPI token for fl-studio-agent
+#   PUBLIC_REPO_TOKEN    a fine-grained GitHub token for origami-research/fl-studio-agent
+#                        with Contents and Workflows read/write and Actions read
+# The mirror clone reads this repository with the job's own GITHUB_TOKEN.
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: version tag to publish, matching mcp-server/pyproject.toml, e.g. v0.1.5
+        required: true
+      resume:
+        description: finish a run that stopped after the PyPI upload
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: publish
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    if: github.repository == 'origami-research/fl-studio-mcp'
+    runs-on: macos-15
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@v5
+      - name: Publish
+        env:
+          TAG: ${{ inputs.tag }}
+          RESUME: ${{ inputs.resume && '--resume' || '' }}
+          OSS_PRIVATE_REMOTE: https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git
+          GH_TOKEN: ${{ secrets.PUBLIC_REPO_TOKEN }}
+          UV_PUBLISH_TOKEN: ${{ secrets.PYPI_API_TOKEN }}
+        run: |
+          # Without the secrets the script still builds and verifies the mirror, then refuses at
+          # its token check before any upload or push: a dry run of everything that needs macOS.
+          [ -z "$GH_TOKEN" ] || gh auth setup-git
+          scripts/oss/build-public-mirror.sh "$RUNNER_TEMP/mirror.git"
+          scripts/oss/publish-public-mirror.sh --repo origami-research/fl-studio-agent --tag "$TAG" \
+            --mirror "$RUNNER_TEMP/mirror.git" --i-approve-publication $RESUME

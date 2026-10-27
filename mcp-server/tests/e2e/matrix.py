@@ -207,7 +207,12 @@ requires_fl_data = pytest.mark.skipif(
 def selected(env_var: str, default: str = "") -> list[MatrixProject]:
     """The matrix trimmed by a comma-separated id list from ``env_var``
     (unset/empty -> ``default``; empty default -> the whole matrix). An
-    unknown id is an operator typo and fails loudly."""
+    unknown id is an operator typo and fails loudly. Without FL's Data dir the
+    matrix is empty and so is the selection: the parametrized tests skip, and
+    ``pytest`` still collects on a machine with no FL (a release runner, a
+    contributor)."""
+    if not MATRIX:
+        return []
     chosen = os.environ.get(env_var, "") or default
     if not chosen:
         return MATRIX

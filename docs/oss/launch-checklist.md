@@ -13,7 +13,17 @@ flpkit 0.8.1 was published on 2026-09-06; the engine now depends on the released
 
 ## Step 7, mechanised: every release
 
-One command publishes a release, the first or any later one:
+Releases run on a fresh macOS runner, not on a developer Mac (owner rule of 2026-10-27: no test suites on the owner's Mac).
+After the release commit is merged, start the `publish` workflow by hand; starting it is the publication approval:
+
+```bash
+gh workflow run publish.yml -f tag=vX.Y.Z            # add -f resume=true to finish a run that stopped after the PyPI upload
+```
+
+It needs two repository Actions secrets: `PYPI_API_TOKEN` (the PyPI token for fl-studio-agent) and `PUBLIC_REPO_TOKEN` (a fine-grained GitHub token for origami-research/fl-studio-agent with Contents and Workflows read/write and Actions read).
+Without the secrets the run builds and verifies the mirror, then refuses at the PyPI token check before any upload or push, which makes it a dry run.
+The verification needs macOS: the native Bridge build fetches a Windows/macOS SDK, and a Linux box fails it (tried 2026-10-27).
+The workflow runs the same two commands a release machine would:
 
 ```bash
 scripts/oss/build-public-mirror.sh <mirror.git>
