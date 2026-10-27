@@ -71,6 +71,26 @@ def test_rerun_with_the_release_already_installed_downloads_only_the_checksums(f
     assert release.fetched == [f"{bridge.RELEASE_DOWNLOAD}/v0.1.2/SHA256SUMS"]
 
 
+def test_a_current_bridge_reruns_without_writing_anything(fl, monkeypatch):
+    """A rerun from a terminal that is not elevated (Windows Program Files is read-only
+    there) must report the installed Bridge already current, not Permission denied:
+    0.1.3 rewrote Plugin.nfo on every run and said "bridge needs you" (2026-10-27)."""
+    release = Release({ASSET: b"universal bridge"})
+    bridge.install_release(fetch=release)
+
+    def read_only(self, *args, **kwargs):
+        raise PermissionError(13, "Permission denied", str(self))
+
+    record = fl / bridge.SOURCE_RECORD  # as Windows' text mode wrote it before this fix
+    record.write_bytes(record.read_bytes().replace(b"\n", b"\r\n"))
+    monkeypatch.setattr(bridge.Path, "write_bytes", read_only)
+    monkeypatch.setattr(bridge.Path, "write_text", read_only)
+    step = bridge.install_release(fetch=release)
+
+    assert step.status == "OK" and "already current" in step.detail
+    assert (fl / "Plugin.nfo").read_bytes() == b"ps_Vendorname=FL MCP\n"  # byte-identical to before
+
+
 def test_a_download_that_does_not_match_the_checksum_is_never_installed(fl):
     """A corrupt or truncated download must not reach FL's plugin folder."""
     release = Release({ASSET: b"truncated"}, sums={ASSET: b"the real bridge"})

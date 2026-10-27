@@ -117,11 +117,11 @@ def _place(data: bytes, source: str, *, explicit: bool) -> InstallStep:
             staged.write_bytes(data)
             staged.replace(library)
         # Capital V matches the field in stock plugins' Plugin.nfo (e.g. Fruity Balance).
-        (dest_dir / "Plugin.nfo").write_bytes(b"ps_Vendorname=FL MCP\n")
-        (dest_dir / SOURCE_RECORD).write_text(f"{source}\nsha256 {digest}\n", encoding="utf-8")
+        _write_if_changed(dest_dir / "Plugin.nfo", "ps_Vendorname=FL MCP\n", newline="\n")
+        _write_if_changed(dest_dir / SOURCE_RECORD, f"{source}\nsha256 {digest}\n")
         fl_build = detect_fl_version()  # macOS only; the doctor compares it with the running FL
         if fl_build is not None:
-            (dest_dir / BRIDGE_BUILD_RECORD).write_text(f"{fl_build.label()}\n", encoding="utf-8")
+            _write_if_changed(dest_dir / BRIDGE_BUILD_RECORD, f"{fl_build.label()}\n")
     except OSError as exc:
         with contextlib.suppress(OSError):
             (dest_dir / f".{bridge_binary_name()}.partial").unlink(missing_ok=True)
@@ -137,6 +137,17 @@ def _place(data: bytes, source: str, *, explicit: bool) -> InstallStep:
     if current:
         return InstallStep(status="OK", detail=f"{library} ({source}, already current)")
     return InstallStep(status="OK", detail=f"{library} ({source}, installed); restart FL Studio to load it")
+
+
+def _write_if_changed(path: Path, text: str, *, newline: str | None = None) -> None:
+    """A current install needs no write, so a rerun from a terminal that is not elevated
+    (to refresh the scripts) reports the Bridge already current instead of Permission
+    denied on Program Files (2026-10-27, a 0.1.3 rerun on Windows). The comparison reads
+    text, so the records Windows wrote with CRLF line endings count as current."""
+    with contextlib.suppress(OSError, UnicodeDecodeError):
+        if path.read_text(encoding="utf-8") == text:
+            return
+    path.write_text(text, encoding="utf-8", newline=newline)
 
 
 def install_built(built: Path) -> InstallStep:

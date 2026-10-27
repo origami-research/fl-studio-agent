@@ -394,7 +394,8 @@ def install_all(bridge_library: Path | None = None, *, with_bridge: bool = True)
 
 
 NEXT_STEPS = (
-    "Next: open FL Studio, then start your MCP client (it launches the server). "
+    "Next: open FLMCP Agent.flp in FL Studio (File > Open, FL's Projects folder), "
+    "then start your MCP client (it launches the server). "
     "Check the connection any time with fl-mcp-doctor."
 )
 
