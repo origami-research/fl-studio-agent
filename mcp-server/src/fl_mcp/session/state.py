@@ -102,7 +102,7 @@ def snapshot(session: FLSession) -> SessionState:
 
 def doctor(session: FLSession, *, clock: Callable[[], float] = time.time) -> DoctorReport:
     """Typed report - control plane, note plane, project file - with a
-    concrete ``fix`` string per degraded plane."""
+    concrete ``fix`` string per plane that is not connected."""
 
     def failed_probe(plane: str, exc: Exception) -> PlaneStatus:
         detail = f"{plane} probe failed: {exc}"
@@ -133,8 +133,9 @@ def doctor(session: FLSession, *, clock: Callable[[], float] = time.time) -> Doc
     except Exception as exc:  # noqa: BLE001 - doctor must report failed probes
         control_plane = failed_probe("control plane", exc)
 
+    bridge = _bridge_install()
     try:
-        note_plane = _note_plane_status(clock=clock)
+        note_plane = _note_plane_status(bridge_installed=bridge.installed, clock=clock)
     except Exception as exc:  # noqa: BLE001 - doctor must report failed probes
         note_plane = failed_probe("note plane", exc)
     supported, profile_detail = profile_gate()
@@ -166,11 +167,11 @@ def doctor(session: FLSession, *, clock: Callable[[], float] = time.time) -> Doc
         and (fl_pid_alive is not False)
     )
     return DoctorReport(
-        status="ok" if all_connected else "degraded",
+        status="ok" if all_connected else "not_ready",
         control_plane=control_plane,
         note_plane=note_plane,
         project_file=project_file,
-        bridge=_bridge_install(),
+        bridge=bridge,
     )
 
 
@@ -246,7 +247,7 @@ def _control_plane_status(session: FLSession, liveness: dict[str, int | bool | N
     )
 
 
-def _note_plane_status(*, clock: Callable[[], float] = time.time) -> PlaneStatus:
+def _note_plane_status(*, bridge_installed: bool, clock: Callable[[], float] = time.time) -> PlaneStatus:
     scripts_dir = piano_roll_scripts_dir()
     script_installed = scripts_dir is not None and (scripts_dir / PYSCRIPT_NAME).is_file()
     roots = spool_roots()
@@ -297,7 +298,12 @@ def _note_plane_status(*, clock: Callable[[], float] = time.time) -> PlaneStatus
             stream = _stream_detail(heartbeat)
             if stream is not None:
                 return PlaneStatus(connected=True, detail=f"spool at {root}; {stream}")
-    if fl_process_running() and not any(_ticking(root, clock) for root in roots):
+    ticking = any(_ticking(root, clock) for root in roots)
+    if not ticking and not bridge_installed:
+        # The engine needs the Bridge for notes and render; with FL open or closed,
+        # nothing works until it is installed.
+        return PlaneStatus(connected=False, detail=NOT_INSTALLED_DETAIL, fix=NOT_INSTALLED_FIX)
+    if fl_process_running() and not ticking:
         # FL is open and no Bridge ticks: the open project is not the agent
         # project. Writes would go nowhere and render refuses, yet this said
         # "connected" (2026-10-26, a new Windows user who opened FL as the README said).
@@ -311,6 +317,11 @@ def _ticking(root: Path, clock: Callable[[], float]) -> bool:
     return read_heartbeat(root / BRIDGE_HEARTBEAT_FILE, clock=clock).age <= BRIDGE_HEARTBEAT_FRESH_SECONDS
 
 
+NOT_INSTALLED_DETAIL = "the FL MCP Bridge is not installed in FL Studio, and the engine needs it for notes and render"
+NOT_INSTALLED_FIX = (
+    "Close FL Studio and run `uvx --python 3.12 --from fl-studio-agent fl-mcp-install` "
+    "(on Windows from a terminal opened as administrator), then open FLMCP Agent.flp in FL Studio."
+)
 NO_BRIDGE_DETAIL = "FL Studio is open, but no FL MCP Bridge is running: the open project does not carry it"
 NO_BRIDGE_FIX = (
     "Open FLMCP Agent.flp (FL Studio's Projects folder, created by fl-mcp-install) in FL Studio; "

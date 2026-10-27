@@ -68,13 +68,10 @@ BRIDGE_RESPONSE_TIMEOUT_SECONDS = 10.0
 NOTE_KINDS = ("write_notes", "clear_notes")
 
 
-def _refuse_if_session_bridge_stalled(session: FLSession) -> None:
-    """A session note write reached the file lane: say WHY the bridge was skipped.
-
-    In session mode the file lane is refused anyway (``file_lane_requires_reload``),
-    but when the reason the router skipped the bridge is a loaded bridge whose
-    GUI-thread tick has stopped (a locked Mac, a modal dialog), the producer must
-    hear that diagnosis, not "requires reopening the project file".
+def refuse_if_bridge_stalled(session: FLSession) -> None:
+    """A note write found no live Bridge: say so when the reason is a loaded
+    session Bridge whose GUI-thread tick has stopped (a locked Mac, a modal
+    dialog). The producer must hear that diagnosis, not "open the prepared song".
     """
     root = session.session_spool_root
     if root is None:
@@ -188,7 +185,14 @@ class FileLane:
         # data=[] and mode="replace"); one path serves both kinds.
         session = self._session
         target = op.target
-        _refuse_if_session_bridge_stalled(session)
+        if session.project is None:
+            # A live Bridge that could not verify the target channel, and no file to edit.
+            log.warning("note write refused: the Bridge cannot target channel %s and no project file is configured",
+                        target.channel)
+            raise NotePlaneUnavailable(
+                "FL Studio could not confirm which track to write to, so these notes were not written.",
+                fix="FL may be busy. Retry the write in a moment.",
+            )
         session._prepare_file_write()
         before = known_notes(session, target) or []
         try:

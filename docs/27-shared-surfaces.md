@@ -49,7 +49,7 @@ def detect(link, spool, project, profile) -> Capabilities: ...
 def pick_note_lane(caps: Capabilities, target: Target, breaker: "BridgeBreaker") -> NoteLane: ...
 ```
 
-There is no `FL_MCP_BRIDGE` flag. Bridge eligibility is evidence: fresh heartbeat, protocol match, ping round-trip, breaker closed, and the target constraints the bridge can actually satisfy. File lane remains first-class and always handles offline or channel-targeted writes.
+There is no `FL_MCP_BRIDGE` flag. Bridge eligibility is evidence: fresh heartbeat, protocol match, ping round-trip, breaker closed, and the target constraints the bridge can actually satisfy. Notes need a live Bridge (updated 2026-10-27: a write with none refuses instead of reloading FL); the file lane serves the channel-targeted writes the live Bridge cannot verify.
 
 ## 3. BridgeBreaker
 

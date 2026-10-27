@@ -362,7 +362,7 @@ A trial FL cannot reopen a project it saved, and it answers Save with a modal Bu
 | Where the engine needs FL to save or open a .flp | Code | Trial |
 | --- | --- | --- |
 | FL launch on the agent project (box install, `fl-mcp-dev-session`) | `fl.process.launch_fl` | Works: the file is a fresh copy of the licensed-authored template, never saved by the trial. |
-| File-lane reload after a project-file edit: note writes when the Bridge is not live, tempo and channel-level fallbacks without the control wire, automation, adding effects | `FLSession._reload_fl`, `lifecycle.reload_fl` | Refused: it kills FL and reopens a file the trial may have saved. |
+| File-lane reload after a project-file edit: note writes whose target channel the live Bridge cannot verify, tempo and channel-level fallbacks without the control wire, automation, adding effects | `FLSession._reload_fl`, `lifecycle.reload_fl` | Refused: it kills FL and reopens a file the trial may have saved. |
 | `export_offline` (a second FL rendering the saved project, `-R` or `/R`) | `controls.export_offline` | Refused. |
 | `render_wav` (play the live arrangement once while the Bridge captures) | `controls.render_wav` | Works: it saves nothing, and its length is read live (`controls.live_arrangement_span`). |
 | Bridge note results (save, then parse the saved file) | `BridgeLane._saved_state` | `save_project` is never attempted; the Bridge acknowledgement confirms the write and the session records it. |

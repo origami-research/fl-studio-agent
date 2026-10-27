@@ -11,9 +11,11 @@ for a stale controller. Done with FL closed:
      reg.xml on macOS, HKCU\Software\Image-Line\FL Studio <N> on Windows
   5. Windows only: the two loopMIDI ports the controller talks over must exist
      (macOS needs nothing: the server opens virtual ports itself)
-  6. the native Bridge plugin: the prebuilt one from this version's GitHub
-     release, checksum-verified (fl/bridge.py); ``--bridge PATH`` installs your
-     own build instead, ``--no-bridge`` skips it
+  6. the native Bridge plugin, which the engine needs for notes and render: the
+     prebuilt one from this version's GitHub release, checksum-verified
+     (fl/bridge.py); ``--bridge PATH`` installs your own build instead.
+     ``--no-bridge`` is for hosts that install their own Bridge build (the
+     arena boxes pin theirs by SHA-256 in provision.ps1); it is not a user choice
 
 FL only loads these from fixed locations under the user's Image-Line data
 folder (and the Bridge from inside FL's own install), so they are copied there
@@ -402,13 +404,17 @@ NEXT_STEPS = (
 
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(
-        description="Install the FL-side FL MCP files for this user. Safe to rerun; close FL Studio first."
+        description="Install what FL Studio needs for FL MCP, for this user: the scripts, the MIDI "
+        "assignment, the agent project, and the Bridge plugin the engine requires. "
+        "Safe to rerun; close FL Studio first."
     )
     parser.add_argument("--json", action="store_true", help="print one JSON object of step results")
     source = parser.add_mutually_exclusive_group()
     source.add_argument("--bridge", type=Path, metavar="PATH",
                         help=f"install this Bridge library ({bridge_binary_name()}) instead of the prebuilt release")
-    source.add_argument("--no-bridge", action="store_true", help="leave the Bridge plugin alone")
+    source.add_argument("--no-bridge", action="store_true",
+                        help="for hosts that install their own Bridge build (CI, provisioned boxes): skip the "
+                        "Bridge step. The engine still needs a Bridge in FL; a normal install never uses this")
     args = parser.parse_args(argv)
     results = install_all(args.bridge, with_bridge=not args.no_bridge)
     failed = any(step.status == "FAIL" for step in results.values())

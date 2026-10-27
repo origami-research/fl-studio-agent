@@ -39,7 +39,7 @@ control wire for tempo, plugin parameters, and channel levels; automation clips
 and adding effects still have no live equivalent.
 
 The note plane also requires a tick from a live Bridge process in the last 10
-seconds. `fl_doctor` reports a stopped tick as degraded instead of treating its
+seconds. `fl-mcp-doctor` reports a stopped tick as not ready instead of treating its
 published port as a connection. Unlock the Mac or close an FL modal dialog,
 then retry; the Bridge heartbeat is written from its GUI-thread tick, not a
 separate timer.

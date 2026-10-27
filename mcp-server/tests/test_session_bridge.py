@@ -175,17 +175,30 @@ def test_bridge_clear_spools_clear_notes(monkeypatch, tmp_path, bridge_env, no_r
     assert no_reload == []
 
 
-def test_stale_heartbeat_routes_project_write(monkeypatch, tmp_path, bridge_env, no_reload):
+def assert_refused_without_writing(session: FLSession, spool: FakeSpool, writes: list, no_reload: list) -> None:
+    """The Bridge is required for notes: with none live a write refuses plainly and
+    touches nothing (it used to save FL's open song, rewrite the file, and relaunch FL)."""
+    with pytest.raises(errors.ToolError) as excinfo:
+        session.write_notes(TARGET, NOTES, "merge")
+    assert excinfo.value.category == "note_plane_unavailable"
+    assert "song prepared for you" in excinfo.value.message
+    assert "FLMCP Agent song" in excinfo.value.fix
+    assert excinfo.value.retryable is True
+    assert spool.sent == [], "a dead bridge must never receive commands"
+    assert writes == []
+    assert no_reload == []
+
+
+def test_stale_heartbeat_refuses_a_note_write(monkeypatch, tmp_path, bridge_env, no_reload):
     write_heartbeat(bridge_env, unix_time=int(time.time() - 3600))
-    monkeypatch.setattr(flp, "write_notes", lambda path, notes, *, pattern, channel, mode: list(notes))
+    writes: list[bool] = []
+    monkeypatch.setattr(flp, "write_notes", lambda *args, **kwargs: writes.append(True))
     spool = FakeSpool()
     session, _ = make_session(
         control=selected_channel_control(0), transport=spool, project=template_copy(tmp_path)
     )
 
-    session.write_notes(TARGET, NOTES, "merge")
-    assert routed(session) == "project-write"
-    assert spool.sent == [], "a dead bridge must never receive commands"
+    assert_refused_without_writing(session, spool, writes, no_reload)
 
 
 def test_stale_heartbeat_refuses_a_session_write_before_the_bridge_timeout(
@@ -223,36 +236,36 @@ def test_stale_heartbeat_refuses_a_session_write_before_the_bridge_timeout(
 def test_stale_heartbeat_with_fl_gone_is_not_blamed_on_the_gui_thread(
     monkeypatch, tmp_path, bridge_env, no_reload
 ):
-    """No live bridge pid: the stopped tick is FL being gone, so the session
-    file-lane refusal stands and the liveness path owns the story."""
+    """No live bridge pid: the stopped tick is FL being gone, not a stalled GUI
+    thread, so the write hears the plain "prepared song is not open" refusal."""
     write_heartbeat(bridge_env, unix_time=int(time.time() - 3600))
     monkeypatch.setattr("fl_mcp.session.notes.pid_alive", lambda pid: False)
-    monkeypatch.setattr(flp, "write_notes", lambda *args, **kwargs: None)
+    writes: list[bool] = []
+    monkeypatch.setattr(flp, "write_notes", lambda *args, **kwargs: writes.append(True))
+    spool = FakeSpool()
     session, _ = make_session(
         control=selected_channel_control(0),
-        transport=FakeSpool(),
+        transport=spool,
         project=template_copy(tmp_path),
         session_spool_root=tmp_path,
     )
-    with pytest.raises(errors.ToolError) as excinfo:
-        session.write_notes(TARGET, NOTES, "merge")
-    assert excinfo.value.category == "file_lane_requires_reload"
+
+    assert_refused_without_writing(session, spool, writes, no_reload)
 
 
 @pytest.mark.parametrize("proto", [None, 1], ids=["missing", "mismatched"])
-def test_unspoken_heartbeat_proto_routes_project_write(monkeypatch, tmp_path, bridge_env, no_reload, proto):
-    """A heartbeat whose protocol the server does not speak is refused -
+def test_unspoken_heartbeat_proto_refuses_a_note_write(monkeypatch, tmp_path, bridge_env, no_reload, proto):
+    """A heartbeat whose protocol the server does not speak is no live Bridge -
     exactly analogous to the wire's dropped-frames codec check."""
     write_heartbeat(bridge_env, proto=proto)
-    monkeypatch.setattr(flp, "write_notes", lambda path, notes, *, pattern, channel, mode: list(notes))
+    writes: list[bool] = []
+    monkeypatch.setattr(flp, "write_notes", lambda *args, **kwargs: writes.append(True))
     spool = FakeSpool()
     session, _ = make_session(
         control=selected_channel_control(0), transport=spool, project=template_copy(tmp_path)
     )
 
-    session.write_notes(TARGET, NOTES, "merge")
-    assert routed(session) == "project-write"
-    assert spool.sent == []
+    assert_refused_without_writing(session, spool, writes, no_reload)
 
 
 def test_matching_target_channel_skips_selection(monkeypatch, tmp_path, bridge_env, no_reload):

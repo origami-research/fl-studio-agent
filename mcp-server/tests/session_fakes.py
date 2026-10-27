@@ -212,6 +212,15 @@ def make_session(
     return session, store
 
 
+def live_untargeted_bridge(monkeypatch, root: Path) -> None:
+    """A live Bridge (fresh, compatible heartbeat under ``root``) whose target channel
+    the wire cannot verify, so note writes meet the Bridge requirement and the file
+    lane serves them: how the file lane's own tests reach it."""
+    monkeypatch.setattr(detect_mod, "spool_roots", lambda: [root])
+    heartbeat = f"unix_time={int(time.time())}\nproto={detect_mod.BRIDGE_PROTO}\nabi=ok\npat=-1\nchan=-1\n"
+    (root / detect_mod.BRIDGE_HEARTBEAT_FILE).write_text(heartbeat, encoding="utf-8")
+
+
 def isolate_spool(monkeypatch) -> None:
     """detect() reads bridge heartbeats under the real spool roots; the fast
     suite must never see this machine's. Call from an autouse fixture; bridge

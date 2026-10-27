@@ -1,7 +1,7 @@
 # Setup
 
 The [README quick start](README.md#quick-start) installs the released package with uv in three steps: install uv (and loopMIDI on Windows), run `fl-mcp-install` once, and add the server to your MCP client.
-This page covers what that does on each OS, the optional Bridge plugin, and working from a source checkout.
+This page covers what that does on each OS, the Bridge plugin the server requires, and working from a source checkout.
 
 **Requirements:** FL Studio 2026 on macOS or Windows, and [uv](https://docs.astral.sh/uv/).
 The file-based features (compose, arrange, analyze `.flp` files) need no FL running; the live features need FL open.
@@ -26,13 +26,14 @@ Each step prints `OK`, `WARN` (needs you), or `FAIL` (the command then exits non
 4. `midi_ports` (Windows only): opens the two loopMIDI ports the way the server will.
    macOS needs no step here: the server opens virtual MIDI ports itself, and FL picks them up while it runs.
 5. `bridge`: downloads the prebuilt Bridge plugin for this OS from the GitHub release matching the package version, checks it against that release's `SHA256SUMS`, and installs it into FL's plugin folder (below).
-   `--bridge PATH` installs your own build instead, and `--no-bridge` leaves the Bridge alone.
+   `--bridge PATH` installs your own build instead.
+   `--no-bridge` skips this step; it is only for hosts that install their own Bridge build (CI and the provisioned boxes below), because the server needs a Bridge in FL.
 
 `--json` prints the same results as one JSON object.
 
 Then open `FLMCP Agent.flp` in FL Studio (File > Open, FL's Projects folder), and only then start your MCP client, which starts the server.
-The engine never opens a project itself, and only a project carrying the Bridge takes writes and renders: with FL's default song open, `fl-mcp-doctor` reports that no Bridge is running.
-Check everything with `fl-mcp-doctor` while FL is open.
+The engine never opens a project itself, and only a project carrying the Bridge takes notes and renders: with FL's default song open, `fl-mcp-doctor` reports that no Bridge is running.
+Check everything with `fl-mcp-doctor` while FL is open: its `status` is `ok` only when every part, the Bridge included, is connected, and `not_ready` otherwise, with a `fix` for each part that is not.
 
 ## Windows
 
@@ -48,7 +49,7 @@ Production boxes are provisioned unattended by `scripts/windows/provision.ps1` a
 ## The Bridge plugin
 
 The Bridge is a native FL effect that performs live host operations: targeted live note writes and `render` (it records the mix while FL plays).
-Without it, notes still land through the project file, with FL reloading the project per write, and `render` is unavailable.
+The server requires it: with no Bridge running in FL, note writes and `render` are refused with a fix (open the agent project), and `fl-mcp-doctor` reports `not_ready`.
 
 `fl-mcp-install` installs it for you: each release carries a universal macOS library (Apple Silicon and Intel) and a Windows x64 DLL, built by the release workflow, with `SHA256SUMS` and a `BRIDGE-NOTICE.txt`.
 The installer downloads the one for your OS from the release matching the installed package version and installs it only if its SHA-256 matches; `fl-mcp-doctor` reports what is installed (`bridge.source`, `bridge.sha256`).

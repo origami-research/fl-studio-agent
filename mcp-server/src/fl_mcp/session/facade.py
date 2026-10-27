@@ -63,6 +63,8 @@ from .detect import (
     Capabilities,
     CapabilityProfileLike,
     detect,
+    freshest_heartbeat,
+    heartbeat_live,
     load_profile,
     read_heartbeat,
 )
@@ -362,12 +364,14 @@ class FLSession:
         return note_ops.all_notes(self)
 
     def _require_note_path(self) -> None:
-        if self.project is None and not self.caps.bridge_live:
-            log.warning("no note backend: no project file is configured and the Bridge is not live")
-            raise NotePlaneUnavailable(
-                "FL Studio is not accepting note edits right now.",
-                fix="FL may still be starting. Wait a moment and retry the write.",
-            )
+        """Notes need a live Bridge. Without one FL is not on the agent project (or
+        has no Bridge installed), and the old file fallback saved whatever song was
+        open, then killed and relaunched FL for every write."""
+        if heartbeat_live(freshest_heartbeat(clock=self._clock)):
+            return
+        log.warning("note write refused: no live Bridge (bridge_heartbeat.txt missing, stale, or incompatible)")
+        note_ops.refuse_if_bridge_stalled(self)
+        raise errors.fl_not_prepared("note_plane_unavailable", "these notes were not written")
 
     def track_name(self, channel: int) -> str:
         """The channel's name for results and actions. A write resolves it BEFORE

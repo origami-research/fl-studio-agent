@@ -109,10 +109,10 @@ try {
     } elseif ($doctor.status -eq 'ok') {
         Add-Step 'doctor' 'ok' 'control plane, note plane, and project file connected'
     } else {
-        $degraded = foreach ($plane in 'control_plane', 'note_plane', 'project_file') {
+        $notConnected = foreach ($plane in 'control_plane', 'note_plane', 'project_file') {
             if (-not $doctor.$plane.connected) { "${plane}: $($doctor.$plane.detail)" }
         }
-        Add-Step 'doctor' 'failed' ("degraded after $BootTimeoutSeconds s: " + ($degraded -join '; '))
+        Add-Step 'doctor' 'failed' ("not ready after $BootTimeoutSeconds s: " + ($notConnected -join '; '))
     }
 } catch {
     Add-Step 'unexpected' 'failed' $_.Exception.Message

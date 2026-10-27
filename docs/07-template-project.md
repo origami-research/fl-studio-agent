@@ -11,7 +11,7 @@ What follows is what ships.
 
 - **The FL MCP Bridge on the Master insert, loaded when FL opens the project.**
   The engine cannot add a plugin to an open project: FL's `ilmcp.addEffect` is unavailable from the controller interpreter, and no Bridge op loads plugins.
-  Without the Bridge, notes, render, `check` and the audio stream do not work.
+  The engine requires it: without a running Bridge, note writes and render are refused, `fl-mcp-doctor` reports `not_ready`, and the audio stream does not start (`check` still plays, but whatever song FL has open).
 - **One Bridge, after every other Master effect.**
   Render records the Bridge's own input, so effects after it on Master are not heard; two Bridges sharing one spool ledger misbehave.
   FL stores it as an effect tuple whose internal name (event 201) is `FL MCP Bridge`; FL loads whatever binary sits in `Plugins/Fruity/Effects/FL MCP Bridge/`.

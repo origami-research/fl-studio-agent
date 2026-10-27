@@ -76,10 +76,12 @@ def test_render_wav_refuses_when_the_live_bridge_is_unavailable(tmp_path, caplog
     control = FakeControl(hello=HELLO, handlers=arrangement())
     session, _ = make_session(control=control)
 
-    with caplog.at_level("WARNING"), pytest.raises(errors.ToolError, match="cannot record right now") as refused:
+    with caplog.at_level("WARNING"), pytest.raises(errors.ToolError, match="nothing was recorded") as refused:
         session.render_wav(tmp_path / "mix.wav")
+    assert refused.value.category == "render_failed"
     assert any("Bridge is not live" in r.message for r in caplog.records)
     # The common cause on a user's machine is FL showing another song (2026-10-26 box run).
+    assert "song prepared for you" in refused.value.message
     assert "open the FLMCP Agent song" in refused.value.fix
 
 

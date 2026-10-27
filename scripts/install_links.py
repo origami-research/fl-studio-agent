@@ -125,7 +125,8 @@ def bundle_manifest(ver: str) -> dict:
             "Lets Claude write notes into FL Studio, set tempo, levels and plugin parameters, check which "
             "channels sound, and render the mix to WAV. Before first use, close FL Studio and run "
             f"`{SETUP_COMMAND}` once (on Windows from an administrator terminal): it installs the FL-side scripts "
-            "and the prebuilt, checksum-verified Bridge plugin that live writes and rendering use. "
+            "and the prebuilt, checksum-verified Bridge plugin, the native FL effect the server requires "
+            "to write notes and render. "
             f"Setup guide: {REPO_URL}#quick-start"
         ),
         "author": {"name": "Origami Research", "url": REPO_URL},
@@ -199,11 +200,11 @@ You need FL Studio 2026 on macOS or Windows and [uv](https://docs.astral.sh/uv/g
    {SETUP_COMMAND}
    ```
 
-   It installs the controller and note scripts, assigns the controller's MIDI ports, creates the agent's own project (`FLMCP Agent.flp`; your other projects are never touched), and downloads the prebuilt [Bridge plugin]({REPO_URL}/blob/main/SETUP.md#the-bridge-plugin) for live writes and `render`, checking it against the release's SHA-256 sums.
+   It installs the controller and note scripts, assigns the controller's MIDI ports, creates the agent's own project (`FLMCP Agent.flp`; your other projects are never touched), and downloads the prebuilt [Bridge plugin]({REPO_URL}/blob/main/SETUP.md#the-bridge-plugin), the native FL effect the server requires to write notes and render, checking it against the release's SHA-256 sums.
    It is safe to rerun.
    To update later, run it with `{PACKAGE}@latest` in place of `{PACKAGE}` and restart FL and your client.
 3. **Open the agent project in FL Studio**: File > Open, `FLMCP Agent.flp` in FL's Projects folder (`Documents/Image-Line/FL Studio/Projects`).
-   It carries the Bridge on its Master insert; in any other song, writes and `render` do not work.
+   It carries the Bridge on its Master insert; in any other song there is no Bridge running, so notes and `render` are refused.
 4. **Add the server to your client** with a button above or a config below, and ask for "a 4-bar chord loop in A minor".
 
 <details>
@@ -220,7 +221,7 @@ Check it with `claude mcp list`.
 <summary><b>Claude Desktop</b></summary>
 
 Download [{BUNDLE_ASSET}]({BUNDLE_URL}) and open it (or drag it into Settings > Extensions).
-Claude Desktop installs the package itself; you still run step 2 once, which also installs the Bridge plugin into FL.
+Claude Desktop installs the package itself; you still run step 2 once, which also installs the Bridge plugin the server requires into FL.
 
 Or add this to `claude_desktop_config.json` (Settings > Developer > Edit Config):
 
@@ -269,8 +270,9 @@ Run the doctor while FL Studio is open:
 {DOCTOR_COMMAND}
 ```
 
-It prints one JSON report of the control plane (controller script and MIDI ports), the note plane, and the agent project, with a `fix` for anything not connected.
-The usual fixes: open `FLMCP Agent.flp` in FL Studio before your client starts the server (the doctor reports a missing Bridge when another song is open); after an upgrade rerun step 2 with `{PACKAGE}@latest` (a stale controller is reported); on Windows, keep loopMIDI running with both ports.
+It prints one JSON report of the control plane (controller script and MIDI ports), the note plane (the Bridge), and the agent project.
+Its `status` is `ok` only when all of them are connected, and `not_ready` otherwise, with a `fix` for each one that is not.
+The usual fixes: open `FLMCP Agent.flp` in FL Studio before your client starts the server (the doctor reports no running Bridge when another song is open, and rerunning step 2 when none is installed); after an upgrade rerun step 2 with `{PACKAGE}@latest` (a stale controller is reported); on Windows, keep loopMIDI running with both ports.
 Using the FL Studio trial? Set `FLMCP_FL_LICENSE=trial` in the server's `env`, and answer **No** when FL asks to save `FLMCP Agent.flp`: the trial cannot reopen a song it saved. If it was saved, delete it and rerun step 2, which creates it again.
 `uvx --python {PYTHON} {PACKAGE} --version` prints the installed version.
 {END}"""

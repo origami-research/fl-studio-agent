@@ -256,7 +256,8 @@ class PlaneStatus(BaseModel):
 
 
 class BridgeInstall(BaseModel):
-    """The Bridge plugin in FL's plugin folder: informational, it does not set the doctor's status."""
+    """The Bridge plugin in FL's plugin folder. The engine needs it: with none installed
+    and none running, the note plane is not connected and the doctor says how to install it."""
 
     installed: bool
     path: str
@@ -266,7 +267,9 @@ class BridgeInstall(BaseModel):
 
 
 class DoctorReport(BaseModel):
-    status: Literal["ok", "degraded"]
+    # Every plane is required (the Bridge included): one that is not connected
+    # means the engine is not ready, never that it works partly.
+    status: Literal["ok", "not_ready"]
     control_plane: PlaneStatus
     note_plane: PlaneStatus
     project_file: PlaneStatus

@@ -250,6 +250,22 @@ def fl_trial_unsupported(action: str) -> ToolError:
     )
 
 
+def fl_not_prepared(category: ErrorCategory, consequence: str) -> ToolError:
+    """No Bridge is running in FL: notes and render need it, and only the agent
+    project carries it. A model hears that as "the prepared song is not open";
+    fl-mcp-doctor names the exact cause (not installed, another song open, FL
+    still loading) for the user."""
+    return ToolError(
+        category,
+        f"FL Studio is not ready for you, so {consequence}: the song prepared for you "
+        "is not open in FL, or FL is still opening it.",
+        "If FL was just opened, retry in a moment. If it keeps failing, ask the user to open "
+        "the FLMCP Agent song in FL Studio (File > Open, in FL's Projects folder); if it is "
+        "already open, the user runs fl-mcp-doctor, which names what is missing.",
+        retryable=True,
+    )
+
+
 def file_lane_requires_reload() -> ToolError:
     """Session mode has no safe in-place project reload primitive."""
     return ToolError(

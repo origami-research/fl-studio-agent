@@ -1,9 +1,9 @@
 """Note routing on the file lane: readback receipts, honest failures.
 
-The bridge lane's eligibility and behavior live in test_session_bridge.py;
-here the heartbeat evidence is absent, so every targeted write is
-project-write - and a connected control plane must NOT divert it (the
-pyscript/spool lane is TARGET-BLIND, dogfood docs/21 A12).
+The bridge lane's eligibility and behavior live in test_session_bridge.py.
+Notes need a live Bridge, so here one ticks but no wire can verify its target
+channel: every targeted write is project-write - and a connected control plane
+must NOT divert it (the pyscript/spool lane is TARGET-BLIND, dogfood docs/21 A12).
 """
 
 from __future__ import annotations
@@ -20,6 +20,7 @@ from session_fakes import (
     FakeSpool,
     FakeStore,
     isolate_spool,
+    live_untargeted_bridge,
     make_session,
 )
 
@@ -30,8 +31,8 @@ from fl_mcp.template import template_path
 
 
 @pytest.fixture(autouse=True)
-def isolated_spool(monkeypatch):
-    isolate_spool(monkeypatch)
+def bridge_ticking(monkeypatch, tmp_path):
+    live_untargeted_bridge(monkeypatch, tmp_path)
 
 
 @pytest.fixture()
@@ -69,12 +70,14 @@ def test_notes_go_project_write_even_when_control_is_connected(project, no_reloa
     assert no_reload == [True]
 
 
-def test_notes_without_a_project_raise_even_when_control_is_connected():
+def test_notes_without_a_project_raise_even_when_control_is_connected(no_reload):
+    """The Bridge ticks but cannot target and there is no file to fall back on."""
     session, store = make_session(control=FakeControl(hello=HELLO), project=None)
 
-    with pytest.raises(NotePlaneUnavailable):
+    with pytest.raises(errors.ToolError):
         session.write_notes(TARGET, NOTES, "merge")
     assert store.writes == []
+    assert no_reload == []
 
 
 def test_recording_failure_never_fails_an_applied_write(project, no_reload, caplog):
@@ -149,12 +152,25 @@ def test_project_write_readback_mismatch_raises(monkeypatch, project, no_reload)
     assert no_reload == [], "an unverified write must not reload FL"
 
 
-def test_no_backend_raises_plainly_and_logs_the_setup_gap(caplog):
-    session, _ = make_session()
-    with caplog.at_level("WARNING"), pytest.raises(NotePlaneUnavailable) as excinfo:
+def test_no_live_bridge_refuses_plainly_and_logs_why(monkeypatch, project, no_reload, caplog):
+    """The Bridge is required: with none ticking (FL on another song, or none
+    installed) a write must not save FL's open song, rewrite the file and relaunch
+    FL, as the old file fallback did. It refuses and says how to fix it."""
+    isolate_spool(monkeypatch)
+    writes: list[bool] = []
+    monkeypatch.setattr(flp, "write_notes", lambda *args, **kwargs: writes.append(True))
+    control = FakeControl(hello=HELLO)
+    session, store = make_session(control=control, project=project)
+
+    with caplog.at_level("WARNING"), pytest.raises(errors.ToolError) as excinfo:
         session.write_notes(TARGET, NOTES, "merge")
-    assert "retry" in excinfo.value.fix.lower()
-    assert any("no project file is configured" in r.message for r in caplog.records)
+
+    assert excinfo.value.category == "note_plane_unavailable"
+    assert "song prepared for you" in excinfo.value.message
+    assert "open the FLMCP Agent song" in excinfo.value.fix
+    assert any("no live Bridge" in r.message for r in caplog.records)
+    assert writes == [] and store.writes == [] and no_reload == []
+    assert "ctl.save" not in [op for op, _ in control.calls]
 
 
 def test_concurrent_session_write_raises_retryable_error(tmp_path):

@@ -223,7 +223,7 @@ def test_doctor_reports_bridge_stream_drops(monkeypatch, tmp_path) -> None:
     monkeypatch.setattr(state_mod, "piano_roll_scripts_dir", lambda: tmp_path)
     monkeypatch.setattr(state_mod, "pid_alive", lambda pid: pid == 1)
 
-    status = state_mod._note_plane_status(clock=_clock)
+    status = state_mod._note_plane_status(bridge_installed=True, clock=_clock)
 
     assert status == PlaneStatus(
         connected=True, detail=f"spool at {root}; live audio streaming; chunks=8, drops=2, sample_rate=48000"

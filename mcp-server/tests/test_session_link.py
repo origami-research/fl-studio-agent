@@ -16,6 +16,7 @@ from session_fakes import (
     FakePlatform,
     FakeSpool,
     isolate_spool,
+    live_untargeted_bridge,
     make_session,
 )
 
@@ -252,6 +253,7 @@ def test_sticky_hello_is_not_trusted_without_a_live_ping(monkeypatch):
 def test_reload_reconnects_the_wire_fresh(monkeypatch, tmp_path):
     """Our own reload kills FL and the old ports; a fresh wire after the
     relaunch hits FL's reliable hot-plug bind and must replace the dead one."""
+    live_untargeted_bridge(monkeypatch, tmp_path)  # notes need a Bridge; the file lane serves this one
     monkeypatch.setattr(flp, "write_notes", lambda path, notes, *, pattern, channel, mode: list(notes))
     monkeypatch.setattr(lifecycle_mod, "fl_process_running", lambda: False)  # skip the pkill branch
     monkeypatch.setattr(lifecycle_mod, "launch_fl", lambda project: None)

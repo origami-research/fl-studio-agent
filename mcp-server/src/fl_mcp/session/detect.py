@@ -146,6 +146,25 @@ class Capabilities:
     bridge_heartbeat_at: float | None = None  # freshest unix_time= seen; breaker recovery
 
 
+def freshest_heartbeat(*, clock: Callable[[], float] = time.time) -> Heartbeat:
+    """The newest Bridge heartbeat across the spool roots; none reads as infinitely old."""
+    best = _NO_HEARTBEAT
+    for root in spool_roots():
+        candidate = read_heartbeat(root / BRIDGE_HEARTBEAT_FILE, clock=clock)
+        if candidate.age < best.age:
+            best = candidate
+    return best
+
+
+def heartbeat_live(heartbeat: Heartbeat) -> bool:
+    """A loaded, compatible Bridge that is ticking now: the one definition of "the Bridge is live"."""
+    return (
+        heartbeat.age <= BRIDGE_HEARTBEAT_FRESH_SECONDS
+        and heartbeat.proto == BRIDGE_PROTO
+        and heartbeat.abi == "ok"
+    )
+
+
 def detect(
     link: ControlLink,
     transport: Transport,
@@ -159,16 +178,8 @@ def detect(
     which channel is selected (the bridge cannot - see _selected_channel).
     ``spool``/``project`` are the detection surface for future capabilities
     (spool health, file-lane state)."""
-    best = _NO_HEARTBEAT
-    for root in spool_roots():
-        candidate = read_heartbeat(root / BRIDGE_HEARTBEAT_FILE, clock=clock)
-        if candidate.age < best.age:
-            best = candidate
-    live = (
-        best.age <= BRIDGE_HEARTBEAT_FRESH_SECONDS
-        and best.proto == BRIDGE_PROTO
-        and best.abi == "ok"
-    )
+    best = freshest_heartbeat(clock=clock)
+    live = heartbeat_live(best)
     return Capabilities(
         bridge_live=live,
         bridge_pattern=best.pattern if live else None,

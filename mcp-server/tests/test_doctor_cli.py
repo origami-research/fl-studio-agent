@@ -30,7 +30,7 @@ def _report(status: str) -> DoctorReport:
     return DoctorReport(status=status, control_plane=plane, note_plane=plane, project_file=plane, bridge=bridge)
 
 
-@pytest.mark.parametrize(("status", "code"), [("ok", 0), ("degraded", 1)])
+@pytest.mark.parametrize(("status", "code"), [("ok", 0), ("not_ready", 1)])
 def test_doctor_prints_the_report_and_exits_by_status(monkeypatch, capsys, status, code):
     session = _Session(_report(status))
     monkeypatch.setattr(doctor, "create_session", lambda: session)

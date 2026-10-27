@@ -330,13 +330,7 @@ def render_wav(session: FLSession, output: Path) -> RenderReceipt:
     """
     if not session.caps.bridge_live:
         log.warning("render refused: the Master-insert Bridge is not live (check bridge_heartbeat.txt)")
-        raise errors.ToolError(
-            "render_failed",
-            "FL Studio cannot record right now.",
-            "FL may still be starting; retry in a moment. If it keeps failing, the song open in FL "
-            "is not the one prepared for you: ask the user to open the FLMCP Agent song in FL Studio.",
-            retryable=True,
-        )
+        raise errors.fl_not_prepared("render_failed", "nothing was recorded")
     span = live_arrangement_span(session)
     path = _live_render(session, output.expanduser().resolve(), span.seconds + RENDER_TAIL_SECONDS)
     return RenderReceipt(path=path, span=span)

@@ -10,7 +10,14 @@ from session_fakes import HELLO, FakeControl, make_session
 from fl_mcp import errors, flp
 from fl_mcp.controller_version import CONTROLLER_PROTOCOL_VERSION
 from fl_mcp.core.carriers.broker_client import BrokerControl
+from fl_mcp.schemas import BridgeInstall
 from fl_mcp.session import state as state_mod
+
+
+@pytest.fixture(autouse=True)
+def bridge_installed(monkeypatch):
+    """The doctor reads FL's plugin folder; this machine's must not decide these tests."""
+    monkeypatch.setattr(state_mod, "_bridge_install", lambda: BridgeInstall(installed=True, path="FL MCP Bridge"))
 
 # --- snapshot ----------------------------------------------------------------
 
@@ -97,13 +104,13 @@ def test_snapshot_without_live_or_project_is_an_explicit_setup_error():
 # --- doctor ------------------------------------------------------------------
 
 
-def test_doctor_all_degraded_names_a_fix_per_plane(tmp_path, monkeypatch):
+def test_doctor_not_ready_names_a_fix_per_plane(tmp_path, monkeypatch):
     monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
     session, _ = make_session()
 
     report = session.doctor()
 
-    assert report.status == "degraded"
+    assert report.status == "not_ready"
     assert report.control_plane.connected is False
     assert "python-rtmidi" in report.control_plane.fix
     assert report.note_plane.connected is False
@@ -120,7 +127,7 @@ def test_doctor_names_an_unknown_fl_build_and_capture_command(tmp_path, monkeypa
         lambda: (False, "unsupported FL 99.0.0 build 1 (arm64); capture a profile with `python -m fl_mcp.discover`"),
     )
     report = make_session()[0].doctor()
-    assert report.status == "degraded"
+    assert report.status == "not_ready"
     assert report.note_plane.detail.startswith("unsupported FL 99.0.0")
     assert "python -m fl_mcp.discover" in report.note_plane.fix
 
@@ -146,7 +153,7 @@ def test_doctor_reports_probe_failures_instead_of_raising(tmp_path):
 
     report = session.doctor()
 
-    assert report.status == "degraded"
+    assert report.status == "not_ready"
     assert report.control_plane.connected is False
     assert "control link exploded" in report.control_plane.fix
     assert report.project_file.connected is False
@@ -210,7 +217,7 @@ def test_note_plane_reports_a_live_bridge_with_a_stale_heartbeat(tmp_path, monke
     status = report.note_plane
 
     assert status.connected is False
-    assert report.status == "degraded"
+    assert report.status == "not_ready"
     assert status.detail == "The FL MCP Bridge is loaded but has not ticked for 11 s: FL's GUI thread is not pumping."
     assert status.fix == (
         "The FL MCP Bridge is loaded but has not ticked for 11 s: FL's GUI thread is not pumping. "
@@ -221,7 +228,7 @@ def test_note_plane_reports_a_live_bridge_with_a_stale_heartbeat(tmp_path, monke
 def test_fl_open_without_a_live_bridge_says_to_open_the_agent_project(tmp_path, monkeypatch):
     """A new user opened FL as the README said; FL showed its default song, which has no
     Bridge, and the doctor still reported "ok" (2026-10-26 box run). Writes and render
-    need the Bridge, so FL running with none live is degraded, with the fix."""
+    need the Bridge, so FL running with none live is not ready, with the fix."""
     _install_note_script(tmp_path)
     (tmp_path / "bridge_udp.json").write_text('{"pid": 123}', encoding="utf-8")  # a closed FL's
     monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
@@ -232,12 +239,35 @@ def test_fl_open_without_a_live_bridge_says_to_open_the_agent_project(tmp_path, 
     session, _ = make_session()
     report = state_mod.doctor(session, clock=lambda: 111.0)
 
-    assert report.status == "degraded"
+    assert report.status == "not_ready"
     assert report.note_plane.connected is False
     assert report.note_plane.detail == state_mod.NO_BRIDGE_DETAIL
     assert "Open FLMCP Agent.flp" in report.note_plane.fix
 
     monkeypatch.setattr(state_mod, "fl_process_running", lambda: False)  # FL closed: the control plane says so
+    assert state_mod.doctor(session, clock=lambda: 111.0).note_plane.connected is True
+
+
+def test_a_missing_bridge_is_not_ready_with_the_install_command(tmp_path, monkeypatch):
+    """The Bridge is required: with none installed the doctor is not ready whether or
+    not FL is open, and says to run fl-mcp-install (opening the agent project would not help)."""
+    _install_note_script(tmp_path)
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
+    monkeypatch.setattr(state_mod, "spool_roots", lambda: [tmp_path])
+    monkeypatch.setattr(state_mod, "_bridge_install", lambda: BridgeInstall(installed=False, path="FL MCP Bridge"))
+    session, _ = make_session()
+
+    for fl_open in (True, False):
+        monkeypatch.setattr(state_mod, "fl_process_running", lambda fl_open=fl_open: fl_open)
+        report = state_mod.doctor(session, clock=lambda: 111.0)
+        assert report.status == "not_ready"
+        assert report.note_plane.connected is False
+        assert report.note_plane.detail == state_mod.NOT_INSTALLED_DETAIL
+        assert "fl-mcp-install" in report.note_plane.fix
+        assert report.bridge.installed is False
+
+    # A ticking Bridge proves it is installed, whatever the plugin-folder probe says.
+    (tmp_path / "bridge_heartbeat.txt").write_text("tick=1\npid=1\nunix_time=110\n", encoding="utf-8")
     assert state_mod.doctor(session, clock=lambda: 111.0).note_plane.connected is True
 
 
