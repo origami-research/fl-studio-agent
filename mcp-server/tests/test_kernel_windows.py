@@ -21,10 +21,13 @@ from fl_mcp.kernel.windows import (
     APPCONTAINER_NAME,
     INTERNET_CLIENT_SID,
     RENDERS_GRANT,
+    RUNTIME_GRANT,
     WORK_GRANT,
     AppContainerLauncher,
     env_block,
+    grants_read_execute,
     job_limits,
+    runtime_dirs,
 )
 
 
@@ -48,6 +51,61 @@ def test_grants_define_the_boundary_and_nothing_else(workspace):
         ("grant", workspace.renders, SID, RENDERS_GRANT),
     ]
     assert WORK_GRANT == "(OI)(CI)M" and RENDERS_GRANT == "(OI)(CI)RX"
+
+
+# A user's own install: uvx's venv in %LOCALAPPDATA%\uv\cache and uv's managed Python
+# in %APPDATA%\uv\python, folders the user owns and no AppContainer can read.
+USER_RUNTIME = (Path(r"C:\Users\u\AppData\Local\uv\cache\archive-v0\env"), Path(r"C:\Users\u\AppData\Roaming\uv\python\cpython-3.12"))
+
+
+def test_a_user_install_runtime_is_granted_read_once_before_the_kernel_starts(workspace):
+    """The public install path (2026-10-26 box run): the kernel exited 106 "No pyvenv.cfg file"
+    because its own venv was unreadable inside the container, so `run` never worked on a
+    user's Windows machine. The launcher grants the interpreter read and execute, once."""
+    api = FakeWin32(runtime_readable=False)
+    launcher = AppContainerLauncher(api, runtime=USER_RUNTIME)
+    argv = ["python", "-I", "-m", "fl_mcp.kernel.child"]
+    for _ in range(2):
+        launcher(argv, workspace=workspace, env={})
+    grants = [c for c in api.calls if c[0] == "grant"]
+    assert grants[:2] == [("grant", USER_RUNTIME[0], SID, RUNTIME_GRANT), ("grant", USER_RUNTIME[1], SID, RUNTIME_GRANT)]
+    assert len(grants) == 4  # the runtime and the workspace, each once
+    names = [c[0] for c in api.calls]
+    assert names.index("grant") < names.index("create_process")
+    assert RUNTIME_GRANT == "(OI)(CI)RX"  # read and run, never write
+
+
+def test_a_provisioned_runtime_is_left_alone(workspace):
+    """A box grants its venv (C:/FLMCP/venv) and Program Files is readable by every container:
+    the FL user cannot rewrite those ACLs and does not need to."""
+    api = FakeWin32(runtime_readable=True)
+    AppContainerLauncher(api, runtime=USER_RUNTIME)(["python"], workspace=workspace, env={})
+    assert [c[1] for c in api.calls if c[0] == "readable"] == list(USER_RUNTIME)
+    assert [c[1] for c in api.calls if c[0] == "grant"] == [workspace.work, workspace.renders]
+
+
+def test_a_runtime_this_user_cannot_grant_fails_the_launch_and_says_how_to_fix_it(workspace):
+    api = FakeWin32(fail="grant", runtime_readable=False)
+    with pytest.raises(OSError, match=r"not readable by its AppContainer.*Box contract"):
+        AppContainerLauncher(api, runtime=USER_RUNTIME)(["python"], workspace=workspace, env={})
+    assert "create_process" not in [c[0] for c in api.calls]
+
+
+def test_runtime_dirs_are_this_interpreters_venv_and_base():
+    import sys
+
+    dirs = runtime_dirs()
+    assert dirs[0] == Path(sys.prefix).resolve()
+    assert set(dirs) == {Path(sys.prefix).resolve(), Path(sys.base_prefix).resolve()}
+
+
+def test_read_execute_is_read_by_any_of_its_spellings():
+    assert grants_read_execute(0x001200A9)  # (RX), what icacls and Program Files write
+    assert grants_read_execute(0x001F01FF)  # (F)
+    assert grants_read_execute(0x10000000)  # GENERIC_ALL
+    assert grants_read_execute(0xA0000000)  # GENERIC_READ | GENERIC_EXECUTE
+    assert not grants_read_execute(0x00120089)  # read without execute
+    assert not grants_read_execute(0x80000000)  # GENERIC_READ alone
 
 
 def test_process_starts_in_the_container_with_only_internet_client(workspace):

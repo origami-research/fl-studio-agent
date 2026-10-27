@@ -87,6 +87,9 @@ The kernel runs in the AppContainer `FLMCP.Kernel` with one capability, `interne
 
 - Files: an AppContainer token is denied every object that does not grant its SID or `ALL APPLICATION PACKAGES`.
   The server grants the SID `work` (modify) and `renders` (read).
+  The kernel also reads the engine's own interpreter: its venv (`sys.prefix`) and the base Python the venv points at (`sys.base_prefix`).
+  A box grants those at provisioning (see "Box contract"); on a user's own machine they sit in folders the user owns (uvx's environment in `%LOCALAPPDATA%\uv\cache`, uv's managed Pythons in `%APPDATA%\uv\python`), so the launcher grants the SID read and execute on whichever of the two its ACL does not already allow, once per server, before the first kernel starts.
+  Until 2026-10-26 it did not, and `run` failed on every public Windows install with `kernel_unavailable` ("the kernel exited with code 106", "No pyvenv.cfg file"): the venv's redirector could not read its own `pyvenv.cfg`.
   Everything else, including the hosting harness's own directories, other users' profiles, and the session spool, is denied by default.
 - Network: `internetClient` allows outbound internet, so pip works.
   Without `privateNetworkClientServer` the VPC is unreachable, and AppContainers get no loopback, so the FL control broker and Bridge ports are unreachable too.
@@ -144,6 +147,7 @@ There is no launch-mode setting: on Windows the kernel is always an AppContainer
    It prints the SID, which is derived from the name `FLMCP.Kernel` and is the same on every box.
 2. Runtime read access: `icacls C:\FLMCP\venv /grant "*<SID>:(OI)(CI)RX"`.
    Repeat after the venv is recreated.
+   The FL user cannot rewrite this ACL, so the launcher's own runtime grant (above) only checks it; a runtime the container cannot read and the user cannot grant makes `run` fail with `kernel_unavailable` naming the folder.
    `C:\Program Files\Python312` already grants `ALL APPLICATION PACKAGES` read and execute through `Program Files`; confirm with `icacls`, or grant the SID the same way.
 3. Metadata block: `New-NetFirewallRule -DisplayName "FLMCP kernel: no instance metadata" -Direction Outbound -Action Block -RemoteAddress 169.254.169.254,fd00:ec2::254 -Package <SID> -Profile Any`.
 4. Windows Firewall: the `mpssvc` service running and the active profile enabled.

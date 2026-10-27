@@ -10,10 +10,11 @@ SID = "S-1-15-2-1-2-3-4-5-6-7"
 
 
 class FakeWin32:
-    def __init__(self, fail: str | None = None) -> None:
+    def __init__(self, fail: str | None = None, *, runtime_readable: bool = True) -> None:
         self.calls: list[tuple] = []
         self.fail = fail
         self.alive = True
+        self.runtime_readable = runtime_readable
 
     def _record(self, name: str, *args) -> None:
         self.calls.append((name, *args))
@@ -23,6 +24,10 @@ class FakeWin32:
     def appcontainer_sid(self, name):
         self._record("appcontainer_sid", name)
         return SID
+
+    def readable(self, path, sid):
+        self._record("readable", path, sid)
+        return self.runtime_readable
 
     def grant(self, path, sid, rights):
         self._record("grant", path, sid, rights)

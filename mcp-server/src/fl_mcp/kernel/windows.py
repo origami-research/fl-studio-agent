@@ -2,8 +2,9 @@
 
 An AppContainer (LowBox) token denies every securable object that does not
 grant its SID, so the kernel reaches only what is granted: its workspace
-(read/write), the renders folder (read), and the Python runtime the box grants
-(docs/38). It has no loopback and, with only the internetClient capability, no
+(read/write), the renders folder (read), and the engine's own Python runtime
+(read), which a box grants at provisioning and a user's own install gets from
+the launcher on first use (docs/38). It has no loopback and, with only the internetClient capability, no
 private-network access; the box adds a firewall rule for the metadata address.
 It needs no account or password. The wire is the inherited stdio pipe trio, so
 no named-pipe ACL or loopback exemption is involved. A job object kills the
@@ -39,6 +40,9 @@ INTERNET_CLIENT_SID = "S-1-15-3-1"
 # icacls grants; (OI)(CI) makes files created later inherit them.
 WORK_GRANT = "(OI)(CI)M"
 RENDERS_GRANT = "(OI)(CI)RX"
+RUNTIME_GRANT = "(OI)(CI)RX"
+# Every AppContainer token carries this group: Program Files grants it read and execute.
+ALL_APPLICATION_PACKAGES_SID = "S-1-15-2-1"
 
 _INFINITE = 0xFFFFFFFF
 _WAIT_OBJECT_0 = 0
@@ -60,6 +64,14 @@ _LIMIT_JOB_MEMORY = 0x00000200
 _LIMIT_DIE_ON_UNHANDLED_EXCEPTION = 0x00000400
 _LIMIT_KILL_ON_JOB_CLOSE = 0x00002000
 _BELOW_NORMAL_PRIORITY_CLASS = 0x00004000
+_SE_FILE_OBJECT = 1
+_DACL_SECURITY_INFORMATION = 0x00000004
+_ACCESS_ALLOWED_ACE_TYPE = 0
+_INHERIT_ONLY_ACE = 0x08
+_FILE_READ_EXECUTE = 0x001200A9
+_GENERIC_ALL = 0x10000000
+_GENERIC_EXECUTE = 0x20000000
+_GENERIC_READ = 0x80000000
 # Every launched tree shares the box with FL's real-time audio: it runs below
 # normal priority, is capped by its JobLimits, dies when the job handle closes,
 # and a crash never parks it behind an error-reporting dialog on the
@@ -69,6 +81,10 @@ _BELOW_NORMAL_PRIORITY_CLASS = 0x00004000
 class Win32(Protocol):
     def appcontainer_sid(self, name: str) -> str:
         """Create the AppContainer profile if missing; return its SID string."""
+        ...
+
+    def readable(self, path: Path, sid: str) -> bool:
+        """Whether ``path``'s own ACL lets the AppContainer ``sid`` read and execute it."""
         ...
 
     def grant(self, path: Path, sid: str, rights: str) -> None: ...
@@ -107,6 +123,16 @@ class Win32(Protocol):
     def exit_code(self, process: int) -> int: ...
 
     def close(self, handle: int) -> None: ...
+
+
+def runtime_dirs() -> tuple[Path, ...]:
+    """The folders the kernel's interpreter reads: this venv and the base Python it points at."""
+    dirs: list[Path] = []
+    for prefix in (sys.prefix, sys.base_prefix):
+        path = Path(prefix).resolve()
+        if path not in dirs:
+            dirs.append(path)
+    return tuple(dirs)
 
 
 def env_block(env: Mapping[str, str]) -> str:
@@ -167,6 +193,12 @@ class AppContainerLauncher:
     _granted: set[Path] = field(default_factory=set, compare=False, repr=False)
     _released: set[Path] = field(default_factory=set, compare=False, repr=False)
     _grants_lock: threading.Lock = field(default_factory=threading.Lock, compare=False, repr=False)
+    # The engine's interpreter (runtime_dirs). A box grants it at provisioning
+    # (docs/38 "Box contract"); a user's own install lives in folders that user
+    # owns (uv's cache and managed Pythons, under the profile), which no
+    # AppContainer can read, so the first launch grants what is not readable yet.
+    runtime: tuple[Path, ...] = field(default_factory=runtime_dirs)
+    _runtime_ready: set[Path] = field(default_factory=set, compare=False, repr=False)
 
     def __call__(
         self,
@@ -180,6 +212,7 @@ class AppContainerLauncher:
         with self._grants_lock:
             if workspace.root in self._released:
                 raise OSError(f"{workspace.root}: its session is over and its grants were withdrawn")
+            self._grant_runtime(sid)
             if workspace.root not in self._granted:
                 self.api.grant(workspace.work, sid, WORK_GRANT)
                 self.api.grant(workspace.renders, sid, RENDERS_GRANT)
@@ -225,6 +258,22 @@ class AppContainerLauncher:
             os.fdopen(parent_ends[2], "rb"),
         )
         return Win32KernelProcess(self.api, process=process, job=job, pid=pid, pipes=streams)
+
+    def _grant_runtime(self, sid: str) -> None:
+        """Make the interpreter readable by the container, once per folder. Called under the grants lock."""
+        for directory in self.runtime:
+            if directory in self._runtime_ready:
+                continue
+            if not self.api.readable(directory, sid):
+                try:
+                    self.api.grant(directory, sid, RUNTIME_GRANT)
+                except (OSError, subprocess.SubprocessError) as exc:
+                    raise OSError(
+                        f"the kernel's Python runtime {directory} is not readable by its AppContainer and "
+                        f"this user cannot grant it ({exc}); grant it read and execute as docs/38 "
+                        "'Box contract' says"
+                    ) from exc
+            self._runtime_ready.add(directory)
 
     def release(self, workspace: Workspace) -> None:
         """Every session's kernel shares the one SID, so a finished session's grants go."""
@@ -333,6 +382,31 @@ class _ExtendedLimitInformation(ctypes.Structure):
     )
 
 
+class _Acl(ctypes.Structure):
+    _fields_ = (
+        ("AclRevision", ctypes.c_ubyte),
+        ("Sbz1", ctypes.c_ubyte),
+        ("AclSize", ctypes.c_uint16),
+        ("AceCount", ctypes.c_uint16),
+        ("Sbz2", ctypes.c_uint16),
+    )
+
+
+class _AceHeader(ctypes.Structure):
+    _fields_ = (("AceType", ctypes.c_ubyte), ("AceFlags", ctypes.c_ubyte), ("AceSize", ctypes.c_uint16))
+
+
+class _AccessAllowedAce(ctypes.Structure):
+    _fields_ = (("Header", _AceHeader), ("Mask", ctypes.c_uint32), ("SidStart", ctypes.c_uint32))
+
+
+def grants_read_execute(mask: int) -> bool:
+    """Whether an allow entry's access mask covers reading and running files."""
+    if mask & _GENERIC_ALL or (mask & _GENERIC_READ and mask & _GENERIC_EXECUTE):
+        return True
+    return mask & _FILE_READ_EXECUTE == _FILE_READ_EXECUTE
+
+
 class CtypesWin32:
     """The Win32 calls behind AppContainerLauncher, bound with explicit signatures."""
 
@@ -359,6 +433,9 @@ class CtypesWin32:
         self._bind(self._adv, "ConvertSidToStringSidW", b, p, ctypes.POINTER(ctypes.c_wchar_p))
         self._bind(self._adv, "ConvertStringSidToSidW", b, ctypes.c_wchar_p, pp)
         self._bind(self._adv, "FreeSid", p, p)
+        self._bind(self._adv, "GetNamedSecurityInfoW", u32, ctypes.c_wchar_p, ctypes.c_int, u32, pp, pp, pp, pp, pp)
+        self._bind(self._adv, "GetAce", b, p, u32, pp)
+        self._bind(self._adv, "EqualSid", b, p, p)
         self._bind(self._k32, "LocalFree", p, p)
         self._bind(self._k32, "CreateJobObjectW", p, p, ctypes.c_wchar_p)
         self._bind(self._k32, "SetInformationJobObject", b, p, ctypes.c_int, p, u32)
@@ -426,6 +503,37 @@ class CtypesWin32:
             return str(text.value)
         finally:
             self._k32.LocalFree(text)
+
+    def readable(self, path: Path, sid: str) -> bool:
+        """An allow entry for ``sid`` or ALL APPLICATION PACKAGES that covers ``path`` itself.
+
+        Deny entries are not weighed: a runtime denied to the container still fails
+        the kernel's start, with the launcher's error."""
+        dacl, descriptor = _PVOID(), _PVOID()
+        result = self._adv.GetNamedSecurityInfoW(
+            str(path), _SE_FILE_OBJECT, _DACL_SECURITY_INFORMATION,
+            None, None, ctypes.byref(dacl), None, ctypes.byref(descriptor),
+        )  # fmt: skip
+        if result != 0:
+            raise ctypes.WinError(result, f"GetNamedSecurityInfoW {path}")
+        trustees = [self._sid(sid), self._sid(ALL_APPLICATION_PACKAGES_SID)]
+        try:
+            if not dacl.value:
+                return True  # a NULL DACL grants everyone everything
+            for index in range(ctypes.cast(dacl, ctypes.POINTER(_Acl)).contents.AceCount):
+                ace = _PVOID()
+                self._check(self._adv.GetAce(dacl, index, ctypes.byref(ace)), "GetAce")
+                entry = ctypes.cast(ace, ctypes.POINTER(_AccessAllowedAce)).contents
+                if entry.Header.AceType != _ACCESS_ALLOWED_ACE_TYPE or entry.Header.AceFlags & _INHERIT_ONLY_ACE:
+                    continue
+                entry_sid = (ace.value or 0) + _AccessAllowedAce.SidStart.offset
+                if grants_read_execute(entry.Mask) and any(self._adv.EqualSid(entry_sid, t) for t in trustees):
+                    return True
+            return False
+        finally:
+            for trustee in trustees:
+                self._k32.LocalFree(trustee)
+            self._k32.LocalFree(descriptor)
 
     def grant(self, path: Path, sid: str, rights: str) -> None:
         subprocess.run(
