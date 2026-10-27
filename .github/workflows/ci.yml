@@ -20,6 +20,30 @@ jobs:
       - run: .venv/bin/ruff check ..
       # The fake-FL suite runs anywhere; live e2e (FL_E2E) is local/nightly only.
       - run: .venv/bin/python -m pytest -q --ignore=tests/e2e
+  # The macOS boundary (docs/38): real cells and shell commands under Seatbelt,
+  # on a macOS runner. These tests start sandbox-exec, kernels and network
+  # calls, so they run only where FLMCP_SANDBOX_TESTS=1 asks for them; a run
+  # that skips any of them fails, so a silent skip cannot pass for evidence.
+  macos-sandbox:
+    runs-on: macos-15
+    defaults:
+      run:
+        working-directory: mcp-server
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - run: uv sync --locked
+      - run: uv pip install --python .venv/bin/python -e ..
+      - name: Seatbelt tests, none skipped
+        env:
+          FLMCP_SANDBOX_TESTS: '1'
+          FLMCP_NETWORK_TESTS: '1'
+        run: |
+          set -o pipefail
+          .venv/bin/python -m pytest -v -rs tests/test_kernel_seatbelt.py | tee seatbelt.log
+          ! grep -E '[0-9]+ skipped' seatbelt.log
+      - name: A client over stdio sees confined=true and refused writes
+        run: uv run --no-project --python 3.12 --with mcp python ../.github/scripts/macos_smoke.py .venv/bin/fl-mcp --workspace-only
   # The one-step install surfaces (server.json, the bundle manifest, the README
   # install links) are generated from scripts/install_links.py; a stale one ships
   # a wrong version or a broken install button. The bundle is the release asset.

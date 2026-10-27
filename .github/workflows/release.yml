@@ -5,7 +5,8 @@ name: release
 # first. This builds the Bridge for macOS and Windows (native.yml) and the
 # Claude Desktop bundle, creates the GitHub release with them, SHA256SUMS and
 # the Bridge NOTICE (fl-mcp-install downloads the Bridge from here and checks it
-# against SHA256SUMS), and publishes server.json to the MCP Registry. The registry namespace
+# against SHA256SUMS), publishes server.json to the MCP Registry, and checks
+# the published package on a fresh Mac (macos-smoke). The registry namespace
 # io.github.origami-research/* is granted to workflows in that account's
 # repositories through GitHub OIDC, so no token is stored.
 on:
@@ -106,3 +107,33 @@ jobs:
         run: |
           ./mcp-publisher login github-oidc
           ./mcp-publisher publish
+
+  # The published package on a fresh Mac, as a user gets it: uvx installs it
+  # from PyPI, the server answers over stdio and says confined=true, and the
+  # model's tools cannot write outside their workspace (docs/38).
+  macos-smoke:
+    if: github.repository == 'origami-research/fl-studio-agent'
+    runs-on: macos-15
+    steps:
+      - uses: astral-sh/setup-uv@v5
+      - name: The PyPI release exists
+        run: |
+          version=${TAG#v}
+          for _ in $(seq 1 30); do
+            code=$(curl -s -o /dev/null -w '%{http_code}' "https://pypi.org/pypi/fl-studio-agent/$version/json")
+            [ "$code" = 200 ] && exit 0
+            sleep 10
+          done
+          echo "fl-studio-agent $version is not on PyPI"; exit 1
+      - name: uvx runs the released version
+        run: |
+          out=$(uvx --python 3.12 "fl-studio-agent@${TAG#v}" --version)
+          echo "$out"
+          test "$out" = "fl-studio-agent ${TAG#v}"
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TAG }}
+      - name: Over stdio it is confined and refuses a write outside its workspace
+        run: |
+          uv run --no-project --python 3.12 --with mcp python .github/scripts/macos_smoke.py \
+            uvx --python 3.12 "fl-studio-agent@${TAG#v}" --workspace-only

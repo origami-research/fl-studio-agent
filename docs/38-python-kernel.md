@@ -125,7 +125,7 @@ It tries to read `<root>/boundary-canary`, to create a file beside it (outside `
 If any of them succeeds, the server kills the kernel and `run` fails with `kernel_unavailable`; model code never runs unconfined.
 A launcher that cannot start the sandbox at all (for example `sandbox-exec` missing) also ends in `kernel_unavailable`.
 The write, home, IPv6 metadata and loopback checks were added with the macOS sandbox on 2026-10-26; Windows denied them before (see "Acceptance on a box"), but the probe did not check them.
-The probe checks these core properties on every user's machine at every start; the rest of the contract below (other processes, other addresses of this machine, system services) is pinned by the darwin tests, which run on development Macs, not on users' machines.
+The probe checks these core properties on every user's machine at every start; the rest of the contract below (other processes, other addresses of this machine, system services) is pinned by the sandbox tests, which CI runs on a macOS runner on every push (see "Acceptance on a Mac"), not on users' machines.
 
 ## macOS boundary: Seatbelt
 
@@ -164,7 +164,7 @@ Each path reaches the profile as a `sandbox-exec -D` parameter, never as profile
 | A container or VM (Docker, Apple Virtualization) | A large install for every user, and the kernel would need the engine's Python inside it. |
 
 The risk with Seatbelt is a macOS release that changes what a process needs.
-A change that breaks a probed property (reading or writing outside the workspace, the home folder, loopback) shows as `kernel_unavailable` on every Mac, never as unconfined code; the darwin tests in `test_kernel_seatbelt.py` catch the rest when they run on a development Mac.
+A change that breaks a probed property (reading or writing outside the workspace, the home folder, loopback) shows as `kernel_unavailable` on every Mac, never as unconfined code; the sandbox tests in `test_kernel_seatbelt.py` catch the rest in CI.
 
 ### Opting out, for engine development only
 
@@ -178,10 +178,11 @@ Windows has no such setting.
 - The local network and the metadata address: Seatbelt can name only `localhost` or every address, so other machines on your network are reachable.
   The probe's metadata check passes on a Mac because nothing answers there; a Mac in a cloud with a metadata service would fail it and refuse to run.
 - Memory, process count and disk: macOS has no per-tree cap a user can set, so the 4 GiB and 32-process job limits are Windows only, and model code can fill the disk through its workspace.
+- Whether a name exists in a folder on the way to the engine's Python (your home folder, for a uv install): opening a missing file there says "not found" rather than "not permitted", so a name's existence can be tested; listing the folder and reading any file in it are denied.
 - Who is on this Mac: user lookup is allowed (Python's `pwd` and `getpass` need it), so the local account names and the computer's name are readable; no file or secret behind them is.
 - A command that calls `setsid` can leave the kernel's process group, so a kill may miss it; it stays sandboxed.
 
-**Acceptance on a Mac** (each is a darwin test in `test_kernel_seatbelt.py`)
+**Acceptance on a Mac** (each is a test in `test_kernel_seatbelt.py`; they start real sandboxes, so they run only with `FLMCP_SANDBOX_TESTS=1`, which CI's `macos-sandbox` job sets on a macOS runner, and that job fails if any of them is skipped)
 
 - Writing outside `work` and listing `~` or `~/.ssh` raise `PermissionError`.
 - Reading another session's `work/secret.txt` raises `PermissionError`.
@@ -190,6 +191,9 @@ Windows has no such setting.
 - `%pip install six` then `import six` succeeds, and so does an HTTPS fetch (set `FLMCP_NETWORK_TESTS=1`).
 - A cell killed past its budget takes the processes it started with it.
 - In `shell`, `osascript -e 'tell application "Finder" to get version'`, `pbpaste` and `defaults read -g` print nothing.
+
+The same job then starts the server over stdio as a client would (`.github/scripts/macos_smoke.py`): it must report `confined=true`, write inside its workspace, and refuse a write outside it through `write_file` and `shell`.
+Each release runs that check again on a fresh macOS runner against the package `uvx` installs from PyPI (`release.yml`, `macos-smoke`).
 
 ## Box contract
 

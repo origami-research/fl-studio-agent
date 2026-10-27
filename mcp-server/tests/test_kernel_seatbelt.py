@@ -1,9 +1,9 @@
 """The macOS boundary: the run kernel and the workspace tools under Seatbelt (docs/38).
 
 The profile tests run everywhere and pin what the generated profile allows.
-The darwin tests run real cells and shell commands through ``sandbox-exec``
-and prove the contract the Windows AppContainer keeps: the workspace and the
-public internet are reachable; the user's home, other workspaces, this
+The sandbox tests run real cells and shell commands through ``sandbox-exec``
+on macOS (CI's macos-sandbox job) and prove the contract the Windows
+AppContainer keeps: the workspace and the public internet are reachable; the user's home, other workspaces, this
 machine's own services, other processes and everything outside the
 workspace are not; the fl calls still reach the server over the kernel's
 pipes; and a stopped call takes its whole process tree with it.
@@ -14,7 +14,6 @@ from __future__ import annotations
 import contextlib
 import os
 import socket
-import sys
 import time
 from collections.abc import Iterator
 from pathlib import Path
@@ -30,7 +29,18 @@ from fl_mcp.schemas import Target
 from fl_mcp.store import Store
 from fl_mcp.workspace.runner import WorkspaceRunner
 
-darwin = pytest.mark.platform("darwin")
+# The real-sandbox tests start sandbox-exec, kernels and network calls, so they
+# run where asked: CI's macos-sandbox job sets FLMCP_SANDBOX_TESTS=1.
+_on_a_mac = pytest.mark.platform("darwin")
+_asked = pytest.mark.skipif(
+    os.environ.get("FLMCP_SANDBOX_TESTS") != "1", reason="real Seatbelt runs; set FLMCP_SANDBOX_TESTS=1"
+)
+
+
+def sandbox(test):
+    return _asked(_on_a_mac(test))
+
+
 network = pytest.mark.skipif(os.environ.get("FLMCP_NETWORK_TESTS") != "1", reason="set FLMCP_NETWORK_TESTS=1")
 
 
@@ -155,7 +165,7 @@ def _denied(host: KernelHost, code: str) -> str:
     return result.traceback.strip().splitlines()[-1]
 
 
-@darwin
+@sandbox
 def test_fl_calls_reach_the_server_over_the_pipes_while_loopback_is_denied(host, session):
     """The Bridge path is the server's: a confined cell's fl calls still work end to end."""
     with _listener() as port:
@@ -172,7 +182,7 @@ def test_fl_calls_reach_the_server_over_the_pipes_while_loopback_is_denied(host,
     assert [n.key for n in session.read_notes(Target(pattern=1, channel=1))] == [60]
 
 
-@darwin
+@sandbox
 def test_no_address_of_this_machine_is_reachable(host):
     """Seatbelt's localhost covers IPv6 loopback and the machine's own address, not only 127.0.0.1."""
     targets = [("::1", "::1")]
@@ -184,7 +194,7 @@ def test_no_address_of_this_machine_is_reachable(host):
             assert "PermissionError" in _denied(host, code), connect
 
 
-@darwin
+@sandbox
 def test_the_kernel_cannot_write_outside_its_workspace(host, workspace, tmp_path):
     assert host.run("open('inside.txt', 'w').write('ok')").result == "2"
     for outside in (tmp_path / "outside.txt", workspace.renders / "x.wav", Path.home() / "flmcp-escape.txt"):
@@ -192,27 +202,29 @@ def test_the_kernel_cannot_write_outside_its_workspace(host, workspace, tmp_path
         assert not outside.exists()
 
 
-@darwin
+@sandbox
 def test_the_kernel_cannot_read_the_users_home_or_its_secrets(host, workspace):
     home = Path.home()
+    # A file that exists: a missing one reads as missing, not denied (docs/38 limits).
+    home_file = next((p for p in sorted(home.iterdir()) if p.is_file()), workspace.canary)
     for code in (
         f"import os\nos.listdir({str(home)!r})",
         f"import os\nos.listdir({str(home / '.ssh')!r})",
-        f"open({str(home / '.zshrc')!r}).read()",
+        f"open({str(home_file)!r}).read()",
         f"open({str(workspace.canary)!r}).read()",
         f"import os\nos.link({str(workspace.canary)!r}, 'canary-link')",
     ):
-        assert "PermissionError" in _denied(host, code)
+        assert "PermissionError" in _denied(host, code), code
 
 
-@darwin
+@sandbox
 def test_the_kernel_cannot_read_another_sessions_workspace(host, tmp_path):
     other = Workspace.create(tmp_path / "other-session")
     (other.work / "secret.txt").write_text("not yours")
     assert "PermissionError" in _denied(host, f"open({str(other.work / 'secret.txt')!r}).read()")
 
 
-@darwin
+@sandbox
 def test_the_kernel_cannot_reach_other_processes(host):
     """Another process's command line and environment hold credentials; signals could stop the server."""
     code = (
@@ -227,7 +239,7 @@ def test_the_kernel_cannot_reach_other_processes(host):
     assert "PermissionError" in _denied(host, "import os\nos.kill(os.getppid(), 0)")
 
 
-@darwin
+@sandbox
 def test_pip_installs_into_the_workspace_and_the_package_imports(host, workspace, tmp_path):
     wheels = workspace.renders  # readable by the kernel, written by the server
     wheel = _wheel(tmp_path)
@@ -237,7 +249,7 @@ def test_pip_installs_into_the_workspace_and_the_package_imports(host, workspace
     assert host.run("import flmcp_probe_pkg\nflmcp_probe_pkg.VALUE").result == "42"
 
 
-@darwin
+@sandbox
 @network
 def test_pip_from_pypi_and_public_https_work_under_the_sandbox(host):
     assert host.run("%pip install -q six==1.17.0").outcome == "ok"
@@ -246,7 +258,7 @@ def test_pip_from_pypi_and_public_https_work_under_the_sandbox(host):
     assert host.run(fetch).result == "200"
 
 
-@darwin
+@sandbox
 def test_a_killed_cell_takes_its_subprocesses_with_it(session, workspace):
     kernel = KernelHost(session, workspace, SeatbeltLauncher(), os.environ, cell_timeout=1.0, interrupt_grace=1.0)
     try:
@@ -289,7 +301,7 @@ def _shell(runner: WorkspaceRunner, command: str, timeout_s: int = 20) -> dict:
     )
 
 
-@darwin
+@sandbox
 def test_workspace_tools_pass_the_probe_and_work_in_the_workspace(runner):
     assert runner.confined
     assert runner.call("write_file", {"path": "a.txt", "content": "hi"}, timeout=30)["created"] is True
@@ -301,7 +313,7 @@ def test_workspace_tools_pass_the_probe_and_work_in_the_workspace(runner):
     assert out["stdout"].startswith("hi1\n[1, 2]\ngit version")
 
 
-@darwin
+@sandbox
 def test_workspace_tools_cannot_reach_outside_the_workspace(runner, workspace, tmp_path):
     from fl_mcp.errors import ToolError
 
@@ -322,14 +334,14 @@ def test_workspace_tools_cannot_reach_outside_the_workspace(runner, workspace, t
     assert out["stderr"].count("Operation not permitted") >= 3, out["stderr"]
 
 
-@darwin
+@sandbox
 def test_a_shell_call_stops_everything_it_started(runner, workspace):
     result = _shell(runner, "sleep 60 & echo $! > bg.pid; echo started")
     assert result["stdout"] == "started\n"
     assert _gone(int((workspace.work / "bg.pid").read_text()))
 
 
-@darwin
+@sandbox
 def test_a_missing_sandbox_exec_refuses_instead_of_running_unconfined(session, workspace, monkeypatch):
     from fl_mcp.errors import ToolError
     from fl_mcp.kernel import seatbelt
@@ -344,4 +356,4 @@ def test_a_missing_sandbox_exec_refuses_instead_of_running_unconfined(session, w
 
 def test_the_seatbelt_launcher_says_it_confines(workspace):
     assert SeatbeltLauncher.confined is True
-    assert sys.platform == "darwin" or SeatbeltLauncher().release(workspace) is None
+    assert SeatbeltLauncher().release(workspace) is None  # nothing is granted, so nothing to withdraw
