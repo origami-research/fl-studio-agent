@@ -2,7 +2,7 @@
   "manifest_version": "0.4",
   "name": "fl-studio-agent",
   "display_name": "FL Studio Agent",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "description": "Drive FL Studio from an AI agent: write notes, set tempo and levels, check what sounds, render.",
   "long_description": "Lets Claude write notes into FL Studio, set tempo, levels and plugin parameters, check which channels sound, and render the mix to WAV. Before first use, close FL Studio and run `uvx --python 3.12 --from fl-studio-agent fl-mcp-install` once (on Windows from an administrator terminal): it installs the FL-side scripts and the prebuilt, checksum-verified Bridge plugin, the native FL effect the server requires to write notes and render. Setup guide: https://github.com/origami-research/fl-studio-agent#quick-start",
   "author": {
