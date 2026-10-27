@@ -76,3 +76,17 @@ def test_windows_launch_spawns_the_executable_and_waits_for_its_bridge_pid(monke
             True,
         )
     ]
+
+
+def test_the_newest_fl_is_chosen_by_version_number(monkeypatch, tmp_path):
+    """'FL Studio 21' sorts after 'FL Studio 2026' as text: an upgrader with both
+    installed got the Bridge in FL 21's folder."""
+    program_files = tmp_path / "Program Files"
+    for name in ("FL Studio 20", "FL Studio 21", "FL Studio 2026"):
+        (program_files / "Image-Line" / name).mkdir(parents=True)
+        (program_files / "Image-Line" / name / "FL64.exe").touch()
+    monkeypatch.setattr(paths.sys, "platform", "win32")
+    monkeypatch.setenv("PROGRAMFILES", str(program_files))
+    monkeypatch.delenv("FL_APP", raising=False)
+
+    assert paths.fl_app() == program_files / "Image-Line" / "FL Studio 2026" / "FL64.exe"

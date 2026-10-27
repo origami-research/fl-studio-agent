@@ -25,6 +25,7 @@ Two distinct trees, easy to conflate:
 from __future__ import annotations
 
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -42,12 +43,18 @@ def fl_app() -> Path:
         return Path(override)
     if sys.platform == "win32":
         program_files = os.environ.get("PROGRAMFILES", r"C:\\Program Files")
-        installed = sorted(
-            Path(program_files).glob("Image-Line/FL Studio*/FL64.exe"), reverse=True
-        )
-        return installed[0] if installed else Path(program_files) / "Image-Line" / "FL Studio" / "FL64.exe"
-    installed = sorted(Path("/Applications").glob("FL Studio*.app"), reverse=True)
-    return installed[0] if installed else Path("/Applications/FL Studio.app")
+        installed = sorted(Path(program_files).glob("Image-Line/FL Studio*/FL64.exe"), key=lambda p: _fl_version(p.parent))
+        return installed[-1] if installed else Path(program_files) / "Image-Line" / "FL Studio" / "FL64.exe"
+    installed = sorted(Path("/Applications").glob("FL Studio*.app"), key=_fl_version)
+    return installed[-1] if installed else Path("/Applications/FL Studio.app")
+
+
+def _fl_version(install: Path) -> int:
+    """The number in 'FL Studio 2026' or 'FL Studio 21.app' (0 when unnumbered).
+    By number, not by name: 'FL Studio 21' sorts after 'FL Studio 2026' as text,
+    which put an upgrader's Bridge into their old FL."""
+    match = re.search(r"FL Studio (\d+)", install.name)
+    return int(match.group(1)) if match else 0
 
 
 BRIDGE_NAME = "FL MCP Bridge"

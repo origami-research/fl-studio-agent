@@ -191,3 +191,47 @@ def test_an_already_current_bridge_needs_no_fl_restart(fl, monkeypatch):
     step = bridge.install_release(fetch=release)
 
     assert step.status == "OK" and "already current" in step.detail
+
+
+def test_the_download_is_verified_by_the_os_trust_store(monkeypatch):
+    """Windows fills its root store on demand, so Python's own check failed on a fresh
+    user's machine (CERTIFICATE_VERIFY_FAILED for github.com, 2026-10-26 box run) and the
+    Bridge was never installed. truststore asks the OS, which fetches the missing root."""
+    import truststore
+
+    seen = {}
+
+    class Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def read(self):
+            return b"sums"
+
+    def urlopen(url, *, timeout, context):
+        seen.update(url=url, timeout=timeout, context=context)
+        return Response()
+
+    monkeypatch.setattr(bridge.urllib.request, "urlopen", urlopen)
+    assert bridge._fetch("https://example.invalid/SHA256SUMS") == b"sums"
+    assert isinstance(seen["context"], truststore.SSLContext)
+    assert seen["timeout"] == bridge.DOWNLOAD_TIMEOUT_SECONDS
+
+
+def test_a_bridge_left_for_the_user_is_not_reported_as_done(monkeypatch, capsys):
+    """A WARN step (no Bridge: no render) must not end with "Next: open FL Studio"."""
+    steps = {
+        "controller_script": install.InstallStep(status="OK", detail="c"),
+        "bridge": install.InstallStep(status="WARN", detail="could not download"),
+    }
+    monkeypatch.setattr(install, "install_all", lambda *a, **k: steps)
+    install.main([])
+    out = capsys.readouterr().out
+    assert "Not finished: bridge needs you" in out and "Next:" not in out
+
+    steps["bridge"] = install.InstallStep(status="OK", detail="installed")
+    install.main([])
+    assert install.NEXT_STEPS in capsys.readouterr().out

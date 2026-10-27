@@ -21,11 +21,14 @@ from __future__ import annotations
 import contextlib
 import hashlib
 import http.client
+import ssl
 import subprocess
 import sys
 import urllib.request
 from collections.abc import Callable
 from pathlib import Path
+
+import truststore
 
 from fl_mcp import __version__
 from fl_mcp.schemas import BridgeInstall
@@ -54,7 +57,12 @@ def release_tag() -> str:
 
 
 def _fetch(url: str) -> bytes:
-    with urllib.request.urlopen(url, timeout=DOWNLOAD_TIMEOUT_SECONDS) as response:
+    """Download over HTTPS verified by the OS, as a browser does. Python's own check sees
+    only the roots already in Windows' store, which Windows fills on demand: a machine
+    that never opened github.com in Edge (Chrome keeps its own roots) lacks GitHub's
+    root and failed with CERTIFICATE_VERIFY_FAILED (2026-10-26, a fresh Windows user)."""
+    context = truststore.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+    with urllib.request.urlopen(url, timeout=DOWNLOAD_TIMEOUT_SECONDS, context=context) as response:
         return response.read()
 
 

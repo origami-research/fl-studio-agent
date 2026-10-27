@@ -411,12 +411,20 @@ def main(argv: list[str] | None = None) -> None:
     args = parser.parse_args(argv)
     results = install_all(args.bridge, with_bridge=not args.no_bridge)
     failed = any(step.status == "FAIL" for step in results.values())
+    waiting = [name for name, step in results.items() if step.status == "WARN"]
     if args.json:
         print(json.dumps({name: step.model_dump() for name, step in results.items()}))
     else:
         for name, step in results.items():
             print(f"  [{step.status}] {name}: {step.detail}")
-        print("\n" + ("Some steps failed; fix them and rerun fl-mcp-install." if failed else NEXT_STEPS))
+        if failed:
+            footer = "Some steps failed; fix them and rerun fl-mcp-install."
+        elif waiting:
+            # A missing Bridge means no render: "Next: open FL" read as done (2026-10-26).
+            footer = f"Not finished: {', '.join(waiting)} needs you (see WARN above); fix it and rerun fl-mcp-install."
+        else:
+            footer = NEXT_STEPS
+        print("\n" + footer)
     if failed:
         raise SystemExit(1)
 
