@@ -14,7 +14,6 @@ logging to STDERR - stdout is the JSON-RPC wire, one stray line corrupts it.
 from __future__ import annotations
 
 import argparse
-import base64
 import contextlib
 import functools
 import logging
@@ -224,10 +223,6 @@ def check(ctx: Context, bars: int = 2, start_bar: int = 1) -> CheckToolResult:
     return CheckToolResult(**checked.model_dump(), actions=actions.sentences())
 
 
-# A render is only listenable if the caller can retrieve it; wavBase64 is
-# capped so a long project cannot balloon one tool reply past what a model
-# request can carry. 12 MiB of WAV is ~90 s of stereo 44.1 kHz.
-RENDER_WAV_BASE64_MAX_BYTES = 12 * 1024 * 1024
 _LAST_RENDER_KEY = "last_render"
 
 
@@ -235,27 +230,27 @@ _LAST_RENDER_KEY = "last_render"
 def render(ctx: Context) -> RenderResult:
     """Play the song once from its start and record the mix to a WAV: how to hear
     your edits. FL's loop mode decides what plays: the playlist in song mode, the
-    selected pattern in pattern mode. Returns {"path", "wavBase64", "span"}:
-    wavBase64 is the WAV in base64 (omitted with a note past the size cap); span
-    says what played (source "song" or "pattern"), its live beats and tempo, and
-    the seconds recorded. A render takes about that long, ten minutes at most,
-    so render once when the pass is done (check proves audibility in seconds).
-    Call analyze afterwards for measurements."""
+    selected pattern in pattern mode. Returns {"path", "bytes", "span"}: path is
+    the WAV file (run code reads it with fl.read_wav or fl.analyze), bytes its
+    size; span says what played (source "song" or "pattern"), its live beats and
+    tempo, and the seconds recorded. The audio stays in the file, never in this
+    result. A render takes about that long, ten minutes at most, so render once
+    when the pass is done (check proves audibility in seconds). Call analyze
+    afterwards for measurements."""
+    # The WAV never goes into the result as text: a 23 s render is ~5.8M tokens of
+    # base64, which overflows the model's context on the next request in any real
+    # client. A person or client that wants the audio opens the file at path.
     actions = ActionLog()
     try:
         rendered = _render(ctx, actions)
     except ToolError as exc:
         return _tool_error_response(_tool_error_result(exc))
-    path = rendered.path
-    result: dict[str, Any] = {"path": str(path), "span": rendered.span, "actions": actions.sentences()}
-    data = path.read_bytes()
-    if len(data) <= RENDER_WAV_BASE64_MAX_BYTES:
-        result["wavBase64"] = base64.b64encode(data).decode("ascii")
-    else:
-        result["note"] = (
-            f"WAV is {len(data)} bytes (> {RENDER_WAV_BASE64_MAX_BYTES}); read it from path instead."
-        )
-    return RenderResult.model_validate(result)
+    return RenderResult(
+        path=str(rendered.path),
+        bytes=rendered.path.stat().st_size,
+        span=rendered.span,
+        actions=actions.sentences(),
+    )
 
 
 @_tool_boundary

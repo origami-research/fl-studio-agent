@@ -104,7 +104,9 @@ pattern in pattern mode, at the live tempo), plays it once from the start while
 the Bridge records the mix, and returns the verified WAV path. Nothing is saved.
 It raises before recording if song mode has an empty playlist or the capture
 would pass ten minutes, and after recording if the WAV does not verify.
-The `render` MCP tool also returns the span it recorded (`RenderSpan`).
+The `render` MCP tool returns the WAV's `path`, its size in `bytes`, and the span it recorded (`RenderSpan`).
+The audio stays in the file: a person or client opens it at `path`, and model code reads it with `fl.read_wav` or `fl.analyze`.
+Until 0.1.5 the result also carried the WAV as base64, which overflowed the model's context in real clients.
 
 A render plays in real time and produces the real mix, so render once when the
 pass is done; the harness listens back after you say you are done. Use

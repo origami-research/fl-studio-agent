@@ -178,11 +178,11 @@ class GetSceneResult(BaseModel):
 
 
 class RenderResult(BaseModel):
-    path: str
-    wavBase64: str | None = None
-    note: str | None = None
-    # The live length the capture recorded and where FL read it (song/pattern).
-    span: RenderSpan
+    """Where the render's WAV is and what it recorded. The audio itself is only in the file."""
+
+    path: str = Field(description="The rendered WAV file.")
+    bytes: int = Field(ge=0, description="The WAV file's size in bytes.")
+    span: RenderSpan = Field(description="What played (song or pattern), its live beats and tempo, and the seconds recorded.")
     actions: Actions
 
 

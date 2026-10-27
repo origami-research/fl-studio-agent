@@ -325,17 +325,20 @@ def _workspace_only(tmp_path: Path) -> Any:
     return SimpleNamespace(workspace=Workspace.create(tmp_path / "kernel"))
 
 
-def test_render_returns_path_wav_base64_and_live_span(tmp_path):
-    import base64
-
+def test_render_returns_the_wav_path_and_size_never_the_audio(tmp_path):
+    """0.1.4 put the whole WAV in the result as base64: a 23 s render was ~5.8M tokens and
+    overflowed the model's context on the next request. The result names the file instead."""
     kernel = _workspace_only(tmp_path)
     stub = _RenderFl()
     result = server.render(_ctx(fl=stub, session=stub, kernel=kernel))
-    assert Path(result.path).exists()
+    wav = Path(result.path)
     # In the renders folder, so model code in run can read the same WAV.
-    assert Path(result.path).is_relative_to(kernel.workspace.renders)
-    assert base64.b64decode(result.wavBase64)[:4] == b"RIFF"
+    assert wav.is_relative_to(kernel.workspace.renders)
+    assert wav.read_bytes()[:4] == b"RIFF"
+    assert result.bytes == wav.stat().st_size
     assert result.span == RENDER_SPAN  # the caller sees what played and for how long
+    assert set(result.model_dump()) == {"path", "bytes", "span", "actions"}
+    assert len(result.model_dump_json()) < 1000
 
 
 def test_analyze_defaults_to_the_most_recent_render(tmp_path):

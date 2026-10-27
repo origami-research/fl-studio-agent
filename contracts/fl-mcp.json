@@ -572,7 +572,7 @@
       }
     },
     {
-      "description": "Play the song once from its start and record the mix to a WAV: how to hear\nyour edits. FL's loop mode decides what plays: the playlist in song mode, the\nselected pattern in pattern mode. Returns {\"path\", \"wavBase64\", \"span\"}:\nwavBase64 is the WAV in base64 (omitted with a note past the size cap); span\nsays what played (source \"song\" or \"pattern\"), its live beats and tempo, and\nthe seconds recorded. A render takes about that long, ten minutes at most,\nso render once when the pass is done (check proves audibility in seconds).\nCall analyze afterwards for measurements.",
+      "description": "Play the song once from its start and record the mix to a WAV: how to hear\nyour edits. FL's loop mode decides what plays: the playlist in song mode, the\nselected pattern in pattern mode. Returns {\"path\", \"bytes\", \"span\"}: path is\nthe WAV file (run code reads it with fl.read_wav or fl.analyze), bytes its\nsize; span says what played (source \"song\" or \"pattern\"), its live beats and\ntempo, and the seconds recorded. The audio stays in the file, never in this\nresult. A render takes about that long, ten minutes at most, so render once\nwhen the pass is done (check proves audibility in seconds). Call analyze\nafterwards for measurements.",
       "inputSchema": {
         "properties": {},
         "title": "renderArguments",
@@ -630,6 +630,7 @@
             "type": "object"
           }
         },
+        "description": "Where the render's WAV is and what it recorded. The audio itself is only in the file.",
         "properties": {
           "actions": {
             "description": "What happened in FL during this call, in order: one plain sentence per change FL confirmed or measurement taken. Reads and failures add none.",
@@ -639,40 +640,25 @@
             "title": "Actions",
             "type": "array"
           },
-          "note": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null,
-            "title": "Note"
+          "bytes": {
+            "description": "The WAV file's size in bytes.",
+            "minimum": 0,
+            "title": "Bytes",
+            "type": "integer"
           },
           "path": {
+            "description": "The rendered WAV file.",
             "title": "Path",
             "type": "string"
           },
           "span": {
-            "$ref": "#/$defs/RenderSpan"
-          },
-          "wavBase64": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null,
-            "title": "Wavbase64"
+            "$ref": "#/$defs/RenderSpan",
+            "description": "What played (song or pattern), its live beats and tempo, and the seconds recorded."
           }
         },
         "required": [
           "path",
+          "bytes",
           "span",
           "actions"
         ],
