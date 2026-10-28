@@ -1,6 +1,6 @@
 [project]
 name = "fl-studio-agent"
-version = "0.1.5"
+version = "0.1.6"
 description = "MCP server for controlling FL Studio's piano roll"
 readme = "README.md"
 license = "MIT"

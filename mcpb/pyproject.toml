@@ -2,6 +2,6 @@
 # this release from PyPI; requires-python keeps it on a Python with python-rtmidi wheels.
 [project]
 name = "fl-studio-agent-bundle"
-version = "0.1.5"
+version = "0.1.6"
 requires-python = ">=3.11,<3.13"
-dependencies = ["fl-studio-agent==0.1.5"]
+dependencies = ["fl-studio-agent==0.1.6"]
