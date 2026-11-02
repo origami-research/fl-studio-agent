@@ -11,6 +11,8 @@ chosen per call from evidence (docs/27 §2; there is no flag):
                  routing rule is fl_mcp.core.router.route via fl_mcp.ops)
 - notes.py     - FileLane + BridgeLane (docs/30 Lanes) + read_notes
 - controls.py  - tempo, levels, plugin params
+- routing.py   - channel-to-mixer routing, mixer sends
+- presets.py   - a plugin channel's presets
 - state.py     - snapshot, channel_names, doctor
 """
 

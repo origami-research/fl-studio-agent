@@ -13,6 +13,9 @@ The stable public surface is deliberately small:
 - `fl.track(...).set_automation(...)` for existing FL-authored automation clips.
 - `with fl.file_edit(): ...` to batch file-lane edits into a single FL reload in development mode.
 - `fl.track(...).params(...)` and `set_param(...)` for live generator plugin parameters.
+- `fl.route(...)` and `fl.send(...)` for live mixer routing and sends.
+- `fl.presets(...)` and `fl.set_preset(...)` for a plugin channel's presets.
+- `fl.sounds(...)` to search the stock presets and samples FL ships.
 
 Notes always go to the channel named by `fl.track(...)`; live Bridge writes select and verify that
 channel first when it is not already selected in FL.
@@ -196,6 +199,62 @@ print(fl.check().summary)
 # Silent: FLEX Bass (it has no notes in bars 1-2).
 ```
 
+### `fl.route(channel: str | int, mixer_track: int) -> ChannelRoute`
+
+**Availability:** live-only. Plays the channel (index, exact name, or a unique part of the name, as `fl.track`) through `mixer_track`, where 0 is the master.
+A mixer track FL does not have is refused before anything is written.
+Returns `ChannelRoute(channel, mixer_track)` read back from `channels.getTargetFxTrack`; a route FL does not keep raises.
+
+```python
+fl.route("FLEX Bass", 3)
+```
+
+### `fl.send(src_track: int, dst_track: int, level: float | None = None, on: bool = True) -> MixerSend`
+
+**Availability:** live-only. Turns the send from mixer track `src_track` to `dst_track` on, or off with `on=False`, then applies the routing change.
+`level` is normalized 0 to 1 (FL's default send is 0.8); `None` keeps the send's level.
+Returns `MixerSend(source, target, on, level)` read back from FL.
+If FL takes the send but refuses its level, the error says the send landed.
+
+```python
+fl.send(3, 5, level=0.5)   # mixer track 3 also feeds mixer track 5
+fl.send(3, 5, on=False)
+```
+
+### `fl.presets(channel: str | int) -> list[str]`
+
+**Availability:** live-only. The names of the channel plugin's presets, in FL's order; a preset's index is its place in this list.
+Every name is one controller round trip.
+A sampler channel is not a plugin and raises `invalid_argument` ("not a plugin; use load_sample").
+
+### `fl.set_preset(channel: str | int, preset: int | str) -> ChannelPreset`
+
+**Availability:** live-only. Switches the channel's plugin to a preset by index, by name (any case), or by a unique part of a name.
+FL has no getter for the current preset, but stepping renames the channel to the preset's name.
+So `set_preset` reads where the channel's name says it is, steps there with `plugins.nextPreset` or `prevPreset`, and confirms by the name it ends on.
+A channel whose name shows no preset, or a name two presets share, takes one step first to learn its place.
+Returns `ChannelPreset(channel, index, name)`, where `name` is the channel's new name.
+The preset replaces the plugin's sound, including earlier `set_param` changes.
+Name lookups (`fl.track`) read the saved song's channel names, which keep the old name until a save, so use the channel's index afterwards.
+If it lands on another preset (a channel renamed by hand to a preset's name), it raises; calling again steps from the preset FL now shows.
+
+```python
+names = fl.presets("FLEX Bass")
+fl.set_preset("FLEX Bass", "Pure Feather")
+```
+
+### `fl.sounds(query: str = "", kind: "preset" | "sample" | None = None, plugin: str | None = None, limit: int = 20) -> list[Sound]`
+
+**Availability:** local file search of this FL install's stock content (`Data/Patches`), read by the engine, not the `run` kernel.
+Returns sounds whose path holds every word of `query` (any case), in FL's folder order, up to `limit` (at most 200).
+`kind` keeps only presets or only samples; `plugin` keeps that plugin's presets.
+A missing stock folder raises `unknown_target` rather than returning an empty list.
+Loading a found sound into a channel is not available yet.
+
+```python
+kicks = fl.sounds("808 kick", kind="sample")
+```
+
 ### `fl.undo() -> None`
 
 **Availability:** live-only. Invokes FL's undo command. The session's note
@@ -326,4 +385,8 @@ with `Model.model_validate(...)`.
 | `ChannelLevels` | `channel: int`, `volume: float` (0–1), `pan: float` (-1–1), `pitch_semitones: int` (-48–48) |
 | `Effect` | `name: str`, `chunk: bytes` (opaque FL-authored plugin state) |
 | `AudioAnalysis` | `bpm: float | None` (FL's tempo for a session render), `key: str | None`, `integrated_lufs: float`, `true_peak_dbfs: float`, `spectral_balance: SpectralBalance` (`low_dbfs`, `mid_dbfs`, `high_dbfs`); decibels in tenths |
+| `ChannelRoute` | `channel: int`, `mixer_track: int` (0 is the master) |
+| `MixerSend` | `source: int`, `target: int`, `on: bool`, `level: float` (normalized, FL's default 0.8) |
+| `ChannelPreset` | `channel: int`, `index: int` (place in `fl.presets`), `name: str` (the channel's name now) |
+| `Sound` | `kind: "preset" | "sample"`, `name: str`, `plugin: str | None` (a preset's plugin), `path: str` (relative to FL's `Data/Patches`, `/`-separated) |
 | `PluginParam` | `index: int`, `name: str`, `value: float` (normalized 0–1), `display: str`, `kind: "continuous" | "stepped" | "enum" | "bool"`, `options: list[str] | None`, `minimum`, `maximum`, `step`, `unit` |

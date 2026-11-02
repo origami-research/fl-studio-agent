@@ -29,14 +29,20 @@ from .schemas import (
     AutomationResult,
     Channel,
     ChannelLevels,
+    ChannelPreset,
+    ChannelRoute,
     CheckResult,
+    MixerSend,
     Note,
     NoteWriteMode,
     PluginParam,
+    Sound,
+    SoundKind,
     Target,
     WriteResult,
 )
 from .session import FLSession, create_session
+from .sounds import SEARCH_LIMIT_MAX
 
 if TYPE_CHECKING:
     from PIL import Image
@@ -81,6 +87,28 @@ class _ChannelLevelsArgs(BaseModel):
 class _AddEffectArgs(BaseModel):
     insert_index: SdkChannel
     plugin_name: Annotated[str, Field(strict=True, min_length=1)]
+
+
+class _RouteArgs(BaseModel):
+    mixer_track: SdkChannel
+
+
+class _SendArgs(BaseModel):
+    src_track: SdkChannel
+    dst_track: SdkChannel
+    level: NormalizedValue | None = None
+    on: Annotated[bool, Field(strict=True)] = True
+
+
+class _SetPresetArgs(BaseModel):
+    preset: SdkChannel | Annotated[str, Field(strict=True, min_length=1)]
+
+
+class _SoundsArgs(BaseModel):
+    query: Annotated[str, Field(strict=True)] = ""
+    kind: SoundKind | None = None
+    plugin: Annotated[str, Field(strict=True)] | None = None
+    limit: Annotated[int, Field(strict=True, ge=1, le=SEARCH_LIMIT_MAX)] = 20
 
 
 _NOTES = TypeAdapter(list[Note])
@@ -160,6 +188,61 @@ class FL:
         except ValidationError as exc:
             raise errors.invalid_argument("fl.add_effect", str(exc)) from None
         return self._session.add_effect(args.insert_index, args.plugin_name)
+
+    def route(self, channel: str | int, mixer_track: int) -> ChannelRoute:
+        """Play a channel (index, exact name, or a unique part of the name) through
+        ``mixer_track``, where 0 is the master. Returns the mixer track FL now routes it to.
+        """
+        try:
+            args = _RouteArgs(mixer_track=mixer_track)
+        except ValidationError as exc:
+            raise errors.invalid_argument("fl.route", str(exc)) from None
+        return self._session.route_channel(self.track(channel).channel, args.mixer_track)
+
+    def send(self, src_track: int, dst_track: int, level: float | None = None, on: bool = True) -> MixerSend:
+        """Send mixer track ``src_track`` to mixer track ``dst_track`` (0 is the master),
+        or stop sending with ``on=False``. ``level`` is 0..1 (FL's default send is 0.8);
+        None keeps the send's level. Returns the send as FL now has it.
+        """
+        try:
+            args = _SendArgs(src_track=src_track, dst_track=dst_track, level=level, on=on)
+        except ValidationError as exc:
+            raise errors.invalid_argument("fl.send", str(exc)) from None
+        if args.src_track == args.dst_track:
+            raise errors.invalid_argument("fl.send", "a mixer track cannot send to itself")
+        return self._session.set_send(args.src_track, args.dst_track, on=args.on, level=args.level)
+
+    def presets(self, channel: str | int) -> list[str]:
+        """The names of a plugin channel's presets, in FL's order: a preset's index is
+        its place in this list. A sampler channel has none and raises."""
+        return self._session.presets(self.track(channel).channel)
+
+    def set_preset(self, channel: str | int, preset: int | str) -> ChannelPreset:
+        """Switch a plugin channel to a preset from ``fl.presets(channel)``: by index, by
+        name (any case), or by a unique part of a name. FL steps through its presets to
+        get there and renames the channel to the preset; returns the preset FL now has.
+        The preset replaces the plugin's sound, including earlier set_param changes.
+        Use the channel's index afterwards: a lookup by name may still know the old name.
+        """
+        try:
+            args = _SetPresetArgs(preset=preset)
+        except ValidationError as exc:
+            raise errors.invalid_argument("fl.set_preset", str(exc)) from None
+        return self._session.set_preset(self.track(channel).channel, args.preset)
+
+    def sounds(
+        self, query: str = "", kind: SoundKind | None = None, plugin: str | None = None, limit: int = 20
+    ) -> list[Sound]:
+        """FL's stock sounds whose path holds every word of ``query`` (any case):
+        ``Sound(kind, name, plugin, path)``, where kind is "preset" or "sample".
+        ``kind`` keeps one kind; ``plugin`` keeps that plugin's presets (e.g. "FLEX");
+        ``limit`` caps the list (at most 200).
+        """
+        try:
+            args = _SoundsArgs(query=query, kind=kind, plugin=plugin, limit=limit)
+        except ValidationError as exc:
+            raise errors.invalid_argument("fl.sounds", str(exc)) from None
+        return self._session.sounds(args.query, kind=args.kind, plugin=args.plugin, limit=args.limit)
 
     def render(self, output: str | Path) -> Path:
         """Play the song once and record the mix to ``output``: how to hear your edits.

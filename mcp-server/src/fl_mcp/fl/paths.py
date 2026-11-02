@@ -57,6 +57,13 @@ def _fl_version(install: Path) -> int:
     return int(match.group(1)) if match else 0
 
 
+def fl_patches_dir() -> Path:
+    """FL's stock content folder (plugin presets, sample packs) inside its install."""
+    if sys.platform == "win32":
+        return fl_app().parent / "Data" / "Patches"
+    return fl_app() / "Contents" / "Resources" / "FL" / "Data" / "Patches"
+
+
 BRIDGE_NAME = "FL MCP Bridge"
 
 

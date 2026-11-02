@@ -32,7 +32,10 @@ from fl_mcp.audio import AudioAnalysis
 from fl_mcp.schemas import (
     AutomationResult,
     ChannelLevels,
+    ChannelPreset,
+    ChannelRoute,
     CheckResult,
+    MixerSend,
     PluginParam,
     RenderReceipt,
     WriteResult,
@@ -323,6 +326,21 @@ class ActionLog:
             return [_Entry(f"Added {kwargs['plugin_name']} to {where}")]
         return [_Entry(f"Changed the effects on {where}; it now has {', '.join(names) or 'none'}")]
 
+    def _route(self, kwargs: Mapping[str, Any], result: ChannelRoute) -> list[_Entry]:
+        return [_Entry(f"Routed {self._name(result.channel)} to {_where(result.mixer_track)}")]
+
+    def _send(self, kwargs: Mapping[str, Any], result: MixerSend) -> list[_Entry]:
+        source, target = _where(result.source), _where(result.target)
+        if not result.on:
+            return [_Entry(f"Stopped sending {source} to {target}")]
+        return [_Entry(f"Sent {source} to {target} at level {_level(result.level)}")]
+
+    def _preset(self, kwargs: Mapping[str, Any], result: ChannelPreset) -> list[_Entry]:
+        # FL renames the channel to its preset, so a live name read now is the preset's.
+        track = self._name(result.channel)
+        where = f"channel {result.channel}" if track == result.name else track
+        return [_Entry(f"Loaded preset {result.name} on {where}")]
+
     def _check(self, kwargs: Mapping[str, Any], result: CheckResult) -> list[_Entry]:
         return [_Entry(_checked(result))]
 
@@ -350,6 +368,9 @@ _CALLS: dict[str, Callable[[ActionLog, Mapping[str, Any], Any], list[_Entry]]] =
     "set_tempo": ActionLog._tempo,
     "set_automation": ActionLog._automation,
     "add_effect": ActionLog._effect,
+    "route_channel": ActionLog._route,
+    "set_send": ActionLog._send,
+    "set_preset": ActionLog._preset,
     "check": ActionLog._check,
     "render_wav": ActionLog._render,
     "export_offline": ActionLog._export,

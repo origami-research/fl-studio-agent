@@ -191,6 +191,25 @@ def invalid_argument(call: str, detail: str) -> ToolError:
     )
 
 
+def not_a_plugin(channel: str) -> ToolError:
+    """A sampler channel answers FL's plugin calls with "Plugin not valid" (live, API 45)."""
+    return ToolError(
+        "invalid_argument",
+        f"{channel} is a sampler channel, not a plugin, so it has no presets.",
+        "Use load_sample to change a sampler's sound; presets are for plugin channels.",
+    )
+
+
+def stock_sounds_missing(folder: Path) -> ToolError:
+    log.warning("FL's stock sound folder %s does not exist", folder)
+    return ToolError(
+        "unknown_target",
+        "FL Studio's stock sounds were not found on this computer.",
+        "FL Studio may be installed somewhere unusual; ask the user. A plugin's own presets "
+        "still list with fl.presets(channel).",
+    )
+
+
 def kernel_unavailable(detail: str) -> ToolError:
     """The run kernel could not start, so no model code ran."""
     return ToolError(

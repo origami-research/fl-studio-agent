@@ -193,6 +193,17 @@ def run(code: str, ctx: Context) -> RunResult:
       pan -1..1, pitch whole semitones -48..48; returns FL's values.
     - Track.params(query="cutoff") / Track.set_param("cutoff", 0.55) - the
       instrument's parameters, values normalized 0..1.
+    - fl.route("Bass", 3) -> ChannelRoute(channel, mixer_track): the channel now
+      plays through mixer track 3 (0 is the master). fl.send(3, 5, level=0.5) or
+      fl.send(3, 5, on=False) -> MixerSend(source, target, on, level): a send
+      between mixer tracks, level 0..1 (FL's default is 0.8).
+    - fl.presets("Bass") -> the plugin's preset names in FL's order;
+      fl.set_preset("Bass", "Pure Feather") (or an index) -> ChannelPreset(channel,
+      index, name): FL switches the plugin to it and renames the channel to the
+      preset, replacing its sound; use the channel's index afterwards. Sampler
+      channels have no presets.
+    - fl.sounds("808 kick", kind="sample") -> [Sound(kind, name, plugin, path)]:
+      the stock presets and samples FL ships, searched by words.
     - fl.check(bars=2, start_bar=1) -> CheckResult: plays those bars and reads
       FL's mixer meters; per channel whether it sounded, its peak dBFS, and why
       it was silent (muted, no notes in those bars, ...); .summary is one line.

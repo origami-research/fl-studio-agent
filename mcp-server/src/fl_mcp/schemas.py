@@ -232,6 +232,37 @@ class ChannelLevels(BaseModel):
     pitch_semitones: int = Field(ge=-48, le=48)
 
 
+class ChannelRoute(BaseModel):
+    """The mixer track a channel plays through, as FL reports it (0 is the master)."""
+
+    channel: int = Field(ge=0)
+    mixer_track: int = Field(ge=0)
+
+
+class MixerSend(BaseModel):
+    """A send from one mixer track to another, as FL reports it.
+
+    ``level`` is normalized 0..1 (FL's default send is 0.8).
+    """
+
+    source: int = Field(ge=0)
+    target: int = Field(ge=0)
+    on: bool
+    level: float
+
+
+class ChannelPreset(BaseModel):
+    """The preset a channel's plugin now has.
+
+    ``index`` is its place in ``fl.presets(channel)``; ``name`` is the
+    channel's name now, which FL sets to the preset's name.
+    """
+
+    channel: int = Field(ge=0)
+    index: int = Field(ge=0)
+    name: str
+
+
 class AutomationPoint(BaseModel):
     """One automation point, in beats and FL's normalized value scale."""
 
@@ -441,6 +472,18 @@ class Channel(BaseModel):
     muted: bool = False
     # The mixer track FL routes this channel to (0 is the master); live reads only.
     mixer_track: int | None = None
+
+
+SoundKind = Literal["preset", "sample"]
+
+
+class Sound(BaseModel):
+    """One stock sound FL ships: a plugin preset or a sample."""
+
+    kind: SoundKind
+    name: str
+    plugin: str | None = None  # the plugin a preset is for; None for samples
+    path: str  # relative to FL's Data/Patches folder, "/"-separated; what the loaders take
 
 
 class MixerTrack(BaseModel):

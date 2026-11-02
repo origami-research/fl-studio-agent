@@ -19,6 +19,7 @@ from contextlib import contextmanager
 from pathlib import Path
 
 from fl_mcp import errors, flp
+from fl_mcp import sounds as stock_sounds
 from fl_mcp.audio_stream import AudioChunk, AudioEndpoint
 from fl_mcp.contract import ENV_AGENT_PROJECT, ENV_SPOOL_ROOT, FLLicense, fl_license_from_env
 from fl_mcp.core.carriers import CarrierUnavailable
@@ -28,7 +29,7 @@ from fl_mcp.core.carriers.udp import UdpCarrier
 from fl_mcp.core.carriers.wire import ControlUnavailable
 from fl_mcp.core.transport import Transport
 from fl_mcp.errors import NotePlaneUnavailable
-from fl_mcp.fl.paths import primary_settings_dir
+from fl_mcp.fl.paths import fl_patches_dir, primary_settings_dir
 from fl_mcp.fl.process import bridge_pid
 from fl_mcp.observer import Observer
 from fl_mcp.ops import notes as ops_notes
@@ -40,9 +41,12 @@ from fl_mcp.schemas import (
     AutomationResult,
     Channel,
     ChannelLevels,
+    ChannelPreset,
+    ChannelRoute,
     CheckResult,
     DoctorReport,
     HelloEvent,
+    MixerSend,
     Note,
     NoteWriteMode,
     PluginParam,
@@ -50,14 +54,17 @@ from fl_mcp.schemas import (
     RenderReceipt,
     RenderSpan,
     SessionState,
+    Sound,
+    SoundKind,
     Target,
     WriteResult,
 )
 from fl_mcp.store import Store
 
 from . import check as check_mod
-from . import controls, lifecycle, state
+from . import controls, lifecycle, routing, state
 from . import notes as note_ops
+from . import presets as preset_ops
 from .detect import (
     BRIDGE_PING_TIMEOUT_SECONDS,
     BridgeBreaker,
@@ -499,6 +506,33 @@ class FLSession:
     def set_plugin_param(self, channel: int, param: int | str, value: float | str) -> PluginParam:
         with self._write_guard("set_plugin_param"):
             return controls.set_plugin_param(self, channel, param, value)
+
+    # -- routing, presets and stock sounds --------------------------------------
+
+    def route_channel(self, channel: int, mixer_track: int) -> ChannelRoute:
+        with self._write_guard("route_channel"):
+            return routing.route_channel(self, channel, mixer_track)
+
+    def set_send(self, source: int, target: int, *, on: bool = True, level: float | None = None) -> MixerSend:
+        with self._write_guard("set_send"):
+            return routing.set_send(self, source, target, on=on, level=level)
+
+    def presets(self, channel: int) -> list[str]:
+        return preset_ops.presets(self, channel)
+
+    def set_preset(self, channel: int, preset: int | str) -> ChannelPreset:
+        with self._write_guard("set_preset"):
+            return preset_ops.set_preset(self, channel, preset)
+
+    def sounds(
+        self, query: str = "", *, kind: SoundKind | None = None, plugin: str | None = None, limit: int = 20
+    ) -> list[Sound]:
+        """Search the stock sounds this FL install ships (fl_mcp.sounds), read here
+        because FL's install is outside what the run kernel may read."""
+        folder = fl_patches_dir()
+        if not folder.is_dir():
+            raise errors.stock_sounds_missing(folder)
+        return stock_sounds.search(folder, query, kind=kind, plugin=plugin, limit=limit)
 
     # -- transport ------------------------------------------------------------
 

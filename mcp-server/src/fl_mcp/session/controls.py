@@ -134,6 +134,14 @@ def _live_read(session: FLSession, op: str, args: list) -> object:
     return session.link.call(op, args, timeout=LIVE_READ_TIMEOUT_SECONDS)
 
 
+def _live_write(session: FLSession, op: str, args: list) -> object:
+    """One live controller write: FL's answer, or a typed error naming why not.
+    Never a file fallback: the caller reads the change back from FL."""
+    if session._ensure_hello() is None or session.control is None:
+        raise errors.control_plane_unavailable(op, LIVE_SET_TIMEOUT_SECONDS)
+    return session.link.call(op, args, timeout=LIVE_SET_TIMEOUT_SECONDS)
+
+
 def _live_int(session: FLSession, op: str, args: list | None = None) -> int:
     value = _live_read(session, op, args or [])
     if isinstance(value, bool) or not isinstance(value, int):
