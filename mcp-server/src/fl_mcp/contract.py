@@ -11,10 +11,11 @@ from pathlib import Path
 from typing import Annotated, Any, Literal
 
 from mcp.server.mcpserver.tools.base import Tool
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, model_validator
 
 from fl_mcp import __version__
 from fl_mcp.audio import AudioAnalysis
+from fl_mcp.kernel.display import ShownImage, describe
 from fl_mcp.schemas import CheckResult, RenderSpan
 
 ENV_SPOOL_ROOT = "FLMCP_SPOOL_ROOT"
@@ -94,6 +95,16 @@ Actions = Annotated[
 ]
 
 
+# The images a result carries go to the model as MCP image content; the result names them.
+ShownImages = Annotated[
+    list[str],
+    Field(
+        description="One line per image shown, with its size and token cost; the images "
+        "themselves follow this result as image content."
+    ),
+]
+
+
 # ok: the cell finished. error: it raised (traceback). interrupted: it ran past its
 # time budget and was stopped, the kernel kept its state. kernel_lost: the kernel
 # process died or was killed, its state is gone and the next run starts fresh.
@@ -107,6 +118,24 @@ class RunResult(BaseModel):
     traceback: str | None = None
     # Every fl call the cell made that FL confirmed, including those before an error.
     actions: Actions
+    images: ShownImages = Field(default_factory=list)
+    # The images themselves: they reach the model as MCP image content, never as text here.
+    _shown: list[ShownImage] = PrivateAttr(default_factory=list)
+    _dropped: int = PrivateAttr(default=0)
+
+    @property
+    def shown(self) -> list[ShownImage]:
+        return self._shown
+
+    @property
+    def dropped(self) -> int:
+        return self._dropped
+
+    def with_images(self, shown: list[ShownImage], dropped: int) -> RunResult:
+        """This result carrying the images a cell showed, and naming them."""
+        result = self.model_copy(update={"images": describe(shown, dropped)})
+        result._shown, result._dropped = list(shown), dropped
+        return result
 
     @model_validator(mode="after")
     def _outcome_matches_payload(self) -> RunResult:
@@ -197,10 +226,11 @@ class CheckToolResult(CheckResult):
 
 
 class AnalyzeResult(AudioAnalysis):
-    """Measurements of a rendered WAV."""
+    """Measurements of a rendered WAV, and its picture as image content after them."""
 
     model_config = ConfigDict(title="AudioAnalysis")
     actions: Actions
+    images: ShownImages
 
 
 # -- the workspace tools (docs/39) ----------------------------------------------------

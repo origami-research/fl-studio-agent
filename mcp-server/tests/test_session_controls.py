@@ -13,10 +13,10 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-from session_fakes import HELLO, FakeControl, FakePlatform, FakeSpool, arrangement, make_session
+from session_fakes import HELLO, RENDER_SPAN, FakeControl, FakePlatform, FakeSpool, arrangement, make_session
 
 from fl_mcp import errors, flp
-from fl_mcp.schemas import AutomationPoint, ControlResponse, PluginParamModel, PluginParamSpec
+from fl_mcp.schemas import AutomationPoint, ControlResponse, PluginParamModel, PluginParamSpec, RenderReceipt
 from fl_mcp.session import FLSession, NotePlaneUnavailable, WriteRejected, controls
 from fl_mcp.session import facade as facade_mod
 
@@ -85,6 +85,23 @@ def test_render_wav_refuses_when_the_live_bridge_is_unavailable(tmp_path, caplog
     assert "open the FLMCP Agent song" in refused.value.fix
 
 
+def test_the_session_remembers_what_each_render_played(monkeypatch, tmp_path):
+    """analyze and fl.spectrogram read a render's tempo and bars from here (#284). A
+    full-song export to the same path is not what that render played, so it is forgotten."""
+    session, _ = make_session(project=tmp_path / "agent.flp")
+    monkeypatch.setattr(controls, "render_wav", lambda _s, output: RenderReceipt(path=output, span=RENDER_SPAN))
+    monkeypatch.setattr(controls, "export_offline", lambda _s, output: output)
+    wav = tmp_path / "take.wav"
+
+    session.render_wav(wav)
+
+    assert session.render_span(wav) == RENDER_SPAN
+    assert session.render_span(tmp_path / "sub" / ".." / "take.wav") == RENDER_SPAN  # any spelling of the path
+    assert session.render_span(tmp_path / "other.wav") is None
+    session.export_offline(wav)
+    assert session.render_span(wav) is None
+
+
 def test_render_waits_for_an_in_flight_write_then_proceeds(monkeypatch, tmp_path):
     """A render serializes behind the write whose saved state it needs."""
     session, _ = make_session(project=tmp_path / "agent.flp")
@@ -104,7 +121,11 @@ def test_render_waits_for_an_in_flight_write_then_proceeds(monkeypatch, tmp_path
     worker = threading.Thread(target=write)
     worker.start()
     assert started.wait(timeout=1)
-    monkeypatch.setattr(controls, "render_wav", lambda _session, output: entered_render.set() or output)
+    monkeypatch.setattr(
+        controls,
+        "render_wav",
+        lambda _session, output: entered_render.set() or RenderReceipt(path=output, span=RENDER_SPAN),
+    )
 
     def render() -> None:
         try:
@@ -121,7 +142,7 @@ def test_render_waits_for_an_in_flight_write_then_proceeds(monkeypatch, tmp_path
     assert finished.is_set()
     assert not renderer.is_alive()
     assert render_errors == []
-    assert rendered == [tmp_path / "mix.wav"]
+    assert [receipt.path for receipt in rendered] == [tmp_path / "mix.wav"]
 
 
 def test_render_refusal_after_bounded_wait_names_the_remaining_write(monkeypatch, tmp_path):

@@ -25,7 +25,7 @@ import numpy as np
 import pytest
 from flpkit import effects_at
 from sdk_fakes import DEFAULT_CHANNELS, FakeSession
-from session_fakes import make_session
+from session_fakes import RENDER_SPAN, make_session
 
 from fl_mcp import errors, sdk, theory
 from fl_mcp.schemas import AutomationPoint, ChannelLevels, Note, Target, WriteResult
@@ -354,6 +354,39 @@ def test_read_wav_loads_synthetic_pcm(fl, tmp_path):
 
     assert sample_rate == 44100
     np.testing.assert_allclose(samples, [[-1.0, 0.0], [0.0, 32767 / 32768]])
+
+
+def _tone(path: Path, seconds: float = 3.0, rate: int = 44100) -> Path:
+    t = np.arange(round(seconds * rate)) / rate
+    samples = (0.2 * np.sin(2 * np.pi * 220 * t) * 32767).astype("<i2")
+    with wave.open(str(path), "wb") as wav:
+        wav.setnchannels(1)
+        wav.setsampwidth(2)
+        wav.setframerate(rate)
+        wav.writeframes(samples.tobytes())
+    return path
+
+
+def test_analyze_reports_fls_tempo_for_this_sessions_render_and_none_for_others(fl, tmp_path):
+    """#284: tempo guessed from the audio read a syncopated 85 BPM render as 113 BPM.
+    FL knows the tempo it rendered at, so a session render reports that; any other WAV
+    reports none rather than a guess."""
+    rendered = _tone(fl.render(tmp_path / "mix.wav"))  # the fake writes no audio; put some where it rendered
+    outside = _tone(tmp_path / "outside.wav")
+
+    assert fl.analyze(rendered).bpm == RENDER_SPAN.tempo_bpm
+    assert fl.analyze(str(rendered)).bpm == RENDER_SPAN.tempo_bpm
+    assert fl.analyze(outside).bpm is None
+
+
+def test_spectrogram_is_an_image_with_this_sessions_bars(fl, tmp_path):
+    rendered = _tone(fl.render(tmp_path / "mix.wav"), seconds=RENDER_SPAN.seconds + 0.5)
+
+    picture = fl.spectrogram(rendered)
+
+    assert picture.mode == "RGB"
+    assert picture.width == 1000
+    assert 300 < picture.height < 600  # small enough to cost a few hundred tokens
 
 
 # -- plugin params -------------------------------------------------------------

@@ -102,7 +102,7 @@ class Channel:
     def serve(self, namespace: dict[str, Any]) -> None:
         while True:
             cell = self._execs.get()
-            self.send(wire.Done(result=self.run(cell, namespace)))
+            self.send(wire.Done.of(self.run(cell, namespace)))
 
     def call(self, call: wire.Call) -> Any:
         call = call.model_copy(update={"id": next(self._call_ids)})
@@ -178,6 +178,8 @@ def main(argv: list[str] | None = None) -> None:
         share_private_dirs(os)
     with contextlib.suppress(OSError):  # model code may have removed it; tempfile needs it
         Path(os.environ["TMP"]).mkdir(exist_ok=True)
+    # Figures become images in the run result, never windows on the machine running FL.
+    os.environ["MPLBACKEND"] = "module://fl_mcp.kernel.mpl_inline"
     inbound, outbound = _take_wire()
     channel = Channel(inbound, outbound)
     # -I keeps the workspace off sys.path while the kernel itself imports;

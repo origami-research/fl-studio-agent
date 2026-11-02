@@ -19,6 +19,7 @@ from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError,
 from fl_mcp import errors
 from fl_mcp.contract import RunResult
 from fl_mcp.errors import ErrorCategory, ToolError
+from fl_mcp.kernel.display import MAX_IMAGES, ShownImage
 from fl_mcp.session import FLSession
 
 # The FLSession surface that sdk.FL and sdk.Track call; a test pins it to sdk.py.
@@ -30,6 +31,7 @@ SessionMethod = Literal[
     "export_offline",
     "plugin_params",
     "read_notes",
+    "render_span",
     "render_wav",
     "save_project",
     "set_automation",
@@ -127,6 +129,18 @@ class Call(BaseModel):
 class Done(BaseModel):
     op: Literal["done"] = "done"
     result: RunResult
+    # The images the cell showed. Validated on arrival against the display caps:
+    # a kernel that sends more, larger or malformed images is not trusted further.
+    images: list[ShownImage] = Field(default_factory=list, max_length=MAX_IMAGES)
+    dropped: int = Field(default=0, ge=0)
+
+    @classmethod
+    def of(cls, result: RunResult) -> Done:
+        return cls(result=result, images=result.shown, dropped=result.dropped)
+
+    def run_result(self) -> RunResult:
+        """The result with the images the server checked, named by the server, not the kernel."""
+        return self.result.with_images(self.images, self.dropped)
 
 
 ToKernel = Annotated[Exec | Interrupt | Reply, Field(discriminator="op")]

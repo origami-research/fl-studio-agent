@@ -14,6 +14,7 @@ logging to STDERR - stdout is the JSON-RPC wire, one stray line corrupts it.
 from __future__ import annotations
 
 import argparse
+import base64
 import contextlib
 import functools
 import logging
@@ -24,8 +25,10 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
+import pydantic_core
 from mcp.server.mcpserver import Context, MCPServer
-from mcp.types import CallToolResult, TextContent
+from mcp.types import CallToolResult, ImageContent, TextContent
+from pydantic import BaseModel
 
 from fl_mcp import __version__, actions, errors
 from fl_mcp.actions import ActionLog
@@ -51,6 +54,8 @@ from fl_mcp.contract import (
     workspace_tools_from_env,
 )
 from fl_mcp.errors import ToolError
+from fl_mcp.kernel import display
+from fl_mcp.kernel.display import ShownImage
 from fl_mcp.kernel.host import KernelHost
 from fl_mcp.kernel.launch import Workspace
 from fl_mcp.platform import PlatformUnsupportedError, platform_for
@@ -148,11 +153,18 @@ def run(code: str, ctx: Context) -> RunResult:
     installs a package for later imports; `!cmd` runs a shell command. The
     working directory is your workspace, the one place you can write; its files
     last for the session. Pre-bound: fl (the SDK), theory, Note,
-    AutomationPoint. A trailing expression is repr'd like a REPL.
+    AutomationPoint, display. A trailing expression is repr'd like a REPL.
 
-    Returns {"outcome", "stdout", "result" | "traceback", "actions"}; stdout
-    includes stderr, and actions lists what FL did, one sentence per change,
-    even when the cell failed partway. outcome is "ok", or "error" (read the
+    Images show like a notebook's: end a cell with a PIL image or a matplotlib
+    figure, call display(img, ...) (also PNG/JPEG bytes or an image file), or
+    leave matplotlib figures open (plt.show() works); you see them after the
+    result. At most 4 per run, each downscaled to at most 1.15 megapixels;
+    one costs about width x height / 750 tokens (a 640x480 plot about 410).
+
+    Returns {"outcome", "stdout", "result" | "traceback", "actions",
+    "images"}; stdout includes stderr, actions lists what FL did, one sentence
+    per change, even when the cell failed partway, and images names each image
+    shown with its size and token cost. outcome is "ok", or "error" (read the
     traceback and fix the code), or "interrupted" when the cell ran past its
     300 s budget (time inside fl calls does not count) - the kernel and its
     variables are intact, or "kernel_lost" when the kernel process died or was
@@ -188,8 +200,10 @@ def run(code: str, ctx: Context) -> RunResult:
       lands in the session's renders folder, which you can read but not write.
       A render plays the whole song in real time (FL's loop mode decides: the
       playlist in song mode, only the selected pattern in pattern mode).
-      fl.analyze(path) -> bpm/key/LUFS/spectral balance; fl.read_wav(path) ->
-      (samples: numpy.ndarray, sample_rate: int).
+      fl.spectrogram(path) -> a picture to look at (end the cell with it):
+      spectrum over time, loudness and stereo width per bar.
+      fl.analyze(path) -> FL's tempo, key, LUFS, true peak, spectral balance;
+      fl.read_wav(path) -> (samples: numpy.ndarray, sample_rate: int).
     - During a match FL is never reopened: fl.save() is not needed (and a
       trial FL cannot save), and Track.set_automation, fl.add_effect and
       fl.file_edit() are unavailable because they rewrite the saved song.
@@ -201,7 +215,8 @@ def run(code: str, ctx: Context) -> RunResult:
     # kernel is a separate process (fl_mcp.kernel, docs/38) and the OS, not
     # Python filtering, confines it to its workspace. A test keeps the
     # docstring's "300 s" in step with kernel.host.RUN_CELL_TIMEOUT_SECONDS.
-    return ctx.request_context.lifespan_context["kernel"].run(code)
+    ran = ctx.request_context.lifespan_context["kernel"].run(code)
+    return _with_images(ran, ran.shown)
 
 
 @_tool_boundary
@@ -236,7 +251,7 @@ def render(ctx: Context) -> RenderResult:
     tempo, and the seconds recorded. The audio stays in the file, never in this
     result. A render takes about that long, ten minutes at most, so render once
     when the pass is done (check proves audibility in seconds). Call analyze
-    afterwards for measurements."""
+    afterwards to see and measure it."""
     # The WAV never goes into the result as text: a 23 s render is ~5.8M tokens of
     # base64, which overflows the model's context on the next request in any real
     # client. A person or client that wants the audio opens the file at path.
@@ -255,9 +270,21 @@ def render(ctx: Context) -> RenderResult:
 
 @_tool_boundary
 def analyze(ctx: Context, wav: str | None = None) -> AnalyzeResult:
-    """Measure a rendered WAV: bpm, key, integrated LUFS, true peak, and
-    spectral balance. ``wav`` defaults to the most recent render (rendering
-    fresh if none exists yet)."""
+    """See and measure a rendered WAV; ``wav`` defaults to the most recent render
+    (rendering fresh if none exists yet).
+
+    Returns {"bpm", "key", "integrated_lufs", "true_peak_dbfs",
+    "spectral_balance", "actions", "images"} and one image (about 560 tokens) to
+    look at: the spectrum over time, bars numbered along the bottom, frequency
+    bands named on the right (sub, bass, low mids, mids, presence, air), colour
+    is energy per 1/13 octave, so a balanced mix reads as an even band; under it,
+    loudness per bar in LUFS (red on top where peaks reach 0 dBFS) and stereo
+    width per bar (empty is mono). bpm is FL's tempo for the render; key is the
+    pitch class with the most energy, not a reliable key (get_scene infers the
+    key from the notes). Look for what you meant: whether each section has the
+    energy and parts you wrote, a lead that stands out of the mids, low end that
+    does not swamp the rest, and contrast between sections. Draw anything else
+    with fl.read_wav and matplotlib in run."""
     fl = ctx.request_context.lifespan_context["fl"]
     actions = ActionLog()
     try:
@@ -265,8 +292,12 @@ def analyze(ctx: Context, wav: str | None = None) -> AnalyzeResult:
         if path is None:
             path = _render(ctx, actions).path
         measured = fl.analyze(path)
+        picture = display.encode(fl.spectrogram(path))
         actions.measured(measured, path.name if wav else "the render")
-        return AnalyzeResult(**measured.model_dump(), actions=actions.sentences())
+        result = AnalyzeResult(
+            **measured.model_dump(), actions=actions.sentences(), images=display.describe([picture], 0)
+        )
+        return _with_images(result, [picture])
     except ToolError as exc:
         return _tool_error_response(_tool_error_result(exc))
     except OSError as exc:
@@ -545,6 +576,23 @@ def tool_definitions() -> tuple[Any, ...]:
 def workspace_tool_definitions() -> tuple[Any, ...]:
     """The workspace tools (docs/39), in stable presentation order."""
     return shell, read_file, write_file, edit_file, glob, grep
+
+
+def _with_images(result: BaseModel, images: list[ShownImage]) -> Any:
+    """The result as the model reads it, with each image after it as MCP image
+    content: a picture the client shows the model, never base64 in the text."""
+    if not images:
+        return result
+    return CallToolResult(
+        content=[
+            TextContent(type="text", text=pydantic_core.to_json(result, indent=2).decode()),
+            *(
+                ImageContent(type="image", data=base64.b64encode(image.data).decode(), mime_type=image.mime_type)
+                for image in images
+            ),
+        ],
+        structured_content=result.model_dump(mode="json"),
+    )
 
 
 def _tool_error_result(exc: ToolError) -> ToolErrorResult:

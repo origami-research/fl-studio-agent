@@ -114,11 +114,30 @@ def test_a_many_block_render_keeps_tempo_key_and_loudness(tmp_path, sample_rate)
     tone = 0.1 * np.sin(2 * np.pi * 997 * t)
     beats = np.exp(-((t % 0.5) * 30)) * np.sin(2 * np.pi * 440 * t)  # A4 hits at 120 BPM
     loud = analyze_wav(_write(tmp_path / "tone.wav", np.stack([tone, tone], axis=1), sample_rate))
-    song = analyze_wav(_write(tmp_path / "beats.wav", beats, sample_rate))
+    song = analyze_wav(_write(tmp_path / "beats.wav", beats, sample_rate), tempo_bpm=120.0)
 
     assert loud.integrated_lufs == pytest.approx(-20.0, abs=0.1)  # BS.1770: -20 dBFS stereo 1 kHz
     assert loud.true_peak_dbfs == pytest.approx(-20.0, abs=0.01)
     assert (song.bpm, song.key) == (120.0, "A")
+
+
+def test_bpm_is_the_tempo_fl_rendered_at_never_a_guess_from_the_audio(tmp_path):
+    """#284: the onset guess read this boom-bap bar (kick on 1, the 'a' of 1 and 3; snare
+    on 2 and 4) at 85 BPM as 113 BPM, a dotted-eighth period. FL's tempo is exact, so bpm
+    is that or nothing."""
+    rate, bpm, bars = 44100, 85.0, 8
+    step = 60 / bpm / 4
+    t = np.arange(round(bars * 16 * step * rate)) / rate
+    hits = np.zeros_like(t)
+    for bar in range(bars):
+        for sixteenth, freq in ((0, 55), (3, 55), (10, 55), (4, 200), (12, 200)):
+            start = round((bar * 16 + sixteenth) * step * rate)
+            tail = t[: round(0.15 * rate)]
+            hits[start : start + len(tail)] += np.exp(-tail * 25) * np.sin(2 * np.pi * freq * tail)
+    path = _write(tmp_path / "boom-bap.wav", 0.5 * hits, rate)
+
+    assert analyze_wav(path, tempo_bpm=bpm).bpm == bpm
+    assert analyze_wav(path).bpm is None
 
 
 def test_true_peak_finds_an_inter_sample_peak_across_many_blocks():

@@ -18,6 +18,7 @@ from typing import Any
 import anyio
 import pytest
 from mcp.types import CallToolResult
+from PIL import Image
 from session_fakes import RENDER_SPAN
 
 from fl_mcp import __version__, errors, server
@@ -62,6 +63,29 @@ def kernel(fake_session, tmp_path):
 
 
 # -- run ----------------------------------------------------------------------
+
+
+def test_run_shows_the_images_a_cell_draws_as_image_content(kernel):
+    """The model sees what its code drew, like a notebook: the image crosses from the
+    kernel process and follows the result as MCP image content, never base64 text."""
+    result = server.run("from PIL import Image\nImage.new('RGB', (320, 200), 'navy')", _ctx(kernel=kernel))
+
+    assert isinstance(result, CallToolResult)
+    text, image = result.content
+    assert (image.type, image.mime_type) == ("image", "image/png")
+    assert json.loads(text.text)["images"] == ["image 1: 320x200 PNG, about 86 tokens"]
+    assert image.data not in text.text
+    assert json.loads(text.text) == result.structured_content
+
+
+def test_run_draws_matplotlib_into_the_result_never_a_window(kernel):
+    """A plt.show() in a cell must not open a window on the machine running FL: the kernel
+    draws it into the result."""
+    pytest.importorskip("matplotlib")
+    result = server.run("import matplotlib.pyplot as plt\nplt.plot([1, 2])\nplt.show()", _ctx(kernel=kernel))
+
+    assert isinstance(result, CallToolResult), result
+    assert result.structured_content["images"] == ["image 1: 640x480 PNG, about 410 tokens"]
 
 
 def test_run_returns_repr_of_last_expression(kernel):
@@ -293,6 +317,7 @@ class _RenderFl:
 
     def __init__(self) -> None:
         self.analyzed: list[Path] = []
+        self.pictured: list[Path] = []
 
     def render(self, output: Path) -> Path:
         return self.render_wav(output).path
@@ -318,6 +343,10 @@ class _RenderFl:
             true_peak_dbfs=-1.0,
             spectral_balance=SpectralBalance(low_dbfs=-20.0, mid_dbfs=-20.0, high_dbfs=-20.0),
         )
+
+    def spectrogram(self, wav: Path) -> Image.Image:
+        self.pictured.append(Path(wav))
+        return Image.new("RGB", (1000, 420))
 
 
 def _workspace_only(tmp_path: Path) -> Any:
@@ -345,17 +374,30 @@ def test_analyze_defaults_to_the_most_recent_render(tmp_path):
     fl = _RenderFl()
     ctx = _ctx(fl=fl, session=fl, kernel=_workspace_only(tmp_path))
     rendered = server.render(ctx)
-    metrics = server.analyze(ctx)
-    assert metrics.bpm == 140.0
-    assert metrics.integrated_lufs == -12.0
-    assert fl.analyzed == [Path(rendered.path)]
+    metrics = server.analyze(ctx).structured_content
+    assert metrics["bpm"] == 140.0
+    assert metrics["integrated_lufs"] == -12.0
+    assert fl.analyzed == fl.pictured == [Path(rendered.path)]
 
 
 def test_analyze_renders_fresh_when_nothing_was_rendered_yet(tmp_path):
     fl = _RenderFl()
-    metrics = server.analyze(_ctx(fl=fl, session=fl, kernel=_workspace_only(tmp_path)))
-    assert metrics.bpm == 140.0
+    metrics = server.analyze(_ctx(fl=fl, session=fl, kernel=_workspace_only(tmp_path))).structured_content
+    assert metrics["bpm"] == 140.0
     assert len(fl.analyzed) == 1
+
+
+def test_analyze_shows_the_render_as_an_image_the_model_sees(tmp_path):
+    """The model cannot hear the render, so analyze also returns its spectrogram: as MCP
+    image content after the JSON, never as base64 text, at a few hundred tokens."""
+    fl = _RenderFl()
+    result = server.analyze(_ctx(fl=fl, session=fl, kernel=_workspace_only(tmp_path)))
+
+    text, image = result.content
+    assert (image.type, image.mime_type) == ("image", "image/png")
+    assert json.loads(text.text)["images"] == ["image 1: 1000x420 PNG, about 560 tokens"]
+    assert image.data not in text.text
+    assert json.loads(text.text) == result.structured_content
 
 
 def test_notes_take_positional_arguments_in_the_documented_order(kernel):

@@ -14,6 +14,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from PIL import Image
 from sdk_fakes import DEFAULT_CHANNELS, FakeSession
 from session_fakes import RENDER_SPAN
 
@@ -497,6 +498,9 @@ class _Measured(FakeSession):
     def analyze(self, wav: Path) -> AudioAnalysis:
         return analysis()
 
+    def spectrogram(self, wav: Path) -> Image.Image:
+        return Image.new("RGB", (100, 42))
+
 
 @pytest.fixture
 def measured(tmp_path) -> SimpleNamespace:
@@ -510,13 +514,13 @@ def test_the_render_tool_reports_the_render(measured):
 
 
 def test_analyze_reports_its_measurement_and_the_render_it_needed(measured, tmp_path):
-    fresh = server.analyze(measured)
-    assert fresh.actions == [
+    def actions(**kwargs):  # analyze returns its picture too, so its result is the structured part
+        return server.analyze(measured, **kwargs).structured_content["actions"]
+
+    assert actions() == [
         "Rendered 0:34",
         "Measured the render: peak -4.0 dBFS, -9.8 LUFS, lows 20 dB over mids, 122 BPM, key A",
     ]
-    assert server.analyze(measured).actions == [
-        "Measured the render: peak -4.0 dBFS, -9.8 LUFS, lows 20 dB over mids, 122 BPM, key A"
-    ]
-    named = server.analyze(measured, wav=str(tmp_path / "mix.wav"))
-    assert named.actions == ["Measured mix.wav: peak -4.0 dBFS, -9.8 LUFS, lows 20 dB over mids, 122 BPM, key A"]
+    assert actions() == ["Measured the render: peak -4.0 dBFS, -9.8 LUFS, lows 20 dB over mids, 122 BPM, key A"]
+    named = actions(wav=str(tmp_path / "mix.wav"))
+    assert named == ["Measured mix.wav: peak -4.0 dBFS, -9.8 LUFS, lows 20 dB over mids, 122 BPM, key A"]

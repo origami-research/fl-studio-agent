@@ -1,7 +1,8 @@
-"""One cell of model code: Jupyter-style magics, REPL result, captured output.
+"""One cell of model code: Jupyter-style magics, REPL result, captured output, shown images.
 
 The kernel and the dev session both execute cells through ``run_cell`` so the
-REPL rule (a trailing expression is repr'd) has one implementation.
+REPL rule (a trailing expression is repr'd, or shown when it is an image) has
+one implementation.
 """
 
 from __future__ import annotations
@@ -23,6 +24,7 @@ from typing import Any
 
 from fl_mcp import theory
 from fl_mcp.contract import RunResult
+from fl_mcp.kernel import display as displays
 from fl_mcp.schemas import AutomationPoint, Note
 
 CELL_FILENAME = "<fl>"
@@ -46,6 +48,7 @@ def new_namespace(fl: object) -> dict[str, Any]:
         "theory": theory,
         "Note": Note,
         "AutomationPoint": AutomationPoint,
+        "display": display,
         "__fl_shell__": shell,
         "__fl_pip__": pip,
     }
@@ -65,6 +68,13 @@ def expand_magics(code: str) -> str:
     return "\n".join(lines)
 
 
+def display(*objects: object) -> None:
+    """Show images in this cell's result: PIL images, matplotlib figures, PNG/JPEG bytes or files."""
+    if displays.current is None:
+        raise RuntimeError("display() shows images while a cell runs")
+    displays.current.show(*objects)
+
+
 def shell(command: str) -> None:
     """``!command``: its output joins the cell's output; a failure raises."""
     _run_command(command, shell=True)
@@ -77,8 +87,10 @@ def pip(args: str) -> None:
 
 
 def _run_command(command: str | list[str], *, shell: bool) -> None:
+    # The kernel's matplotlib backend lives in the engine; another interpreter draws headless.
+    env = {**os.environ, "MPLBACKEND": "Agg"}
     completed = subprocess.run(
-        command, shell=shell, capture_output=True, text=True, errors="replace", check=False
+        command, shell=shell, capture_output=True, text=True, errors="replace", check=False, env=env
     )
     sys.stdout.write(completed.stdout)
     sys.stderr.write(completed.stderr)
@@ -98,29 +110,41 @@ def run_cell(code: str, namespace: dict[str, Any]) -> RunResult:
         )
 
     # REPL semantics: a trailing expression is evaluated and repr'd, so
-    # `fl.tempo` answers like Python instead of printing nothing.
+    # `fl.tempo` answers like Python instead of printing nothing; an image is
+    # shown instead, like a notebook's output.
     last_expr: ast.Expression | None = None
     if tree.body and isinstance(tree.body[-1], ast.Expr):
         last_expr = ast.Expression(tree.body.pop().value)
 
     output = io.StringIO()
+    shown = displays.current = displays.Display()
     try:
         with contextlib.redirect_stdout(output), contextlib.redirect_stderr(output):
-            exec(compile(tree, CELL_FILENAME, "exec"), namespace)
-            result = eval(compile(last_expr, CELL_FILENAME, "eval"), namespace) if last_expr else None
+            try:
+                exec(compile(tree, CELL_FILENAME, "exec"), namespace)
+                result = eval(compile(last_expr, CELL_FILENAME, "eval"), namespace) if last_expr else None
+                if result is not None and shown.show_result(result):
+                    result = None
+            except BaseException:
+                with contextlib.suppress(Exception):  # figures drawn before an error still show
+                    shown.flush_figures()
+                raise
+            shown.flush_figures()
     except BaseException as exc:  # noqa: BLE001 - the cell boundary: model code's exception (incl. SystemExit, KeyboardInterrupt) IS the result
         return RunResult(
             outcome="error",
             stdout=_bounded(output.getvalue()),
             traceback=_bounded(_model_traceback(exc)),
             actions=[],
-        )
+        ).with_images(shown.images, shown.dropped)
+    finally:
+        displays.current = None
     return RunResult(
         outcome="ok",
         stdout=_bounded(output.getvalue()),
         result=None if result is None else _bounded(repr(result)),
         actions=[],
-    )
+    ).with_images(shown.images, shown.dropped)
 
 
 def _model_traceback(exc: BaseException) -> str:

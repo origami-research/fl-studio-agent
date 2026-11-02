@@ -32,6 +32,8 @@ class SpectralBalance(BaseModel):
 
 
 class AudioAnalysis(BaseModel):
+    # FL's own tempo when the WAV is one of this session's renders; null otherwise. A tempo
+    # guessed from the audio misread syncopated beats (85 BPM read as 113, issue #284).
     bpm: float | None
     key: str | None
     integrated_lufs: float
@@ -39,31 +41,33 @@ class AudioAnalysis(BaseModel):
     spectral_balance: SpectralBalance
 
 
-def analyze_wav(path: Path) -> AudioAnalysis:
-    """Measure a PCM WAV without invoking a DAW or an external binary."""
+def analyze_wav(path: Path, tempo_bpm: float | None = None) -> AudioAnalysis:
+    """Measure a PCM WAV without invoking a DAW or an external binary.
+
+    ``tempo_bpm`` is FL's tempo for the render, reported as ``bpm``; the audio is not
+    asked for one.
+    """
     with path.open("rb") as file, wave.open(file, "rb") as wav:
         channels, width, sample_rate, count = _header(wav)
         loudness = _Loudness(sample_rate, channels, count)
         peak = _TruePeak(channels)
-        envelope = _Envelope(sample_rate)
         spectrum = _Spectrum(sample_rate, count)
         decoded = 0
         for block in _blocks(wav, channels, width):
             decoded += len(block)
             loudness.add(block)
             peak.add(block)
-            mono = block.mean(axis=1)
-            envelope.add(mono)
-            spectrum.add(mono)
+            spectrum.add(block.mean(axis=1))
     # The header is written last from the writer's own counter, so it can claim frames a failed
     # write never put on disk; the decoded count is the truth, and a short file is not a take.
     if decoded != count:
         raise ValueError(f"WAV header claims {count} frames but only {decoded} are present")
     return AudioAnalysis(
-        bpm=envelope.bpm(),
+        bpm=tempo_bpm,
         key=spectrum.key(),
-        integrated_lufs=loudness.integrated(),
-        true_peak_dbfs=_dbfs(peak.finish()),
+        # Tenths of a dB: finer is below what anyone hears, and costs the model tokens to read.
+        integrated_lufs=round(loudness.integrated(), 1),
+        true_peak_dbfs=round(_dbfs(peak.finish()), 1),
         spectral_balance=spectrum.balance(),
     )
 
@@ -252,39 +256,6 @@ class _Loudness:
         return float(-0.691 + 10 * np.log10(max(gated.mean(), 1e-12)))
 
 
-class _Envelope:
-    """RMS envelope at 200 Hz; the tempo is the strongest onset periodicity in 60-240 BPM."""
-
-    def __init__(self, sample_rate: int) -> None:
-        self._hop = max(1, sample_rate // 200)
-        self._rms: list[float] = []
-        self._partial = np.empty(0)
-
-    def add(self, mono: np.ndarray) -> None:
-        mono = np.concatenate([self._partial, mono])
-        whole = len(mono) // self._hop * self._hop
-        self._rms.extend(np.sqrt(np.mean(mono[:whole].reshape(-1, self._hop) ** 2, axis=1)).tolist())
-        self._partial = mono[whole:]
-
-    def bpm(self) -> float | None:
-        if not self._rms:
-            return None
-        envelope = np.array(self._rms)
-        onset = np.maximum(0, np.diff(envelope, prepend=envelope[0]))
-        if onset.max() < envelope.mean() * 0.1:
-            return None
-        # FFT autocorrelation keeps a multi-minute render linearithmic instead of
-        # making its analysis quadratic in duration.
-        fft_length = len(onset) * 2 - 1
-        spectrum = np.fft.rfft(onset, n=fft_length)
-        autocorrelation = np.fft.irfft(spectrum * spectrum.conj(), n=fft_length)[: len(onset)]
-        low, high = round(200 * 60 / 240), round(200 * 60 / 60)
-        if len(autocorrelation) <= high:
-            return None
-        lag = low + np.argmax(autocorrelation[low : high + 1])
-        return round(200 * 60 / lag, 2)
-
-
 class _Spectrum:
     """Mean Hann-windowed power spectrum of the mono mix (Welch, 50% overlap).
 
@@ -345,6 +316,6 @@ class _Spectrum:
             # Parseval for a one-sided real FFT, corrected for the Hann window's
             # mean-square attenuation, gives a directly comparable dBFS RMS level.
             mean_square = 2 * band.sum() / (self._size**2 * np.mean(self._window**2))
-            return float(10 * np.log10(max(mean_square, 1e-12)))
+            return round(float(10 * np.log10(max(mean_square, 1e-12))), 1)
 
         return SpectralBalance(low_dbfs=level(20, 250), mid_dbfs=level(250, 4000), high_dbfs=level(4000, 20000))

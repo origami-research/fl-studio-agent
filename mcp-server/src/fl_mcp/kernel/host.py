@@ -300,8 +300,8 @@ class KernelHost:
         if failure is None:
             return result
         note = f"Closing the fl.file_edit block this cell left open failed: {failure}"
-        if result.outcome == "ok":
-            return RunResult(outcome="error", stdout=result.stdout, traceback=note, actions=[])
+        if result.outcome == "ok":  # a copy, so the images the cell showed still show
+            return result.model_copy(update={"outcome": "error", "result": None, "traceback": note})
         return result.model_copy(update={"traceback": f"{result.traceback}\n{note}"})
 
     def _cell_outcome(self, kernel: _Kernel, code: str, cell: _Cell) -> RunResult:
@@ -339,7 +339,7 @@ class KernelHost:
             if message is None:
                 return None
             if isinstance(message, wire.Done):
-                return message.result
+                return message.run_result()
             if isinstance(message, wire.Call):
                 if not kernel.send(self._serve_call(message, cell), self._write_timeout):
                     return self._stalled(kernel)

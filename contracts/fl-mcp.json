@@ -136,7 +136,7 @@
   },
   "tools": [
     {
-      "description": "Run a Python cell in a persistent kernel bound to the live FL Studio\nsession, like a Jupyter notebook. Variables, imports, and functions persist\nacross calls. It is full Python: import anything, use files, numpy,\ntime.sleep, type/dir/getattr. `%pip install pkg` (or `!pip install pkg`)\ninstalls a package for later imports; `!cmd` runs a shell command. The\nworking directory is your workspace, the one place you can write; its files\nlast for the session. Pre-bound: fl (the SDK), theory, Note,\nAutomationPoint. A trailing expression is repr'd like a REPL.\n\nReturns {\"outcome\", \"stdout\", \"result\" | \"traceback\", \"actions\"}; stdout\nincludes stderr, and actions lists what FL did, one sentence per change,\neven when the cell failed partway. outcome is \"ok\", or \"error\" (read the\ntraceback and fix the code), or \"interrupted\" when the cell ran past its\n300 s budget (time inside fl calls does not count) - the kernel and its\nvariables are intact, or \"kernel_lost\" when the kernel process died or was\nkilled (os._exit, a crash, or ignoring the interrupt) - its variables are\ngone, files stay, the next run starts fresh.\n\nHow to work: write, check at milestones, render at the end. Every fl call\napplies to FL immediately and returns once FL has it, or raises with the\nreason; its result is what FL now has. There is nothing to wait for, save,\nreopen or re-read. To prove parts are audible, check (a few seconds); to\nhear the song, render once when the pass is done.\n\nThe SDK (no introspection needed):\n- fl.set_tempo(140.0) -> the tempo FL now has; fl.tempo reads it.\n- fl.channels -> [Channel(index, name, ...), ...].\n- fl.track(\"Bass\") / fl.track(2, pattern=1) -> Track (exact name, index, or\n  unique substring; pattern defaults to 1).\n- Track.write([Note(...), ...], mode=\"merge\"|\"replace\") -> WriteResult(wrote,\n  track, pattern, mode, total): \"merge\" adds the notes, \"replace\" swaps the\n  pattern's notes on that track; total is how many it now has.\n  Track.notes() -> the notes it has now; Track.clear() empties it.\n- Note(60, 0.0, 1.0, 0.8) = Note(key=60, start=0.0, length=1.0,\n  velocity=0.8, pan=0.5): by position or name, in that order; key is a\n  MIDI int or a name like \"C4\"/\"F#3\"; start/length in beats from pattern start.\n- Track.set_channel_levels(volume=0.9, pan=-0.15, pitch=0) - volume 0..1,\n  pan -1..1, pitch whole semitones -48..48; returns FL's values.\n- Track.params(query=\"cutoff\") / Track.set_param(\"cutoff\", 0.55) - the\n  instrument's parameters, values normalized 0..1.\n- fl.check(bars=2, start_bar=1) -> CheckResult: plays those bars and reads\n  FL's mixer meters; per channel whether it sounded, its peak dBFS, and why\n  it was silent (muted, no notes in those bars, ...); .summary is one line.\n- fl.render(\"mix.wav\") -> Path of the WAV. Only the file name is used: it\n  lands in the session's renders folder, which you can read but not write.\n  A render plays the whole song in real time (FL's loop mode decides: the\n  playlist in song mode, only the selected pattern in pattern mode).\n  fl.analyze(path) -> bpm/key/LUFS/spectral balance; fl.read_wav(path) ->\n  (samples: numpy.ndarray, sample_rate: int).\n- During a match FL is never reopened: fl.save() is not needed (and a\n  trial FL cannot save), and Track.set_automation, fl.add_effect and\n  fl.file_edit() are unavailable because they rewrite the saved song.\n- theory.chord(\"C\", \"minor\") / theory.scale(\"E\", \"minor\") -> MIDI ints;\n  theory.drums(\"x...x...x...x...\", key=\"C1\", step_beats=0.25) -> a\n  ready-to-write [Note] step grid ('x' = hit, '.' = rest).",
+      "description": "Run a Python cell in a persistent kernel bound to the live FL Studio\nsession, like a Jupyter notebook. Variables, imports, and functions persist\nacross calls. It is full Python: import anything, use files, numpy,\ntime.sleep, type/dir/getattr. `%pip install pkg` (or `!pip install pkg`)\ninstalls a package for later imports; `!cmd` runs a shell command. The\nworking directory is your workspace, the one place you can write; its files\nlast for the session. Pre-bound: fl (the SDK), theory, Note,\nAutomationPoint, display. A trailing expression is repr'd like a REPL.\n\nImages show like a notebook's: end a cell with a PIL image or a matplotlib\nfigure, call display(img, ...) (also PNG/JPEG bytes or an image file), or\nleave matplotlib figures open (plt.show() works); you see them after the\nresult. At most 4 per run, each downscaled to at most 1.15 megapixels;\none costs about width x height / 750 tokens (a 640x480 plot about 410).\n\nReturns {\"outcome\", \"stdout\", \"result\" | \"traceback\", \"actions\",\n\"images\"}; stdout includes stderr, actions lists what FL did, one sentence\nper change, even when the cell failed partway, and images names each image\nshown with its size and token cost. outcome is \"ok\", or \"error\" (read the\ntraceback and fix the code), or \"interrupted\" when the cell ran past its\n300 s budget (time inside fl calls does not count) - the kernel and its\nvariables are intact, or \"kernel_lost\" when the kernel process died or was\nkilled (os._exit, a crash, or ignoring the interrupt) - its variables are\ngone, files stay, the next run starts fresh.\n\nHow to work: write, check at milestones, render at the end. Every fl call\napplies to FL immediately and returns once FL has it, or raises with the\nreason; its result is what FL now has. There is nothing to wait for, save,\nreopen or re-read. To prove parts are audible, check (a few seconds); to\nhear the song, render once when the pass is done.\n\nThe SDK (no introspection needed):\n- fl.set_tempo(140.0) -> the tempo FL now has; fl.tempo reads it.\n- fl.channels -> [Channel(index, name, ...), ...].\n- fl.track(\"Bass\") / fl.track(2, pattern=1) -> Track (exact name, index, or\n  unique substring; pattern defaults to 1).\n- Track.write([Note(...), ...], mode=\"merge\"|\"replace\") -> WriteResult(wrote,\n  track, pattern, mode, total): \"merge\" adds the notes, \"replace\" swaps the\n  pattern's notes on that track; total is how many it now has.\n  Track.notes() -> the notes it has now; Track.clear() empties it.\n- Note(60, 0.0, 1.0, 0.8) = Note(key=60, start=0.0, length=1.0,\n  velocity=0.8, pan=0.5): by position or name, in that order; key is a\n  MIDI int or a name like \"C4\"/\"F#3\"; start/length in beats from pattern start.\n- Track.set_channel_levels(volume=0.9, pan=-0.15, pitch=0) - volume 0..1,\n  pan -1..1, pitch whole semitones -48..48; returns FL's values.\n- Track.params(query=\"cutoff\") / Track.set_param(\"cutoff\", 0.55) - the\n  instrument's parameters, values normalized 0..1.\n- fl.check(bars=2, start_bar=1) -> CheckResult: plays those bars and reads\n  FL's mixer meters; per channel whether it sounded, its peak dBFS, and why\n  it was silent (muted, no notes in those bars, ...); .summary is one line.\n- fl.render(\"mix.wav\") -> Path of the WAV. Only the file name is used: it\n  lands in the session's renders folder, which you can read but not write.\n  A render plays the whole song in real time (FL's loop mode decides: the\n  playlist in song mode, only the selected pattern in pattern mode).\n  fl.spectrogram(path) -> a picture to look at (end the cell with it):\n  spectrum over time, loudness and stereo width per bar.\n  fl.analyze(path) -> FL's tempo, key, LUFS, true peak, spectral balance;\n  fl.read_wav(path) -> (samples: numpy.ndarray, sample_rate: int).\n- During a match FL is never reopened: fl.save() is not needed (and a\n  trial FL cannot save), and Track.set_automation, fl.add_effect and\n  fl.file_edit() are unavailable because they rewrite the saved song.\n- theory.chord(\"C\", \"minor\") / theory.scale(\"E\", \"minor\") -> MIDI ints;\n  theory.drums(\"x...x...x...x...\", key=\"C1\", step_beats=0.25) -> a\n  ready-to-write [Note] step grid ('x' = hit, '.' = rest).",
       "inputSchema": {
         "properties": {
           "code": {
@@ -159,6 +159,14 @@
               "type": "string"
             },
             "title": "Actions",
+            "type": "array"
+          },
+          "images": {
+            "description": "One line per image shown, with its size and token cost; the images themselves follow this result as image content.",
+            "items": {
+              "type": "string"
+            },
+            "title": "Images",
             "type": "array"
           },
           "outcome": {
@@ -572,7 +580,7 @@
       }
     },
     {
-      "description": "Play the song once from its start and record the mix to a WAV: how to hear\nyour edits. FL's loop mode decides what plays: the playlist in song mode, the\nselected pattern in pattern mode. Returns {\"path\", \"bytes\", \"span\"}: path is\nthe WAV file (run code reads it with fl.read_wav or fl.analyze), bytes its\nsize; span says what played (source \"song\" or \"pattern\"), its live beats and\ntempo, and the seconds recorded. The audio stays in the file, never in this\nresult. A render takes about that long, ten minutes at most, so render once\nwhen the pass is done (check proves audibility in seconds). Call analyze\nafterwards for measurements.",
+      "description": "Play the song once from its start and record the mix to a WAV: how to hear\nyour edits. FL's loop mode decides what plays: the playlist in song mode, the\nselected pattern in pattern mode. Returns {\"path\", \"bytes\", \"span\"}: path is\nthe WAV file (run code reads it with fl.read_wav or fl.analyze), bytes its\nsize; span says what played (source \"song\" or \"pattern\"), its live beats and\ntempo, and the seconds recorded. The audio stays in the file, never in this\nresult. A render takes about that long, ten minutes at most, so render once\nwhen the pass is done (check proves audibility in seconds). Call analyze\nafterwards to see and measure it.",
       "inputSchema": {
         "properties": {},
         "title": "renderArguments",
@@ -667,7 +675,7 @@
       }
     },
     {
-      "description": "Measure a rendered WAV: bpm, key, integrated LUFS, true peak, and\nspectral balance. ``wav`` defaults to the most recent render (rendering\nfresh if none exists yet).",
+      "description": "See and measure a rendered WAV; ``wav`` defaults to the most recent render\n(rendering fresh if none exists yet).\n\nReturns {\"bpm\", \"key\", \"integrated_lufs\", \"true_peak_dbfs\",\n\"spectral_balance\", \"actions\", \"images\"} and one image (about 560 tokens) to\nlook at: the spectrum over time, bars numbered along the bottom, frequency\nbands named on the right (sub, bass, low mids, mids, presence, air), colour\nis energy per 1/13 octave, so a balanced mix reads as an even band; under it,\nloudness per bar in LUFS (red on top where peaks reach 0 dBFS) and stereo\nwidth per bar (empty is mono). bpm is FL's tempo for the render; key is the\npitch class with the most energy, not a reliable key (get_scene infers the\nkey from the notes). Look for what you meant: whether each section has the\nenergy and parts you wrote, a lead that stands out of the mids, low end that\ndoes not swamp the rest, and contrast between sections. Draw anything else\nwith fl.read_wav and matplotlib in run.",
       "inputSchema": {
         "properties": {
           "wav": {
@@ -714,7 +722,7 @@
             "type": "object"
           }
         },
-        "description": "Measurements of a rendered WAV.",
+        "description": "Measurements of a rendered WAV, and its picture as image content after them.",
         "properties": {
           "actions": {
             "description": "What happened in FL during this call, in order: one plain sentence per change FL confirmed or measurement taken. Reads and failures add none.",
@@ -734,6 +742,14 @@
               }
             ],
             "title": "Bpm"
+          },
+          "images": {
+            "description": "One line per image shown, with its size and token cost; the images themselves follow this result as image content.",
+            "items": {
+              "type": "string"
+            },
+            "title": "Images",
+            "type": "array"
           },
           "integrated_lufs": {
             "title": "Integrated Lufs",
@@ -764,7 +780,8 @@
           "integrated_lufs",
           "true_peak_dbfs",
           "spectral_balance",
-          "actions"
+          "actions",
+          "images"
         ],
         "title": "AudioAnalysis",
         "type": "object"

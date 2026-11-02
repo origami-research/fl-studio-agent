@@ -16,6 +16,8 @@ dependencies = [
     "pip>=24.0",
     # fl-mcp-install's Bridge download verifies HTTPS with the OS (fl/bridge.py).
     "truststore>=0.10",
+    # fl.spectrogram draws its picture, and run shows the images a cell displays.
+    "pillow>=11.0",
 ]
 keywords = ["fl-studio", "mcp", "music-production", "piano-roll"]
 classifiers = [
@@ -70,7 +72,14 @@ artifacts = ["src/fl_mcp/assets/session-template.flp"]
 
 
 [dependency-groups]
-dev = ["pytest>=8.0", "pyflp>=2.0", "python-rtmidi>=1.5", "flpkit==0.9.0"]
+dev = [
+    "pytest>=8.0",
+    "pyflp>=2.0",
+    "python-rtmidi>=1.5",
+    "flpkit==0.9.0",
+    # The run kernel's matplotlib backend (kernel/mpl_inline.py) is tested against the real library.
+    "matplotlib>=3.8",
+]
 
 [tool.ruff]
 line-length = 110

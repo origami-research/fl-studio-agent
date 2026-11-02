@@ -40,8 +40,9 @@ Each text field of a result is cut at 1,000,000 characters with a note, so a hug
 
 ### Outcomes
 
-`RunResult` is `{outcome, stdout, result | traceback, actions}`; `stdout` includes stderr.
+`RunResult` is `{outcome, stdout, result | traceback, actions, images}`; `stdout` includes stderr.
 `actions` lists the changes FL confirmed for the cell's `fl` calls, recorded by the server as it serves them and kept whatever the outcome ([36](36-engine-contract.md#actions)).
+`images` names each image the cell showed, with its size and token cost; the images themselves follow the result as MCP image content (see [Images](#images)).
 
 | outcome | Meaning | Kernel state |
 | --- | --- | --- |
@@ -58,6 +59,26 @@ A kernel that died between cells (for example a background thread's `os._exit`) 
 A `with fl.file_edit():` block a cell leaves open is closed by the server when the cell ends; if closing fails, the cell's result says so.
 
 A kernel that cannot start makes `run` fail with the `kernel_unavailable` tool error; no model code runs.
+
+### Images
+
+Since 2026-11-02 a cell can show images, like a notebook's inline output, so the model can look at what its code drew: a render's spectrogram (`fl.spectrogram`, [sdk-reference](sdk-reference.md#flspectrogramwav-str--path---pilimageimage)), a plot of its notes, any chart.
+A cell shows an image by ending with it (a PIL image, a matplotlib figure, or any object with `_repr_png_`), by calling `display(...)` (which also takes PNG/JPEG bytes or an image file path), or by leaving matplotlib figures open; `plt.show()` works.
+The kernel sets `MPLBACKEND` to `fl_mcp.kernel.mpl_inline`, so a figure never opens a window on the machine running FL; `!cmd` and `%pip` subprocesses get `Agg` instead, which every matplotlib has.
+Figures are closed once shown, and a figure that fails to draw fails only its own cell.
+
+| Cap | Value | Why |
+| --- | --- | --- |
+| Images per run | 4; more are dropped and `images` says how many | bounds one call's token cost |
+| Size | downscaled to at most 1568 px on a side and 1.15 megapixels | Claude reads an image as about width x height / 750 tokens, so one costs at most about 1,500 |
+| Encoding | PNG, or JPEG at quality 85 when the PNG is over 300 KB and the JPEG under half of it (photos, dense spectrograms) | small on the wire and in the client |
+| Bytes | 2 MiB per image | bounds the wire message |
+
+The kernel runs model code, so the server checks every image against these caps when the cell's `done` message arrives (`kernel/display.py`, `ShownImage`): the PNG or JPEG header must show the format and size the kernel declared, and the image must decode, since a client that cannot decode it would fail every later request carrying the result.
+The server writes the `images` lines itself from the images it checked.
+A message that breaks them is garbled and the kernel is killed, like any other malformed message.
+Audio is never shown: Claude cannot take audio input, and a WAV is millions of tokens as text.
+
 
 ### Workspace
 

@@ -15,7 +15,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from contextlib import AbstractContextManager
 from pathlib import Path
-from typing import Annotated
+from typing import TYPE_CHECKING, Annotated
 
 import numpy as np
 from pydantic import BaseModel, Field, TypeAdapter, ValidationError
@@ -37,6 +37,9 @@ from .schemas import (
     WriteResult,
 )
 from .session import FLSession, create_session
+
+if TYPE_CHECKING:
+    from PIL import Image
 
 SdkChannel = Annotated[int, Field(strict=True, ge=0)]
 SdkPattern = Annotated[int, Field(strict=True, ge=1)]
@@ -175,8 +178,21 @@ class FL:
         self._session.save_project()
 
     def analyze(self, wav: str | Path) -> AudioAnalysis:
-        """Return deterministic audio measurements for a rendered WAV."""
-        return analyze_wav(Path(wav))
+        """Measure a WAV: integrated LUFS, true peak, spectral balance, and ``bpm``, which is
+        FL's tempo when the WAV is one of this session's renders (null for any other)."""
+        path = Path(wav).expanduser().resolve()
+        span = self._session.render_span(path)
+        return analyze_wav(path, None if span is None else span.tempo_bpm)
+
+    def spectrogram(self, wav: str | Path) -> Image.Image:
+        """A picture of a WAV to look at: the spectrum over time with frequency bands named,
+        loudness and stereo width per bar, red where peaks reach 0 dBFS. Bars are numbered
+        for this session's renders (seconds for any other WAV). End a cell with it, or pass
+        it to display(), to see it; it is a PIL image, so crop or resize it as you like."""
+        from fl_mcp.spectrogram import spectrogram
+
+        path = Path(wav).expanduser().resolve()
+        return spectrogram(path, self._session.render_span(path))
 
     def read_wav(self, path: str | Path) -> tuple[np.ndarray, int]:
         """Load PCM WAV samples and sample rate for NumPy processing."""
