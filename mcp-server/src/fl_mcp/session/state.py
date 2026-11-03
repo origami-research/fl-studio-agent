@@ -39,10 +39,26 @@ def channel_names(session: FLSession) -> list[Channel]:
     the names it was saved with. A file-lane edit saves FL's live state before
     patching the file, so a live index is also the file's. The saved song only
     when FL is not connected; a channel it never named reads ``Channel <index>``."""
-    return [
+    return described(session, [
         channel if channel.name else channel.model_copy(update={"name": f"Channel {channel.index}"})
         for channel in session.snapshot().channels
-    ]
+    ])
+
+
+def described(session: FLSession, channels: list[Channel]) -> list[Channel]:
+    """``channels`` with what the project's notes say each is for (docs/07)."""
+    guide = project_guide(session, [c.name for c in channels])
+    return [c.model_copy(update={"about": guide.about.get(c.name)}) for c in channels]
+
+
+def project_guide(session: FLSession, names: list[str]) -> flp.ProjectGuide:
+    if session.project is None or not session.project.is_file():
+        return flp.ProjectGuide()
+    try:
+        return flp.project_guide(session.project, names)
+    except (OSError, flp.FlpError) as exc:  # the notes are help, not state: a read without them still stands
+        log.warning("could not read the project's notes from %s: %s", session.project, exc)
+        return flp.ProjectGuide()
 
 
 def tempo(session: FLSession) -> float | None:

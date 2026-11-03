@@ -6,12 +6,11 @@ import shutil
 from types import SimpleNamespace
 
 import pytest
-from session_fakes import HELLO, FakeControl, FakeSpool, arrangement, make_session
+from session_fakes import FIVE_CHANNEL_PROJECT, HELLO, FakeControl, FakeSpool, arrangement, make_session
 
 from fl_mcp import errors
 from fl_mcp.schemas import SpoolResponse
 from fl_mcp.session import FLSession, controls
-from fl_mcp.template import template_path
 
 
 def _rig(monkeypatch, tmp_path, handlers, *, project=None):
@@ -128,7 +127,7 @@ def test_without_the_control_plane_there_is_no_span_and_no_capture(monkeypatch, 
 def test_the_saved_template_never_sets_the_length_and_nothing_is_saved(monkeypatch, tmp_path):
     """The project file is the template's 4-bar loop while FL plays 16 bars live."""
     project = tmp_path / "agent.flp"
-    shutil.copyfile(template_path(), project)
+    shutil.copyfile(FIVE_CHANNEL_PROJECT, project)
     before = project.read_bytes()
     handlers = arrangement(loop_mode=1, tempo_bpm=130.0, song_last_tick=64 * 96 - 1)
     session, control, _ = _rig(monkeypatch, tmp_path, handlers, project=project)

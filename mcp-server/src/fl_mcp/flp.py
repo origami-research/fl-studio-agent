@@ -17,6 +17,7 @@ differential, the live-FL gates, and the tests of this seam.
 from __future__ import annotations
 
 from collections.abc import Sequence
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import flpkit
@@ -32,6 +33,7 @@ from flpkit import (
     FlpPlaylistItem,
     FlpProject,
     add_effect,
+    codec,
     notes_at,
     read,
     set_tempo,
@@ -52,8 +54,10 @@ __all__ = [
     "FlpNote",
     "FlpPlaylistItem",
     "FlpProject",
+    "ProjectGuide",
     "add_effect",
     "notes_at",
+    "project_guide",
     "read",
     "set_channel_levels",
     "set_tempo",
@@ -100,3 +104,46 @@ def write_automation(
                 raise FlpError(f"channel {channel} has no automation readback after save")
             return item.automation
     raise FlpError(f"channel {channel} is absent from the saved-file automation readback")
+
+
+# The project's own comments (FL's File > Project info): text, UTF-16 since FL 11.5.
+EVENT_COMMENTS = 195
+EVENT_VERSION = 199
+
+
+@dataclass(frozen=True)
+class ProjectGuide:
+    """What the project's comments say: per channel name, what it is for; and the rest.
+
+    One rule: a line ``<channel name>: <text>`` describes that channel (the packaged
+    template writes its palette this way, docs/07); every other line is a project note.
+    """
+
+    about: dict[str, str] = field(default_factory=dict)
+    notes: str | None = None
+
+
+def project_guide(path: Path, channel_names: Sequence[str]) -> ProjectGuide:
+    _header, raw = codec.chunks(path.read_bytes())
+    stream = codec.Stream(raw)
+    text, unicode = None, True
+    for event_id, offset, size in stream:
+        if event_id == EVENT_VERSION:
+            version = bytes(stream[offset : offset + size]).decode("ascii", "replace").rstrip("\0")
+            unicode = tuple(int(x) for x in version.split(".")[:2] if x.isdigit()) >= (11, 5)
+        elif event_id == EVENT_COMMENTS:
+            payload = bytes(stream[offset : offset + size])
+            text = (payload.decode("utf-16-le", "replace") if unicode else payload.decode("latin-1")).rstrip("\0")
+            break
+    if not text:
+        return ProjectGuide()
+    names = set(channel_names)
+    about: dict[str, str] = {}
+    notes = []
+    for line in text.replace("\r\n", "\n").replace("\r", "\n").split("\n"):
+        name, sep, rest = line.partition(": ")
+        if sep and name in names and name not in about:
+            about[name] = rest.strip()
+        elif line.strip():
+            notes.append(line.strip())
+    return ProjectGuide(about=about, notes="\n".join(notes) or None)

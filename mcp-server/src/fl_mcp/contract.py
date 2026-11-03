@@ -163,6 +163,7 @@ class SceneSummary(BaseModel):
     note_count: int
     playlist: dict[str, Any]
     automations: list[dict[str, Any]] = Field(default_factory=list)
+    project_notes: str | None = None
     channels: list[dict[str, Any]]
     summary: str
 
@@ -186,6 +187,7 @@ class GetSceneResult(BaseModel):
     note_count: int | None = None
     playlist: dict[str, Any] | None = None
     automations: list[dict[str, Any]] | None = None
+    project_notes: str | None = None
     channels: list[dict[str, Any]] | None = None
     summary: str | None = None
     notes: list[SceneNote] | None = None

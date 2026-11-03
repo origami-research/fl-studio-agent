@@ -16,7 +16,7 @@ def test_default_project_is_a_disposable_bridge_template():
     assert project.read_bytes() == template.read_bytes()
     assert flp.read(project).playlist == (
         flp.FlpPlaylistItem(
-            position=0, length=1536, track=1, pattern=1, channel=None, arrangement=0
+            position=0, length=16 * 48, track=1, pattern=1, channel=None, arrangement=0
         ),
     )
     shutil.rmtree(project.parent)

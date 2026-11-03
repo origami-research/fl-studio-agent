@@ -20,6 +20,7 @@ from types import SimpleNamespace
 import pytest
 from flpkit import FlpNote
 from session_fakes import (
+    FIVE_CHANNEL_PROJECT,
     HELLO,
     NOTES,
     TARGET,
@@ -44,7 +45,6 @@ from fl_mcp.session.detect import (
     read_heartbeat,
 )
 from fl_mcp.session.notes import BridgeLane, FileLane
-from fl_mcp.template import template_path
 
 PING_OK = SpoolResponse(id=0, ok=True, op="ping")
 BRIDGE_OK = SpoolResponse(id=0, ok=True, op="add_notes", notes_written=999)  # 999: a lying echo
@@ -73,7 +73,7 @@ def routed(session: FLSession) -> str:
 def template_copy(tmp_path: Path) -> Path:
     """A real copy of the session template, for writes that route to the file lane."""
     path = tmp_path / "agent.flp"
-    shutil.copyfile(template_path(), path)
+    shutil.copyfile(FIVE_CHANNEL_PROJECT, path)
     return path
 
 

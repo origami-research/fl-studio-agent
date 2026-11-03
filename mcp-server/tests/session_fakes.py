@@ -59,6 +59,11 @@ def arrangement(
 
 
 # What a render of the template's four-bar pattern at 130 BPM reports.
+# The engine's earlier five-channel session template (808 Kick, 808 Clap, 808 HiHat, 808 Snare,
+# FLEX Bass; PPQ 96): a fixed project for tests of engine behaviour, which must not change when
+# the packaged palette does (test_template covers the packaged one).
+FIVE_CHANNEL_PROJECT = Path(__file__).parent / "fixtures" / "five-channel-session.flp"
+
 RENDER_SPAN = RenderSpan(
     source="pattern",
     pattern=1,

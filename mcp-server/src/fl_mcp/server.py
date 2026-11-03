@@ -179,7 +179,9 @@ def run(code: str, ctx: Context) -> RunResult:
 
     The SDK (no introspection needed):
     - fl.set_tempo(140.0) -> the tempo FL now has; fl.tempo reads it.
-    - fl.channels -> [Channel(index, name, ...), ...].
+    - fl.channels -> [Channel(index, name, about, ...), ...]: about is what the
+      project's notes say the channel is for (an instrument, a drum map, a
+      range); get_scene shows the same. Pick channels by it.
     - fl.track("Bass") / fl.track(2, pattern=1) -> Track (exact name, index, or
       unique substring of FL's current names; pattern defaults to 1). Every
       method that takes a channel takes it the same way.
@@ -336,7 +338,10 @@ def get_scene(
     every write made this session and the current live tempo. This is the one
     read: its answer is current, so there is no need to read again after a write.
 
-    Call this before writing, so additions fit what is already there. It returns
+    Call this before writing, so additions fit what is already there; each
+    channel's ``about`` and the ``project_notes`` are what the project itself
+    says each channel is for (drum maps, ranges, the mixer), so read them
+    before choosing which channel plays what. It returns
     an analysis rather than a note dump: a 56-note project summarises to about
     20 tokens instead of ~960, and the summary answers the questions that
     actually get asked.
@@ -381,9 +386,14 @@ def get_scene(
         return GetSceneResult.from_notes(
             SceneNotesResult.model_validate({"notes": scene.notes_detail(rows, channel, pattern)})
         )
-    names = {c.index: c.name for c in session.channel_names()}
+    channels = session.channel_names()
+    names = {c.index: c.name for c in channels}
+    about = {c.index: c.about for c in channels if c.about}
+    notes = session.project_guide(list(names.values())).notes
     return GetSceneResult.from_summary(
-        SceneSummary.model_validate(scene.summarize(project, rows, names, tempo=session.tempo()))
+        SceneSummary.model_validate(
+            scene.summarize(project, rows, names, tempo=session.tempo(), about=about, project_notes=notes)
+        )
     )
 
 

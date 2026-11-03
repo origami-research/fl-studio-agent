@@ -485,6 +485,8 @@ class Channel(BaseModel):
     muted: bool = False
     # The mixer track FL routes this channel to (0 is the master); live reads only.
     mixer_track: int | None = None
+    # What the project's notes say this channel is for (flp.project_guide), if they say.
+    about: str | None = None
 
 
 SoundKind = Literal["preset", "sample"]

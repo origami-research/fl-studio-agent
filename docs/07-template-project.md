@@ -25,17 +25,40 @@ PPQ and tempo are read from the project, never assumed.
 
 ## The session template
 
-`fl_mcp/assets/session-template.flp`, resolved with `fl-mcp-template` (never copied by path), SHA-256 `a080994a1b9d90b1e42b388e806d646f14f576f941ce2766ad43e7bf05daf2e4`.
+`fl_mcp/assets/session-template.flp`, resolved with `fl-mcp-template` (never copied by path); its SHA-256 is pinned in `mcp-server/tests/test_template.py`.
 `make_agent_project.create(force=True)` copies it to the agent project path; the Windows box installer and the arena's FL launch do this before every start.
 
-- PPQ 96, 130 BPM, 4/4, no notes.
-- Five channels: `808 Kick`, `808 Clap`, `808 HiHat`, `808 Snare` (samplers on FL factory samples) and `FLEX Bass` (FLEX).
-- Pattern 1 on playlist track 1, its clip window the `0xFFFFFFFF` auto-length sentinel, so the clip grows with the pattern and a Full-song render covers everything written into Pattern 1.
-  Measured on trial FL 2026 for Windows (26.1.6): with an explicit `0..1536` window the song stayed 4 bars (7.9 s at 130 BPM) after 16 bars were written; with the sentinel it grew to 16 bars (29.54 s).
-- The FL MCP Bridge in Master slot 10 (index 9), the only Master effect.
+Updated 2026-11-02: the template was five channels (four 808 samplers and a FLEX bass, all on the master), and models had nothing to play chords, pads or leads on.
+It is now a palette of FL's stock instruments on a mixed bus layout, and it says in its own notes what each channel is for.
 
-It was written by tools, not saved by FL: FL's stock `Basic with limiter` template with its Emphasizer renamed to the Bridge, then the playlist clip and its window added.
-Its version event still reads FL 25.1.99.
+### What it contains
+
+- PPQ 48 (the stock template's), 120 BPM, 4/4, no notes; Pattern 1 on playlist track 1 with the auto-length clip window (below).
+- 23 channels, each on its own named mixer track:
+  three FPC kits (808, house, acoustic jazz) whose pad notes the notes list, a pitched 808 cowbell sampler, an 808 (FLEX) into Fruity Fast Dist and Fruity Soft Clipper, electric bass, synth bass, piano, Rhodes, strings, pad, choir, brass, woodwinds, sax, guitar, lead and pluck, and five spare channels for live loading: two synths (3x Osc, Sytrus) and three samplers.
+- The mixer of FL's "Advanced/Electronic/Trap" template: instrument tracks into drum, instrument, background, vocal and sub buses, a kick-driven sidechain (Fruity Peak Controller) feeding the sidechained and sub buses, a mid/side pre-master, and Maximus on the master.
+  Added: a Drum Bus with Parametric EQ 2 and a Fruity Limiter compressing, a Reverb Send (Fruity Reeverb 2) fed by the melodic tracks, a Delay Send (Fruity Delay Bank) fed by Lead and Pluck, and the FL MCP Bridge in Master slot 10, the last effect.
+- The project's comments (FL's File > Project info) hold the palette guide: one line `<channel name>: <what it is for>` per channel, then how the song and the mixer work.
+  `get_scene` returns each channel's line as its `about` and the rest as `project_notes`, and `fl.channels` carries `about`, for this template or any project written the same way (`flp.project_guide`).
+
+### How it is built
+
+`scripts/build_session_template.py`, run on a machine with FL Studio 2026 installed, writes it from FL's own stock content; the script's palette table is the one list of facts about each channel.
+Each channel is a channel FL saved in a stock template (default channel settings) carrying an instrument FL saved elsewhere: a stock preset (FPC kits, the DirectWave instrument packs, Sytrus) or a stock template's or demo song's channel (FLEX patches, DirectWave pianos and band instruments).
+Effects are FL-saved mixer-slot tuples from stock templates and demo projects, spliced with flpkit's `EffectFormat`; insert names, routes and fader levels are single-event edits; channel volumes go through flpkit.
+The build reads every edit back, flpkit re-reads the result, and building twice gives the same bytes.
+
+Legal to ship: no audio is copied; every sample stays in FL's factory folders and is referenced by `%FLStudioFactoryData%` or `%FLStudioData%` paths that FL resolves in its own install, and the instruments and effects are FL's own plugin states, as in any shared project (a test checks for paths and the absence of WAV or Ogg data).
+
+### FL trial and editions
+
+A trial FL cannot reopen a project a trial saved; the template is written by tools from files a licensed FL saved, so a trial opens it (verified on trial FL 2026 for Windows, 26.1.6, 2026-11-02: all 23 channels loaded and sounded under `check`, and a render recorded every one).
+The palette uses plugins of FL's full editions (DirectWave, Sytrus, FPC, FLEX, 3x Osc, Maximus); an edition without one runs it in demo mode.
+
+### The playlist clip
+
+Pattern 1 sits on playlist track 1 with its clip window the `0xFFFFFFFF` auto-length sentinel, so the clip grows with the pattern and a Full-song render covers everything written into Pattern 1.
+Measured on trial FL 2026 for Windows (26.1.6): with an explicit `0..1536` window the song stayed 4 bars (7.9 s at 130 BPM) after 16 bars were written; with the sentinel it grew to 16 bars (29.54 s).
 
 ## A user's project as the agent project
 

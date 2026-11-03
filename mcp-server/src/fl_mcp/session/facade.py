@@ -567,6 +567,13 @@ class FLSession:
             return errors.fl_stopped_answering(unchanged)
         return errors.control_plane_unavailable(op, timeout)
 
+    def live_channels(self) -> list[Channel]:
+        """FL's channels now, each with what the project's notes say it is for."""
+        return state.described(self, self.snapshot().channels)
+
+    def project_guide(self, names: list[str]) -> flp.ProjectGuide:
+        return state.project_guide(self, names)
+
     def doctor(self) -> DoctorReport:
         return state.doctor(self)
 

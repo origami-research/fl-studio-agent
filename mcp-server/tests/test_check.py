@@ -15,12 +15,11 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from session_fakes import HELLO, FakeControl, isolate_spool, make_session
+from session_fakes import FIVE_CHANNEL_PROJECT, HELLO, FakeControl, isolate_spool, make_session
 
 from fl_mcp import errors
 from fl_mcp.schemas import ControlResponse, Note, Target
 from fl_mcp.session.check import METER_DECAY_SECONDS, _overlaps_looped
-from fl_mcp.template import template_path
 
 
 @pytest.fixture(autouse=True)
@@ -116,7 +115,7 @@ class PlayingFL(FakeControl):
 def song(tmp_path) -> Path:
     """The song FL opened: the template (no notes; pattern 1 on the playlist's first four bars)."""
     project = tmp_path / "agent.flp"
-    shutil.copyfile(template_path(), project)
+    shutil.copyfile(FIVE_CHANNEL_PROJECT, project)
     return project
 
 

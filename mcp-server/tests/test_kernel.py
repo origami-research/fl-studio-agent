@@ -427,7 +427,7 @@ def test_a_kernel_that_stops_reading_cannot_block_the_server(tmp_path, workspace
                 "import sys, time\n"
                 'print(\'{"op": "ready", "pid": 1}\', flush=True)\n'
                 "sys.stdin.readline()\n"
-                'print(\'{"op": "call", "id": 1, "method": "snapshot"}\', flush=True)\n'
+                'print(\'{"op": "call", "id": 1, "method": "live_channels"}\', flush=True)\n'
                 "time.sleep(60)\n"
             )
             return PosixLauncher()([sys.executable, "-c", script], workspace=workspace, env=env)

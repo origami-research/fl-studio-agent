@@ -13,6 +13,7 @@ from pathlib import Path
 
 import pytest
 from session_fakes import (
+    FIVE_CHANNEL_PROJECT,
     HELLO,
     NOTES,
     TARGET,
@@ -29,7 +30,6 @@ from session_fakes import (
 from fl_mcp import errors, flp
 from fl_mcp.schemas import Note, WriteResult
 from fl_mcp.session import FLSession, NotePlaneUnavailable, WriteRejected
-from fl_mcp.template import template_path
 
 
 @pytest.fixture(autouse=True)
@@ -50,7 +50,7 @@ def project(tmp_path) -> Path:
     """A real copy of the session template (5 channels, no notes): the file
     lane's surgery and readback run unpatched."""
     path = tmp_path / "agent.flp"
-    shutil.copyfile(template_path(), path)
+    shutil.copyfile(FIVE_CHANNEL_PROJECT, path)
     return path
 
 

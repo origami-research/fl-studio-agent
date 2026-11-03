@@ -152,8 +152,8 @@ class FL:
 
     @property
     def channels(self) -> list[Channel]:
-        """The channels in FL now."""
-        return self._session.snapshot().channels
+        """The channels in FL now, each with what the project's notes say it is for (``about``)."""
+        return self._session.live_channels()
 
     @property
     def tempo(self) -> float:

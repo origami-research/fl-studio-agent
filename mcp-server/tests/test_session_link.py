@@ -9,6 +9,7 @@ from typing import Any
 
 import pytest
 from session_fakes import (
+    FIVE_CHANNEL_PROJECT,
     HELLO,
     NOTES,
     TARGET,
@@ -27,7 +28,6 @@ from fl_mcp.session import FLSession, create_session
 from fl_mcp.session import lifecycle as lifecycle_mod
 from fl_mcp.session import link as link_mod
 from fl_mcp.session.link import ControlLink
-from fl_mcp.template import template_path
 
 
 @pytest.fixture(autouse=True)
@@ -315,7 +315,7 @@ def test_reload_reconnects_the_wire_fresh(monkeypatch, tmp_path):
     old = FakeControl(hello=HELLO)
     fresh = FakeControl(hello=HELLO)
     project = tmp_path / "agent.flp"
-    shutil.copyfile(template_path(), project)
+    shutil.copyfile(FIVE_CHANNEL_PROJECT, project)
     session, _ = make_session(control=old, transport=FakeSpool(), project=project)
     session.link._control_factory = lambda: fresh
     session.link._last_recycle = 12345.0

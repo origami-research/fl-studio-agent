@@ -283,11 +283,22 @@ def summarize(
     rows: Sequence[SceneRow],
     channel_names: dict[int, str] | None = None,
     tempo: float | None = None,
+    about: dict[int, str] | None = None,
+    project_notes: str | None = None,
 ) -> dict[str, Any]:
     """Analyse ``rows`` (and ``project``'s playlist and automation) into
     something a model can reason about directly. Named channels without
-    notes are listed too, so an empty channel reads as empty, not missing."""
+    notes are listed too, so an empty channel reads as empty, not missing.
+    ``about`` and ``project_notes`` are what the project's own notes say
+    (flp.project_guide): what each channel is for, and the rest."""
     names = channel_names or {}
+    about = about or {}
+
+    def described(index: int) -> dict[str, str]:
+        return {"about": about[index]} if index in about else {}
+
+    notes_section = {"project_notes": project_notes} if project_notes else {}
+    notes_line = [f"project notes: {project_notes}"] if project_notes else []
     playlist, playlist_line = _playlist_digest(_read_clips(project))
     automations = _read_automations(project)
     automation_section = (
@@ -315,7 +326,9 @@ def summarize(
     by_channel: dict[int, list] = {}
     for row in rows:
         by_channel.setdefault(row.channel, []).append(row)
-    empty = [{"index": i, "name": name, "notes": 0} for i, name in sorted(names.items()) if i not in by_channel]
+    empty = [
+        {"index": i, "name": name, "notes": 0, **described(i)} for i, name in sorted(names.items()) if i not in by_channel
+    ]
     empty_line = (
         ["no notes: " + ", ".join(f"{c['name']} (ch{c['index']})" for c in empty)] if empty else []
     )
@@ -328,8 +341,9 @@ def summarize(
             "note_count": 0,
             "playlist": playlist,
             **automation_section,
+            **notes_section,
             "summary": "\n".join(
-                [f"tempo {tempo:g}, no notes yet" if tempo else "no notes yet", *empty_line]
+                [*notes_line, f"tempo {tempo:g}, no notes yet" if tempo else "no notes yet", *empty_line]
             ),
         }
 
@@ -355,7 +369,7 @@ def summarize(
         )
         summaries.append(summary)
 
-    lines = []
+    lines = [*notes_line]
     if tempo:
         lines.append(f"tempo {tempo:g}")
     lines.append(f"key {key} (confidence: {confidence})")
@@ -371,6 +385,7 @@ def summarize(
         "note_count": len(rows),
         "playlist": playlist,
         **automation_section,
+        **notes_section,
         "channels": [
             {
                 "index": s.index,
@@ -380,6 +395,7 @@ def summarize(
                 "range": [note_name(s.low), note_name(s.high)],
                 "pitch_classes": [NOTE_NAMES[p] for p in s.pitch_classes],
                 **({"root_motion": s.root_motion} if s.root_motion else {}),
+                **described(s.index),
             }
             for s in summaries
         ]

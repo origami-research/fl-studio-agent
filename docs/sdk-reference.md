@@ -62,11 +62,13 @@ fl = connect()
 
 **Availability:** confirmed session snapshot (live FL when connected, otherwise
 the configured project file). Returns channel index, name, normalized volume,
-pan, and mute state.
+pan, mute state, and `about`: what the project's own notes (FL's Project info)
+say the channel is for, from a line `<channel name>: <text>`; `None` when they
+say nothing ([07](07-template-project.md)).
 
 ```python
 for channel in fl.channels:
-    print(channel.index, channel.name)
+    print(channel.index, channel.name, channel.about)
 ```
 
 ### `fl.tempo -> float`

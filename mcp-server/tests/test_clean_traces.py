@@ -32,7 +32,7 @@ from typing import Any
 import pytest
 from mcp.types import CallToolResult
 from pydantic import BaseModel
-from session_fakes import HELLO, FakeControl, FakeSpool, make_session
+from session_fakes import FIVE_CHANNEL_PROJECT, HELLO, FakeControl, FakeSpool, make_session
 
 from fl_mcp import actions, schemas, sdk, server
 from fl_mcp.contract import FLLicense, build_contract
@@ -43,7 +43,6 @@ from fl_mcp.session import detect as detect_mod
 from fl_mcp.session import facade as facade_mod
 from fl_mcp.session.detect import BRIDGE_HEARTBEAT_FILE
 from fl_mcp.store import Store
-from fl_mcp.template import template_path
 
 # The engine's internals, as the models in those runs quoted them back.
 INTERNAL_WORDS = re.compile(
@@ -118,7 +117,7 @@ def box(tmp_path, monkeypatch):
         encoding="utf-8",
     )
     project = tmp_path / "FLMCP Agent.flp"
-    shutil.copyfile(template_path(), project)
+    shutil.copyfile(FIVE_CHANNEL_PROJECT, project)
     control = trial_fl()
     clock = TrialClock()
     session, _ = make_session(
