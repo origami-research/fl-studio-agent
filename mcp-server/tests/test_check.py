@@ -253,3 +253,14 @@ def test_a_note_in_a_looping_pattern_counts_on_every_pass():
     assert not _overlaps_looped(note, start=0, end=3, length=4)
     held = Note(key=60, start=3, length=2)  # rings into the next bar
     assert _overlaps_looped(held, start=4, end=4.5, length=8)
+
+
+def test_a_check_after_fl_stopped_answering_says_it_may_be_frozen():
+    """Issue #290: an FL that answered and then froze is named as such, not as still starting."""
+    session, _ = make_session(control=FakeControl(hello=None))
+    session.link.stopped_answering = True
+    session.link.hello = lambda: None
+
+    with pytest.raises(errors.ToolError, match="stopped answering") as excinfo:
+        session.check(1, 2)
+    assert excinfo.value.retryable is False

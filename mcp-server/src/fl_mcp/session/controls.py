@@ -84,7 +84,7 @@ def save_project(session: FLSession) -> None:
         # budget.  In session mode that probe crosses the broker first; using
         # 0 here made the resulting ctl.save error claim an expired request
         # even though no save request had received a zero-second timeout.
-        raise errors.control_plane_unavailable("ctl.save", LIVE_SET_TIMEOUT_SECONDS)
+        raise session.not_answering("ctl.save", LIVE_SET_TIMEOUT_SECONDS, "nothing was saved")
     session.link.command("ctl.save")
 
 
@@ -132,7 +132,7 @@ def _render_env() -> dict[str, str]:
 def _live_read(session: FLSession, op: str, args: list) -> object:
     """One live controller read: FL's answer, or a typed error naming why not."""
     if session._ensure_hello() is None or session.control is None:
-        raise errors.control_plane_unavailable(op, LIVE_READ_TIMEOUT_SECONDS)
+        raise session.not_answering(op, LIVE_READ_TIMEOUT_SECONDS, "nothing could be read")
     return session.link.call(op, args, timeout=LIVE_READ_TIMEOUT_SECONDS)
 
 
@@ -140,7 +140,7 @@ def _live_write(session: FLSession, op: str, args: list) -> object:
     """One live controller write: FL's answer, or a typed error naming why not.
     Never a file fallback: the caller reads the change back from FL."""
     if session._ensure_hello() is None or session.control is None:
-        raise errors.control_plane_unavailable(op, LIVE_SET_TIMEOUT_SECONDS)
+        raise session.not_answering(op, LIVE_SET_TIMEOUT_SECONDS, "nothing was changed")
     return session.link.call(op, args, timeout=LIVE_SET_TIMEOUT_SECONDS)
 
 

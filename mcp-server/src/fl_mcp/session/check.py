@@ -58,7 +58,7 @@ def check(
     if isinstance(bars, bool) or not isinstance(bars, int) or not 1 <= bars <= CHECK_MAX_BARS:
         raise errors.invalid_argument("check", f"bars must be a whole number from 1 to {CHECK_MAX_BARS}, got {bars!r}")
     if session._ensure_hello() is None:
-        raise errors.ToolError(
+        raise errors.fl_stopped_answering("nothing could be played") if session.link.stopped_answering else errors.ToolError(
             "control_plane_unavailable",
             "FL Studio is not answering, so nothing could be played.",
             "FL may still be starting. Retry the check in a moment.",

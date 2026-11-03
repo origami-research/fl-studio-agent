@@ -251,6 +251,28 @@ class FileLane:
         return after
 
 
+# FL's piano roll window (midi.widPianoRoll, the ui module's window ids).
+PIANO_ROLL_WINDOW = 3
+
+
+def close_piano_roll(session: FLSession) -> None:
+    """Close FL's piano roll before the Bridge adds or clears notes (FHD_AddNotesToPR).
+
+    Issue #290, reproduced on a dev box 2026-11-02 (FL 2026 trial, a 4,000-note song):
+    with the piano roll open while the Bridge wrote, FL froze during the next checks'
+    playback and never answered again (3 of 3 runs); with it closed during the writes,
+    the same writes and checks ran clean (4 of 4), including with the piano roll opened
+    after the writes. The window is closed, never reopened: the user opens it again.
+    A failure to close is logged and the write goes ahead; it is not worth losing it.
+    """
+    try:
+        if session.link.call("ui.getVisible", [PIANO_ROLL_WINDOW]):
+            session.link.command("ui.hideWindow", [PIANO_ROLL_WINDOW])
+            log.info("closed FL's piano roll before a Bridge note edit (issue #290)")
+    except errors.ToolError as exc:
+        log.warning("could not close FL's piano roll before a Bridge note edit: %s", exc.message)
+
+
 class BridgeLane:
     """Live targeted notes via the native Bridge plugin, which consumes the
     same v2 spool as the pyscript but is not target-blind: as an effect it can
@@ -269,6 +291,7 @@ class BridgeLane:
         target, notes, mode = op.target, list(data), op.mode
         before = known_notes(session, target)
         self._select_target_channel(target.channel)
+        close_piano_roll(session)
         if op.kind == "write_notes":
             # add_notes is the bridge wire's write vocabulary; clear_notes is
             # its own wire op (the consumer replaces with empty).

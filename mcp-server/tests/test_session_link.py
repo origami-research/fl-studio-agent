@@ -31,6 +31,12 @@ from fl_mcp.template import template_path
 
 
 @pytest.fixture(autouse=True)
+def no_process_listing(monkeypatch):
+    """The link lists FL processes; tests never touch the host's (stubbed where they matter)."""
+    monkeypatch.setattr(link_mod, "fl_pids", lambda: [])
+
+
+@pytest.fixture(autouse=True)
 def isolated_spool(monkeypatch):
     isolate_spool(monkeypatch)
 
@@ -154,6 +160,54 @@ def test_silent_wire_recycles_ports_when_fl_is_running(monkeypatch):
     assert session._ensure_hello() is HELLO
     assert silent.closed
     assert session.control is healed
+
+
+def test_an_fl_that_answered_and_stopped_is_reported_not_recycled(monkeypatch):
+    """Issue #290 (box, 2026-11-02): FL froze mid-playback after answering this session, and
+    every later call spent two minutes recycling ports that cannot revive it. A recycle binds
+    ports an FL missed at launch; the same FL silent for a moment is busy (retryable), silent
+    for STOPPED_AFTER_SECONDS it is reported stopped, and a different FL process is recycled."""
+    control = FakeControl(hello=HELLO)
+    session, _ = make_session(control=control)
+    now = [100.0]
+    session.link._clock = lambda: now[0]
+    factory_calls: list[bool] = []
+    session.link._control_factory = lambda: factory_calls.append(True)
+    monkeypatch.setattr(link_mod, "fl_process_running", lambda: True)
+    monkeypatch.setattr(link_mod, "fl_pids", lambda: [4242])
+    assert session._ensure_hello() is HELLO
+
+    control.handlers["ping"] = lambda args: ControlResponse(id=1, ok=False, err="no answer")
+    now[0] += 5.0
+    assert session._ensure_hello() is None
+    assert factory_calls == [] and not session.link.stopped_answering  # busy, not frozen yet
+
+    now[0] += link_mod.STOPPED_AFTER_SECONDS
+    assert session._ensure_hello() is None
+    assert factory_calls == [] and session.link.stopped_answering
+    assert "stopped answering" in session.not_answering("ctl.save", 8.0, "nothing was saved").message
+
+    healed = FakeControl(hello=HELLO)
+    session.link._control_factory = lambda: healed
+    monkeypatch.setattr(link_mod, "fl_pids", lambda: [5151])  # FL was restarted
+    assert session._ensure_hello() is HELLO
+    assert session.control is healed and not session.link.stopped_answering
+
+
+def test_with_several_fl_processes_the_link_recycles_as_before(monkeypatch):
+    """docs/34: one machine may run several FLs; which one answered is then unknown."""
+    control = FakeControl(hello=HELLO)
+    session, _ = make_session(control=control)
+    monkeypatch.setattr(link_mod, "fl_process_running", lambda: True)
+    monkeypatch.setattr(link_mod, "fl_pids", lambda: [4242, 5151])
+    monkeypatch.setattr(link_mod, "RECYCLE_HELLO_WAIT_SECONDS", 0.0)
+    assert session._ensure_hello() is HELLO
+    control.handlers["ping"] = lambda args: ControlResponse(id=1, ok=False, err="no answer")
+    reopened: list[bool] = []
+    session.link._control_factory = lambda: (reopened.append(True), FakeControl(hello=None))[1]
+
+    session._ensure_hello()
+    assert reopened == [True] and not session.link.stopped_answering
 
 
 def test_silent_wire_does_not_recycle_when_fl_is_closed(monkeypatch):

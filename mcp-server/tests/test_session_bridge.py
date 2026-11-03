@@ -280,6 +280,51 @@ def test_matching_target_channel_skips_selection(monkeypatch, tmp_path, bridge_e
     assert "select_channels" not in [op for op, _ in control.calls]
 
 
+def test_an_open_piano_roll_is_closed_before_the_bridge_writes(monkeypatch, tmp_path, bridge_env, no_reload):
+    """Issue #290 (box, 2026-11-02): Bridge writes with FL's piano roll open froze FL during the
+    next playback, 3 of 3 runs; closed during the writes, 0 of 4. The engine closes it first."""
+    project = project_flp(monkeypatch, tmp_path)
+    order: list[str] = []
+    visible = {"piano roll": 1}
+
+    def hide(args):
+        assert args == [3]
+        visible["piano roll"] = 0
+        order.append("hide")
+
+    control = FakeControl(
+        hello=HELLO,
+        handlers={
+            "channels.selectedChannel": lambda args: 0,
+            "ui.getVisible": lambda args: visible["piano roll"] if args == [3] else 0,
+            "ui.hideWindow": hide,
+        },
+    )
+    spool = FakeSpool(responses={"ping": PING_OK, "add_notes": BRIDGE_OK})
+    real_send = spool.send
+    spool.send = lambda op, **args: (order.append(op), real_send(op, **args))[1]
+    session, _ = make_session(control=control, transport=spool, project=project)
+
+    session.write_notes(TARGET, NOTES, "merge")
+    assert routed(session) == "bridge"
+    assert order[-2:] == ["hide", "add_notes"]
+    assert visible["piano roll"] == 0
+
+
+def test_a_closed_piano_roll_is_left_alone_and_a_failed_close_still_writes(
+    monkeypatch, tmp_path, bridge_env, no_reload
+):
+    project = project_flp(monkeypatch, tmp_path)
+    control = selected_channel_control(0)  # no ui handlers: the close attempt fails
+    spool = FakeSpool(responses={"ping": PING_OK, "add_notes": BRIDGE_OK})
+    session, _ = make_session(control=control, transport=spool, project=project)
+
+    session.write_notes(TARGET, NOTES, "merge")
+    assert routed(session) == "bridge"
+    assert "ui.hideWindow" not in [op for op, _ in control.calls]
+    assert [op for op, _ in spool.sent][-1] == "add_notes"
+
+
 def test_mismatched_target_selects_and_verifies_before_bridge_write(
     monkeypatch, tmp_path, bridge_env, no_reload
 ):

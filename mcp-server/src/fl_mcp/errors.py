@@ -121,6 +121,16 @@ def control_plane_unavailable(op: str, timeout: float) -> ToolError:
     )
 
 
+def fl_stopped_answering(unchanged: str) -> ToolError:
+    """FL answered this session, is still running, and no longer answers (issue #290)."""
+    return ToolError(
+        "control_plane_unavailable",
+        f"FL Studio answered earlier and has stopped answering, so {unchanged}; it may be frozen.",
+        "If FL does not respond on screen, restart it (unsaved changes in FL are lost) and reopen the song.",
+        retryable=False,
+    )
+
+
 def control_plane_busy(op: str, timeout: float) -> ToolError:
     """The shared wire was held by another session's op - contended, NOT dead.
 

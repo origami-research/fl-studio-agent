@@ -561,6 +561,12 @@ class FLSession:
     def channel_names(self) -> list[Channel]:
         return state.channel_names(self)
 
+    def not_answering(self, op: str, timeout: float, unchanged: str) -> errors.ToolError:
+        """THE error for a live op FL did not take: frozen (#290) or not answering yet."""
+        if self.link.stopped_answering:
+            return errors.fl_stopped_answering(unchanged)
+        return errors.control_plane_unavailable(op, timeout)
+
     def doctor(self) -> DoctorReport:
         return state.doctor(self)
 

@@ -11,7 +11,7 @@ from typing import Any, Protocol
 from fl_mcp import errors
 from fl_mcp.controller_version import CONTROLLER_PROTOCOL_VERSION, controller_protocol_matches
 from fl_mcp.core.carriers.wire import ControlUnavailable
-from fl_mcp.fl.process import FL_BOOT_TIMEOUT_SECONDS, fl_process_running
+from fl_mcp.fl.process import FL_BOOT_TIMEOUT_SECONDS, fl_pids, fl_process_running
 from fl_mcp.schemas import ControlResponse, HelloEvent
 
 
@@ -44,6 +44,10 @@ RECYCLE_HELLO_WAIT_SECONDS = 120.0
 RECYCLE_HELLO_RETRY_INITIAL_SECONDS = 1.0
 RECYCLE_HELLO_RETRY_MAX_SECONDS = 8.0
 RECYCLE_MIN_INTERVAL_SECONDS = 30.0
+# An FL that answered and then stays silent this long is reported as stopped (issue #290).
+STOPPED_AFTER_SECONDS = 30.0
+# How often a live link re-reads which FL process is answering it (a process listing).
+PID_RECHECK_SECONDS = 30.0
 
 # FL can stay "unsafe at current time" for a few seconds after a load; give the
 # controller's OnIdle deferral time to land a mutating call (v1-measured).
@@ -88,6 +92,15 @@ class ControlLink:
         # refuse the first recycle on a host booted under the interval ago.
         self._last_recycle = float("-inf")
         self._warned_controller_versions: set[str] = set()
+        # The FL process whose controller answered this link, and when it last did. A
+        # recycle binds ports an FL missed at launch; it cannot revive an FL that answered
+        # and then stopped (issue #290: FL froze mid-playback, and every later call spent
+        # two minutes recycling), so such an FL is reported as stopped, not recycled.
+        # Known only while exactly one FL runs; with several, the old behavior stands.
+        self._answered_pid: int | None = None
+        self._answered_at = float("-inf")
+        self._pid_checked_at = float("-inf")
+        self.stopped_answering = False
 
     def _check_controller_protocol(self, hello: HelloEvent) -> HelloEvent:
         """Warn once for each incompatible controller that announces itself."""
@@ -123,6 +136,7 @@ class ControlLink:
             # from the SysEx callback, milliseconds when alive) confirms the
             # wire is current before anything trusts it.
             if self.control.send_request("ping", timeout=PING_CONFIRM_SECONDS).ok:
+                self._answered(self._clock())
                 return self._check_controller_protocol(hello)
         except errors.ToolError as exc:
             # A contended shared wire is LIVE, not dead: another session's op
@@ -140,12 +154,29 @@ class ControlLink:
             log.debug("control hello probe failed: %s", exc.message)
         return self._recycle()
 
+    def _answered(self, now: float) -> None:
+        """FL answered: remember when, and (at most every PID_RECHECK_SECONDS) which FL it is."""
+        self._answered_at = now
+        self.stopped_answering = False
+        if now - self._pid_checked_at >= PID_RECHECK_SECONDS:
+            self._pid_checked_at = now
+            pids = fl_pids()
+            self._answered_pid = pids[0] if len(pids) == 1 else None
+
     def _recycle(self) -> HelloEvent | None:
         """Recycle a silent wire for a hot-plug bind; ``self.control`` is
         non-None (the caller's guard in :meth:`hello`)."""
         if not fl_process_running():
             return None  # nothing to bind to - FL is not even running
         now = self._clock()
+        if self._answered_pid is not None and fl_pids() == [self._answered_pid]:
+            # The same FL that answered: a recycle cannot help. Silence for a moment is a
+            # busy FL (a long write, a dialog) and stays retryable; sustained, it is stopped.
+            if now - self._answered_at >= STOPPED_AFTER_SECONDS and not self.stopped_answering:
+                log.warning("FL Studio answered this session and has been silent for %gs; it may be frozen",
+                            now - self._answered_at)
+                self.stopped_answering = True
+            return None
         if now - self._last_recycle < RECYCLE_MIN_INTERVAL_SECONDS:
             return None  # recycled too recently - one wait per interval, not per call
         self._last_recycle = now
@@ -170,11 +201,13 @@ class ControlLink:
                 remaining,
             )
             try:
-                return self._check_controller_protocol(
-                    self.control.await_hello(timeout=min(retry_wait, remaining))
-                )
+                hello = self.control.await_hello(timeout=min(retry_wait, remaining))
             except errors.ToolError as exc:
                 last_error = exc
+            else:
+                self._pid_checked_at = float("-inf")  # a new FL may have bound: record its process
+                self._answered(self._clock())
+                return self._check_controller_protocol(hello)
             remaining = deadline - self._clock()
             if remaining <= 0:
                 detail = last_error.message if last_error is not None else "no detail"
