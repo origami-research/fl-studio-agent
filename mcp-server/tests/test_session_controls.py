@@ -258,7 +258,7 @@ def test_live_render_retries_an_unacknowledged_stop_after_capture(monkeypatch, t
 
     assert controls._live_render(session, tmp_path / "mix.wav", 1.0) == tmp_path / "mix.wav"
     assert [op for op, _ in control.calls].count("transport.stop") == 2
-    assert [op for op, _ in session.transport.sent] == ["capture_start", "capture_stop"]
+    assert [op for op, _ in session.transport.sent] == ["capture_stop", "capture_start", "capture_stop"]
 
 
 def test_live_render_returns_verified_wav_when_stop_stays_unacknowledged(monkeypatch, tmp_path, caplog):
@@ -290,6 +290,30 @@ def test_live_render_reports_unacknowledged_stop_when_capture_fails(monkeypatch,
     assert excinfo.value.category == "render_failed"
     assert "Bridge" not in excinfo.value.message
     assert any("transport.stop was unacknowledged" in r.message for r in caplog.records)
+
+
+def test_live_render_stops_any_leftover_capture_before_it_starts(monkeypatch, tmp_path):
+    """Box take base-phonk-opus (2026-11-02): one render left the Bridge armed, and every later
+    render failed "could not start recording" for seven minutes. Every render now stops the
+    Bridge's capture first; with nothing armed the Bridge just says so."""
+    from fl_mcp.schemas import SpoolResponse
+
+    session, _ = _verified_live_render(monkeypatch, tmp_path, lambda args: None)
+    good_stop = session.transport.responses["capture_stop"]
+    session.transport.responses["capture_stop"] = [SpoolResponse(id=1, ok=False, err="no active capture"), good_stop]
+
+    assert controls._live_render(session, tmp_path / "mix.wav", 1.0) == tmp_path / "mix.wav"
+    assert [op for op, _ in session.transport.sent] == ["capture_stop", "capture_start", "capture_stop"]
+
+
+def test_a_clearing_stop_that_fails_does_not_block_the_render(monkeypatch, tmp_path, caplog):
+    session, _ = _verified_live_render(monkeypatch, tmp_path, lambda args: None)
+    good_stop = session.transport.responses["capture_stop"]
+    session.transport.responses["capture_stop"] = [errors.note_plane_unavailable(1, 2.0), good_stop]
+
+    with caplog.at_level("WARNING"):
+        assert controls._live_render(session, tmp_path / "mix.wav", 1.0) == tmp_path / "mix.wav"
+    assert "could not clear the Bridge's capture" in caplog.text
 
 
 @pytest.mark.parametrize("wav", [None, b""])

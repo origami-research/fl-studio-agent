@@ -20,6 +20,7 @@ from typing import TYPE_CHECKING, Literal
 
 from fl_mcp import audio, errors, flp
 from fl_mcp.contract import ENV_AGENT_PROJECT, ENV_SPOOL_ROOT, FLLicense
+from fl_mcp.core.carriers import CarrierUnavailable
 from fl_mcp.errors import NotePlaneUnavailable, WriteRejected
 from fl_mcp.schemas import (
     CAPTURE_MAX_SECONDS,
@@ -31,6 +32,7 @@ from fl_mcp.schemas import (
     PluginParamSpec,
     RenderReceipt,
     RenderSpan,
+    SpoolResponse,
 )
 
 from .link import LIVE_READ_TIMEOUT_SECONDS, LIVE_SET_TIMEOUT_SECONDS
@@ -198,12 +200,32 @@ def live_arrangement_span(session: FLSession) -> RenderSpan:
     )
 
 
+def _capture_start(session: FLSession, seconds: float, timeout: float) -> SpoolResponse:
+    """Arm the Bridge's capture, first stopping whatever capture it still has armed.
+
+    The Bridge holds one capture and refuses a start while one is armed; only a
+    capture_stop disarms it. A start it acknowledged after this side gave up, or
+    a server that died mid-render, left it armed with nobody to stop it, and every
+    later render failed "could not start recording" until FL was restarted (box
+    take base-phonk-opus, 2026-11-02: ten renders over seven minutes). Renders are
+    single-flight per FL, so whatever is armed at start time is a leftover: one
+    rule, a stop before every start, clears it (with nothing armed the Bridge
+    answers "no active capture" and nothing changes).
+    """
+    with session._transport_use():
+        try:
+            stopped = session.transport.send("capture_stop")
+            session.transport.await_response(stopped, timeout=timeout)
+        except (errors.ToolError, CarrierUnavailable) as exc:
+            log.warning("could not clear the Bridge's capture before a render: %s", exc)
+        started = session.transport.send("capture_start", seconds=seconds)
+        return session.transport.await_response(started, timeout=timeout)
+
+
 def _live_render(session: FLSession, output: Path, seconds: float) -> Path:
     """Play the live arrangement from its start while the master Bridge records it."""
     response_timeout = min(10.0, max(2.0, seconds / 2.0 + 2.0))
-    with session._transport_use():
-        started = session.transport.send("capture_start", seconds=seconds)
-        start = session.transport.await_response(started, timeout=response_timeout)
+    start = _capture_start(session, seconds, response_timeout)
     if not start.ok:
         log.warning("the Bridge refused capture_start: %s", start.err)
         raise errors.ToolError(

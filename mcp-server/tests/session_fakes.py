@@ -156,7 +156,7 @@ class FakePlatform:
 class FakeSpool:
     """Session<->spool contract without the filesystem: scripted responses."""
 
-    def __init__(self, responses: dict[str, SpoolResponse | Exception] | None = None) -> None:
+    def __init__(self, responses: dict[str, SpoolResponse | Exception | list] | None = None) -> None:
         self.responses = responses or {}
         self.sent: list[tuple[str, dict[str, Any]]] = []
         self._id = 0
@@ -169,6 +169,8 @@ class FakeSpool:
 
     def await_response(self, command: SpoolCommand, timeout: float) -> SpoolResponse:
         outcome = self.responses.get(command.op)
+        if isinstance(outcome, list):  # scripted in order, one per call
+            outcome = outcome.pop(0) if outcome else None
         if isinstance(outcome, Exception):
             raise outcome
         if outcome is None:
