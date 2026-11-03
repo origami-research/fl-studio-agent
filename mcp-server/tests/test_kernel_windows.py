@@ -21,6 +21,7 @@ from fl_mcp.kernel.windows import (
     APPCONTAINER_NAME,
     INTERNET_CLIENT_SID,
     RENDERS_GRANT,
+    RUNTIME_FILE_GRANT,
     RUNTIME_GRANT,
     WORK_GRANT,
     AppContainerLauncher,
@@ -62,30 +63,93 @@ def test_a_user_install_runtime_is_granted_read_once_before_the_kernel_starts(wo
     """The public install path (2026-10-26 box run): the kernel exited 106 "No pyvenv.cfg file"
     because its own venv was unreadable inside the container, so `run` never worked on a
     user's Windows machine. The launcher grants the interpreter read and execute, once."""
-    api = FakeWin32(runtime_readable=False)
+    api = FakeWin32(unreadable=USER_RUNTIME)
     launcher = AppContainerLauncher(api, runtime=USER_RUNTIME)
     argv = ["python", "-I", "-m", "fl_mcp.kernel.child"]
     for _ in range(2):
         launcher(argv, workspace=workspace, env={})
     grants = [c for c in api.calls if c[0] == "grant"]
-    assert grants[:2] == [("grant", USER_RUNTIME[0], SID, RUNTIME_GRANT), ("grant", USER_RUNTIME[1], SID, RUNTIME_GRANT)]
-    assert len(grants) == 4  # the runtime and the workspace, each once
+    assert grants[:4] == [
+        ("grant", USER_RUNTIME[0], SID, RUNTIME_GRANT),
+        ("grant", USER_RUNTIME[0], SID, RUNTIME_FILE_GRANT, "recursive"),
+        ("grant", USER_RUNTIME[1], SID, RUNTIME_GRANT),
+        ("grant", USER_RUNTIME[1], SID, RUNTIME_FILE_GRANT, "recursive"),
+    ]
+    assert len(grants) == 6  # the runtime and the workspace, each once
     names = [c[0] for c in api.calls]
     assert names.index("grant") < names.index("create_process")
-    assert RUNTIME_GRANT == "(OI)(CI)RX"  # read and run, never write
+    assert RUNTIME_GRANT == "(OI)(CI)RX" and RUNTIME_FILE_GRANT == "RX"  # read and run, never write
+
+
+def test_a_dll_its_folder_does_not_cover_is_granted_on_the_file_itself(workspace, tmp_path):
+    """#289, reproduced on a box 2026-11-02: the uvx environment's folder granted the container,
+    but pydantic_core's DLL below it kept an ACL of its own (uv hard-links installed files, and
+    a recursive permission change under another of the file's paths recomputed it), so the
+    folder check passed and every `run` failed with "DLL load failed ... Access is denied".
+    The launcher checks every file and adds the grant to each one explicitly."""
+    env = tmp_path / "uv" / "cache" / "archive-v0" / "env"
+    dll = env / "Lib" / "site-packages" / "pydantic_core" / "_pydantic_core.pyd"
+    dll.parent.mkdir(parents=True)
+    dll.write_bytes(b"MZ")
+    (env / "pyvenv.cfg").write_text("home = C:/py")
+    api = FakeWin32(unreadable={dll})
+    AppContainerLauncher(api, runtime=(env,))(["python"], workspace=workspace, env={})
+    assert dll in [c[1] for c in api.calls if c[0] == "readable"]
+    names = [c[0] for c in api.calls]
+    assert [c for c in api.calls if c[0] == "grant"][:2] == [
+        ("grant", env, SID, RUNTIME_GRANT),
+        ("grant", env, SID, RUNTIME_FILE_GRANT, "recursive"),
+    ]
+    assert names.index("grant") < names.index("create_process")
+
+
+def test_the_runtime_walk_skips_linked_folders_and_files_that_vanish(workspace, tmp_path):
+    """Review of #289's fix: a link out of the runtime is not the runtime's to check (nor a
+    loop), and Python's temporary bytecode files can vanish mid-walk."""
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "secret.dll").write_bytes(b"MZ")
+    env = tmp_path / "env"
+    env.mkdir()
+    (env / "linked").symlink_to(outside, target_is_directory=True)
+    gone = env / "x.pyc.123"
+    gone.write_bytes(b"")
+
+    class Vanishing(FakeWin32):
+        def readable(self, path, sid):
+            if path == gone:
+                raise FileNotFoundError(path)
+            return super().readable(path, sid)
+
+    api = Vanishing()
+    AppContainerLauncher(api, runtime=(env,))(["python"], workspace=workspace, env={})
+    checked = [c[1] for c in api.calls if c[0] == "readable"]
+    assert outside / "secret.dll" not in checked and env / "linked" / "secret.dll" not in checked
+    assert [c for c in api.calls if c[0] == "grant"][:1] == [("grant", workspace.work, SID, WORK_GRANT)]
+
+
+def test_a_runtime_file_the_grant_cannot_reach_fails_the_launch_naming_it(workspace, tmp_path):
+    env = tmp_path / "env"
+    dll = env / "x.pyd"
+    dll.parent.mkdir(parents=True)
+    dll.write_bytes(b"MZ")
+    api = FakeWin32(unreadable={dll}, grants_stick=False)
+    with pytest.raises(OSError, match=r"x\.pyd still denies it"):
+        AppContainerLauncher(api, runtime=(env,))(["python"], workspace=workspace, env={})
+    assert "create_process" not in [c[0] for c in api.calls]
 
 
 def test_a_provisioned_runtime_is_left_alone(workspace):
     """A box grants its venv (C:/FLMCP/venv) and Program Files is readable by every container:
     the FL user cannot rewrite those ACLs and does not need to."""
-    api = FakeWin32(runtime_readable=True)
+    api = FakeWin32()
     AppContainerLauncher(api, runtime=USER_RUNTIME)(["python"], workspace=workspace, env={})
     assert [c[1] for c in api.calls if c[0] == "readable"] == list(USER_RUNTIME)
     assert [c[1] for c in api.calls if c[0] == "grant"] == [workspace.work, workspace.renders]
 
 
 def test_a_runtime_this_user_cannot_grant_fails_the_launch_and_says_how_to_fix_it(workspace):
-    api = FakeWin32(fail="grant", runtime_readable=False)
+    api = FakeWin32(fail="grant", unreadable=USER_RUNTIME)
     with pytest.raises(OSError, match=r"not readable by its AppContainer.*Box contract"):
         AppContainerLauncher(api, runtime=USER_RUNTIME)(["python"], workspace=workspace, env={})
     assert "create_process" not in [c[0] for c in api.calls]

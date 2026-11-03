@@ -10,11 +10,15 @@ SID = "S-1-15-2-1-2-3-4-5-6-7"
 
 
 class FakeWin32:
-    def __init__(self, fail: str | None = None, *, runtime_readable: bool = True) -> None:
+    def __init__(
+        self, fail: str | None = None, *, unreadable=(), grants_stick: bool = True
+    ) -> None:
         self.calls: list[tuple] = []
         self.fail = fail
         self.alive = True
-        self.runtime_readable = runtime_readable
+        # Paths whose own ACL denies the container until a recursive grant covers them.
+        self.unreadable = set(unreadable)
+        self.grants_stick = grants_stick
 
     def _record(self, name: str, *args) -> None:
         self.calls.append((name, *args))
@@ -27,10 +31,12 @@ class FakeWin32:
 
     def readable(self, path, sid):
         self._record("readable", path, sid)
-        return self.runtime_readable
+        return path not in self.unreadable
 
-    def grant(self, path, sid, rights):
-        self._record("grant", path, sid, rights)
+    def grant(self, path, sid, rights, *, recursive=False):
+        self._record("grant", path, sid, rights, *(("recursive",) if recursive else ()))
+        if recursive and self.grants_stick:
+            self.unreadable = {p for p in self.unreadable if path not in (p, *p.parents)}
 
     def revoke(self, path, sid):
         self._record("revoke", path, sid)

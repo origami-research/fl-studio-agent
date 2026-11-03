@@ -41,6 +41,13 @@ INTERNET_CLIENT_SID = "S-1-15-3-1"
 WORK_GRANT = "(OI)(CI)M"
 RENDERS_GRANT = "(OI)(CI)RX"
 RUNTIME_GRANT = "(OI)(CI)RX"
+# The same right set on every file and folder below the runtime, as its own explicit entry.
+# uv installs by hard link and writes files whose ACL does not inherit (2026-11-02 box run:
+# pydantic_core's DLL carried only SYSTEM, Administrators and the owner), and a hard-linked
+# file has one ACL shared by all its paths, so an inherited grant from one folder does not
+# reach it or is recomputed away by an ACL change under another of its paths (#289).
+# An explicit entry on the file itself survives both.
+RUNTIME_FILE_GRANT = "RX"
 # Every AppContainer token carries this group: Program Files grants it read and execute.
 ALL_APPLICATION_PACKAGES_SID = "S-1-15-2-1"
 
@@ -87,7 +94,9 @@ class Win32(Protocol):
         """Whether ``path``'s own ACL lets the AppContainer ``sid`` read and execute it."""
         ...
 
-    def grant(self, path: Path, sid: str, rights: str) -> None: ...
+    def grant(self, path: Path, sid: str, rights: str, *, recursive: bool = False) -> None:
+        """Add an allow entry for ``sid``; ``recursive`` also adds it to everything below."""
+        ...
 
     def revoke(self, path: Path, sid: str) -> None: ...
 
@@ -123,6 +132,11 @@ class Win32(Protocol):
     def exit_code(self, process: int) -> int: ...
 
     def close(self, handle: int) -> None: ...
+
+
+def _is_link(path: Path) -> bool:
+    """A symlink or an NTFS junction (``islink`` is False for a junction)."""
+    return path.is_symlink() or bool(getattr(os.path, "isjunction", lambda _p: False)(path))
 
 
 def runtime_dirs() -> tuple[Path, ...]:
@@ -260,20 +274,51 @@ class AppContainerLauncher:
         return Win32KernelProcess(self.api, process=process, job=job, pid=pid, pipes=streams)
 
     def _grant_runtime(self, sid: str) -> None:
-        """Make the interpreter readable by the container, once per folder. Called under the grants lock."""
+        """Make every file of the interpreter readable by the container, once per folder.
+        Called under the grants lock.
+
+        The check covers the files the kernel loads, not just their folder (#289): a folder
+        can grant the container while a DLL below it does not."""
         for directory in self.runtime:
             if directory in self._runtime_ready:
                 continue
-            if not self.api.readable(directory, sid):
+            if self._unreadable(directory, sid):
                 try:
                     self.api.grant(directory, sid, RUNTIME_GRANT)
+                    self.api.grant(directory, sid, RUNTIME_FILE_GRANT, recursive=True)
                 except (OSError, subprocess.SubprocessError) as exc:
                     raise OSError(
                         f"the kernel's Python runtime {directory} is not readable by its AppContainer and "
                         f"this user cannot grant it ({exc}); grant it read and execute as docs/38 "
                         "'Box contract' says"
                     ) from exc
+                still = self._unreadable(directory, sid)
+                if still:
+                    raise OSError(
+                        f"the kernel's Python runtime is not readable by its AppContainer even after granting "
+                        f"{directory}: {still[0]} still denies it; grant it read and execute as docs/38 "
+                        "'Box contract' says"
+                    )
             self._runtime_ready.add(directory)
+
+    def _unreadable(self, directory: Path, sid: str) -> list[Path]:
+        """The folder and everything below it whose own ACL does not let the container read it.
+
+        Junctions and symlinked folders are not followed (a link out of the runtime, or a
+        loop, is not the runtime's to check), and a file that vanishes mid-walk (Python's
+        temporary bytecode files) is skipped rather than failing the launch."""
+        paths = [directory]
+        for root, dirs, files in os.walk(directory):
+            dirs[:] = [d for d in dirs if not _is_link(Path(root, d))]
+            paths += [Path(root, name) for name in (*dirs, *files)]
+        unreadable = []
+        for path in paths:
+            try:
+                if not self.api.readable(path, sid):
+                    unreadable.append(path)
+            except FileNotFoundError:
+                continue
+        return unreadable
 
     def release(self, workspace: Workspace) -> None:
         """Every session's kernel shares the one SID, so a finished session's grants go."""
@@ -535,10 +580,12 @@ class CtypesWin32:
                 self._k32.LocalFree(trustee)
             self._k32.LocalFree(descriptor)
 
-    def grant(self, path: Path, sid: str, rights: str) -> None:
+    def grant(self, path: Path, sid: str, rights: str, *, recursive: bool = False) -> None:
+        # /T /C keeps going past a file it cannot change and then exits non-zero; the
+        # launcher's re-check names any file still denied, so that exit is not an error here.
         subprocess.run(
-            [str(self._icacls), str(path), "/grant", f"*{sid}:{rights}", "/Q"],
-            check=True,
+            [str(self._icacls), str(path), "/grant", f"*{sid}:{rights}", *(("/T", "/C", "/L") if recursive else ()), "/Q"],
+            check=not recursive,
             capture_output=True,
         )
 
