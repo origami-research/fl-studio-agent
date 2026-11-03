@@ -165,13 +165,14 @@ class FL:
 
     def track(self, name_or_index: str | int, pattern: int = 1) -> Track:
         """A channel's piano roll in ``pattern``: by index, exact name, or a unique
-        part of the name. Raises ChannelNotFound listing the channels otherwise.
+        part of the name, as FL names it now. Raises ChannelNotFound listing the
+        channels otherwise.
         """
         # THE place channel names resolve - Target is ints-only past this
-        # boundary. Resolution reads the PROJECT FILE, not the live snapshot: targets are
-        # file coordinates (that is what write_notes patches), and the file
-        # answers instantly while FL may be mid-boot right after a reload
-        # (dogfood A12: the live read raced every post-write reload).
+        # boundary. The names are FL's live ones whenever FL is connected
+        # (session/state.py channel_names), so a channel FL just renamed resolves
+        # by its new name. A reload settles before returning, so no live read
+        # lands in FL's boot window (dogfood A12).
         try:
             args = _TrackArgs(name_or_index=name_or_index, pattern=pattern)
         except ValidationError as exc:
@@ -243,7 +244,6 @@ class FL:
         name (any case), or by a unique part of a name. FL steps through its presets to
         get there and renames the channel to the preset; returns the preset FL now has.
         The preset replaces the plugin's sound, including earlier set_param changes.
-        Use the channel's index afterwards: a lookup by name may still know the old name.
         """
         try:
             args = _SetPresetArgs(preset=preset)
@@ -269,8 +269,7 @@ class FL:
         """Load a stock sample into a sampler channel: a Sound from
         ``fl.sounds(kind="sample")``, or its path. FL renames the channel to the
         sample; returns the channel's name as FL now reports it. A plugin channel
-        is refused (give it an instrument preset instead). Use the channel's index
-        afterwards: a lookup by name may still know the old name.
+        is refused (give it an instrument preset instead).
         """
         try:
             args = _LoadArgs(kind="sample", sound=sample)
@@ -284,8 +283,7 @@ class FL:
         the instrument (a sampler too), and FL names the channel after the preset:
         the way to change a channel's instrument. An effect preset adds its effect to
         the next free slot of the mixer track the channel plays through (``.effect``).
-        Returns the channel's name and instrument as FL now reports them. Use the
-        channel's index afterwards.
+        Returns the channel's name and instrument as FL now reports them.
         """
         try:
             args = _LoadArgs(kind="preset", sound=preset)

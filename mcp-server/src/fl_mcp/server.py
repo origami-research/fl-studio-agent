@@ -181,7 +181,8 @@ def run(code: str, ctx: Context) -> RunResult:
     - fl.set_tempo(140.0) -> the tempo FL now has; fl.tempo reads it.
     - fl.channels -> [Channel(index, name, ...), ...].
     - fl.track("Bass") / fl.track(2, pattern=1) -> Track (exact name, index, or
-      unique substring; pattern defaults to 1).
+      unique substring of FL's current names; pattern defaults to 1). Every
+      method that takes a channel takes it the same way.
     - Track.write([Note(...), ...], mode="merge"|"replace") -> WriteResult(wrote,
       track, pattern, mode, total): "merge" adds the notes, "replace" swaps the
       pattern's notes on that track; total is how many it now has.
@@ -200,8 +201,7 @@ def run(code: str, ctx: Context) -> RunResult:
     - fl.presets("Bass") -> the plugin's preset names in FL's order;
       fl.set_preset("Bass", "Pure Feather") (or an index) -> ChannelPreset(channel,
       index, name): FL switches the plugin to it and renames the channel to the
-      preset, replacing its sound; use the channel's index afterwards. Sampler
-      channels have no presets.
+      preset, replacing its sound. Sampler channels have no presets.
     - fl.sounds("808 kick", kind="sample") -> [Sound(kind, name, plugin, path)]:
       the stock presets and samples FL ships, searched by words.
       fl.load_sample("808 Clap", sound) -> ChannelSound(channel, kind, sound,
@@ -209,7 +209,7 @@ def run(code: str, ctx: Context) -> RunResult:
       after it. fl.load_preset(channel, sound): an instrument preset puts its
       plugin on the channel, the way to change an instrument; an effect preset
       adds its effect to the channel's mixer track (.effect). Pass a Sound or
-      its path; use the channel's index afterwards.
+      its path.
     - fl.check(bars=2, start_bar=1) -> CheckResult: plays those bars and reads
       FL's mixer meters; per channel whether it sounded, its peak dBFS, and why
       it was silent (muted, no notes in those bars, ...); .summary is one line.

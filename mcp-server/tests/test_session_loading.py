@@ -13,17 +13,26 @@ selected when the file is sent, and every result is FL's readback.
 from __future__ import annotations
 
 import re
+import shutil
 from pathlib import Path, PurePosixPath
 from typing import Any
 
 import pytest
-from session_fakes import HELLO, FakeControl, FakeSpool, isolate_spool, live_untargeted_bridge, make_session
+from session_fakes import (
+    HELLO,
+    FakeControl,
+    FakeSpool,
+    isolate_spool,
+    live_untargeted_bridge,
+    make_session,
+    snapshot_answer,
+)
 
 from fl_mcp import errors, sdk
 from fl_mcp.actions import ActionLog
 from fl_mcp.kernel import wire
 from fl_mcp.schemas import (
-    Channel,
+    ChannelRoute,
     ChannelSound,
     ControlResponse,
     MixerEffect,
@@ -33,6 +42,7 @@ from fl_mcp.schemas import (
 )
 from fl_mcp.session import WriteRejected
 from fl_mcp.session import loading as loading_mod
+from fl_mcp.template import template_path
 
 KICK = "Packs/Drums/Kicks/808 Kick.wav"
 COWBELL = "Packs/Drums/Percussion/808 Cowbell.wav"
@@ -130,6 +140,7 @@ class FakeFL:
             "plugins.isValid": lambda args: int(self.channels[args[0]]["plugin"] is not None),
             "plugins.getPluginName": plugin_name,
             "mixer.isTrackPluginValid": lambda args: int(self.slots[args[0]][args[1]] is not None),
+            "state.snapshot": lambda args: snapshot_answer([c["name"] for c in self.channels]),
         }
 
 
@@ -152,12 +163,15 @@ class LoadingSpool(FakeSpool):
 
 @pytest.fixture
 def box(tmp_path, monkeypatch, patches):
-    """A session with a live FL MCP Bridge and the fake FL behind it."""
+    """A session on the template song with a live FL MCP Bridge and the fake FL
+    behind it; the saved song keeps the template's names, whatever FL renames."""
     live_untargeted_bridge(monkeypatch, tmp_path)
+    project = tmp_path / "agent.flp"
+    shutil.copyfile(template_path(), project)
     fl = FakeFL()
     control = FakeControl(hello=HELLO, handlers=fl.handlers())
     spool = LoadingSpool(fl)
-    session, _ = make_session(control=control, transport=spool)
+    session, _ = make_session(control=control, transport=spool, project=project)
     return session, fl, control, spool
 
 
@@ -328,10 +342,8 @@ def test_a_load_fl_does_not_show_raises(box, sound):
 
 
 @pytest.fixture
-def live(box, monkeypatch):
-    session, fl, control, spool = box
-    names = [Channel(index=i, name=c["name"]) for i, c in enumerate(fl.channels)]
-    monkeypatch.setattr(session, "channel_names", lambda: names)
+def live(box):
+    session, _, control, spool = box
     return sdk.connect(session), control, spool
 
 
@@ -343,6 +355,32 @@ def test_the_sdk_takes_fl_sounds_results_or_their_paths(live):
     assert fl.load_sample("808 Clap", cowbell).name == "808 Cowbell"
     assert fl.load_sample(2, KICK).name == "808 Kick #2"
     assert fl.load_preset("FLEX", sytrus).plugin == "Sytrus"
+
+
+def test_a_name_fl_just_gave_a_channel_finds_it_at_once(live):
+    """Live, FL renamed each channel it loaded into, and the lookup still knew only
+    the saved song's names, so the model fell back to channel numbers. Every
+    channel argument resolves against FL's live names."""
+    fl, _, _ = live
+    cowbell = Sound(kind="sample", name="808 Cowbell", path=COWBELL)
+
+    assert fl.load_sample("808 Clap", cowbell).name == "808 Cowbell"
+    assert fl.load_preset("808 Cowbell", SYTRUS).name == "3o3ish 2"
+    assert fl.track("3o3ish 2").channel == 1
+    with pytest.raises(sdk.ChannelNotFound, match="1: 3o3ish 2"):
+        fl.track("808 Clap")
+
+
+def test_the_result_names_a_renamed_channel_by_its_new_name_afterwards():
+    """A later sentence about a channel this call renamed uses the name FL gave it."""
+    actions = ActionLog(lambda channel: "808 Clap")
+    actions.called("load_sound", {}, ChannelSound(channel=1, kind="sample", sound=COWBELL, name="808 Cowbell"))
+    actions.called("route_channel", {}, ChannelRoute(channel=1, mixer_track=3))
+
+    assert actions.sentences() == [
+        "Loaded the sample 808 Cowbell into channel 1",
+        "Routed 808 Cowbell to mixer track 3",
+    ]
 
 
 @pytest.mark.parametrize(

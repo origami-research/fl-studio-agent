@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-from session_fakes import HELLO, FakeControl, make_session
+from session_fakes import HELLO, FakeControl, make_session, snapshot_answer
 
 from fl_mcp import errors, flp
 from fl_mcp.controller_version import CONTROLLER_PROTOCOL_VERSION
@@ -99,6 +99,39 @@ def test_snapshot_without_live_or_project_is_an_explicit_setup_error():
     assert excinfo.value.category == "control_plane_unavailable"
     assert "state cannot be read" in excinfo.value.message
     assert excinfo.value.retryable is True
+
+
+# --- channel names -------------------------------------------------------------
+
+
+def saved_song(monkeypatch, *names: str) -> None:
+    channels = tuple(
+        flp.FlpChannel(index=i, name=name, volume=10000, pan=6400, pitch_semitones=0) for i, name in enumerate(names)
+    )
+    monkeypatch.setattr(flp, "read", lambda path: flp.FlpProject(ppq=96, tempo=120.0, channels=channels, notes=()))
+
+
+def test_channel_names_are_fls_live_names_while_fl_is_connected(monkeypatch, tmp_path):
+    """FL renames channels itself (a loaded sample or preset, a preset step) and the
+    saved song keeps the old names, so every channel lookup reads FL's names."""
+    project = tmp_path / "agent.flp"
+    project.write_bytes(b"")
+    saved_song(monkeypatch, "808 Kick", "808 Clap")
+    control = FakeControl(
+        hello=HELLO, handlers={"state.snapshot": lambda args: snapshot_answer(["808 Kick", "808 Cowbell"])}
+    )
+    session, _ = make_session(control=control, project=project)
+
+    assert [(c.index, c.name) for c in session.channel_names()] == [(0, "808 Kick"), (1, "808 Cowbell")]
+
+
+def test_channel_names_fall_back_to_the_saved_song_without_fl(monkeypatch, tmp_path):
+    project = tmp_path / "agent.flp"
+    project.write_bytes(b"")
+    saved_song(monkeypatch, "808 Kick", "")
+    session, _ = make_session(project=project)
+
+    assert [c.name for c in session.channel_names()] == ["808 Kick", "Channel 1"]
 
 
 # --- doctor ------------------------------------------------------------------

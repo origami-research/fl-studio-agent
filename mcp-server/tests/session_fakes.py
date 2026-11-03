@@ -67,6 +67,23 @@ RENDER_SPAN = RenderSpan(
     seconds=16 * 60 / 130,
 )
 HELLO = HelloEvent(script_ver=CONTROLLER_PROTOCOL_VERSION, fl_ver="2026", ppq=96)
+TEMPLATE_CHANNELS = ("808 Kick", "808 Clap", "808 HiHat", "808 Snare", "FLEX Bass")
+
+
+def snapshot_answer(names: Sequence[str]) -> dict[str, Any]:
+    """FL's ``state.snapshot`` answer for channels named ``names``, in the
+    controller's own shape: the live names every channel lookup reads."""
+    return {
+        "ppq": 96,
+        "tempo": 120_000,
+        "playing": False,
+        "current_pattern": 1,
+        "channels": [
+            {"idx": i, "name": name, "vol": 0.78, "pan": 0.0, "muted": False, "target_mixer_track": i + 1}
+            for i, name in enumerate(names)
+        ],
+        "mixer": [],
+    }
 TARGET = Target(pattern=1, channel=0)
 NOTES = [Note(key=60, start=0, length=1)]
 

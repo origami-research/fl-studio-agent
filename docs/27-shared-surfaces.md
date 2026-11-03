@@ -30,6 +30,7 @@ So the engine's record of applied writes is the source of truth for the notes it
   A target this session never wrote reads from the project, which still describes it.
   A save of the project newer than a record (FL saving its live state, including a person's Cmd+S) supersedes that record, because the save holds everything FL had then.
   Tempo is read live from FL whenever FL is connected.
+  So are channel names, which `fl.track` and every method that takes a channel resolve against: FL renames channels itself (loading a sample or a preset, stepping a preset), and the project keeps the names it was saved with.
 - **Unknown.** A merge onto a track whose earlier notes the session never saw (no project to read) has no knowable total: the result says `total=None` and nothing is recorded.
 - **Known gap.** `fl.undo()` reverts FL without telling the record, so a note read after an undo can be stale.
 

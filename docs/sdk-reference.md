@@ -80,11 +80,16 @@ print(fl.tempo)
 
 ### `fl.track(name_or_index: str | int, pattern: int = 1) -> Track`
 
-**Availability:** project-file coordinate lookup when a project is configured;
-otherwise the session snapshot. `name_or_index` is a channel index, an exact
-channel name, or an unambiguous case-insensitive substring. `pattern` is the
-one-based piano-roll pattern number. Raises `ChannelNotFound` for no or
-ambiguous match.
+**Availability:** the channels `fl.channels` lists: FL's live names when FL is
+connected, otherwise the project's saved names.
+`name_or_index` is a channel index, an exact channel name, or an unambiguous
+case-insensitive substring.
+A channel FL renamed (a loaded sample or preset, a preset step, a rename by
+hand) resolves by its new name at once.
+Every method that takes a channel (`fl.route`, `fl.presets`, `fl.set_preset`,
+`fl.load_sample`, `fl.load_preset`) resolves it here.
+`pattern` is the one-based piano-roll pattern number.
+Raises `ChannelNotFound` for no or ambiguous match.
 
 ```python
 lead_in_pattern_two = fl.track("Lead", pattern=2)
@@ -236,7 +241,6 @@ So `set_preset` reads where the channel's name says it is, steps there with `plu
 A channel whose name shows no preset, or a name two presets share, takes one step first to learn its place.
 Returns `ChannelPreset(channel, index, name)`, where `name` is the channel's new name.
 The preset replaces the plugin's sound, including earlier `set_param` changes.
-Name lookups (`fl.track`) read the saved song's channel names, which keep the old name until a save, so use the channel's index afterwards.
 If it lands on another preset (a channel renamed by hand to a preset's name), it raises; calling again steps from the preset FL now shows.
 
 ```python
@@ -262,7 +266,6 @@ kicks = fl.sounds("808 kick", kind="sample")
 FL renames the channel after the sample (`"808 Cowbell"`), numbering it when another channel already has that name (`"808 Kick #2"`).
 Returns `ChannelSound(channel, kind, sound, name, plugin=None)` read back from FL; a channel that does not show the sample raises.
 A plugin channel is refused before anything changes: FL only renames it. Give it an instrument preset with `fl.load_preset` instead.
-Use the channel's index afterwards: name lookups read the saved song's names.
 
 ### `fl.load_preset(channel: str | int, preset: Sound | str) -> ChannelSound`
 

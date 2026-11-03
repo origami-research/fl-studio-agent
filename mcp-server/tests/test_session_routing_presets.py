@@ -11,22 +11,27 @@ known good, and a call that stops partway says what already landed.
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
 import pytest
-from session_fakes import HELLO, FakeControl, make_session
+from session_fakes import HELLO, FakeControl, make_session, snapshot_answer
 
-from fl_mcp import errors, sdk
+from fl_mcp import errors, flp, sdk
 from fl_mcp.actions import ActionLog
 from fl_mcp.kernel import wire
-from fl_mcp.schemas import Channel, ChannelPreset, ChannelRoute, ControlResponse, MixerSend, Sound
+from fl_mcp.schemas import ChannelPreset, ChannelRoute, ControlResponse, MixerSend, Sound
 from fl_mcp.session import WriteRejected
 from fl_mcp.session import facade as facade_mod
 
 MIXER_TRACKS = 127  # a full mixer as mixer.trackCount reports it, the master included
 DEFAULT_SEND_LEVEL = 0.8  # FL's level for a send just turned on (live)
 FLEX_PRESETS = ["Default", "Analog Bass", "Bright Pluck", "Deep Sub", "Glass Keys", "Hollow Lead", "Pure Feather"]
-CHANNELS = [Channel(index=0, name="808 Kick"), Channel(index=1, name="FLEX Bass")]
+# The saved song's channels; FL's live names follow the plugin's preset steps.
+SAVED_CHANNELS = tuple(
+    flp.FlpChannel(index=i, name=name, volume=10000, pan=6400, pitch_semitones=0)
+    for i, name in enumerate(["808 Kick", "FLEX Bass"])
+)
 
 
 def refused(detail: str) -> ControlResponse:
@@ -113,12 +118,12 @@ class FakePlugin:
         }
 
 
-def session_with(*fakes: FakeMixer | FakePlugin):
+def session_with(*fakes: FakeMixer | FakePlugin, project: Path | None = None):
     handlers: dict[str, Any] = {}
     for fake in fakes:
         handlers.update(fake.handlers())
     control = FakeControl(hello=HELLO, handlers=handlers)
-    session, _ = make_session(control=control)
+    session, _ = make_session(control=control, project=project)
     return session, control
 
 
@@ -396,10 +401,15 @@ def test_sounds_without_fls_stock_folder_says_so(tmp_path, monkeypatch):
 
 
 @pytest.fixture
-def live(monkeypatch):
+def live(tmp_path, monkeypatch):
+    """The SDK on a saved song whose channel 1 is "FLEX Bass"; FL renames it as its preset steps."""
     mixer, plugin = FakeMixer(), FakePlugin()
-    session, control = session_with(mixer, plugin)
-    monkeypatch.setattr(session, "channel_names", lambda: CHANNELS)
+    saved = tmp_path / "agent.flp"
+    saved.write_bytes(b"")
+    saved_song = flp.FlpProject(ppq=96, tempo=120.0, channels=SAVED_CHANNELS, notes=())
+    monkeypatch.setattr(flp, "read", lambda path: saved_song)
+    session, control = session_with(mixer, plugin, project=saved)
+    control.handlers["state.snapshot"] = lambda args: snapshot_answer(["808 Kick", plugin.name])
     return sdk.connect(session), control
 
 
@@ -412,6 +422,18 @@ def test_sdk_calls_name_channels_like_fl_track(live):
     assert fl.send(3, 0, level=0.6) == MixerSend(source=3, target=0, on=True, level=0.6)
     with pytest.raises(sdk.ChannelNotFound):
         fl.route("Lead", 3)
+
+
+def test_a_channel_goes_by_the_preset_name_fl_gave_it_at_once(live):
+    """Stepping a preset renames the channel in FL while the saved song keeps the
+    old name; the next call naming the channel finds it by the name FL reported."""
+    fl, _ = live
+
+    assert fl.set_preset("FLEX Bass", "Pure Feather").name == "Pure Feather"
+    assert fl.route("Pure Feather", 3) == ChannelRoute(channel=1, mixer_track=3)
+    assert fl.presets("Pure Feather") == FLEX_PRESETS
+    with pytest.raises(sdk.ChannelNotFound, match="1: Pure Feather"):
+        fl.presets("FLEX Bass")
 
 
 @pytest.mark.parametrize(
@@ -469,7 +491,7 @@ def test_each_change_reads_as_one_sentence_from_fls_readback():
     actions.called("set_send", {}, MixerSend(source=3, target=5, on=True, level=0.5))
     actions.called("set_send", {}, MixerSend(source=3, target=0, on=False))
     actions.called("set_preset", {}, ChannelPreset(channel=1, index=6, name="Pure Feather"))
-    # Without a saved song the channel's live name is already the preset's.
+    # A channel this call had not named yet reads its live name, already the preset's.
     actions.called("set_preset", {}, ChannelPreset(channel=4, index=6, name="Pure Feather"))
     actions.called("presets", {}, FLEX_PRESETS)
     actions.called("sounds", {}, [])

@@ -16,12 +16,14 @@ from session_fakes import (
     HELLO,
     NOTES,
     TARGET,
+    TEMPLATE_CHANNELS,
     FakeControl,
     FakeSpool,
     FakeStore,
     isolate_spool,
     live_untargeted_bridge,
     make_session,
+    snapshot_answer,
 )
 
 from fl_mcp import errors, flp
@@ -56,9 +58,14 @@ def keys(notes) -> list[tuple[int, float]]:
     return [(n.key, n.start) for n in notes]
 
 
+def live_template() -> FakeControl:
+    """FL connected on the template song: the track label is FL's live channel name."""
+    return FakeControl(hello=HELLO, handlers={"state.snapshot": lambda args: snapshot_answer(TEMPLATE_CHANNELS)})
+
+
 def test_notes_go_project_write_even_when_control_is_connected(project, no_reload):
     spool = FakeSpool()
-    session, store = make_session(control=FakeControl(hello=HELLO), transport=spool, project=project)
+    session, store = make_session(control=live_template(), transport=spool, project=project)
 
     result = session.write_notes(TARGET, NOTES, "merge")
 
@@ -187,7 +194,7 @@ def test_concurrent_session_write_raises_retryable_error(tmp_path):
 
 def test_clear_notes_is_project_write_even_when_connected(project, no_reload):
     spool = FakeSpool()
-    session, _ = make_session(control=FakeControl(hello=HELLO), transport=spool, project=project)
+    session, _ = make_session(control=live_template(), transport=spool, project=project)
     session.write_notes(TARGET, NOTES, "replace")
 
     result = session.clear_notes(TARGET)

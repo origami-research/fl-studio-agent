@@ -32,22 +32,17 @@ PYSCRIPT_NAME = "MCP Write Notes.pyscript"
 
 
 def channel_names(session: FLSession) -> list[Channel]:
-    """The channels of the TARGET universe - the project file - for name
-    resolution. File-first because targets are file coordinates and the
-    file answers instantly mid-reload; the live snapshot is the fallback
-    for sessions without a project."""
-    if session.project is not None and session.project.is_file():
-        proj = flp.read(session.project)
-        return [
-            Channel(
-                index=c.index,
-                name=c.name or f"Channel {c.index}",
-                volume=c.volume / flp.LEVEL_MAX,
-                pan=(c.pan - flp.PAN_CENTRE) / flp.PAN_CENTRE,
-            )
-            for c in proj.channels
-        ]
-    return session.snapshot().channels
+    """The channels names resolve against (``fl.track`` and every SDK method that
+    takes a channel) and the labels results use: the snapshot's, so live from FL
+    whenever FL is connected. FL renames channels itself (loading a sample or a
+    preset, stepping a preset, a person renaming one), and the saved song keeps
+    the names it was saved with. A file-lane edit saves FL's live state before
+    patching the file, so a live index is also the file's. The saved song only
+    when FL is not connected; a channel it never named reads ``Channel <index>``."""
+    return [
+        channel if channel.name else channel.model_copy(update={"name": f"Channel {channel.index}"})
+        for channel in session.snapshot().channels
+    ]
 
 
 def tempo(session: FLSession) -> float | None:

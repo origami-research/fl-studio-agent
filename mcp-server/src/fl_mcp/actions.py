@@ -340,10 +340,12 @@ class ActionLog:
         # FL renames the channel to its preset, so a live name read now is the preset's.
         track = self._name(result.channel)
         where = f"channel {result.channel}" if track == result.name else track
+        self._names[result.channel] = result.name
         return [_Entry(f"Loaded preset {result.name} on {where}")]
 
     def _load(self, kwargs: Mapping[str, Any], result: ChannelSound) -> list[_Entry]:
-        # The result's name is FL's live readback; a lookup by name may still know the old one.
+        # The result's name is FL's live readback, and later sentences use it.
+        self._names[result.channel] = result.name
         sound = PurePosixPath(result.sound).stem
         if result.effect is not None:
             effect = result.effect
