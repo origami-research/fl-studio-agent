@@ -7,6 +7,8 @@ the action log - is the shipped code, not a mock of it.
 
 from __future__ import annotations
 
+import contextlib
+from collections.abc import Iterator
 from pathlib import Path
 
 from session_fakes import RENDER_SPAN
@@ -69,6 +71,7 @@ class FakeSession(FLSession):
         self._channels = list(channels)
         self._next_id = 0
         self.level_calls: list[tuple[int, float | None, float | None, int | None]] = []
+        self.renders: list[dict] = []
 
     def write_notes(self, target: Target, notes: list[Note], mode: NoteWriteMode) -> WriteResult:
         if self.fail_next_write is not None:
@@ -96,9 +99,19 @@ class FakeSession(FLSession):
         self._tempo = round(bpm * 1000) / 1000
         return self._tempo
 
-    def render_wav(self, output: Path) -> RenderReceipt:
+    def render_wav(
+        self, output: Path, start_bar: int = 1, bars: int | None = None, solo: tuple = (), mute: tuple = ()
+    ) -> RenderReceipt:
+        self.renders.append({"output": output, "start_bar": start_bar, "bars": bars, "solo": solo, "mute": mute})
         output.write_bytes(b"RIFF....WAVE")
-        return RenderReceipt(path=output, span=RENDER_SPAN)
+        span = RENDER_SPAN.model_copy(update={"start_bar": start_bar})
+        return RenderReceipt(path=output, span=span, solo=list(solo), mute=list(mute))
+
+    def render_stems(self, output: Path, by: str, start_bar: int = 1, bars: int | None = None) -> list[RenderReceipt]:
+        return [
+            self.render_wav(output.with_name(f"{output.stem}-{c.index}.wav"), start_bar, bars, solo=(c.index,))
+            for c in self._channels
+        ]
 
     def export_offline(self, output: Path) -> Path:
         return self.render_wav(output).path
@@ -149,6 +162,10 @@ class FakeSession(FLSession):
             display=f"{value:g}",
             kind="continuous",
         )
+
+    @contextlib.contextmanager
+    def _write_guard(self, action: str) -> Iterator[None]:
+        yield  # one caller at a time in these tests; the real guard is tested on FLSession
 
     def snapshot(self) -> SessionState:
         return SessionState(tempo_bpm=self._tempo, channels=list(self._channels))

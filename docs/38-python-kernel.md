@@ -93,11 +93,16 @@ The server creates:
 | `<root>/work` | read and write; cwd and `HOME` | model files, `.packages` (pip target), `.tmp`, caches |
 | `<root>/renders` | read only | WAVs written by the server for `fl.render(...)` and the `render` tool |
 | `<root>/boundary-canary` | none | the probe file described below |
+| FL's `Data/Patches` | read only (since 2026-11-03) | FL's stock presets and sample packs, `fl.stock_folder`; a `Sound`'s `path` from `fl.sounds` is relative to it |
 
 `fl.render(name)` uses only the file name and writes `<root>/renders/<name>`; the `render` tool writes `<root>/renders/render-<id>.wav`.
 Every render lands directly in `renders`, never in a folder made inside it, because on Windows the kernel can read a render only through the grant it inherits from `renders` (see "Private directories" below).
 The server, not the kernel, writes there, and the kernel cannot write there, so it cannot plant a link that turns a render into a server write somewhere else.
 `fl.read_wav(path)` returns `(samples: numpy.ndarray, sample_rate: int)` and runs inside the kernel.
+`fl.render` returns the WAV's path with what played (`.span`), so model code marks bars itself; `bars=`/`start_bar=`, `solo=`/`mute=` and `stems=` choose what it records ([sdk-reference](sdk-reference.md)).
+
+FL's stock content is readable so the model can load a sample and listen to it before choosing it: `fl.sounds` searches the index on the server, and the kernel reads the file.
+It is read only, never run, and nothing else of FL's install is granted: on macOS the profile reads that one folder by its real path and only looks up its parents; on Windows see "Files" below.
 
 `%pip` and `!pip` use the engine's interpreter with `PIP_TARGET=<root>/work/.packages`, which the kernel appends to `sys.path`.
 Every other Python started in the workspace (`!python`, `python` in the `shell` tool) appends it too, through the `sitecustomize` on its `PYTHONPATH`.
@@ -116,6 +121,8 @@ The kernel runs in the AppContainer `FLMCP.Kernel` with one capability, `interne
   A box grants those at provisioning (see "Box contract"); on a user's own machine they sit in folders the user owns (uvx's environment in `%LOCALAPPDATA%\uv\cache`, uv's managed Pythons in `%APPDATA%\uv\python`), so the launcher checks the ACL of every file and folder in the two, once per server before the first kernel starts, and where any denies the container it grants the SID read and execute on the folder (inherited by new files) and on every file below it as the file's own entry (links out of the runtime are not followed).
   The file-level entry is needed because uv installs by hard link and some of its files do not inherit their folder's ACL, and a hard-linked file has one ACL for all its paths, so a permission change under another path recomputes inherited entries away (#289, 2026-11-02: the folder granted the container, pydantic_core's DLL did not, and every `run` failed with "DLL load failed ... Access is denied").
   Until 2026-10-26 it did not, and `run` failed on every public Windows install with `kernel_unavailable` ("the kernel exited with code 106", "No pyvenv.cfg file"): the venv's redirector could not read its own `pyvenv.cfg`.
+  FL's stock content (`Data/Patches`) is read only: under `Program Files` every AppContainer already reads it through `ALL APPLICATION PACKAGES` (which also lets the kernel read, not change, the rest of FL's install there, as before 2026-11-03), and an install elsewhere gets one `(OI)(CI)RX` grant on that folder (the read and list access `Program Files` gives it) if this user may grant it; if not, the kernel starts without it and only reading a sample from `run` is refused.
+  Box run 2026-11-03: `Data\Patches` carried `ALL APPLICATION PACKAGES:(I)(RX)`; inside `run` the kernel read Packs samples, and writing into the folder, listing the user's Documents and listing `C:\FLMCP` were all refused with `PermissionError`.
   Everything else, including the hosting harness's own directories, other users' profiles, and the session spool, is denied by default.
 - Network: `internetClient` allows outbound internet, so pip works.
   Without `privateNetworkClientServer` the VPC is unreachable, and AppContainers get no loopback, so the FL control broker and Bridge ports are unreachable too.
@@ -161,6 +168,7 @@ The profile denies everything by default, like an AppContainer, and then allows:
 | --- | --- |
 | read and write | `<root>/work` |
 | read | `<root>/renders` |
+| read | FL's stock content, `FL Studio.app/Contents/Resources/FL/Data/Patches` (its real path; its parents only looked up, the rest of the bundle denied, nothing in it runnable) |
 | read and run | the engine's interpreter: what it reports as `sys.executable`, `sys.prefix`, `sys.base_prefix` and its `-I` `sys.path` (uvx's environment and uv's managed Python, a venv, or an editable checkout), with every symlink on the way |
 | read and run | the system's software: `/System`, `/usr`, `/bin`, `/sbin`, `/Library/Frameworks`, `/opt/homebrew`, the selected developer tools (Xcode or the Command Line Tools), `/etc`, time zones |
 | outbound network | the internet, so pip works |

@@ -107,24 +107,29 @@ class RenderSpan(BaseModel):
 
     ``source`` is what FL plays in its current loop mode: the playlist
     (``"song"``) or the selected pattern (``"pattern"``, numbered by
-    ``pattern``). ``beats`` is that live length and ``tempo_bpm`` FL's live
-    tempo. ``seconds`` is the time played; the capture adds a short decay
-    tail. The tempo is the one at render time, so a song that
-    automates its tempo is captured at that tempo's length.
+    ``pattern``). The render played ``beats`` beats from bar ``start_bar``
+    (four beats a bar) at ``tempo_bpm``, FL's live tempo. ``seconds`` is the
+    time played; the capture adds a 0.5 s tail after it. The tempo is the one
+    at render time, so a song that automates its tempo is captured at that
+    tempo's length.
     """
 
     source: Literal["song", "pattern"]
     pattern: int | None = None
+    start_bar: int = Field(default=1, ge=1)
     beats: float = Field(gt=0)
     tempo_bpm: float = Field(gt=0)
     seconds: float = Field(gt=0)
 
 
 class RenderReceipt(BaseModel):
-    """What render_wav confirmed: the verified Bridge capture and the live span it recorded."""
+    """What render_wav confirmed: the verified Bridge capture, the live span it recorded,
+    and the channels soloed or muted for it."""
 
     path: Path
     span: RenderSpan
+    solo: list[int] = Field(default_factory=list)
+    mute: list[int] = Field(default_factory=list)
 
 
 class WriteResult(BaseModel):
@@ -532,6 +537,7 @@ class MixerTrack(BaseModel):
     volume: float = 0.8
     pan: float = 0.0
     muted: bool = False
+    solo: bool = False
 
 
 class SessionState(BaseModel):
@@ -573,6 +579,7 @@ class SessionState(BaseModel):
                     volume=float(t["vol"]),
                     pan=float(t["pan"]),
                     muted=bool(t["muted"]),
+                    solo=bool(t.get("solo", False)),
                 )
                 for t in snap["mixer"]
             ],

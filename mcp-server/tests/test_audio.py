@@ -1,6 +1,6 @@
 """The render check's loudness: render_wav refuses a recording at or under -60 LUFS as
 silence, so this meter must read BS.1770 levels, refuse a truncated file, and stay small
-in memory for a long song."""
+in memory for a long song. And read_wav, the samples model code measures."""
 
 from __future__ import annotations
 
@@ -11,7 +11,7 @@ import wave
 import numpy as np
 import pytest
 
-from fl_mcp.audio import integrated_lufs
+from fl_mcp.audio import integrated_lufs, read_wav
 
 
 def _write(path, samples, sample_rate):
@@ -91,3 +91,37 @@ def test_loudness_memory_does_not_grow_with_render_length(tmp_path):
 
     assert float(lufs) > -30
     assert int(growth_mib) < 64
+
+
+def test_read_wav_reads_fls_stock_samples_ogg_vorbis_inside_a_wav(tmp_path):
+    """FL 2026's Packs samples are Vorbis in a WAV (format 0x674F, the data chunk an Ogg
+    stream): the stdlib, scipy and libsndfile refused them on a box, so the model could not
+    listen to a sample before choosing it. read_wav unwraps the Ogg stream."""
+    import io
+
+    import soundfile
+
+    rate = 44100
+    tone = 0.5 * np.sin(2 * np.pi * 440 * np.arange(rate) / rate)
+    ogg = io.BytesIO()
+    soundfile.write(ogg, np.stack([tone, tone], axis=1), rate, format="OGG", subtype="VORBIS")
+    stream = ogg.getvalue()
+    fmt = (0x674F).to_bytes(2, "little") + (2).to_bytes(2, "little") + rate.to_bytes(4, "little") + bytes(18)
+    body = b"WAVE" + b"fmt " + len(fmt).to_bytes(4, "little") + fmt + b"data" + len(stream).to_bytes(4, "little") + stream
+    path = tmp_path / "Kick.wav"
+    path.write_bytes(b"RIFF" + len(body).to_bytes(4, "little") + body)
+
+    samples, got_rate = read_wav(path)
+
+    assert got_rate == rate and samples.shape[1] == 2
+    assert abs(len(samples) - rate) < 2048
+    peak = np.abs(np.fft.rfft(samples[:, 0])).argmax() * rate / len(samples)
+    assert abs(peak - 440) < 5
+
+
+def test_read_wav_still_refuses_what_is_not_audio(tmp_path):
+    path = tmp_path / "notes.wav"
+    path.write_bytes(b"RIFF\x10\x00\x00\x00WAVEjunk\x04\x00\x00\x00abcd")
+
+    with pytest.raises(wave.Error, match="fmt chunk and/or data chunk missing"):  # the stdlib's own error
+        read_wav(path)

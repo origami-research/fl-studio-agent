@@ -24,7 +24,13 @@ from fl_mcp import errors, flp
 from fl_mcp.schemas import CHECK_MAX_BARS, Channel, ChannelCheck, CheckResult, MixerTrack, Note, SessionState
 
 from . import controls
-from .controls import FL_LOOP_MODE_PATTERN, FL_LOOP_MODE_SONG, FL_SONGLENGTH_ABSTICKS, FL_STEPS_PER_BEAT
+from .controls import (
+    BEATS_PER_BAR,
+    FL_LOOP_MODE_PATTERN,
+    FL_LOOP_MODE_SONG,
+    FL_SONGLENGTH_ABSTICKS,
+    FL_STEPS_PER_BEAT,
+)
 
 if TYPE_CHECKING:
     from .facade import FLSession
@@ -33,8 +39,6 @@ if TYPE_CHECKING:
 MASTER = 0
 # getTrackPeaks mode: the louder of left and right (IL API stubs, midi.PEAK_LR).
 PEAK_LR = 2
-# The template is 4/4 and the note API speaks beats, so a bar is four beats.
-BEATS_PER_BAR = 4
 # At or below -60 dBFS a track is silent: the threshold render uses for a silent mix.
 SILENCE_DBFS = -60.0
 # Pause between meter sweeps. FL's meters fall back slowly enough that a hit

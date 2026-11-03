@@ -25,10 +25,10 @@ import numpy as np
 import pytest
 from flpkit import effects_at
 from sdk_fakes import DEFAULT_CHANNELS, FakeSession
-from session_fakes import make_session
+from session_fakes import RENDER_SPAN, make_session
 
 from fl_mcp import errors, sdk, theory
-from fl_mcp.schemas import AutomationPoint, ChannelLevels, Note, Target, WriteResult
+from fl_mcp.schemas import AutomationPoint, ChannelLevels, MixerTrack, Note, SessionState, Target, WriteResult
 from fl_mcp.sdk import ChannelNotFound, connect
 from fl_mcp.session.link import TRANSIENT_RETRY_DELAYS
 
@@ -334,6 +334,54 @@ def test_render_returns_the_confirmed_wav_path(fl, tmp_path):
 
     assert fl.render(output) == output
     assert output.is_file()
+
+
+def test_a_render_is_its_wav_path_and_says_what_played(fl, fake_session, tmp_path):
+    """Model code reads the WAV and marks bars itself: the render is a Path (read_wav, open,
+    soundfile take it) carrying the span FL played and the channels it heard."""
+    render = fl.render(tmp_path / "bass.wav", bars=2, start_bar=3, solo="Bass", mute=["Kick", 2])
+
+    assert isinstance(render, Path) and render.name == "bass.wav"
+    assert render.span.start_bar == 3 and render.span.tempo_bpm == RENDER_SPAN.tempo_bpm
+    assert (render.solo, render.mute) == ((1,), (0, 2))
+    assert fake_session.renders[-1] == {
+        "output": tmp_path / "bass.wav", "start_bar": 3, "bars": 2, "solo": (1,), "mute": (0, 2),
+    }
+    assert repr(render).startswith(f"Render({str(tmp_path / 'bass.wav')!r}, span=RenderSpan(")
+
+
+def test_stems_are_one_render_per_channel_and_pick_their_own_channels(fl, tmp_path):
+    stems = fl.render(tmp_path / "take.wav", stems="channels", bars=1)
+
+    assert [(s.name, s.solo) for s in stems] == [("take-0.wav", (0,)), ("take-1.wav", (1,)), ("take-2.wav", (2,))]
+    with pytest.raises(errors.ToolError, match="leave out solo and mute"):
+        fl.render(tmp_path / "take.wav", stems="channels", solo=["Bass"])
+
+
+def test_the_scene_mixer_and_tempo_are_plain_objects_in_run(fl, fake_session):
+    """What get_scene reads, the mixer and the tempo are reachable as Python objects."""
+    fake_session.snapshot = lambda: SessionState(
+        tempo_bpm=120.0, mixer=[MixerTrack(index=0, name="Master"), MixerTrack(index=1, name="Drums", solo=True)]
+    )
+    assert [(t.name, t.solo) for t in fl.mixer] == [("Master", False), ("Drums", True)]
+    with pytest.raises(errors.ToolError, match="cannot be read in this session"):  # no song, as get_scene
+        fl.scene()
+    with pytest.raises(errors.ToolError, match='detail must be "summary" or "notes"'):
+        fl.scene(detail="all")
+
+
+@pytest.mark.parametrize("kwargs", [{"bars": True}, {"bars": 2.5}, {"start_bar": "3"}, {"start_bar": 0}, {"stems": "tracks"}])
+def test_render_arguments_are_checked_in_the_kernel_before_any_play(fl, fake_session, tmp_path, kwargs):
+    """The wire's codec would coerce True or "3" to an int, so the SDK checks them strictly first."""
+    with pytest.raises(errors.ToolError) as excinfo:
+        fl.render(tmp_path / "x.wav", **kwargs)
+    assert excinfo.value.category == "invalid_argument"
+    assert fake_session.renders == []
+
+
+def test_a_solo_channel_that_does_not_exist_lists_the_real_ones(fl, tmp_path):
+    with pytest.raises(sdk.ChannelNotFound, match="Kick"):
+        fl.render(tmp_path / "x.wav", solo=["Tuba"])
 
 
 def test_save_sends_the_project_save_operation(fl, control):

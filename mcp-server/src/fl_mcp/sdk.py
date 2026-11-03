@@ -15,13 +15,14 @@ from __future__ import annotations
 from collections.abc import Sequence
 from contextlib import AbstractContextManager
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Literal
 
 import numpy as np
 from pydantic import BaseModel, Field, TypeAdapter, ValidationError, model_validator
 
 from fl_mcp import errors
 from fl_mcp.audio import read_wav
+from fl_mcp.contract import SceneNotesResult, SceneSummary
 
 from .flp import Effect
 from .schemas import (
@@ -34,9 +35,12 @@ from .schemas import (
     ChannelSound,
     CheckResult,
     MixerSend,
+    MixerTrack,
     Note,
     NoteWriteMode,
     PluginParam,
+    RenderReceipt,
+    RenderSpan,
     Sound,
     SoundKind,
     Target,
@@ -109,6 +113,12 @@ class _SoundsArgs(BaseModel):
     limit: Annotated[int, Field(strict=True, ge=1, le=SEARCH_LIMIT_MAX)] = 20
 
 
+class _RenderArgs(BaseModel):
+    bars: Annotated[int, Field(strict=True, ge=1)] | None = None
+    start_bar: Annotated[int, Field(strict=True, ge=1)] = 1
+    stems: Literal["channels", "mixer"] | None = None
+
+
 class _LoadArgs(BaseModel):
     """A stock sound to load: a Sound from fl.sounds() of the right kind, or its path."""
 
@@ -131,6 +141,29 @@ _AUTOMATION_POINTS = TypeAdapter(list[AutomationPoint])
 _WRITE_MODE = TypeAdapter(NoteWriteMode)
 
 
+class Render(type(Path())):
+    """A rendered WAV: its path (open it, read it with fl.read_wav, pass it to soundfile)
+    that also says what played: ``span`` (start_bar, beats, tempo_bpm, seconds) and the
+    channels ``solo``-ed and ``mute``-d for it."""
+
+    span: RenderSpan
+    solo: tuple[int, ...]
+    mute: tuple[int, ...]
+
+    @classmethod
+    def of(cls, receipt: RenderReceipt) -> Render:
+        render = cls(receipt.path)
+        render.span, render.solo, render.mute = receipt.span, tuple(receipt.solo), tuple(receipt.mute)
+        return render
+
+    def __repr__(self) -> str:
+        span = getattr(self, "span", None)
+        if span is None:  # a path derived from a render (.parent, / "x") is a plain path
+            return super().__repr__()
+        heard = "".join(f", {k}={v!r}" for k, v in (("solo", self.solo), ("mute", self.mute)) if v)
+        return f"Render({str(self)!r}, span={span!r}{heard})"
+
+
 class ChannelNotFound(ValueError):
     """Raised with the real channel names so the caller can pick one."""
 
@@ -151,6 +184,29 @@ class FL:
     def channels(self) -> list[Channel]:
         """The channels in FL now, each with what the project's notes say it is for (``about``)."""
         return self._session.live_channels()
+
+    @property
+    def mixer(self) -> list[MixerTrack]:
+        """FL's mixer tracks now: index, name, volume, pan, muted, solo (0 is the master)."""
+        return self._session.mixer_tracks()
+
+    @property
+    def stock_folder(self) -> Path:
+        """FL's stock presets and samples (its Data/Patches folder), which run code may
+        read but not change; a Sound's path from fl.sounds is relative to it."""
+        return self._session.stock_folder()
+
+    def scene(
+        self, detail: Literal["summary", "notes"] = "summary", channel: str | int | None = None, pattern: int | None = None
+    ) -> SceneSummary | SceneNotesResult:
+        """What the get_scene tool returns, as objects: detail="summary" for tempo, key, the
+        playlist and a digest per channel; "notes" for every note FL has (by channel and
+        pattern), optionally of one channel and one pattern."""
+        if detail == "summary":
+            return self._session.scene_summary()
+        if detail != "notes":
+            raise errors.invalid_argument("fl.scene", f'detail must be "summary" or "notes", got {detail!r}')
+        return self._session.scene_notes(None if channel is None else self.track(channel).channel, pattern)
 
     @property
     def tempo(self) -> float:
@@ -288,12 +344,45 @@ class FL:
             raise errors.invalid_argument("fl.load_preset", str(exc)) from None
         return self._session.load_sound(self.track(channel).channel, args.path, "preset")
 
-    def render(self, output: str | Path) -> Path:
-        """Play the song once and record the mix to ``output``: how to hear your edits.
+    def render(
+        self,
+        output: str | Path,
+        *,
+        bars: int | None = None,
+        start_bar: int = 1,
+        solo: Sequence[str | int] = (),
+        mute: Sequence[str | int] = (),
+        stems: Literal["channels", "mixer"] | None = None,
+    ) -> Render | list[Render]:
+        """Play the song and record the mix to ``output``: how to hear your edits.
+        It plays in real time, so it takes about as long as what it records.
 
-        It takes about the song's length in real time.
+        ``bars``/``start_bar`` record only those bars (four beats a bar; the default is
+        the whole song). ``solo`` channels are the only ones heard; ``mute`` channels
+        are silenced; channels as for fl.track. FL's channel mutes are put back after.
+        Returns a Render: the WAV's Path, so fl.read_wav(r) reads it, with r.span saying
+        what played (start_bar, beats, tempo_bpm, seconds) and r.solo, r.mute.
+
+        ``stems="channels"`` records each channel alone, ``stems="mixer"`` the channels
+        on each mixer track together, one play each (so it takes that many times as
+        long), into files named after ``output``; returns the list of Renders.
         """
-        return self._session.render_wav(Path(output)).path
+        try:
+            args = _RenderArgs(bars=bars, start_bar=start_bar, stems=stems)
+        except ValidationError as exc:
+            raise errors.invalid_argument("fl.render", str(exc)) from None
+        channels = {
+            name: tuple(self.track(c).channel for c in ([value] if isinstance(value, str | int) else value))
+            for name, value in (("solo", solo), ("mute", mute))
+        }
+        if args.stems is not None:
+            if solo or mute:
+                raise errors.invalid_argument("fl.render", "stems picks the channels itself; leave out solo and mute")
+            receipts = self._session.render_stems(Path(output), args.stems, start_bar=args.start_bar, bars=args.bars)
+            return [Render.of(r) for r in receipts]
+        return Render.of(
+            self._session.render_wav(Path(output), start_bar=args.start_bar, bars=args.bars, **channels)
+        )
 
     def export_offline(self, output: str | Path) -> Path:
         """Export the saved song with a second FL (about a minute). Licensed FL only; use render to listen."""
@@ -305,7 +394,8 @@ class FL:
         self._session.save_project()
 
     def read_wav(self, path: str | Path) -> tuple[np.ndarray, int]:
-        """Load PCM WAV samples and sample rate for NumPy processing."""
+        """A WAV's samples, float (frames, channels), and its sample rate: a render, or one of
+        FL's stock samples (fl.stock_folder / sound.path), which are Ogg Vorbis inside a WAV."""
         return read_wav(Path(path))
 
     def check(self, bars: int = 2, start_bar: int = 1) -> CheckResult:

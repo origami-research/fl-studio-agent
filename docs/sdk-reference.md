@@ -10,6 +10,7 @@ The stable public surface is deliberately small:
 - `fl.set_tempo(...)` for confirmed tempo changes.
 - `fl.check(...)` to prove in seconds which channels sound.
 - `fl.render(...)` and `fl.read_wav(...)` for render/audio workflows: the model measures and plots the samples itself.
+- `fl.scene(...)`, `fl.mixer` and `fl.stock_folder` for what FL has, as plain objects.
 - `fl.track(...).set_automation(...)` for existing FL-authored automation clips.
 - `with fl.file_edit(): ...` to batch file-lane edits into a single FL reload in development mode.
 - `fl.track(...).params(...)` and `set_param(...)` for live generator plugin parameters.
@@ -106,33 +107,66 @@ may be quantized.
 confirmed_bpm = fl.set_tempo(128.0)
 ```
 
-### `fl.render(output: str | Path) -> Path`
+### `fl.render(output, *, bars=None, start_bar=1, solo=(), mute=(), stems=None) -> Render | list[Render]`
 
 **Availability:** live session with the Master Bridge and FL audio output. Reads
 the live arrangement's length from FL (the playlist in song mode, the selected
-pattern in pattern mode, at the live tempo), plays it once from the start while
-the Bridge records the mix, and returns the verified WAV path. Nothing is saved.
+pattern in pattern mode, at the live tempo), plays it while the Bridge records
+the mix, and returns the verified WAV. Nothing is saved.
 It raises before recording if song mode has an empty playlist or the capture
 would pass ten minutes, and after recording if the WAV does not verify.
-The `render` MCP tool returns the WAV's `path`, its size in `bytes`, and the span it recorded (`RenderSpan`).
+
+It returns a `Render`: the WAV's `Path` (so `fl.read_wav`, `open` and soundfile take it) that also says what played.
+`.span` is the `RenderSpan`: `start_bar`, `beats`, `tempo_bpm` and `seconds`, so model code marks bars itself (bar `n` of the render starts `(n - start_bar) * 240 / tempo_bpm` seconds in, at four beats a bar); `.solo` and `.mute` are the channels it was rendered with.
+The WAV runs 0.5 s past `seconds`: the decay tail, or the start of the next bar for a range.
+Until 2026-11-03 it returned a plain `Path`.
+
+Since 2026-11-03 it can record part of the song or some of its channels, so the model can listen to an instrument or a section on its own, and audition a change: write a test note, render that channel solo, measure it, then write the track back (`mode="replace"`), not `fl.undo()`, because FL's undo history holds the render's mute changes (see `fl.undo`):
+
+| Argument | Effect |
+| --- | --- |
+| `bars`, `start_bar` | Record `bars` bars from `start_bar` (four beats a bar), cut at the song's end; a start past the end is refused. FL plays from that bar in absolute ticks, as `fl.check` does; notes held over from before it are not re-struck. |
+| `solo` | Only these channels are heard (names or indices, as for `fl.track`; one alone is fine). |
+| `mute` | These channels are silenced. |
+| `stems` | `"channels"`: each channel alone; `"mixer"`: the channels routed to each mixer track together. One play per stem, so it takes that many times as long, bounded at ten minutes of recording in all; files are named `<output>-<label>.wav`. Returns the list. |
+
+Solo and mute set each channel's mute in FL's channel rack explicitly and read it back, then set back exactly the channels they changed, also when the render fails; a channel FL will not set back is an error naming it.
+FL's own channel solo is not used, because un-soloing unmutes every channel and would lose the user's mutes.
+A muted channel is silent and everything else stays, so a soloed channel is heard through its whole mixer routing and effects, as in the mix.
+A silent whole-song render is refused, because it means FL's audio path is broken; a silent range, solo or stem is returned as the answer.
+
+The `render` MCP tool records the whole song as before and returns the WAV's `path`, its size in `bytes`, and the span it recorded.
 The audio stays in the file: a person or client opens it at `path`, and model code reads it with `fl.read_wav`.
-The span's tempo and beats put bars on the audio: at 4 beats a bar, bar `n` starts at `(n - 1) * 240 / tempo_bpm` seconds into the WAV.
 Until 0.1.5 the result also carried the WAV as base64, which overflowed the model's context in real clients.
 
-A render plays in real time and produces the real mix, so render once when the
+A whole-song render plays in real time and produces the real mix, so render it once when the
 pass is done; the harness listens back after you say you are done. Use
 `get_scene` to read work and `fl.check()` to prove it sounds instead.
 
 ```python
-wav = fl.render("/tmp/mix.wav")
+wav = fl.render("mix.wav")
+bass = fl.render("bass.wav", bars=4, solo="Bass")
+stems = fl.render("take.wav", stems="channels", bars=8)
 ```
 
 From the `run` tool only the file name is used: the WAV lands in the session's
 read-only renders folder and the returned path says where ([38](38-python-kernel.md)).
 
+### `fl.scene(detail="summary", channel=None, pattern=None)`, `fl.mixer`, `fl.stock_folder`
+
+Plain objects for model code, since 2026-11-03.
+`fl.scene()` is what the `get_scene` tool returns (`SceneSummary`: tempo, inferred key, the playlist and a digest per channel); `fl.scene("notes", channel=, pattern=)` is every note FL has (`SceneNotesResult`), optionally of one channel (a name or index) and one pattern.
+`fl.mixer` lists FL's mixer tracks now (`MixerTrack`: index, name, volume, pan, muted, solo; 0 is the master).
+`fl.stock_folder` is FL's `Data/Patches` folder, which run code may read but not change: a `Sound`'s `path` from `fl.sounds` is relative to it, so a sample can be loaded and listened to before it is chosen.
+
+```python
+kick = fl.sounds("808 kick", kind="sample")[0]
+samples, rate = fl.read_wav(fl.stock_folder / kick.path)
+```
+
 ### `fl.read_wav(path: str | Path) -> tuple[np.ndarray, int]`
 
-**Availability:** local file read. Loads a PCM WAV as `(samples, sample_rate)`.
+**Availability:** local file read. Loads a PCM WAV as `(samples, sample_rate)`, and FL's stock samples too: FL 2026 ships them as Ogg Vorbis inside a WAV (format tag `0x674F`), which Python's `wave`, scipy and libsndfile all refuse, so `read_wav` decodes the Ogg stream inside (since 2026-11-03).
 `samples` is a float64 NumPy array shaped `(frames, channels)`, normalized to
 roughly `[-1, 1]`; `sample_rate` is Hz.
 
@@ -144,9 +178,10 @@ Until 2026-11-03 the SDK also had `fl.analyze` (tempo, key, LUFS, true peak, spe
 import matplotlib.pyplot as plt
 import numpy as np
 
-samples, rate = fl.read_wav(fl.render("mix.wav"))
+wav = fl.render("mix.wav")
+samples, rate = fl.read_wav(wav)
 plt.specgram(samples.mean(axis=1), Fs=rate, NFFT=4096, cmap="magma")
-for start in np.arange(0, len(samples) / rate, 240 / fl.tempo):
+for start in np.arange(0, wav.span.seconds, 240 / wav.span.tempo_bpm):
     plt.axvline(start, color="white", lw=0.5)  # bar lines, 4 beats a bar
 # a figure still open when the cell ends is shown to the model
 ```
@@ -262,6 +297,7 @@ fl.load_preset(3, room).effect            # MixerEffect(mixer_track=4, slot=0, .
 
 **Availability:** live-only. Invokes FL's undo command. The session's note
 record does not follow it, so write the track again to set its notes for certain.
+FL keeps a solo or mute render's mute changes in its undo history, so an undo right after one would mute a channel again (box run 2026-11-03); since then an undo that changed a channel's mute sets it back and raises `fl_api_error` saying nothing else was undone.
 
 ## `Track`
 

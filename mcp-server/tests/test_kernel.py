@@ -45,9 +45,9 @@ class _Session(FakeSession):
         self.file_edit_log: list[str] = []
         self.file_edit_exit_failures = 0
 
-    def render_wav(self, output: Path) -> RenderReceipt:
+    def render_wav(self, output: Path, *args, **kwargs) -> RenderReceipt:
         time.sleep(self.render_seconds)
-        return super().render_wav(output)
+        return super().render_wav(output, *args, **kwargs)
 
     @contextlib.contextmanager
     def file_edit(self) -> Iterator[None]:

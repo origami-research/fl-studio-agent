@@ -23,6 +23,7 @@ from fl_mcp.kernel.windows import (
     RENDERS_GRANT,
     RUNTIME_FILE_GRANT,
     RUNTIME_GRANT,
+    STOCK_GRANT,
     WORK_GRANT,
     AppContainerLauncher,
     env_block,
@@ -39,7 +40,7 @@ def workspace(tmp_path) -> Workspace:
 
 def _launch(api, workspace):
     argv = [r"C:\FLMCP\venv\Scripts\python.exe", "-I", "-m", "fl_mcp.kernel.child"]
-    return AppContainerLauncher(api)(argv, workspace=workspace, env={"PATH": r"C:\py", "HOME": "w"})
+    return AppContainerLauncher(api, stock=())(argv, workspace=workspace, env={"PATH": r"C:\py", "HOME": "w"})
 
 
 def test_grants_define_the_boundary_and_nothing_else(workspace):
@@ -64,7 +65,7 @@ def test_a_user_install_runtime_is_granted_read_once_before_the_kernel_starts(wo
     because its own venv was unreadable inside the container, so `run` never worked on a
     user's Windows machine. The launcher grants the interpreter read and execute, once."""
     api = FakeWin32(unreadable=USER_RUNTIME)
-    launcher = AppContainerLauncher(api, runtime=USER_RUNTIME)
+    launcher = AppContainerLauncher(api, runtime=USER_RUNTIME, stock=())
     argv = ["python", "-I", "-m", "fl_mcp.kernel.child"]
     for _ in range(2):
         launcher(argv, workspace=workspace, env={})
@@ -93,7 +94,7 @@ def test_a_dll_its_folder_does_not_cover_is_granted_on_the_file_itself(workspace
     dll.write_bytes(b"MZ")
     (env / "pyvenv.cfg").write_text("home = C:/py")
     api = FakeWin32(unreadable={dll})
-    AppContainerLauncher(api, runtime=(env,))(["python"], workspace=workspace, env={})
+    AppContainerLauncher(api, runtime=(env,), stock=())(["python"], workspace=workspace, env={})
     assert dll in [c[1] for c in api.calls if c[0] == "readable"]
     names = [c[0] for c in api.calls]
     assert [c for c in api.calls if c[0] == "grant"][:2] == [
@@ -122,7 +123,7 @@ def test_the_runtime_walk_skips_linked_folders_and_files_that_vanish(workspace, 
             return super().readable(path, sid)
 
     api = Vanishing()
-    AppContainerLauncher(api, runtime=(env,))(["python"], workspace=workspace, env={})
+    AppContainerLauncher(api, runtime=(env,), stock=())(["python"], workspace=workspace, env={})
     checked = [c[1] for c in api.calls if c[0] == "readable"]
     assert outside / "secret.dll" not in checked and env / "linked" / "secret.dll" not in checked
     assert [c for c in api.calls if c[0] == "grant"][:1] == [("grant", workspace.work, SID, WORK_GRANT)]
@@ -135,7 +136,7 @@ def test_a_runtime_file_the_grant_cannot_reach_fails_the_launch_naming_it(worksp
     dll.write_bytes(b"MZ")
     api = FakeWin32(unreadable={dll}, grants_stick=False)
     with pytest.raises(OSError, match=r"x\.pyd still denies it"):
-        AppContainerLauncher(api, runtime=(env,))(["python"], workspace=workspace, env={})
+        AppContainerLauncher(api, runtime=(env,), stock=())(["python"], workspace=workspace, env={})
     assert "create_process" not in [c[0] for c in api.calls]
 
 
@@ -143,7 +144,7 @@ def test_a_provisioned_runtime_is_left_alone(workspace):
     """A box grants its venv (C:/FLMCP/venv) and Program Files is readable by every container:
     the FL user cannot rewrite those ACLs and does not need to."""
     api = FakeWin32()
-    AppContainerLauncher(api, runtime=USER_RUNTIME)(["python"], workspace=workspace, env={})
+    AppContainerLauncher(api, runtime=USER_RUNTIME, stock=())(["python"], workspace=workspace, env={})
     assert [c[1] for c in api.calls if c[0] == "readable"] == list(USER_RUNTIME)
     assert [c[1] for c in api.calls if c[0] == "grant"] == [workspace.work, workspace.renders]
 
@@ -151,8 +152,38 @@ def test_a_provisioned_runtime_is_left_alone(workspace):
 def test_a_runtime_this_user_cannot_grant_fails_the_launch_and_says_how_to_fix_it(workspace):
     api = FakeWin32(fail="grant", unreadable=USER_RUNTIME)
     with pytest.raises(OSError, match=r"not readable by its AppContainer.*Box contract"):
-        AppContainerLauncher(api, runtime=USER_RUNTIME)(["python"], workspace=workspace, env={})
+        AppContainerLauncher(api, runtime=USER_RUNTIME, stock=())(["python"], workspace=workspace, env={})
     assert "create_process" not in [c[0] for c in api.calls]
+
+
+STOCK = (Path(r"D:\FL Studio 2026\Data\Patches"),)
+
+
+def test_fls_stock_content_is_granted_read_only_when_the_container_cannot_read_it(workspace):
+    """The kernel reads stock samples to choose one (docs/38). Under Program Files every
+    container reads it already; an install elsewhere gets one read-only grant, checked once."""
+    api = FakeWin32(unreadable=STOCK)
+    launcher = AppContainerLauncher(api, runtime=(), stock=STOCK)
+    for _ in range(2):
+        launcher(["python"], workspace=workspace, env={})
+    assert [c for c in api.calls if c[0] == "grant" and c[1] == STOCK[0]] == [("grant", STOCK[0], SID, STOCK_GRANT)]
+    assert [c for c in api.calls if c[0] == "readable"] == [("readable", STOCK[0], SID)]
+    assert STOCK_GRANT == "(OI)(CI)RX"  # read, never write; what readable() checks for
+
+
+def test_stock_content_this_user_cannot_grant_leaves_the_kernel_running_without_it(workspace):
+    """Stock content is optional, unlike the runtime: fl.sounds still searches it server-side."""
+
+    class NotOurs(FakeWin32):
+        def grant(self, path, sid, rights, *, recursive=False):
+            super().grant(path, sid, rights, recursive=recursive)
+            if path == STOCK[0]:
+                raise OSError("Access is denied.")
+
+    api = NotOurs(unreadable=STOCK)
+    AppContainerLauncher(api, runtime=(), stock=STOCK)(["python"], workspace=workspace, env={})
+    assert [c[1] for c in api.calls if c[0] == "grant"] == [STOCK[0], workspace.work, workspace.renders]
+    assert "create_process" in [c[0] for c in api.calls]
 
 
 def test_runtime_dirs_are_this_interpreters_venv_and_base():
@@ -210,7 +241,7 @@ def test_kill_terminates_the_whole_job_and_reaping_closes_the_handles(workspace)
 def test_release_withdraws_the_session_grants(workspace):
     """All sessions share one SID, so a finished workspace must stop being reachable."""
     api = FakeWin32()
-    AppContainerLauncher(api).release(workspace)
+    AppContainerLauncher(api, stock=()).release(workspace)
     assert [c for c in api.calls if c[0] == "revoke"] == [
         ("revoke", workspace.work, SID),
         ("revoke", workspace.renders, SID),
@@ -238,7 +269,7 @@ def test_a_workspace_is_granted_once_and_a_release_is_final(workspace):
     once per call: regranting on each launch would walk .packages every time. A launch
     racing shutdown must not grant a finished session again (review, 2026-10-22)."""
     api = FakeWin32()
-    launcher = AppContainerLauncher(api)
+    launcher = AppContainerLauncher(api, stock=())
     argv = ["python", "-I", "-m", "fl_mcp.workspace.op"]
     for _ in range(3):
         launcher(argv, workspace=workspace, env={})
@@ -252,7 +283,7 @@ def test_a_workspace_is_granted_once_and_a_release_is_final(workspace):
 def test_release_attempts_both_revokes_when_the_first_fails(workspace):
     api = FakeWin32(fail="revoke")
     with pytest.raises(OSError):
-        AppContainerLauncher(api).release(workspace)
+        AppContainerLauncher(api, stock=()).release(workspace)
     assert [c[1] for c in api.calls if c[0] == "revoke"] == [workspace.work, workspace.renders]
 
 

@@ -397,6 +397,23 @@ def test_sounds_without_fls_stock_folder_says_so(tmp_path, monkeypatch):
     assert raised.value.category == "unknown_target"
 
 
+def test_a_sound_path_is_relative_to_the_stock_folder_the_kernel_reads(patches):
+    """fl.sounds searches here; run code then reads the file itself, read-only (docs/38)."""
+    session, _ = make_session()
+
+    sample = session.sounds("kick")[0]
+    assert (session.stock_folder() / sample.path).is_file()
+    assert session.stock_folder() == patches.resolve()
+
+
+def test_the_stock_folder_without_fl_says_so(tmp_path, monkeypatch):
+    monkeypatch.setattr(facade_mod, "fl_patches_dir", lambda: tmp_path / "missing")
+    session, _ = make_session()
+
+    with pytest.raises(errors.ToolError, match="stock sounds were not found"):
+        session.stock_folder()
+
+
 # -- the SDK surface ------------------------------------------------------------------
 
 

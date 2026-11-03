@@ -13,7 +13,17 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-from session_fakes import HELLO, RENDER_SPAN, FakeControl, FakePlatform, FakeSpool, arrangement, make_session
+from session_fakes import (
+    HELLO,
+    RENDER_SPAN,
+    TEMPLATE_CHANNELS,
+    FakeControl,
+    FakePlatform,
+    FakeSpool,
+    arrangement,
+    make_session,
+    snapshot_answer,
+)
 
 from fl_mcp import errors, flp
 from fl_mcp.schemas import AutomationPoint, ControlResponse, PluginParamModel, PluginParamSpec, RenderReceipt
@@ -107,7 +117,7 @@ def test_render_waits_for_an_in_flight_write_then_proceeds(monkeypatch, tmp_path
     monkeypatch.setattr(
         controls,
         "render_wav",
-        lambda _session, output: entered_render.set() or RenderReceipt(path=output, span=RENDER_SPAN),
+        lambda _session, output, **options: entered_render.set() or RenderReceipt(path=output, span=RENDER_SPAN),
     )
 
     def render() -> None:
@@ -546,12 +556,62 @@ def test_automation_requires_a_project_file():
 # --- undo (addendum A11) ------------------------------------------------------
 
 
+def _rack(**handlers):
+    """FL answering an undo: its channels' mutes read before and after it."""
+    return FakeControl(hello=HELLO, handlers={"state.snapshot": lambda args: snapshot_answer(TEMPLATE_CHANNELS), **handlers})
+
+
 def test_undo_sends_its_op_and_returns_none():
-    control = FakeControl(hello=HELLO, handlers={"general.undo": lambda args: 0})
+    control = _rack(**{"general.undo": lambda args: 0})
     session, _ = make_session(control=control)
 
     assert session.undo() is None
-    assert control.calls == [("general.undo", [])]
+    assert [op for op, _ in control.calls if op != "ping"] == ["state.snapshot", "general.undo", "state.snapshot"]
+
+
+def test_an_undo_that_reached_a_renders_mute_change_sets_it_back_and_says_so():
+    """Box run 2026-11-03: FL keeps a solo render's mute changes in its undo history, so an
+    undo right after one muted a channel again and the next render lost it."""
+    muted = {"1": False}
+    answer = snapshot_answer(TEMPLATE_CHANNELS)
+
+    def snapshot(args):
+        return {**answer, "channels": [{**c, "muted": c["idx"] == 1 and muted["1"]} for c in answer["channels"]]}
+
+    def mute(args):
+        muted["1"] = bool(args[1])
+
+    control = _rack(**{
+        "state.snapshot": snapshot,
+        "general.undo": lambda args: muted.update({"1": True}),
+        "channels.muteChannel": mute,
+        "channels.isChannelMuted": lambda args: muted["1"] if args[0] == 1 else False,
+    })
+    session, _ = make_session(control=control)
+
+    with pytest.raises(errors.ToolError, match="mute change from a solo or mute render") as excinfo:
+        session.undo()
+
+    assert muted["1"] is False
+    assert ("channels.muteChannel", [1, 0]) in control.calls
+    assert "write the track again" in excinfo.value.fix
+
+
+def test_an_undo_that_changed_the_channels_or_could_not_be_read_stands():
+    """The guard compares like with like: a channel added or renamed by the undo, or a read
+    that failed, leaves the undo as done rather than setting an unrelated channel's mute."""
+    reads = iter([snapshot_answer(TEMPLATE_CHANNELS), snapshot_answer((*TEMPLATE_CHANNELS, "New"))])
+    control = _rack(**{"state.snapshot": lambda args: next(reads), "general.undo": lambda args: 0})
+    session, _ = make_session(control=control)
+
+    assert session.undo() is None
+    assert "channels.muteChannel" not in [op for op, _ in control.calls]
+
+    failing = _rack(**{"state.snapshot": lambda args: ControlResponse(id=1, ok=False, err="timed out"),
+                       "general.undo": lambda args: 0})
+    session, _ = make_session(control=failing)
+    assert session.undo() is None
+    assert "general.undo" in [op for op, _ in failing.calls]
 
 
 def test_undo_raises_without_a_control_plane():
@@ -564,7 +624,7 @@ def test_undo_raises_without_a_control_plane():
 def test_a_persistent_unsafe_refusal_is_retryable_operation_unsafe():
     """Addendum A6: unsafe-at-current-time means busy, not broken. The link
     retried it to exhaustion; what surfaces is one plain, retryable sentence."""
-    control = FakeControl(hello=HELLO, handlers={"general.undo": lambda args: UNSAFE})
+    control = _rack(**{"general.undo": lambda args: UNSAFE})
     session, _ = make_session(control=control)
 
     with pytest.raises(errors.ToolError) as excinfo:
@@ -576,7 +636,7 @@ def test_a_persistent_unsafe_refusal_is_retryable_operation_unsafe():
 
 def test_transport_other_refusals_surface_fl_detail():
     boom = ControlResponse(id=1, ok=False, err="no such op")
-    control = FakeControl(hello=HELLO, handlers={"general.undo": lambda args: boom})
+    control = _rack(**{"general.undo": lambda args: boom})
     session, _ = make_session(control=control)
 
     with pytest.raises(errors.ToolError) as excinfo:

@@ -44,8 +44,6 @@ from fl_mcp.contract import (
     ReadFileResult,
     RenderResult,
     RunResult,
-    SceneNotesResult,
-    SceneSummary,
     ShellResult,
     ToolErrorResult,
     WriteFileResult,
@@ -60,7 +58,7 @@ from fl_mcp.platform import PlatformUnsupportedError, platform_for
 from fl_mcp.workspace import ops
 from fl_mcp.workspace.runner import FILE_OP_TIMEOUT_SECONDS, SHELL_GRACE_SECONDS, OpTimeout, WorkspaceRunner
 
-from . import scene, sdk
+from . import sdk
 from .schemas import RenderReceipt
 from .session import create_session
 
@@ -203,7 +201,8 @@ def run(code: str, ctx: Context) -> RunResult:
       index, name): FL switches the plugin to it and renames the channel to the
       preset, replacing its sound. Sampler channels have no presets.
     - fl.sounds("808 kick", kind="sample") -> [Sound(kind, name, plugin, path)]:
-      the stock presets and samples FL ships, searched by words.
+      the stock presets and samples FL ships, searched by words; path is
+      relative to fl.stock_folder, which you can read (not write).
       fl.load_sample("808 Clap", sound) -> ChannelSound(channel, kind, sound,
       name, plugin, effect): that sampler channel now plays the sample, renamed
       after it. fl.load_preset(channel, sound): an instrument preset puts its
@@ -213,12 +212,18 @@ def run(code: str, ctx: Context) -> RunResult:
     - fl.check(bars=2, start_bar=1) -> CheckResult: plays those bars and reads
       FL's mixer meters; per channel whether it sounded, its peak dBFS, and why
       it was silent (muted, no notes in those bars, ...); .summary is one line.
-    - fl.render("mix.wav") -> Path of the WAV. Only the file name is used: it
-      lands in the session's renders folder, which you can read but not write.
-      A render plays the whole song in real time (FL's loop mode decides: the
-      playlist in song mode, only the selected pattern in pattern mode).
+    - fl.render("mix.wav", bars=None, start_bar=1, solo=[], mute=[]) -> the
+      WAV's Path, with .span (start_bar, beats, tempo_bpm, seconds). Only the
+      file name is used: it lands in the renders folder (read, not write). It
+      plays in real time (FL's loop mode decides: the playlist in song mode,
+      the selected pattern in pattern mode); bars= records just those bars,
+      solo/mute (channels) only those heard, FL's mutes put back after (FL's
+      undo history keeps them: write a track back rather than fl.undo()).
+      stems="channels" or "mixer" -> a list, one play per stem.
       fl.read_wav(path) -> (samples: numpy.ndarray (frames, channels),
-      sample_rate: int).
+      sample_rate: int), for a render or a stock sample.
+    - fl.scene() / fl.scene("notes", channel=, pattern=) -> what get_scene
+      returns, as objects; fl.mixer -> mixer tracks (volume, pan, mute, solo).
     - During a match FL is never reopened: fl.save() is not needed (and a
       trial FL cannot save), and Track.set_automation, fl.add_effect and
       fl.file_edit() are unavailable because they rewrite the saved song.
@@ -226,13 +231,17 @@ def run(code: str, ctx: Context) -> RunResult:
       theory.drums("x...x...x...x...", key="C1", step_beats=0.25) -> a
       ready-to-write [Note] step grid ('x' = hit, '.' = rest).
 
-    Listening is yours to build: read a render and compute or plot whatever
-    you want (numpy, scipy, matplotlib and soundfile are installed; %pip
-    install anything else). A spectrogram with bar lines (4 beats a bar):
+    Listening is yours to build: render, then compute or plot whatever you
+    want (numpy, scipy, matplotlib and soundfile are installed; %pip install
+    anything else). A spectrogram with bar lines (4 beats a bar):
       import matplotlib.pyplot as plt, numpy as np
-      x, sr = fl.read_wav(fl.render("mix.wav"))
+      wav = fl.render("mix.wav"); x, sr = fl.read_wav(wav)
       plt.specgram(x.mean(axis=1), Fs=sr, NFFT=4096, cmap="magma")
-      for t in np.arange(0, len(x) / sr, 240 / fl.tempo): plt.axvline(t, c="w", lw=.5)
+      for t in np.arange(0, wav.span.seconds, 240 / wav.span.tempo_bpm): plt.axvline(t, c="w", lw=.5)
+    The bass alone against the kick, over bars 1-4:
+      spec = lambda w: abs(np.fft.rfft(fl.read_wav(w)[0].mean(axis=1)))
+      bass, kick = (spec(fl.render(f"{c}.wav", bars=4, solo=[c])) for c in ("Bass", "Kick"))
+      plt.figure(); plt.loglog(bass, label="bass"); plt.loglog(kick, label="kick"); plt.legend()
     """
     # Engineering notes (not part of the model-facing description above): the
     # kernel is a separate process (fl_mcp.kernel, docs/38) and the OS, not
@@ -328,31 +337,9 @@ def get_scene(
             )
         )
     session = ctx.request_context.lifespan_context["session"]
-    project = session.project
-    if project is None or not project.is_file():
-        log.warning("get_scene needs the agent project file; none is configured")
-        return _tool_error_response(
-            ToolErrorResult(
-                error="invalid_argument",
-                message="The song's layout cannot be read in this session.",
-                fix='Read a track\'s notes with run: fl.track("Bass").notes().',
-                retryable=False,
-            )
-        )
-    rows = scene.rows_from_notes(session.all_notes())
     if detail == "notes":
-        return GetSceneResult.from_notes(
-            SceneNotesResult.model_validate({"notes": scene.notes_detail(rows, channel, pattern)})
-        )
-    channels = session.channel_names()
-    names = {c.index: c.name for c in channels}
-    about = {c.index: c.about for c in channels if c.about}
-    notes = session.project_guide(list(names.values())).notes
-    return GetSceneResult.from_summary(
-        SceneSummary.model_validate(
-            scene.summarize(project, rows, names, tempo=session.tempo(), about=about, project_notes=notes)
-        )
-    )
+        return GetSceneResult.from_notes(session.scene_notes(channel, pattern))
+    return GetSceneResult.from_summary(session.scene_summary())
 
 
 # -- the workspace tools (docs/39) ----------------------------------------------------

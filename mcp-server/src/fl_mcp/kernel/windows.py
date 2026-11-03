@@ -17,6 +17,7 @@ calls, injected so the orchestration is tested off Windows.
 from __future__ import annotations
 
 import ctypes
+import logging
 import os
 import subprocess
 import sys
@@ -26,10 +27,12 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import IO, Any, ClassVar, Protocol
 
-from fl_mcp.kernel.launch import KERNEL_JOB, JobLimits, Workspace
+from fl_mcp.kernel.launch import KERNEL_JOB, JobLimits, Workspace, stock_dirs
 
 if sys.platform == "win32":
     import msvcrt
+
+log = logging.getLogger(__name__)
 
 # The AppContainer profile name. Its SID is derived from this name alone, so
 # the box computes the same SID with `fl-mcp-kernel-sid`.
@@ -48,6 +51,10 @@ RUNTIME_GRANT = "(OI)(CI)RX"
 # reach it or is recomputed away by an ACL change under another of its paths (#289).
 # An explicit entry on the file itself survives both.
 RUNTIME_FILE_GRANT = "RX"
+# FL's stock presets and samples, never written. Program Files usually grants every
+# AppContainer this already (ALL APPLICATION PACKAGES), so this is for an install
+# elsewhere, and only when this user may grant it.
+STOCK_GRANT = "(OI)(CI)RX"  # what readable() checks for, as Program Files grants it
 # Every AppContainer token carries this group: Program Files grants it read and execute.
 ALL_APPLICATION_PACKAGES_SID = "S-1-15-2-1"
 
@@ -213,6 +220,9 @@ class AppContainerLauncher:
     # AppContainer can read, so the first launch grants what is not readable yet.
     runtime: tuple[Path, ...] = field(default_factory=runtime_dirs)
     _runtime_ready: set[Path] = field(default_factory=set, compare=False, repr=False)
+    # FL's stock content (Data/Patches), which the kernel may read, never change.
+    stock: tuple[Path, ...] = field(default_factory=stock_dirs)
+    _stock_ready: set[Path] = field(default_factory=set, compare=False, repr=False)
 
     def __call__(
         self,
@@ -227,6 +237,7 @@ class AppContainerLauncher:
             if workspace.root in self._released:
                 raise OSError(f"{workspace.root}: its session is over and its grants were withdrawn")
             self._grant_runtime(sid)
+            self._grant_stock(sid)
             if workspace.root not in self._granted:
                 self.api.grant(workspace.work, sid, WORK_GRANT)
                 self.api.grant(workspace.renders, sid, RENDERS_GRANT)
@@ -300,6 +311,20 @@ class AppContainerLauncher:
                         "'Box contract' says"
                     )
             self._runtime_ready.add(directory)
+
+    def _grant_stock(self, sid: str) -> None:
+        """Let the container read FL's stock content, once per server. Optional: when it
+        is not readable and this user cannot grant it, the kernel starts without it and
+        fl.sounds still searches it; only reading a sample from run is refused."""
+        for folder in self.stock:
+            if folder in self._stock_ready:
+                continue
+            self._stock_ready.add(folder)
+            try:
+                if not self.api.readable(folder, sid):
+                    self.api.grant(folder, sid, STOCK_GRANT)
+            except (OSError, subprocess.SubprocessError) as exc:
+                log.warning("FL's stock content %s is not readable by the kernel and could not be granted: %s", folder, exc)
 
     def _unreadable(self, directory: Path, sid: str) -> list[Path]:
         """The folder and everything below it whose own ACL does not let the container read it.

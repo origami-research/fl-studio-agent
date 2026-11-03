@@ -6,10 +6,18 @@ import shutil
 from types import SimpleNamespace
 
 import pytest
-from session_fakes import FIVE_CHANNEL_PROJECT, HELLO, FakeControl, FakeSpool, arrangement, make_session
+from session_fakes import (
+    FIVE_CHANNEL_PROJECT,
+    HELLO,
+    FakeControl,
+    FakeSpool,
+    arrangement,
+    make_session,
+    snapshot_answer,
+)
 
 from fl_mcp import errors
-from fl_mcp.schemas import SpoolResponse
+from fl_mcp.schemas import ControlResponse, SpoolResponse
 from fl_mcp.session import FLSession, controls
 
 
@@ -138,3 +146,202 @@ def test_the_saved_template_never_sets_the_length_and_nothing_is_saved(monkeypat
     assert span.seconds == pytest.approx(64 * 60 / 130)
     assert "ctl.save" not in [op for op, _ in control.calls]
     assert project.read_bytes() == before
+
+
+# -- bars, solo, mute, stems (the model's own listening, docs/38) ------------------------
+
+
+def _set_pos(control: FakeControl) -> list[list]:
+    return [args for op, args in control.calls if op == "transport.setSongPos"]
+
+
+def test_a_bar_range_plays_from_its_bar_and_records_only_its_length(monkeypatch, tmp_path):
+    """16 bars at 120 BPM; bars 9-10 start at absolute tick 8 bars x 4 beats x 96 ppq."""
+    session, control, transport = _rig(monkeypatch, tmp_path, arrangement(loop_mode=1, tempo_bpm=120.0, song_last_tick=64 * 96 - 1))
+
+    receipt = session.render_wav(tmp_path / "mix.wav", start_bar=9, bars=2)
+
+    assert (receipt.span.start_bar, receipt.span.beats) == (9, 8.0)
+    assert receipt.span.seconds == pytest.approx(4.0)
+    assert _captured_seconds(transport) == pytest.approx([4.0 + controls.RENDER_TAIL_SECONDS])
+    assert _set_pos(control) == [[8 * 4 * 96, controls.FL_SONGLENGTH_ABSTICKS]]
+
+
+def test_the_whole_song_still_starts_where_every_render_has(monkeypatch, tmp_path):
+    session, control, _ = _rig(monkeypatch, tmp_path, arrangement(loop_mode=1, song_last_tick=64 * 96 - 1))
+
+    session.render_wav(tmp_path / "mix.wav")
+
+    assert _set_pos(control) == [[0]]
+
+
+def test_a_range_past_the_end_is_cut_there_and_a_start_past_it_is_refused(monkeypatch, tmp_path):
+    session, _, transport = _rig(monkeypatch, tmp_path, arrangement(tempo_bpm=120.0, steps=64))  # a 4-bar pattern
+
+    assert session.render_wav(tmp_path / "mix.wav", start_bar=3, bars=8).span.beats == 8.0
+    with pytest.raises(errors.ToolError, match="pattern 1 is 4 bars long; start at bar 1 to 4") as excinfo:
+        session.render_wav(tmp_path / "mix.wav", start_bar=5)
+    assert excinfo.value.category == "invalid_argument"
+    assert len(_captured_seconds(transport)) == 1
+
+
+@pytest.mark.parametrize(("start_bar", "bars"), [(0, None), (1, 0), (True, None), (1, 2.5)])
+def test_bars_and_start_bar_are_whole_bars(monkeypatch, tmp_path, start_bar, bars):
+    session, _, transport = _rig(monkeypatch, tmp_path, arrangement())
+
+    with pytest.raises(errors.ToolError) as excinfo:
+        session.render_wav(tmp_path / "mix.wav", start_bar=start_bar, bars=bars)
+
+    assert excinfo.value.category == "invalid_argument"
+    assert transport.sent == []
+
+
+def test_a_long_song_can_still_render_a_few_of_its_bars(monkeypatch, tmp_path):
+    """The ten-minute cap is on what is recorded, so bars of a song past it still render."""
+    session, _, _ = _rig(monkeypatch, tmp_path, arrangement(loop_mode=1, tempo_bpm=20.0, song_last_tick=1024 * 96 - 1))
+
+    assert session.render_wav(tmp_path / "mix.wav", start_bar=100, bars=1).span.seconds == pytest.approx(12.0)
+
+
+def test_silence_is_refused_only_for_the_whole_mix(monkeypatch, tmp_path):
+    """A silent whole mix means FL's audio path is broken; a silent range or solo is an answer."""
+    session, _, _ = _rig(monkeypatch, tmp_path, arrangement(loop_mode=1, song_last_tick=64 * 96 - 1))
+    monkeypatch.setattr(controls.audio, "integrated_lufs", lambda path: -120.0)
+
+    assert session.render_wav(tmp_path / "intro.wav", bars=1).span.beats == 4.0
+    with pytest.raises(errors.ToolError, match="recorded silence"):
+        session.render_wav(tmp_path / "mix.wav")
+
+
+class _Rack:
+    """FL's channel rack mutes as the controller answers them: muteChannel(index, value)
+    sets one (measured on FL 2026: value 1 mutes, 0 unmutes, a repeat changes nothing)."""
+
+    def __init__(self, muted: dict[int, bool], *, stuck: frozenset[int] = frozenset()) -> None:
+        self.muted = dict(muted)
+        self.stuck = stuck  # channels FL stops answering for after their first change
+        self.toggles: list[int] = []
+
+    def handlers(self) -> dict:
+        def toggle(args):
+            index, value = args
+            if index in self.stuck and index in self.toggles:
+                return ControlResponse(id=0, ok=False, err="refused")
+            self.toggles.append(index)
+            self.muted[index] = bool(value)
+
+        answer = snapshot_answer([f"ch{i}" for i in sorted(self.muted)])
+        return {
+            "state.snapshot": lambda args: {
+                **answer,
+                "channels": [{**c, "muted": self.muted[c["idx"]]} for c in answer["channels"]],
+            },
+            "channels.muteChannel": toggle,
+            "channels.isChannelMuted": lambda args: self.muted[args[0]],
+        }
+
+
+def test_solo_mutes_the_others_for_the_render_and_puts_every_mute_back(monkeypatch, tmp_path):
+    """Channel 3 was muted by the user; solo 1 mutes 0 and 2, mute stays on 3, all as before after."""
+    rack = _Rack({0: False, 1: False, 2: False, 3: True})
+    session, control, _ = _rig(monkeypatch, tmp_path, {**arrangement(), **rack.handlers()})
+    during = []
+    real = controls._live_render
+    monkeypatch.setattr(controls, "_live_render", lambda *a, **k: (during.append(dict(rack.muted)), real(*a, **k))[1])
+
+    receipt = session.render_wav(tmp_path / "bass.wav", solo=(1,))
+
+    assert during == [{0: True, 1: False, 2: True, 3: True}]
+    assert rack.muted == {0: False, 1: False, 2: False, 3: True}
+    assert (receipt.solo, receipt.mute) == ([1], [])
+
+
+def test_mute_silences_only_those_channels(monkeypatch, tmp_path):
+    rack = _Rack({0: False, 1: False, 2: False})
+    session, _, _ = _rig(monkeypatch, tmp_path, {**arrangement(), **rack.handlers()})
+
+    session.render_wav(tmp_path / "no-drums.wav", mute=(0, 2))
+
+    assert sorted(rack.toggles) == [0, 0, 2, 2]  # muted for the render, then set back
+    assert rack.muted == {0: False, 1: False, 2: False}
+
+
+def test_the_mutes_go_back_when_the_render_fails(monkeypatch, tmp_path):
+    rack = _Rack({0: False, 1: False})
+    session, _, transport = _rig(monkeypatch, tmp_path, {**arrangement(), **rack.handlers()})
+    transport.responses["capture_stop"] = SpoolResponse(id=2, ok=False, err="no audio")
+
+    with pytest.raises(errors.ToolError, match="recorded no audio"):
+        session.render_wav(tmp_path / "bass.wav", solo=(1,))
+
+    assert rack.muted == {0: False, 1: False}
+
+
+def test_a_channel_fl_will_not_set_back_is_an_error_naming_it(monkeypatch, tmp_path):
+    rack = _Rack({0: False, 1: False}, stuck=frozenset({0}))
+    session, _, transport = _rig(monkeypatch, tmp_path, {**arrangement(), **rack.handlers()})
+
+    with pytest.raises(errors.ToolError, match="ch0 is still muted") as excinfo:
+        session.render_wav(tmp_path / "bass.wav", solo=(1,))
+    assert "already failed" not in excinfo.value.message
+
+    # When the render failed first, its reason stays in the message.
+    rack.toggles.clear()
+    rack.muted[0] = False  # someone set it back by hand
+    transport.responses["capture_stop"] = SpoolResponse(id=2, ok=False, err="no audio")
+    with pytest.raises(errors.ToolError, match=r"ch0 is still muted\..*already failed.*recorded no audio"):
+        session.render_wav(tmp_path / "bass.wav", solo=(1,))
+
+
+@pytest.mark.parametrize(("solo", "mute", "message"), [((1,), (1,), "in both solo and mute"), ((9,), (), "no channel at index 9")])
+def test_solo_and_mute_name_real_channels_once(monkeypatch, tmp_path, solo, mute, message):
+    rack = _Rack({0: False, 1: False})
+    session, _, transport = _rig(monkeypatch, tmp_path, {**arrangement(), **rack.handlers()})
+
+    with pytest.raises(errors.ToolError, match=message):
+        session.render_wav(tmp_path / "x.wav", solo=solo, mute=mute)
+
+    assert rack.toggles == [] and transport.sent == []
+
+
+def test_stems_record_each_channel_alone_one_play_each(monkeypatch, tmp_path):
+    rack = _Rack({0: False, 1: False, 2: True})
+    session, _, transport = _rig(monkeypatch, tmp_path, {**arrangement(tempo_bpm=120.0, steps=64), **rack.handlers()})
+
+    stems = session.render_stems(tmp_path / "take.wav", "channels", bars=1)
+
+    assert [s.path.name for s in stems] == ["take-0-ch0.wav", "take-1-ch1.wav", "take-2-ch2.wav"]
+    assert [s.solo for s in stems] == [[0], [1], [2]]
+    assert len(_captured_seconds(transport)) == 3
+    assert rack.muted == {0: False, 1: False, 2: True}  # the user's mute on channel 2 is back
+    # One rack for the set: each stem changes only what differs from the last (box run
+    # 2026-11-03: re-muting every channel per stem took 12 s a stem on 23 channels).
+    assert rack.toggles == [1, 0, 1, 1, 2, 0, 1, 2]
+
+
+def test_mixer_stems_solo_the_channels_routed_to_each_track(monkeypatch, tmp_path):
+    rack = _Rack({0: False, 1: False, 2: False})
+    handlers = {**arrangement(tempo_bpm=120.0, steps=64), **rack.handlers()}
+    snapshot = handlers["state.snapshot"]
+    handlers["state.snapshot"] = lambda args: {
+        **snapshot(args),
+        "channels": [{**c, "target_mixer_track": 1 if c["idx"] < 2 else 2} for c in snapshot(args)["channels"]],
+        "mixer": [{"idx": t, "name": f"Bus {t}", "vol": 0.8, "pan": 0.0, "muted": False, "solo": False} for t in range(3)],
+    }
+    session, _, transport = _rig(monkeypatch, tmp_path, handlers)
+
+    stems = session.render_stems(tmp_path / "take.wav", "mixer", bars=1)
+
+    assert [(s.path.name, s.solo) for s in stems] == [("take-mixer1-Bus-1.wav", [0, 1]), ("take-mixer2-Bus-2.wav", [2])]
+
+
+def test_stems_past_the_recording_cap_are_refused_before_any_play(monkeypatch, tmp_path):
+    rack = _Rack({i: False for i in range(12)})
+    handlers = arrangement(loop_mode=1, tempo_bpm=60.0, song_last_tick=60 * 96 - 1)  # 60 s each
+    session, _, transport = _rig(monkeypatch, tmp_path, {**handlers, **rack.handlers()})
+
+    with pytest.raises(errors.ToolError, match=r"12 stems of 60\.0 s each") as excinfo:
+        session.render_stems(tmp_path / "take.wav", "channels")
+
+    assert excinfo.value.category == "render_failed"
+    assert transport.sent == []

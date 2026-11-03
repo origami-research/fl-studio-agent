@@ -22,6 +22,7 @@ import pytest
 from sdk_fakes import DEFAULT_CHANNELS, FakeSession
 from test_kernel import _wheel
 
+from fl_mcp.kernel import seatbelt
 from fl_mcp.kernel.host import KernelHost
 from fl_mcp.kernel.launch import Workspace
 from fl_mcp.kernel.seatbelt import SANDBOX_EXEC, Profile, SeatbeltLauncher, _Reach, build_profile
@@ -125,6 +126,32 @@ def test_nested_readable_trees_collapse_into_their_parent(tmp_path):
     assert reach.roots() == {tmp_path.resolve()}
 
 
+def _fake_fl(root: Path) -> Path:
+    """An FL bundle laid out like FL's: its stock folder, and a program beside it."""
+    patches = root / "FL Studio 2026.app" / "Contents" / "Resources" / "FL" / "Data" / "Patches"
+    (patches / "Packs" / "Drums").mkdir(parents=True)
+    (patches / "Packs" / "Drums" / "Kick.wav").write_bytes(b"RIFF....WAVE")
+    (patches / "run.sh").write_text("#!/bin/sh\necho ran\n")
+    (patches / "run.sh").chmod(0o755)
+    program = root / "FL Studio 2026.app" / "Contents" / "MacOS" / "FL Studio"
+    program.parent.mkdir(parents=True)
+    program.write_text("the rest of FL")
+    return patches
+
+
+def test_fls_stock_folder_is_read_only_data_never_the_whole_bundle(workspace, tmp_path):
+    """The kernel reads stock samples to choose one (docs/38); the folder must not widen to
+    the .app bundle (as a runtime path would) or become runnable."""
+    patches = _fake_fl(tmp_path)
+    profile = build_profile(workspace, (), (patches,))
+    lines = profile.text.splitlines()
+    stock = f'(subpath (param "{_param(profile, patches.resolve())}"))'
+    assert stock in next(line for line in lines if line.startswith('(allow file-read* (literal "/")'))
+    assert stock not in next(line for line in lines if line.startswith("(allow process-exec"))
+    bundle = str((tmp_path / "FL Studio 2026.app").resolve())
+    assert f'(subpath (param "{_param(profile, bundle)}"))' not in profile.text  # only looked up, never read
+
+
 # -- the run kernel under the real sandbox ----------------------------------------------------
 
 
@@ -215,6 +242,28 @@ def test_the_kernel_cannot_read_the_users_home_or_its_secrets(host, workspace):
         f"import os\nos.link({str(workspace.canary)!r}, 'canary-link')",
     ):
         assert "PermissionError" in _denied(host, code), code
+
+
+@sandbox
+def test_the_kernel_reads_fls_stock_samples_and_nothing_else_of_fl(session, workspace, tmp_path, monkeypatch):
+    patches = _fake_fl(tmp_path)
+    monkeypatch.setattr(seatbelt, "stock_dirs", lambda: (patches,))
+    host = KernelHost(session, workspace, SeatbeltLauncher(), os.environ, cell_timeout=60.0)
+    try:
+        kick = patches / "Packs" / "Drums" / "Kick.wav"
+        assert host.run(f"open({str(kick)!r}, 'rb').read()[:4]").result == "b'RIFF'"
+        assert host.run(f"import os\nos.listdir({str(patches / 'Packs')!r})").result == "['Drums']"
+        program = tmp_path / "FL Studio 2026.app" / "Contents" / "MacOS" / "FL Studio"
+        for code in (
+            f"open({str(kick)!r}, 'ab')",
+            f"open({str(patches / 'new.wav')!r}, 'w')",
+            f"open({str(program)!r}).read()",
+            f"import os\nos.listdir({str(program.parent.parent)!r})",
+            f"import subprocess\nsubprocess.run([{str(patches / 'run.sh')!r}])",
+        ):
+            assert "PermissionError" in _denied(host, code), code
+    finally:
+        host.close()
 
 
 @sandbox

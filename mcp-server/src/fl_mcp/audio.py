@@ -1,5 +1,5 @@
-"""Reading PCM WAV renders: the samples for the SDK's read_wav, and the loudness the
-render check uses to refuse a silent recording.
+"""Reading WAVs: the samples for the SDK's read_wav (renders, and FL's stock samples),
+and the loudness the render check uses to refuse a silent recording.
 
 integrated_lufs streams the file in fixed-size blocks, so its memory is O(block) however
 long the render: a 90 s song measured whole took >3 GB and paged FL out on an 8 GB
@@ -11,6 +11,7 @@ or plots what it wants itself (docs/38).
 
 from __future__ import annotations
 
+import io
 import wave
 from pathlib import Path
 
@@ -46,10 +47,38 @@ def wav_format(path: Path) -> tuple[int, int]:
 
 
 def read_wav(path: Path) -> tuple[np.ndarray, int]:
-    """The whole file as float frames (channels last) and its sample rate: the SDK's read_wav."""
-    with path.open("rb") as file, wave.open(file, "rb") as wav:
-        channels, width, sample_rate, _ = _header(wav)
-        return _decode(wav.readframes(wav.getnframes()), channels, width), sample_rate
+    """The whole file as float frames (channels last) and its sample rate: the SDK's read_wav.
+
+    PCM WAV, as renders are; and FL's stock samples, which are Ogg Vorbis inside a WAV
+    (format tag 0x674F and its siblings, the data chunk an Ogg stream: box run
+    2026-11-03, where the stdlib, scipy and libsndfile all refused them as WAVs)."""
+    try:
+        with path.open("rb") as file, wave.open(file, "rb") as wav:
+            channels, width, sample_rate, _ = _header(wav)
+            return _decode(wav.readframes(wav.getnframes()), channels, width), sample_rate
+    except wave.Error:
+        stream = _ogg_in_wav(path)
+        if stream is None:
+            raise
+    import soundfile
+
+    samples, sample_rate = soundfile.read(io.BytesIO(stream), dtype="float64", always_2d=True)
+    return samples, sample_rate
+
+
+def _ogg_in_wav(path: Path) -> bytes | None:
+    """The data chunk of a RIFF WAV when it holds an Ogg stream, else None."""
+    blob = path.read_bytes()
+    if blob[:4] != b"RIFF" or blob[8:12] != b"WAVE":
+        return None
+    offset = 12
+    while offset + 8 <= len(blob):
+        chunk, size = blob[offset : offset + 4], int.from_bytes(blob[offset + 4 : offset + 8], "little")
+        if chunk == b"data":
+            data = blob[offset + 8 : offset + 8 + size]
+            return data if data[:4] == b"OggS" else None
+        offset += 8 + size + (size & 1)
+    return None
 
 
 def _header(wav: wave.Wave_read) -> tuple[int, int, int, int]:

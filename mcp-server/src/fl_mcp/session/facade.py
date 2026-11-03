@@ -18,10 +18,17 @@ from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from pathlib import Path
 
-from fl_mcp import errors, flp
+from fl_mcp import errors, flp, scene
 from fl_mcp import sounds as stock_sounds
 from fl_mcp.audio_stream import AudioChunk, AudioEndpoint
-from fl_mcp.contract import ENV_AGENT_PROJECT, ENV_SPOOL_ROOT, FLLicense, fl_license_from_env
+from fl_mcp.contract import (
+    ENV_AGENT_PROJECT,
+    ENV_SPOOL_ROOT,
+    FLLicense,
+    SceneNotesResult,
+    SceneSummary,
+    fl_license_from_env,
+)
 from fl_mcp.core.carriers import CarrierUnavailable
 from fl_mcp.core.carriers.broker_client import BrokerControl
 from fl_mcp.core.carriers.spool import SpoolCarrier
@@ -48,6 +55,7 @@ from fl_mcp.schemas import (
     DoctorReport,
     HelloEvent,
     MixerSend,
+    MixerTrack,
     Note,
     NoteWriteMode,
     PluginParam,
@@ -65,6 +73,7 @@ from . import check as check_mod
 from . import controls, lifecycle, loading, routing, state
 from . import notes as note_ops
 from . import presets as preset_ops
+from .audition import set_muted
 from .detect import (
     BRIDGE_PING_TIMEOUT_SECONDS,
     BridgeBreaker,
@@ -410,9 +419,23 @@ class FLSession:
         with self._write_guard("set_tempo"):
             return controls.set_tempo(self, bpm)
 
-    def render_wav(self, output: Path) -> RenderReceipt:
+    def render_wav(
+        self,
+        output: Path,
+        start_bar: int = 1,
+        bars: int | None = None,
+        solo: tuple[int, ...] = (),
+        mute: tuple[int, ...] = (),
+    ) -> RenderReceipt:
         with self._write_guard("render_wav"):
-            return controls.render_wav(self, output)
+            return controls.render_wav(self, output, start_bar=start_bar, bars=bars, solo=solo, mute=mute)
+
+    def render_stems(
+        self, output: Path, by: str, start_bar: int = 1, bars: int | None = None
+    ) -> list[RenderReceipt]:
+        """One play per stem, the whole set under one write guard, like one render."""
+        with self._write_guard("render_wav"):
+            return controls.render_stems(self, output, by, start_bar=start_bar, bars=bars)
 
     def export_offline(self, output: Path) -> Path:
         with self._write_guard("export_offline"):
@@ -521,12 +544,17 @@ class FLSession:
     def sounds(
         self, query: str = "", *, kind: SoundKind | None = None, plugin: str | None = None, limit: int = 20
     ) -> list[Sound]:
-        """Search the stock sounds this FL install ships (fl_mcp.sounds), read here
-        because FL's install is outside what the run kernel may read."""
+        """Search the stock sounds this FL install ships (fl_mcp.sounds). The search runs
+        here, where the index is; the kernel reads the files themselves (stock_folder)."""
+        return stock_sounds.search(self.stock_folder(), query, kind=kind, plugin=plugin, limit=limit)
+
+    def stock_folder(self) -> Path:
+        """FL's stock content folder (Data/Patches: plugin presets, sample packs). The run
+        kernel may read it and nothing else of FL's install (docs/38)."""
         folder = fl_patches_dir()
         if not folder.is_dir():
             raise errors.stock_sounds_missing(folder)
-        return stock_sounds.search(folder, query, kind=kind, plugin=plugin, limit=limit)
+        return folder.resolve()
 
     # -- transport ------------------------------------------------------------
 
@@ -536,8 +564,29 @@ class FLSession:
             return check_mod.check(self, start_bar, bars, clock=self._monotonic, sleep=self._sleep)
 
     def undo(self) -> None:
-        """``general.undo``. The note record does not follow it (docs/27 §1a known gap)."""
-        self.link.command("general.undo")
+        """``general.undo``. The note record does not follow it (docs/27 §1a known gap).
+
+        FL keeps a render's solo and mute changes in its undo history (audition.py), and
+        the SDK changes no mute otherwise, so an undo that changed a channel's mute undid
+        one of those: the mute is set back and the undo is reported as not done, rather
+        than leaving a channel silently muted."""
+        with self._write_guard("undo"):  # a render's own mute changes must not read as flipped
+            before = self._mutes("before")
+            self.link.command("general.undo")
+            after = self._mutes("after")
+            if before is None or after is None or before.keys() != after.keys():
+                return  # the guard cannot tell (no read, or the undo changed the channels): the undo stands
+            flipped = sorted(key for key, muted in before.items() if after[key] != muted)
+            if not flipped:
+                return
+            for key in flipped:
+                set_muted(self, key[0], before[key])
+        raise errors.ToolError(
+            "fl_api_error",
+            "FL's last undo step was a mute change from a solo or mute render, so it was set back "
+            "and nothing else was undone.",
+            'To take back notes, write the track again (mode="replace") or clear it.',
+        )
 
     # -- reads ----------------------------------------------------------------
 
@@ -549,6 +598,48 @@ class FLSession:
 
     def channel_names(self) -> list[Channel]:
         return state.channel_names(self)
+
+    def mixer_tracks(self) -> list[MixerTrack]:
+        """FL's mixer tracks now, from the one composite snapshot."""
+        return self.snapshot().mixer
+
+    def _mutes(self, when: str) -> dict[tuple[int, str], bool] | None:
+        """Each channel's mute, keyed by index and name so a shifted channel never matches."""
+        try:
+            return {(c.index, c.name): c.muted for c in self.snapshot().channels}
+        except errors.ToolError as exc:
+            log.warning("could not read the channel mutes %s an undo: %s", when, exc)
+            return None
+
+    def scene_summary(self) -> SceneSummary:
+        """get_scene's summary: tempo, inferred key, playlist and a digest per channel."""
+        project = self._scene_project()
+        rows = scene.rows_from_notes(self.all_notes())
+        channels = self.channel_names()
+        names = {c.index: c.name for c in channels}
+        about = {c.index: c.about for c in channels if c.about}
+        notes = self.project_guide(list(names.values())).notes
+        return SceneSummary.model_validate(
+            scene.summarize(project, rows, names, tempo=self.tempo(), about=about, project_notes=notes)
+        )
+
+    def scene_notes(self, channel: int | None = None, pattern: int | None = None) -> SceneNotesResult:
+        """get_scene's notes: every note FL has, by channel and pattern, optionally one of each."""
+        self._scene_project()
+        rows = scene.rows_from_notes(self.all_notes())
+        return SceneNotesResult.model_validate({"notes": scene.notes_detail(rows, channel, pattern)})
+
+    def _scene_project(self) -> Path:
+        """The song's layout (playlist, notes nobody wrote this session) is read from the
+        project FL opened; without one the scene is unknown, never guessed."""
+        if self.project is None or not self.project.is_file():
+            log.warning("the scene needs the agent project file; none is configured")
+            raise errors.ToolError(
+                "invalid_argument",
+                "The song's layout cannot be read in this session.",
+                'Read a track\'s notes with run: fl.track("Bass").notes().',
+            )
+        return self.project
 
     def not_answering(self, op: str, timeout: float, unchanged: str) -> errors.ToolError:
         """THE error for a live op FL did not take: frozen (#290) or not answering yet."""

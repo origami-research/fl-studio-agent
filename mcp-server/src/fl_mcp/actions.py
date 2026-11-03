@@ -22,6 +22,7 @@ touch (channel and pattern), never by a name two channels may share.
 from __future__ import annotations
 
 import logging
+import math
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
@@ -353,10 +354,29 @@ class ActionLog:
         return [_Entry(_checked(result))]
 
     def _render(self, kwargs: Mapping[str, Any], receipt: RenderReceipt) -> list[_Entry]:
-        played = _duration(receipt.span.seconds)
-        if receipt.span.source == "pattern" and receipt.span.pattern is not None:
-            return [_Entry(f"Rendered {played} of pattern {receipt.span.pattern}")]
-        return [_Entry(f"Rendered {played}")]
+        return [_Entry(f"Rendered {self._rendered(receipt, bars=kwargs.get('bars'))}")]
+
+    def _stems(self, kwargs: Mapping[str, Any], receipts: list[RenderReceipt]) -> list[_Entry]:
+        if not receipts:
+            return []
+        each = self._rendered(receipts[0], bars=kwargs.get("bars"), alone=False)
+        return [_Entry(f"Rendered {_count(len(receipts), 'stem')}, each {each}")]
+
+    def _rendered(self, receipt: RenderReceipt, *, bars: int | None = None, alone: bool = True) -> str:
+        """What a render played: "0:34", "0:08 of bars 9-10 of pattern 1, solo Bass"."""
+        span = receipt.span
+        parts = [_duration(span.seconds)]
+        if span.start_bar > 1 or bars is not None:
+            last = span.start_bar + max(1, math.ceil(span.beats / 4 - 1e-9)) - 1
+            parts.append(f"of bar {span.start_bar}" if last == span.start_bar else f"of bars {span.start_bar}-{last}")
+        if span.source == "pattern" and span.pattern is not None:
+            parts.append(f"of pattern {span.pattern}")
+        text = " ".join(parts)
+        if alone and receipt.solo:
+            text += ", solo " + ", ".join(self._name(c) for c in receipt.solo)
+        if alone and receipt.mute:
+            text += ", muting " + ", ".join(self._name(c) for c in receipt.mute)
+        return text
 
     def _export(self, kwargs: Mapping[str, Any], path: Path) -> list[_Entry]:
         return [_Entry(f"Exported the song to {Path(path).name}")]
@@ -382,6 +402,7 @@ _CALLS: dict[str, Callable[[ActionLog, Mapping[str, Any], Any], list[_Entry]]] =
     "load_sound": ActionLog._load,
     "check": ActionLog._check,
     "render_wav": ActionLog._render,
+    "render_stems": ActionLog._stems,
     "export_offline": ActionLog._export,
     "save_project": ActionLog._save,
     "undo": ActionLog._undo,

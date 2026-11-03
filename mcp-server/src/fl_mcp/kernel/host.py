@@ -54,7 +54,7 @@ _MAX_MESSAGE_BYTES = 64 << 20
 # A dead kernel's stderr pipe closes at once unless a grandchild still holds it.
 _STDERR_DRAIN_SECONDS = 2.0
 # Session calls whose ``output`` path the server writes: confined to renders.
-_SERVER_WRITES = frozenset({"render_wav", "export_offline"})
+_SERVER_WRITES = frozenset({"render_wav", "render_stems", "export_offline"})
 
 
 class _Exited:

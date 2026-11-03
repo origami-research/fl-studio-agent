@@ -7,12 +7,14 @@ landed - it never falls through to the file path (the v1 cascade bug).
 from __future__ import annotations
 
 import logging
+import math
 import os
 import re
 import shutil
 import subprocess
 import tempfile
 import time
+from collections.abc import Sequence
 from math import isfinite
 from numbers import Real
 from pathlib import Path
@@ -35,6 +37,7 @@ from fl_mcp.schemas import (
     SpoolResponse,
 )
 
+from .audition import Rack, audition
 from .link import LIVE_READ_TIMEOUT_SECONDS, LIVE_SET_TIMEOUT_SECONDS
 
 if TYPE_CHECKING:
@@ -59,6 +62,8 @@ FL_LOOP_MODE_PATTERN = 0
 FL_LOOP_MODE_SONG = 1
 FL_SONGLENGTH_ABSTICKS = 2
 FL_STEPS_PER_BEAT = 4
+# The template is 4/4 and the note API speaks beats, so a bar is four beats.
+BEATS_PER_BAR = 4
 
 log = logging.getLogger(__name__)
 
@@ -182,22 +187,46 @@ def live_arrangement_span(session: FLSession) -> RenderSpan:
     else:
         raise errors.fl_api_error("transport.getLoopMode", f"returned unknown loop mode {loop_mode}")
 
-    seconds = beats * 60.0 / tempo_bpm
-    if seconds + RENDER_TAIL_SECONDS > CAPTURE_MAX_SECONDS:
-        raise errors.ToolError(
-            "render_failed",
-            f"The live {source} is {beats:g} beats at {tempo_bpm:g} BPM ({seconds:.1f} s); "
-            f"a render records at most {CAPTURE_MAX_SECONDS:g} s including its "
-            f"{RENDER_TAIL_SECONDS:g} s tail.",
-            "Shorten the arrangement or raise the tempo, then render again.",
-        )
     return RenderSpan(
         source=source,
         pattern=pattern,
         beats=beats,
         tempo_bpm=tempo_bpm,
-        seconds=seconds,
+        seconds=beats * 60.0 / tempo_bpm,
     )
+
+
+def bar_range(span: RenderSpan, start_bar: int, bars: int | None) -> RenderSpan:
+    """The part of a live span from ``start_bar`` for ``bars`` bars (to its end when None).
+
+    A range past the end is cut at the end, so the span says what actually plays; a
+    start past the end is refused. Bars are four beats (BEATS_PER_BAR).
+    """
+    if isinstance(start_bar, bool) or not isinstance(start_bar, int) or start_bar < 1:
+        raise errors.invalid_argument("fl.render", f"start_bar must be a whole number from 1, got {start_bar!r}")
+    if bars is not None and (isinstance(bars, bool) or not isinstance(bars, int) or bars < 1):
+        raise errors.invalid_argument("fl.render", f"bars must be a whole number from 1, or None, got {bars!r}")
+    start = (start_bar - 1) * BEATS_PER_BAR
+    if start >= span.beats:
+        total = max(1, math.ceil(span.beats / BEATS_PER_BAR - 1e-9))
+        what = "song" if span.source == "song" else f"pattern {span.pattern}"
+        raise errors.invalid_argument(
+            "fl.render", f"the {what} is {total} bar{'s' if total != 1 else ''} long; start at bar 1 to {total}"
+        )
+    end = span.beats if bars is None else min(span.beats, start + bars * BEATS_PER_BAR)
+    beats = end - start
+    return span.model_copy(update={"start_bar": start_bar, "beats": beats, "seconds": beats * 60.0 / span.tempo_bpm})
+
+
+def _check_capture_length(span: RenderSpan) -> None:
+    if span.seconds + RENDER_TAIL_SECONDS > CAPTURE_MAX_SECONDS:
+        raise errors.ToolError(
+            "render_failed",
+            f"The live {span.source} is {span.beats:g} beats at {span.tempo_bpm:g} BPM ({span.seconds:.1f} s); "
+            f"a render records at most {CAPTURE_MAX_SECONDS:g} s including its "
+            f"{RENDER_TAIL_SECONDS:g} s tail.",
+            "Render fewer bars (bars=, start_bar=), shorten the arrangement or raise the tempo.",
+        )
 
 
 def _capture_start(session: FLSession, seconds: float, timeout: float) -> SpoolResponse:
@@ -222,8 +251,15 @@ def _capture_start(session: FLSession, seconds: float, timeout: float) -> SpoolR
         return session.transport.await_response(started, timeout=timeout)
 
 
-def _live_render(session: FLSession, output: Path, seconds: float) -> Path:
-    """Play the live arrangement from its start while the master Bridge records it."""
+def _live_render(
+    session: FLSession, output: Path, seconds: float, *, start_tick: int = 0, refuse_silence: bool = True
+) -> Path:
+    """Play the live arrangement from ``start_tick`` while the master Bridge records it.
+
+    The Bridge starts recording when FL starts playing, wherever it plays from. A
+    silent recording of the whole mix means FL's audio path is broken, so it is
+    refused; a range or a soloed render may be silent and is returned as it is.
+    """
     response_timeout = min(10.0, max(2.0, seconds / 2.0 + 2.0))
     start = _capture_start(session, seconds, response_timeout)
     if not start.ok:
@@ -238,7 +274,10 @@ def _live_render(session: FLSession, output: Path, seconds: float) -> Path:
     try:
         # Position is a controller operation, so it remains on the control wire
         # rather than reaching from the Bridge into FL on a mixer callback.
-        positioned = session.link.request("transport.setSongPos", [0], timeout=LIVE_SET_TIMEOUT_SECONDS)
+        # The song's start in FL's default mode (a fraction of the song), as every render
+        # until 2026-11-03; any other bar in absolute ticks, as fl.check positions.
+        position = [0] if start_tick == 0 else [start_tick, FL_SONGLENGTH_ABSTICKS]
+        positioned = session.link.request("transport.setSongPos", position, timeout=LIVE_SET_TIMEOUT_SECONDS)
         if not positioned.ok:
             raise errors.ToolError(
                 "render_failed",
@@ -323,13 +362,13 @@ def _live_render(session: FLSession, output: Path, seconds: float) -> Path:
     if (
         rate != start.sample_rate
         or abs(frames - expected_frames) > expected_frames * 0.01
-        or lufs <= -60
+        or (refuse_silence and lufs <= -60)
     ):
         log.warning(
             "Bridge WAV did not verify: frames=%s/%s rate=%s/%s lufs=%.1f%s",
             frames, expected_frames, rate, start.sample_rate, lufs, stop_detail,
         )
-        silent = lufs <= -60
+        silent = refuse_silence and lufs <= -60
         raise errors.ToolError(
             "render_failed",
             "The render recorded silence." if silent else "The render's recording was incomplete.",
@@ -349,8 +388,33 @@ def _live_render(session: FLSession, output: Path, seconds: float) -> Path:
     return output
 
 
-def render_wav(session: FLSession, output: Path) -> RenderReceipt:
-    """Play the live arrangement once and record the live mix.
+def _prepare_render(session: FLSession, start_bar: int, bars: int | None) -> tuple[RenderSpan, RenderSpan, int]:
+    """The live span, the part of it to record, and the absolute tick it starts at."""
+    if not session.caps.bridge_live:
+        log.warning("render refused: the Master-insert Bridge is not live (check bridge_heartbeat.txt)")
+        raise errors.fl_not_prepared("render_failed", "nothing was recorded")
+    whole = live_arrangement_span(session)
+    span = bar_range(whole, start_bar, bars)
+    start_tick = 0
+    if start_bar > 1:
+        ppq = _live_int(session, "general.getRecPPQ")
+        if ppq <= 0:
+            raise errors.fl_api_error("general.getRecPPQ", f"returned {ppq} ticks per beat")
+        start_tick = (start_bar - 1) * BEATS_PER_BAR * ppq
+    return whole, span, start_tick
+
+
+def render_wav(
+    session: FLSession,
+    output: Path,
+    *,
+    start_bar: int = 1,
+    bars: int | None = None,
+    solo: Sequence[int] = (),
+    mute: Sequence[int] = (),
+) -> RenderReceipt:
+    """Play the live arrangement once, or ``bars`` bars of it from ``start_bar``, and
+    record the live mix; with ``solo``/``mute``, only those channels sound (audition).
 
     The length is FL's own, read live just before the capture
     (live_arrangement_span); nothing is saved first, so a trial FL renders
@@ -358,12 +422,73 @@ def render_wav(session: FLSession, output: Path) -> RenderReceipt:
     required: it fails loudly when that live path is unavailable rather than
     masking it with an offline export.
     """
-    if not session.caps.bridge_live:
-        log.warning("render refused: the Master-insert Bridge is not live (check bridge_heartbeat.txt)")
-        raise errors.fl_not_prepared("render_failed", "nothing was recorded")
-    span = live_arrangement_span(session)
-    path = _live_render(session, output.expanduser().resolve(), span.seconds + RENDER_TAIL_SECONDS)
-    return RenderReceipt(path=path, span=span)
+    whole, span, start_tick = _prepare_render(session, start_bar, bars)
+    _check_capture_length(span)
+    everything = span.beats == whole.beats and not solo and not mute
+    with audition(session, solo, mute):
+        path = _live_render(
+            session,
+            output.expanduser().resolve(),
+            span.seconds + RENDER_TAIL_SECONDS,
+            start_tick=start_tick,
+            refuse_silence=everything,
+        )
+    return RenderReceipt(path=path, span=span, solo=sorted(solo), mute=sorted(mute))
+
+
+def render_stems(
+    session: FLSession, output: Path, by: str, *, start_bar: int = 1, bars: int | None = None
+) -> list[RenderReceipt]:
+    """One render per channel (``by="channels"``) or per mixer track, soloing the
+    channels routed to it (``by="mixer"``): the Bridge records only the master, so
+    each stem is its own play. Files are named ``<output stem>-<label>.wav`` beside
+    ``output``.
+
+    Every stem may be silent (a channel with no notes in the bars), so none is
+    refused for silence; the whole set is bounded like one render, at
+    CAPTURE_MAX_SECONDS of recording.
+    """
+    if by not in ("channels", "mixer"):
+        raise errors.invalid_argument("fl.render", f'stems must be "channels" or "mixer", got {by!r}')
+    state = session.snapshot()
+    if by == "channels":
+        groups = [(f"{c.index}-{c.name}", (c.index,)) for c in state.channels]
+    else:
+        names = {t.index: t.name for t in state.mixer}
+        tracks = sorted({c.mixer_track for c in state.channels if c.mixer_track is not None})
+        groups = [
+            (f"mixer{t}-{names.get(t, '')}", tuple(c.index for c in state.channels if c.mixer_track == t))
+            for t in tracks
+        ]
+    if not groups:
+        raise errors.invalid_argument("fl.render", "FL has no channels to record stems of")
+    _, span, start_tick = _prepare_render(session, start_bar, bars)
+    recorded = len(groups) * (span.seconds + RENDER_TAIL_SECONDS)
+    if recorded > CAPTURE_MAX_SECONDS:
+        raise errors.ToolError(
+            "render_failed",
+            f"{len(groups)} stems of {span.seconds:.1f} s each record {recorded:.0f} s; "
+            f"one call records at most {CAPTURE_MAX_SECONDS:g} s.",
+            "Render fewer bars (bars=, start_bar=), or solo the channels you need one render at a time.",
+        )
+    receipts = []
+    with Rack(session) as rack:
+        for label, solo in groups:
+            rack.hear(solo)
+            path = _live_render(
+                session,
+                output.expanduser().resolve().with_name(f"{output.stem}-{_label(label)}.wav"),
+                span.seconds + RENDER_TAIL_SECONDS,
+                start_tick=start_tick,
+                refuse_silence=False,
+            )
+            receipts.append(RenderReceipt(path=path, span=span, solo=list(solo)))
+    return receipts
+
+
+def _label(text: str) -> str:
+    """A file-name-safe stem label: letters, digits and dashes, at most 40 characters."""
+    return re.sub(r"[^A-Za-z0-9]+", "-", text).strip("-")[:40] or "stem"
 
 
 def export_offline(session: FLSession, output: Path) -> Path:

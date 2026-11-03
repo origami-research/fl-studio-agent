@@ -4,11 +4,12 @@ The kernel and every workspace-tool call start under ``sandbox-exec`` with a
 profile generated here. Like the Windows AppContainer (kernel.windows) it
 denies by default and allows what the kernel needs:
 
-- files: read and write its workspace (``work``), read ``renders``, read and
-  run the engine's own Python (found by asking that interpreter, so a venv,
-  uv's managed Pythons and an editable checkout all work) and the system's
-  software folders. The user's home, other kernels' workspaces, the canary
-  and everything else are denied.
+- files: read and write its workspace (``work``), read ``renders`` and FL's
+  stock content (``Data/Patches``: presets and sample packs, read only and
+  never run), read and run the engine's own Python (found by asking that
+  interpreter, so a venv, uv's managed Pythons and an editable checkout all
+  work) and the system's software folders. The user's home, other kernels'
+  workspaces, the canary, the rest of FL and everything else are denied.
 - network: outbound internet (pip), but nothing on this machine: Seatbelt's
   ``localhost`` covers loopback and the machine's own addresses, so the FL
   control broker, the Bridge ports and every local service are unreachable.
@@ -35,7 +36,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import ClassVar
 
-from fl_mcp.kernel.launch import KERNEL_JOB, JobLimits, KernelProcess, Workspace, spawn_group
+from fl_mcp.kernel.launch import KERNEL_JOB, JobLimits, KernelProcess, Workspace, spawn_group, stock_dirs
 
 SANDBOX_EXEC = Path("/usr/bin/sandbox-exec")
 
@@ -160,14 +161,22 @@ class _Params:
         return tuple((name, path) for path, name in self._names.items())
 
 
-def build_profile(workspace: Workspace, runtime: Iterable[Path]) -> Profile:
-    """The kernel's profile: deny by default, then exactly the access the module docstring lists."""
+def build_profile(workspace: Workspace, runtime: Iterable[Path], stock: Iterable[Path] = ()) -> Profile:
+    """The kernel's profile: deny by default, then exactly the access the module docstring lists.
+
+    ``stock`` folders are read-only data: read by their real path, their parents only
+    looked up, and never in ``readable``, which would widen a folder inside an app
+    bundle to the whole bundle and let the kernel run it."""
     readable = _Reach()
     for path in (*map(Path, SYSTEM_READABLE), *runtime):
         readable.add(path)
     own = _Reach()
     own.add(workspace.work)
     own.add(workspace.renders)
+    data = [workspace.renders]
+    for folder in stock:
+        own.add(folder)
+        data.append(folder.resolve())
     p = _Params()
     work = p.subpaths([workspace.work])
     programs = f"{p.subpaths(readable.roots())} {work}"
@@ -189,7 +198,7 @@ def build_profile(workspace: Workspace, runtime: Iterable[Path]) -> Profile:
 (allow signal (target same-sandbox))
 
 ; Files: the system, the engine's Python and its workspace; write only the workspace.
-(allow file-read* (literal "/") {programs} {p.subpaths([workspace.renders])})
+(allow file-read* (literal "/") {programs} {p.subpaths(data)})
 (allow file-read-metadata {p.literals(readable.links | readable.dirs | own.links | own.dirs)})
 (allow file-write* {work})
 (allow file-read* file-write-data {devices} (subpath "/dev/fd"))
@@ -240,7 +249,7 @@ class SeatbeltLauncher:
     ) -> KernelProcess:
         if not SANDBOX_EXEC.is_file():
             raise OSError(f"{SANDBOX_EXEC} is missing, so model code cannot be confined on this Mac")
-        profile = build_profile(workspace, self._runtime_paths())
+        profile = build_profile(workspace, self._runtime_paths(), stock_dirs())
         return spawn_group(profile.command(argv), workspace=workspace, env=env)
 
     def _runtime_paths(self) -> tuple[Path, ...]:

@@ -125,6 +125,25 @@ def test_each_kind_of_change_reads_as_one_plain_sentence():
     ]
 
 
+def test_a_render_says_which_bars_and_channels_it_heard():
+    """A range, a solo and stems read differently from a full render, so the record of what
+    the model listened to is exact."""
+    range_span = RenderSpan(source="song", start_bar=9, beats=8.0, tempo_bpm=120.0, seconds=4.0)
+    actions = log()
+    actions.called("render_wav", {}, RenderReceipt(path=Path("b.wav"), span=range_span, solo=[4]))
+    actions.called("render_wav", {}, RenderReceipt(path=Path("m.wav"), span=_song_span(34.0), mute=[0, 1]))
+    stems = [RenderReceipt(path=Path(f"s{i}.wav"), span=range_span, solo=[i]) for i in range(3)]
+    actions.called("render_stems", {}, stems)
+    first_bars = RenderSpan(source="song", beats=8.0, tempo_bpm=120.0, seconds=4.0)
+    actions.called("render_wav", {"bars": 2}, RenderReceipt(path=Path("i.wav"), span=first_bars))
+    assert actions.sentences() == [
+        "Rendered 0:04 of bars 9-10, solo FLEX Bass",
+        "Rendered 0:34, muting 808 Kick, 808 Clap",
+        "Rendered 3 stems, each 0:04 of bars 9-10",
+        "Rendered 0:04 of bars 1-2",
+    ]
+
+
 def _song_span(seconds: float) -> RenderSpan:
     return RenderSpan(source="song", beats=seconds * 2, tempo_bpm=120.0, seconds=seconds)
 
