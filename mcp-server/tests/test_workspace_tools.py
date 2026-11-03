@@ -28,7 +28,7 @@ from fl_mcp.kernel.launch import PosixLauncher, Workspace
 from fl_mcp.workspace import ops
 from fl_mcp.workspace.runner import OpTimeout, WorkspaceRunner
 
-FL_TOOLS = ["run", "get_scene", "check", "render", "analyze"]
+FL_TOOLS = ["run", "get_scene", "check", "render"]
 WORKSPACE_TOOLS = ["shell", "read_file", "write_file", "edit_file", "glob", "grep"]
 HARNESS_RESULT_CHARS = 20_000
 posix_only = pytest.mark.skipif(sys.platform == "win32", reason="POSIX shell syntax")

@@ -7,9 +7,9 @@ returned (FL's values, per docs/27), never from what was asked for. A call
 that raised adds nothing, and so does a read.
 
 ``ActionLog.called`` is the one entry point for FL calls: the run kernel host
-records every call a cell makes over the wire, and the check, render and
-analyze tools record their own call the same way, so a check reads the same
-from either path.
+records every call a cell makes over the wire, and the check and render
+tools record their own call the same way, so a check reads the same from
+either path.
 
 Only changes in a row merge, so the list keeps FL's order and every sentence
 is true of the state it describes: three or more changes of one kind in a row
@@ -22,13 +22,11 @@ touch (channel and pattern), never by a name two channels may share.
 from __future__ import annotations
 
 import logging
-import math
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Any
 
-from fl_mcp.audio import AudioAnalysis
 from fl_mcp.schemas import (
     AutomationResult,
     ChannelLevels,
@@ -234,10 +232,6 @@ class ActionLog:
         if any(method in SONG_REWRITES for method, _, _ in held):
             self._add(_Entry("Reopened FL with the changed song"))
 
-    def measured(self, analysis: AudioAnalysis, wav: str) -> None:
-        """Record a measurement of a WAV; ``wav`` names it ("the render", "mix.wav")."""
-        self._add(_Entry(_measured(analysis, wav)))
-
     def sentences(self) -> list[str]:
         out = [_fit(sentence) for run in self._runs for sentence in run.sentences()]
         more = self._more + max(0, len(out) - MAX_ACTIONS)
@@ -405,25 +399,6 @@ def _checked(result: CheckResult) -> str:
     master = result.master_peak_dbfs
     parts.append(f"master {master:.1f} dBFS" if master is not None else "master silent")
     return f"Checked {span}: " + ", ".join(parts)
-
-
-def _measured(analysis: AudioAnalysis, wav: str) -> str:
-    if not math.isfinite(analysis.true_peak_dbfs):
-        return f"Measured {wav}: it is silent"
-    parts = [f"peak {analysis.true_peak_dbfs:.1f} dBFS"]
-    if math.isfinite(analysis.integrated_lufs):
-        parts.append(f"{analysis.integrated_lufs:.1f} LUFS")
-    balance = analysis.spectral_balance
-    if math.isfinite(balance.low_dbfs) and math.isfinite(balance.mid_dbfs):
-        lows = round(balance.low_dbfs - balance.mid_dbfs)
-        parts.append(
-            f"lows {lows} dB over mids" if lows > 0 else f"lows {-lows} dB under mids" if lows < 0 else "lows level with mids"
-        )
-    if analysis.bpm is not None:
-        parts.append(f"{analysis.bpm:.0f} BPM")
-    if analysis.key is not None:
-        parts.append(f"key {analysis.key}")
-    return f"Measured {wav}: " + ", ".join(parts)
 
 
 def _duration(seconds: float) -> str:

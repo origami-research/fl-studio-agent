@@ -31,7 +31,7 @@ except ModuleNotFoundError:
     flctl = None
 
 from e2e.matrix import run_file_cycle, selected
-from fl_mcp.audio import analyze_wav
+from fl_mcp.audio import integrated_lufs
 from fl_mcp.fl.paths import fl_app
 from fl_mcp.schemas import Note
 
@@ -128,6 +128,4 @@ def test_bridge_template_pattern_one_renders_audible_audio(render_gate, tmp_path
     assert binary is not None, "FL binary not found under Contents/MacOS"
     subprocess.run([str(binary), "-R", str(project)], check=True)
 
-    analysis = analyze_wav(project.with_suffix(".wav"))
-    assert analysis.integrated_lufs > -120.0
-    assert analysis.true_peak_dbfs > -240.0
+    assert integrated_lufs(project.with_suffix(".wav")) > -120.0

@@ -69,7 +69,6 @@ class FakeSession(FLSession):
         self._channels = list(channels)
         self._next_id = 0
         self.level_calls: list[tuple[int, float | None, float | None, int | None]] = []
-        self._render_spans = {}
 
     def write_notes(self, target: Target, notes: list[Note], mode: NoteWriteMode) -> WriteResult:
         if self.fail_next_write is not None:
@@ -99,7 +98,6 @@ class FakeSession(FLSession):
 
     def render_wav(self, output: Path) -> RenderReceipt:
         output.write_bytes(b"RIFF....WAVE")
-        self._render_spans[output.resolve()] = RENDER_SPAN  # as FLSession.render_wav records it
         return RenderReceipt(path=output, span=RENDER_SPAN)
 
     def export_offline(self, output: Path) -> Path:

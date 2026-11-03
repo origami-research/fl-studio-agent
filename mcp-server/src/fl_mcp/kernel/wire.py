@@ -34,7 +34,6 @@ SessionMethod = Literal[
     "plugin_params",
     "presets",
     "read_notes",
-    "render_span",
     "render_wav",
     "route_channel",
     "save_project",

@@ -131,7 +131,7 @@ def test_tools_list_validates_through_the_mcp_layer_and_every_output_schema_is_a
 
     listed = anyio.run(call)
     tools = {tool.name: tool.model_dump(by_alias=True) for tool in listed.tools}
-    assert set(tools) == {"run", "get_scene", "check", "render", "analyze"}
+    assert set(tools) == {"run", "get_scene", "check", "render"}
     for name, tool in tools.items():
         schema = tool["outputSchema"]
         assert schema.get("type") == "object", (

@@ -147,15 +147,14 @@ Using the FL Studio trial? Set `FLMCP_FL_LICENSE=trial` in the server's `env`, a
 
 ## Tools
 
-The server exposes five tools, one per job:
+The server exposes four tools, one per job:
 
 | Tool | Purpose |
 | --- | --- |
 | `run` | Execute Python against the FL SDK: write and clear notes, tempo, levels, parameters. Its docstring is the SDK cheatsheet. |
 | `get_scene` | Read what FL has now: a compact musical summary, or the notes (`detail="notes"`, by channel and pattern). |
 | `check` | Play a few bars and read FL's mixer meters: which channels sounded, their peaks, and why a silent one is silent. |
-| `render` | Play the live arrangement once and record the mix to WAV. |
-| `analyze` | Analyze a WAV deterministically. |
+| `render` | Play the live arrangement once and record the mix to WAV; `run` code reads it with `fl.read_wav` and measures or plots what it wants. |
 
 The working rhythm is write, check at milestones, render at the end.
 Every result is what FL now has, so nothing needs waiting for, saving, or re-reading.

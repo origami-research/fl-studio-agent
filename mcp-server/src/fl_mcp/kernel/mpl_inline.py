@@ -2,8 +2,8 @@
 
 The kernel sets ``MPLBACKEND`` to this module, so a cell's figures never open a window
 on the machine running FL; they become images the model sees (display.py), as in a
-notebook. matplotlib is not an engine dependency: this loads only when model code
-imports it.
+notebook. matplotlib is an engine dependency, so it imports without a %pip install;
+this loads only when model code imports it.
 """
 
 from __future__ import annotations

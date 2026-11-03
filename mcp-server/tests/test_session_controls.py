@@ -85,23 +85,6 @@ def test_render_wav_refuses_when_the_live_bridge_is_unavailable(tmp_path, caplog
     assert "open the FLMCP Agent song" in refused.value.fix
 
 
-def test_the_session_remembers_what_each_render_played(monkeypatch, tmp_path):
-    """analyze and fl.spectrogram read a render's tempo and bars from here (#284). A
-    full-song export to the same path is not what that render played, so it is forgotten."""
-    session, _ = make_session(project=tmp_path / "agent.flp")
-    monkeypatch.setattr(controls, "render_wav", lambda _s, output: RenderReceipt(path=output, span=RENDER_SPAN))
-    monkeypatch.setattr(controls, "export_offline", lambda _s, output: output)
-    wav = tmp_path / "take.wav"
-
-    session.render_wav(wav)
-
-    assert session.render_span(wav) == RENDER_SPAN
-    assert session.render_span(tmp_path / "sub" / ".." / "take.wav") == RENDER_SPAN  # any spelling of the path
-    assert session.render_span(tmp_path / "other.wav") is None
-    session.export_offline(wav)
-    assert session.render_span(wav) is None
-
-
 def test_render_waits_for_an_in_flight_write_then_proceeds(monkeypatch, tmp_path):
     """A render serializes behind the write whose saved state it needs."""
     session, _ = make_session(project=tmp_path / "agent.flp")
@@ -240,7 +223,7 @@ def _verified_live_render(monkeypatch, tmp_path, stop):
     session.project.write_bytes(b"FLhd")
     monkeypatch.setattr(controls.time, "sleep", lambda seconds: None)
     monkeypatch.setattr(controls.audio, "wav_format", lambda path: (100, 44100))
-    monkeypatch.setattr(controls.audio, "analyze_wav", lambda path: SimpleNamespace(integrated_lufs=-12.0))
+    monkeypatch.setattr(controls.audio, "integrated_lufs", lambda path: -12.0)
     return session, control
 
 

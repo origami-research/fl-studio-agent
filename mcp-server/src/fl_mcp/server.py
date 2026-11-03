@@ -35,7 +35,6 @@ from fl_mcp.actions import ActionLog
 from fl_mcp.contract import (
     ENV_KERNEL_ROOT,
     WORKSPACE_ONLY_FLAG,
-    AnalyzeResult,
     CheckToolResult,
     EditFileResult,
     GetSceneResult,
@@ -54,7 +53,6 @@ from fl_mcp.contract import (
     workspace_tools_from_env,
 )
 from fl_mcp.errors import ToolError
-from fl_mcp.kernel import display
 from fl_mcp.kernel.display import ShownImage
 from fl_mcp.kernel.host import KernelHost
 from fl_mcp.kernel.launch import Workspace
@@ -219,16 +217,22 @@ def run(code: str, ctx: Context) -> RunResult:
       lands in the session's renders folder, which you can read but not write.
       A render plays the whole song in real time (FL's loop mode decides: the
       playlist in song mode, only the selected pattern in pattern mode).
-      fl.spectrogram(path) -> a picture to look at (end the cell with it):
-      spectrum over time, loudness and stereo width per bar.
-      fl.analyze(path) -> FL's tempo, key, LUFS, true peak, spectral balance;
-      fl.read_wav(path) -> (samples: numpy.ndarray, sample_rate: int).
+      fl.read_wav(path) -> (samples: numpy.ndarray (frames, channels),
+      sample_rate: int).
     - During a match FL is never reopened: fl.save() is not needed (and a
       trial FL cannot save), and Track.set_automation, fl.add_effect and
       fl.file_edit() are unavailable because they rewrite the saved song.
     - theory.chord("C", "minor") / theory.scale("E", "minor") -> MIDI ints;
       theory.drums("x...x...x...x...", key="C1", step_beats=0.25) -> a
       ready-to-write [Note] step grid ('x' = hit, '.' = rest).
+
+    Listening is yours to build: read a render and compute or plot whatever
+    you want (numpy, scipy, matplotlib and soundfile are installed; %pip
+    install anything else). A spectrogram with bar lines (4 beats a bar):
+      import matplotlib.pyplot as plt, numpy as np
+      x, sr = fl.read_wav(fl.render("mix.wav"))
+      plt.specgram(x.mean(axis=1), Fs=sr, NFFT=4096, cmap="magma")
+      for t in np.arange(0, len(x) / sr, 240 / fl.tempo): plt.axvline(t, c="w", lw=.5)
     """
     # Engineering notes (not part of the model-facing description above): the
     # kernel is a separate process (fl_mcp.kernel, docs/38) and the OS, not
@@ -257,20 +261,17 @@ def check(ctx: Context, bars: int = 2, start_bar: int = 1) -> CheckToolResult:
     return CheckToolResult(**checked.model_dump(), actions=actions.sentences())
 
 
-_LAST_RENDER_KEY = "last_render"
-
-
 @_tool_boundary
 def render(ctx: Context) -> RenderResult:
     """Play the song once from its start and record the mix to a WAV: how to hear
     your edits. FL's loop mode decides what plays: the playlist in song mode, the
     selected pattern in pattern mode. Returns {"path", "bytes", "span"}: path is
-    the WAV file (run code reads it with fl.read_wav or fl.analyze), bytes its
-    size; span says what played (source "song" or "pattern"), its live beats and
-    tempo, and the seconds recorded. The audio stays in the file, never in this
-    result. A render takes about that long, ten minutes at most, so render once
-    when the pass is done (check proves audibility in seconds). Call analyze
-    afterwards to see and measure it."""
+    the WAV file, bytes its size; span says what played (source "song" or
+    "pattern"), its live beats and tempo, and the seconds recorded. The audio
+    stays in the file, never in this result: to look at it, read it in run
+    (fl.read_wav) and plot or measure what you want. A render takes about that
+    long, ten minutes at most, so render once when the pass is done (check
+    proves audibility in seconds)."""
     # The WAV never goes into the result as text: a 23 s render is ~5.8M tokens of
     # base64, which overflows the model's context on the next request in any real
     # client. A person or client that wants the audio opens the file at path.
@@ -285,49 +286,6 @@ def render(ctx: Context) -> RenderResult:
         span=rendered.span,
         actions=actions.sentences(),
     )
-
-
-@_tool_boundary
-def analyze(ctx: Context, wav: str | None = None) -> AnalyzeResult:
-    """See and measure a rendered WAV; ``wav`` defaults to the most recent render
-    (rendering fresh if none exists yet).
-
-    Returns {"bpm", "key", "integrated_lufs", "true_peak_dbfs",
-    "spectral_balance", "actions", "images"} and one image (about 560 tokens) to
-    look at: the spectrum over time, bars numbered along the bottom, frequency
-    bands named on the right (sub, bass, low mids, mids, presence, air), colour
-    is energy per 1/13 octave, so a balanced mix reads as an even band; under it,
-    loudness per bar in LUFS (red on top where peaks reach 0 dBFS) and stereo
-    width per bar (empty is mono). bpm is FL's tempo for the render; key is the
-    pitch class with the most energy, not a reliable key (get_scene infers the
-    key from the notes). Look for what you meant: whether each section has the
-    energy and parts you wrote, a lead that stands out of the mids, low end that
-    does not swamp the rest, and contrast between sections. Draw anything else
-    with fl.read_wav and matplotlib in run."""
-    fl = ctx.request_context.lifespan_context["fl"]
-    actions = ActionLog()
-    try:
-        path = Path(wav) if wav else ctx.request_context.lifespan_context.get(_LAST_RENDER_KEY)
-        if path is None:
-            path = _render(ctx, actions).path
-        measured = fl.analyze(path)
-        picture = display.encode(fl.spectrogram(path))
-        actions.measured(measured, path.name if wav else "the render")
-        result = AnalyzeResult(
-            **measured.model_dump(), actions=actions.sentences(), images=display.describe([picture], 0)
-        )
-        return _with_images(result, [picture])
-    except ToolError as exc:
-        return _tool_error_response(_tool_error_result(exc))
-    except OSError as exc:
-        return _tool_error_response(
-            ToolErrorResult(
-                error="invalid_argument",
-                message=str(exc),
-                fix="Pass the path returned by render, or call render first.",
-                retryable=False,
-            )
-        )
 
 
 @_tool_boundary
@@ -586,18 +544,16 @@ def _file_op(ctx: Context, op: str, args: dict[str, Any]) -> dict[str, Any]:
 
 
 def _render(ctx: Context, actions: ActionLog) -> RenderReceipt:
-    """Render to a new WAV in the renders folder, so run can read the result too;
-    analyze measures it next unless told otherwise."""
+    """Render to a new WAV in the renders folder, so run can read the result too."""
     output = ctx.request_context.lifespan_context["kernel"].workspace.fresh_render()
     rendered = ctx.request_context.lifespan_context["session"].render_wav(output)
     actions.called("render_wav", {"output": output}, rendered)
-    ctx.request_context.lifespan_context[_LAST_RENDER_KEY] = rendered.path
     return rendered
 
 
 def tool_definitions() -> tuple[Any, ...]:
     """The engine's FL tool surface, in stable presentation order."""
-    return run, get_scene, check, render, analyze
+    return run, get_scene, check, render
 
 
 def workspace_tool_definitions() -> tuple[Any, ...]:

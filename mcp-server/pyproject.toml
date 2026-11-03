@@ -16,8 +16,13 @@ dependencies = [
     "pip>=24.0",
     # fl-mcp-install's Bridge download verifies HTTPS with the OS (fl/bridge.py).
     "truststore>=0.10",
-    # fl.spectrogram draws its picture, and run shows the images a cell displays.
+    # run shows the images a cell displays.
     "pillow>=11.0",
+    # The model listens by computing and plotting what it wants in run (docs/38), so the
+    # kernel ships the usual tools for it; anything else is a %pip install away.
+    "scipy>=1.13",
+    "matplotlib>=3.8",
+    "soundfile>=0.12",
 ]
 keywords = ["fl-studio", "mcp", "music-production", "piano-roll"]
 classifiers = [
@@ -77,8 +82,6 @@ dev = [
     "pyflp>=2.0",
     "python-rtmidi>=1.5",
     "flpkit==0.9.0",
-    # The run kernel's matplotlib backend (kernel/mpl_inline.py) is tested against the real library.
-    "matplotlib>=3.8",
 ]
 
 [tool.ruff]

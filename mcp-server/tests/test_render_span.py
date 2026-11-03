@@ -40,7 +40,7 @@ def _rig(monkeypatch, tmp_path, handlers, *, project=None):
     monkeypatch.setattr(FLSession, "caps", property(lambda self: SimpleNamespace(bridge_live=True)))
     monkeypatch.setattr(controls.time, "sleep", lambda seconds: None)
     monkeypatch.setattr(controls.audio, "wav_format", lambda path: (100, 44100))
-    monkeypatch.setattr(controls.audio, "analyze_wav", lambda path: SimpleNamespace(integrated_lufs=-12.0))
+    monkeypatch.setattr(controls.audio, "integrated_lufs", lambda path: -12.0)
     return session, control, transport
 
 

@@ -5,7 +5,9 @@
 ## What changed
 
 `run` executes model code in a separate, long-lived Python process: a kernel, like a Jupyter notebook's.
-The code is full Python: every import, introspection, files, `time.sleep`, numpy, and package installs with `%pip install x` or `!pip install x`.
+The code is full Python: every import, introspection, files, `time.sleep`, and package installs with `%pip install x` or `!pip install x`.
+numpy, scipy, matplotlib, soundfile and Pillow ship with the engine (since 2026-11-03), so the model can read a render and measure or plot it with no install.
+librosa is left to `%pip install librosa`: its numba and llvmlite add about 170 MB, cap the engine's numpy, and often lack wheels for a new Python, which would fail the whole engine install.
 The boundary is the operating system, not a Python allowlist.
 On Windows, the production FL boxes, the kernel is an AppContainer process that can reach only its own workspace.
 On macOS it is a Seatbelt sandbox with the same reach (since 2026-10-26; until then the macOS kernel ran unconfined, with the user's own access).
@@ -62,7 +64,8 @@ A kernel that cannot start makes `run` fail with the `kernel_unavailable` tool e
 
 ### Images
 
-Since 2026-11-02 a cell can show images, like a notebook's inline output, so the model can look at what its code drew: a render's spectrogram (`fl.spectrogram`, [sdk-reference](sdk-reference.md#flspectrogramwav-str--path---pilimageimage)), a plot of its notes, any chart.
+Since 2026-11-02 a cell can show images, like a notebook's inline output, so the model can look at what its code drew: a spectrogram of a render it read with `fl.read_wav`, a plot of its notes, any chart.
+This is how the model listens: it computes and plots what it wants itself, and the engine ships no canned analysis ([sdk-reference](sdk-reference.md#flread_wavpath-str--path---tuplenpndarray-int)).
 A cell shows an image by ending with it (a PIL image, a matplotlib figure, or any object with `_repr_png_`), by calling `display(...)` (which also takes PNG/JPEG bytes or an image file path), or by leaving matplotlib figures open; `plt.show()` works.
 The kernel sets `MPLBACKEND` to `fl_mcp.kernel.mpl_inline`, so a figure never opens a window on the machine running FL; `!cmd` and `%pip` subprocesses get `Agg` instead, which every matplotlib has.
 Figures are closed once shown, and a figure that fails to draw fails only its own cell.
@@ -94,7 +97,7 @@ The server creates:
 `fl.render(name)` uses only the file name and writes `<root>/renders/<name>`; the `render` tool writes `<root>/renders/render-<id>.wav`.
 Every render lands directly in `renders`, never in a folder made inside it, because on Windows the kernel can read a render only through the grant it inherits from `renders` (see "Private directories" below).
 The server, not the kernel, writes there, and the kernel cannot write there, so it cannot plant a link that turns a render into a server write somewhere else.
-`fl.read_wav(path)` returns `(samples: numpy.ndarray, sample_rate: int)` and runs inside the kernel, as does `fl.analyze(path)`.
+`fl.read_wav(path)` returns `(samples: numpy.ndarray, sample_rate: int)` and runs inside the kernel.
 
 `%pip` and `!pip` use the engine's interpreter with `PIP_TARGET=<root>/work/.packages`, which the kernel appends to `sys.path`.
 Every other Python started in the workspace (`!python`, `python` in the `shell` tool) appends it too, through the `sitecustomize` on its `PYTHONPATH`.
@@ -268,4 +271,3 @@ It lands in the server log for the kernel, and in the output of `%pip` and `!pyt
 - First real-Windows run (dev box, 2026-10-18) found that the null device and 0o700 directories are denied inside the container; both are fixed above.
 - `PIP_TARGET` installs a package's dependencies even when the engine venv already has them; imports still resolve to the engine's copies first.
 - One AppContainer SID per box (the firewall rule needs a fixed SID): concurrent sessions on one box would share it, and a server that crashes leaves its grants until the harness deletes the kernel root.
-- The `analyze` tool's `wav` argument still reads any path the server can read (server-side, returns measurements only).

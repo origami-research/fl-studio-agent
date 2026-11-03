@@ -13,7 +13,7 @@ They are off unless asked for, so the fl-mcp-v1 tool surface does not change whe
 
 | Setting | Effect |
 | --- | --- |
-| nothing (default) | The FL tools only: `run, get_scene, check, render, analyze`. |
+| nothing (default) | The FL tools only: `run, get_scene, check, render`. |
 | `FLMCP_WORKSPACE_TOOLS=1` | The FL tools, then the six workspace tools. Any value other than `0` or `1` stops the server at startup. |
 | `fl-mcp --workspace-only` | The six workspace tools alone, with no FL session: the server never starts or connects to FL. For computer-use runs, where the model reaches FL through the desktop. |
 

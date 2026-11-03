@@ -18,11 +18,9 @@ from typing import Any
 import anyio
 import pytest
 from mcp.types import CallToolResult
-from PIL import Image
 from session_fakes import RENDER_SPAN
 
 from fl_mcp import __version__, errors, server
-from fl_mcp.audio import AudioAnalysis, SpectralBalance
 from fl_mcp.contract import build_version
 from fl_mcp.kernel.host import RUN_CELL_TIMEOUT_SECONDS, KernelHost
 from fl_mcp.kernel.launch import PosixLauncher, Workspace
@@ -164,7 +162,7 @@ def test_the_model_sees_one_tool_per_job():
     prove it sounds, hear it, measure it. Setup diagnostics are the operator's
     fl-mcp-doctor, and note reads live in get_scene and the SDK, so neither
     fl_doctor nor get_notes is offered to a model."""
-    assert [fn.__name__ for fn in server.tool_definitions()] == ["run", "get_scene", "check", "render", "analyze"]
+    assert [fn.__name__ for fn in server.tool_definitions()] == ["run", "get_scene", "check", "render"]
 
 
 def test_check_returns_the_sessions_result():
@@ -297,7 +295,7 @@ def test_tools_register_with_ctx_injected_and_absent_from_the_schema():
         srv.add_tool(fn)
 
     tools = {t.name: t for t in srv._tool_manager.list_tools()}
-    assert set(tools) == {"run", "get_scene", "check", "render", "analyze"}
+    assert set(tools) == {"run", "get_scene", "check", "render"}
     for name, tool in tools.items():
         assert tool.context_kwarg == "ctx", f"{name}: ctx not detected for injection"
         assert "ctx" not in tool.parameters.get("properties", {}), (
@@ -309,15 +307,11 @@ def test_tools_register_with_ctx_injected_and_absent_from_the_schema():
     assert tools["render"].parameters.get("properties", {}) == {}
 
 
-# -- render / analyze -----------------------------------------------------------
+# -- render ---------------------------------------------------------------------
 
 
 class _RenderFl:
-    """SDK and session stub: render writes a tiny WAV; analyze measures a given path."""
-
-    def __init__(self) -> None:
-        self.analyzed: list[Path] = []
-        self.pictured: list[Path] = []
+    """SDK and session stub: render writes a tiny WAV."""
 
     def render(self, output: Path) -> Path:
         return self.render_wav(output).path
@@ -333,20 +327,6 @@ class _RenderFl:
             wav.setframerate(44100)
             wav.writeframes((np.zeros(441)).astype("<i2").tobytes())
         return RenderReceipt(path=output, span=RENDER_SPAN)
-
-    def analyze(self, wav: Path) -> AudioAnalysis:
-        self.analyzed.append(Path(wav))
-        return AudioAnalysis(
-            bpm=140.0,
-            key=None,
-            integrated_lufs=-12.0,
-            true_peak_dbfs=-1.0,
-            spectral_balance=SpectralBalance(low_dbfs=-20.0, mid_dbfs=-20.0, high_dbfs=-20.0),
-        )
-
-    def spectrogram(self, wav: Path) -> Image.Image:
-        self.pictured.append(Path(wav))
-        return Image.new("RGB", (1000, 420))
 
 
 def _workspace_only(tmp_path: Path) -> Any:
@@ -368,36 +348,6 @@ def test_render_returns_the_wav_path_and_size_never_the_audio(tmp_path):
     assert result.span == RENDER_SPAN  # the caller sees what played and for how long
     assert set(result.model_dump()) == {"path", "bytes", "span", "actions"}
     assert len(result.model_dump_json()) < 1000
-
-
-def test_analyze_defaults_to_the_most_recent_render(tmp_path):
-    fl = _RenderFl()
-    ctx = _ctx(fl=fl, session=fl, kernel=_workspace_only(tmp_path))
-    rendered = server.render(ctx)
-    metrics = server.analyze(ctx).structured_content
-    assert metrics["bpm"] == 140.0
-    assert metrics["integrated_lufs"] == -12.0
-    assert fl.analyzed == fl.pictured == [Path(rendered.path)]
-
-
-def test_analyze_renders_fresh_when_nothing_was_rendered_yet(tmp_path):
-    fl = _RenderFl()
-    metrics = server.analyze(_ctx(fl=fl, session=fl, kernel=_workspace_only(tmp_path))).structured_content
-    assert metrics["bpm"] == 140.0
-    assert len(fl.analyzed) == 1
-
-
-def test_analyze_shows_the_render_as_an_image_the_model_sees(tmp_path):
-    """The model cannot hear the render, so analyze also returns its spectrogram: as MCP
-    image content after the JSON, never as base64 text, at a few hundred tokens."""
-    fl = _RenderFl()
-    result = server.analyze(_ctx(fl=fl, session=fl, kernel=_workspace_only(tmp_path)))
-
-    text, image = result.content
-    assert (image.type, image.mime_type) == ("image", "image/png")
-    assert json.loads(text.text)["images"] == ["image 1: 1000x420 PNG, about 560 tokens"]
-    assert image.data not in text.text
-    assert json.loads(text.text) == result.structured_content
 
 
 def test_notes_take_positional_arguments_in_the_documented_order(kernel):

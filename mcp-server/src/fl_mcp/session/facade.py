@@ -53,7 +53,6 @@ from fl_mcp.schemas import (
     PluginParam,
     PluginParamModel,
     RenderReceipt,
-    RenderSpan,
     SessionState,
     Sound,
     SoundKind,
@@ -239,8 +238,6 @@ class FLSession:
         self._audio_stream_thread: threading.Thread | None = None
         self._audio_endpoint: AudioEndpoint | None = None
         self._audio_bridge_pid: int | None = None
-        # What each render this session made played: its tempo puts bars on what reads it.
-        self._render_spans: dict[Path, RenderSpan] = {}
 
     @property
     def control(self) -> ControlCarrier | None:
@@ -415,19 +412,11 @@ class FLSession:
 
     def render_wav(self, output: Path) -> RenderReceipt:
         with self._write_guard("render_wav"):
-            receipt = controls.render_wav(self, output)
-        self._render_spans[receipt.path.resolve()] = receipt.span
-        return receipt
-
-    def render_span(self, wav: Path) -> RenderSpan | None:
-        """What FL played for one of this session's renders (tempo, beats); None for any other WAV."""
-        return self._render_spans.get(Path(wav).expanduser().resolve())
+            return controls.render_wav(self, output)
 
     def export_offline(self, output: Path) -> Path:
         with self._write_guard("export_offline"):
-            exported = controls.export_offline(self, output)
-        self._render_spans.pop(exported.resolve(), None)  # the whole song, not what a render there played
-        return exported
+            return controls.export_offline(self, output)
 
     @contextmanager
     def audio_stream(self) -> Iterator[Iterator[AudioChunk]]:

@@ -14,13 +14,11 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-from PIL import Image
 from sdk_fakes import DEFAULT_CHANNELS, FakeSession
 from session_fakes import RENDER_SPAN
 
 from fl_mcp import errors, server
 from fl_mcp.actions import GROUP_AT, MAX_ACTIONS, MAX_CHARS, ActionLog
-from fl_mcp.audio import AudioAnalysis, SpectralBalance
 from fl_mcp.flp import Effect
 from fl_mcp.kernel.host import KernelHost
 from fl_mcp.kernel.launch import PosixLauncher, Workspace
@@ -54,17 +52,6 @@ def check_result(master: float | None = -1.8, start_bar: int = 9, bars: int = 2)
     return CheckResult(
         start_bar=start_bar, bars=bars, seconds=4.0, master_peak_dbfs=master, channels=heard, summary="."
     )
-
-
-def analysis(**overrides: object) -> AudioAnalysis:
-    fields = {
-        "bpm": 122.04,
-        "key": "A",
-        "integrated_lufs": -9.84,
-        "true_peak_dbfs": -4.0,
-        "spectral_balance": SpectralBalance(low_dbfs=-10.0, mid_dbfs=-30.0, high_dbfs=-40.0),
-    }
-    return AudioAnalysis(**{**fields, **overrides})
 
 
 def note_write(actions: ActionLog, channel: int, wrote: int, mode: str = "merge", total: int | None = None,
@@ -114,7 +101,6 @@ def test_each_kind_of_change_reads_as_one_plain_sentence():
     actions.called("export_offline", {}, Path("/renders/mix.wav"))
     actions.called("save_project", {}, None)
     actions.called("undo", {}, None)
-    actions.measured(analysis(), "the render")
     assert actions.sentences() == [
         "Set tempo to 122 BPM",
         "Wrote 64 notes to 808 Kick",
@@ -136,7 +122,6 @@ def test_each_kind_of_change_reads_as_one_plain_sentence():
         "Exported the song to mix.wav",
         "Saved the song",
         "Undid the last action in FL",
-        "Measured the render: peak -4.0 dBFS, -9.8 LUFS, lows 20 dB over mids, 122 BPM, key A",
     ]
 
 
@@ -182,20 +167,6 @@ def test_check_variants_say_what_the_meters_could_tell():
     actions = log()
     actions.called("check", {}, shared)
     assert actions.sentences() == ["Checked bar 3: 3 of 5 tracks sound, 1 not measurable alone, master silent"]
-
-
-def test_measurements_never_print_impossible_numbers():
-    silent = analysis(true_peak_dbfs=float("-inf"), integrated_lufs=float("-inf"))
-    quiet_lows = analysis(
-        bpm=None, key=None, spectral_balance=SpectralBalance(low_dbfs=-35.0, mid_dbfs=-30.0, high_dbfs=-40.0)
-    )
-    actions = log()
-    actions.measured(silent, "the render")
-    actions.measured(quiet_lows, "mix.wav")
-    assert actions.sentences() == [
-        "Measured the render: it is silent",
-        "Measured mix.wav: peak -4.0 dBFS, -9.8 LUFS, lows 5 dB under mids",
-    ]
 
 
 def test_a_sentence_that_cannot_be_written_never_fails_the_call():
@@ -482,8 +453,8 @@ def test_the_check_tool_reports_what_it_measured(session):
     assert checked.summary == "1 of 1 channels sounded in bars 9-10."
 
 
-class _Measured(FakeSession):
-    """Render writes a real (silent-but-valid) WAV; analyze returns fixed numbers."""
+class _Rendering(FakeSession):
+    """Render writes a real (silent-but-valid) WAV."""
 
     def render_wav(self, output: Path) -> RenderReceipt:
         import wave
@@ -495,32 +466,13 @@ class _Measured(FakeSession):
             wav.writeframes(b"\x00\x00" * 441)
         return RenderReceipt(path=output, span=_song_span(34.0))
 
-    def analyze(self, wav: Path) -> AudioAnalysis:
-        return analysis()
-
-    def spectrogram(self, wav: Path) -> Image.Image:
-        return Image.new("RGB", (100, 42))
-
 
 @pytest.fixture
-def measured(tmp_path) -> SimpleNamespace:
-    session = _Measured(store=Store("measured", root=tmp_path / "store"), channels=DEFAULT_CHANNELS)
+def rendering(tmp_path) -> SimpleNamespace:
+    session = _Rendering(store=Store("rendering", root=tmp_path / "store"), channels=DEFAULT_CHANNELS)
     kernel = SimpleNamespace(workspace=Workspace.create(tmp_path / "kernel"))
     return _ctx(fl=session, session=session, kernel=kernel)
 
 
-def test_the_render_tool_reports_the_render(measured):
-    assert server.render(measured).actions == ["Rendered 0:34"]
-
-
-def test_analyze_reports_its_measurement_and_the_render_it_needed(measured, tmp_path):
-    def actions(**kwargs):  # analyze returns its picture too, so its result is the structured part
-        return server.analyze(measured, **kwargs).structured_content["actions"]
-
-    assert actions() == [
-        "Rendered 0:34",
-        "Measured the render: peak -4.0 dBFS, -9.8 LUFS, lows 20 dB over mids, 122 BPM, key A",
-    ]
-    assert actions() == ["Measured the render: peak -4.0 dBFS, -9.8 LUFS, lows 20 dB over mids, 122 BPM, key A"]
-    named = actions(wav=str(tmp_path / "mix.wav"))
-    assert named == ["Measured mix.wav: peak -4.0 dBFS, -9.8 LUFS, lows 20 dB over mids, 122 BPM, key A"]
+def test_the_render_tool_reports_the_render(rendering):
+    assert server.render(rendering).actions == ["Rendered 0:34"]

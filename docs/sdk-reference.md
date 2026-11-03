@@ -9,7 +9,7 @@ The stable public surface is deliberately small:
 - `fl.track(...).write(...)`, `clear()`, and `notes()` for channel/pattern notes.
 - `fl.set_tempo(...)` for confirmed tempo changes.
 - `fl.check(...)` to prove in seconds which channels sound.
-- `fl.render(...)`, `fl.spectrogram(...)`, `fl.read_wav(...)`, and `fl.analyze(...)` for render/audio workflows.
+- `fl.render(...)` and `fl.read_wav(...)` for render/audio workflows: the model measures and plots the samples itself.
 - `fl.track(...).set_automation(...)` for existing FL-authored automation clips.
 - `with fl.file_edit(): ...` to batch file-lane edits into a single FL reload in development mode.
 - `fl.track(...).params(...)` and `set_param(...)` for live generator plugin parameters.
@@ -39,9 +39,8 @@ from fl_mcp.schemas import Note
 fl = connect()
 bass = fl.track("Bass")
 bass.write([Note(key="C2", start=0, length=1)], mode="replace")
-wav = fl.render("/tmp/bass-pass.wav")
-analysis = fl.analyze(wav)
-if analysis.true_peak_dbfs > -1:
+samples, rate = fl.read_wav(fl.render("/tmp/bass-pass.wav"))
+if abs(samples).max() > 0.9:
     bass.write([Note(key="C2", start=0, length=1, velocity=0.7)], mode="replace")
 ```
 
@@ -116,8 +115,8 @@ the Bridge records the mix, and returns the verified WAV path. Nothing is saved.
 It raises before recording if song mode has an empty playlist or the capture
 would pass ten minutes, and after recording if the WAV does not verify.
 The `render` MCP tool returns the WAV's `path`, its size in `bytes`, and the span it recorded (`RenderSpan`).
-The audio stays in the file: a person or client opens it at `path`, and model code reads it with `fl.spectrogram`, `fl.read_wav` or `fl.analyze`.
-The session remembers each render's span, so `fl.analyze` and `fl.spectrogram` know its tempo and bars.
+The audio stays in the file: a person or client opens it at `path`, and model code reads it with `fl.read_wav`.
+The span's tempo and beats put bars on the audio: at 4 beats a bar, bar `n` starts at `(n - 1) * 240 / tempo_bpm` seconds into the WAV.
 Until 0.1.5 the result also carried the WAV as base64, which overflowed the model's context in real clients.
 
 A render plays in real time and produces the real mix, so render once when the
@@ -137,52 +136,19 @@ read-only renders folder and the returned path says where ([38](38-python-kernel
 `samples` is a float64 NumPy array shaped `(frames, channels)`, normalized to
 roughly `[-1, 1]`; `sample_rate` is Hz.
 
-`render(path) -> Path` records the live mix through the Bridge and preserves the
-confirmed artifact. Use `read_wav` only when raw NumPy samples are wanted, and
-`analyze` when derived metrics are enough.
+This is how the model listens: there is no canned analysis.
+It reads the samples and computes or plots what it wants with numpy, scipy or matplotlib, and shows a figure by ending the cell with it ([38](38-python-kernel.md#images)).
+Until 2026-11-03 the SDK also had `fl.analyze` (tempo, key, LUFS, true peak, spectral balance) and `fl.spectrogram` (a fixed picture), and the `analyze` tool returned both; the owner removed them so the model builds the analysis it needs.
 
 ```python
-samples, sample_rate = fl.read_wav(wav)
-peak = abs(samples).max()
-```
+import matplotlib.pyplot as plt
+import numpy as np
 
-### `fl.spectrogram(wav: str | Path) -> PIL.Image.Image`
-
-**Availability:** local file analysis. The model cannot hear a render, but it can look at one: this draws a 1000x420 picture of a PCM WAV (about 560 tokens) for the model to see.
-End a `run` cell with it, or pass it to `display()`, and the image follows the result ([38](38-python-kernel.md#images)); the `analyze` tool returns the same picture of the render.
-
-| Part | What it shows |
-| --- | --- |
-| spectrum | energy over time, 30 Hz to 16 kHz on a log axis, bands named on the right (sub, bass, low mids, mids, presence, air); colour is energy per 1/13 octave, so pink noise, the usual reference for a balanced mix, reads as an even band |
-| loudness | loudness per bar in LUFS (BS.1770 K-weighting), red on top where a sample peak is within 0.5 dB of 0 dBFS (clipping, or a limiter's ceiling) |
-| stereo width | side energy over mid energy per bar; empty is mono |
-| time axis | bar numbers at FL's tempo for this session's renders (bars of 4 beats; the render's decay tail after "end"), seconds for any other WAV |
-
-It streams the file like `analyze`, so a long song costs only the picture's memory.
-It is a PIL image: crop or resize it, or draw anything else from `fl.read_wav` with matplotlib.
-
-```python
-fl.spectrogram(fl.render("mix.wav"))  # the last line of a run cell: the model sees it
-```
-
-### `fl.analyze(wav: str | Path) -> AudioAnalysis`
-
-**Availability:** local file analysis. Computes deterministic metrics from a
-PCM WAV; it does not control FL.
-`bpm` is FL's tempo when the WAV is one of this session's renders and null for any other WAV.
-Until 2026-11-02 it was guessed from the audio, which read a syncopated 85 BPM render as 113 BPM ([#284](https://github.com/origami-research/fl-studio-mcp/issues/284)).
-`key` is the pitch class with the most energy, not a key estimate; `get_scene` infers the key from the notes.
-It streams the file in fixed-size blocks, so its memory stays flat however long the
-render (prefer it to `read_wav`, which loads every frame, for a full-length song).
-Integrated loudness equals a whole-file pass; true peak is 4x band-limited
-interpolation per block with real signal on both sides of each seam; key and spectral
-balance come from the mean Hann-windowed spectrum of 65,536-frame segments (one
-segment, so exactly the whole-file spectrum, for a render that short).
-The `analyze` MCP tool returns these measurements and the render's `fl.spectrogram` picture as image content.
-
-```python
-analysis = fl.analyze("/tmp/mix.wav")
-print(analysis.integrated_lufs, analysis.key)
+samples, rate = fl.read_wav(fl.render("mix.wav"))
+plt.specgram(samples.mean(axis=1), Fs=rate, NFFT=4096, cmap="magma")
+for start in np.arange(0, len(samples) / rate, 240 / fl.tempo):
+    plt.axvline(start, color="white", lw=0.5)  # bar lines, 4 beats a bar
+# a figure still open when the cell ends is shown to the model
 ```
 
 ### `fl.check(bars: int = 2, start_bar: int = 1) -> CheckResult`

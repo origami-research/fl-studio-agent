@@ -1,9 +1,12 @@
-"""Small, deterministic measurements for PCM WAV renders.
+"""Reading PCM WAV renders: the samples for the SDK's read_wav, and the loudness the
+render check uses to refuse a silent recording.
 
-analyze_wav streams the file in fixed-size blocks, so its memory is O(block) however
-long the render: a 90 s song analysed whole (4x-upsampled true peak, float64 copies)
-took >3 GB and paged FL out on an 8 GB worker. Every measurement is an accumulator fed
-block by block; a render shorter than one block measures exactly as a whole-file pass.
+integrated_lufs streams the file in fixed-size blocks, so its memory is O(block) however
+long the render: a 90 s song measured whole took >3 GB and paged FL out on an 8 GB
+worker. A render shorter than one block measures exactly as a whole-file pass.
+
+There is no analyzer here on purpose: the model reads the samples in run and measures
+or plots what it wants itself (docs/38).
 """
 
 from __future__ import annotations
@@ -12,64 +15,27 @@ import wave
 from pathlib import Path
 
 import numpy as np
-from pydantic import BaseModel
 
-# Frames decoded per read; also the true-peak block and the spectrum segment length.
+# Frames decoded per read.
 _BLOCK = 1 << 15
-_SPECTRUM_SEGMENT = 1 << 16
-# Real signal each true-peak block is upsampled with on both sides, so the sinc tails
-# that cross a block seam are present and the seam loses no inter-sample peak.
-_TRUE_PEAK_CONTEXT = 1 << 13
 _LOUDNESS_RATE = 48000
 
 
-class SpectralBalance(BaseModel):
-    """Mean-square level by conventional production bands, in dBFS."""
-
-    low_dbfs: float
-    mid_dbfs: float
-    high_dbfs: float
-
-
-class AudioAnalysis(BaseModel):
-    # FL's own tempo when the WAV is one of this session's renders; null otherwise. A tempo
-    # guessed from the audio misread syncopated beats (85 BPM read as 113, issue #284).
-    bpm: float | None
-    key: str | None
-    integrated_lufs: float
-    true_peak_dbfs: float
-    spectral_balance: SpectralBalance
-
-
-def analyze_wav(path: Path, tempo_bpm: float | None = None) -> AudioAnalysis:
-    """Measure a PCM WAV without invoking a DAW or an external binary.
-
-    ``tempo_bpm`` is FL's tempo for the render, reported as ``bpm``; the audio is not
-    asked for one.
-    """
+def integrated_lufs(path: Path) -> float:
+    """BS.1770 integrated loudness of a PCM WAV, streamed block by block."""
     with path.open("rb") as file, wave.open(file, "rb") as wav:
         channels, width, sample_rate, count = _header(wav)
         loudness = _Loudness(sample_rate, channels, count)
-        peak = _TruePeak(channels)
-        spectrum = _Spectrum(sample_rate, count)
         decoded = 0
         for block in _blocks(wav, channels, width):
             decoded += len(block)
             loudness.add(block)
-            peak.add(block)
-            spectrum.add(block.mean(axis=1))
     # The header is written last from the writer's own counter, so it can claim frames a failed
     # write never put on disk; the decoded count is the truth, and a short file is not a take.
     if decoded != count:
         raise ValueError(f"WAV header claims {count} frames but only {decoded} are present")
-    return AudioAnalysis(
-        bpm=tempo_bpm,
-        key=spectrum.key(),
-        # Tenths of a dB: finer is below what anyone hears, and costs the model tokens to read.
-        integrated_lufs=round(loudness.integrated(), 1),
-        true_peak_dbfs=round(_dbfs(peak.finish()), 1),
-        spectral_balance=spectrum.balance(),
-    )
+    # Tenths of a dB: finer is below what anyone hears.
+    return round(loudness.integrated(), 1)
 
 
 def wav_format(path: Path) -> tuple[int, int]:
@@ -79,8 +45,8 @@ def wav_format(path: Path) -> tuple[int, int]:
     return count, sample_rate
 
 
-def _read_wav(path: Path) -> tuple[np.ndarray, int]:
-    """The whole file as float frames (channels last): the SDK's read_wav, not the analyzer."""
+def read_wav(path: Path) -> tuple[np.ndarray, int]:
+    """The whole file as float frames (channels last) and its sample rate: the SDK's read_wav."""
     with path.open("rb") as file, wave.open(file, "rb") as wav:
         channels, width, sample_rate, _ = _header(wav)
         return _decode(wav.readframes(wav.getnframes()), channels, width), sample_rate
@@ -120,47 +86,6 @@ def _decode(raw: bytes, channels: int, width: int) -> np.ndarray:
     if values.size == 0:
         raise ValueError("WAV has no complete audio frames")
     return values.reshape(-1, channels)
-
-
-def _dbfs(value: float) -> float:
-    return float(20 * np.log10(max(value, 1e-12)))
-
-
-class _TruePeak:
-    """4x band-limited interpolation, block by block.
-
-    Each block is upsampled with _TRUE_PEAK_CONTEXT real frames on both sides; the zero
-    padding after each window keeps its wrap-around away from the kept block, and the
-    render's own ends see silence beyond them, as an isolated recording should.
-    """
-
-    def __init__(self, channels: int) -> None:
-        self._buffer = np.empty((0, channels))
-        self._offset = 0  # absolute frame index of _buffer[0]
-        self._next = 0  # first frame of the next block to measure
-        self._peak = 0.0
-
-    def add(self, frames: np.ndarray) -> None:
-        self._buffer = np.concatenate([self._buffer, frames])
-        self._measure(final=False)
-
-    def finish(self) -> float:
-        self._measure(final=True)
-        return self._peak
-
-    def _measure(self, *, final: bool) -> None:
-        end = self._offset + len(self._buffer)
-        while self._next < end and (final or self._next + _BLOCK + _TRUE_PEAK_CONTEXT <= end):
-            stop = min(end, self._next + _BLOCK)
-            low, high = max(0, self._next - _TRUE_PEAK_CONTEXT), min(end, stop + _TRUE_PEAK_CONTEXT)
-            window = np.pad(self._buffer[low - self._offset : high - self._offset], ((0, _TRUE_PEAK_CONTEXT), (0, 0)))
-            upsampled = np.fft.irfft(np.fft.rfft(window, axis=0), n=window.shape[0] * 4, axis=0) * 4
-            kept = upsampled[(self._next - low) * 4 : (stop - low) * 4]
-            self._peak = max(self._peak, float(np.abs(kept).max()))
-            self._next = stop
-        keep_from = max(self._offset, self._next - _TRUE_PEAK_CONTEXT)
-        self._buffer = self._buffer[keep_from - self._offset :]
-        self._offset = keep_from
 
 
 def _biquad(
@@ -254,68 +179,3 @@ class _Loudness:
         relative = -0.691 + 10 * np.log10(gated.mean()) - 10
         gated = gated[levels[levels > -70] > relative]
         return float(-0.691 + 10 * np.log10(max(gated.mean(), 1e-12)))
-
-
-class _Spectrum:
-    """Mean Hann-windowed power spectrum of the mono mix (Welch, 50% overlap).
-
-    A render no longer than one segment is one segment: exactly the whole-file spectrum.
-    Longer renders average segments at every half segment plus one ending on the last
-    frame, so the whole render counts.
-    """
-
-    def __init__(self, sample_rate: int, count: int) -> None:
-        self._rate = sample_rate
-        self._count = count
-        self._size = min(count, _SPECTRUM_SEGMENT)
-        self._window = np.hanning(self._size)
-        self._power = np.zeros(self._size // 2 + 1)
-        self._segments = 0
-        self._buffer = np.empty(0)
-        self._offset = 0  # absolute frame index of _buffer[0]
-        self._next = 0  # first frame of the next segment
-        self._last_end = 0
-
-    def add(self, mono: np.ndarray) -> None:
-        self._buffer = np.concatenate([self._buffer, mono])
-        end = self._offset + len(self._buffer)
-        while self._next + self._size <= end:
-            self._take(self._next)
-            self._next += max(1, self._size // 2)
-        if end == self._count and self._last_end < end:
-            self._take(end - self._size)
-        keep_from = max(self._offset, min(self._next, end - self._size))
-        self._buffer = self._buffer[keep_from - self._offset :]
-        self._offset = keep_from
-
-    def _take(self, start: int) -> None:
-        segment = self._buffer[start - self._offset : start - self._offset + self._size]
-        self._power += np.abs(np.fft.rfft(segment * self._window)) ** 2
-        self._segments += 1
-        self._last_end = start + self._size
-
-    def key(self) -> str | None:
-        if not np.any(self._power):
-            return None
-        frequencies = np.fft.rfftfreq(self._size, 1 / self._rate)
-        valid = (frequencies >= 20) & (frequencies <= 5000)
-        if not np.any(valid):
-            return None
-        frequency = frequencies[valid][np.argmax(self._power[valid])]
-        if frequency <= 0:
-            return None
-        midi = round(69 + 12 * np.log2(frequency / 440))
-        return ("C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B")[midi % 12]
-
-    def balance(self) -> SpectralBalance:
-        power = self._power / self._segments
-        frequencies = np.fft.rfftfreq(self._size, 1 / self._rate)
-
-        def level(low: float, high: float) -> float:
-            band = power[(frequencies >= low) & (frequencies < high)]
-            # Parseval for a one-sided real FFT, corrected for the Hann window's
-            # mean-square attenuation, gives a directly comparable dBFS RMS level.
-            mean_square = 2 * band.sum() / (self._size**2 * np.mean(self._window**2))
-            return round(float(10 * np.log10(max(mean_square, 1e-12))), 1)
-
-        return SpectralBalance(low_dbfs=level(20, 250), mid_dbfs=level(250, 4000), high_dbfs=level(4000, 20000))

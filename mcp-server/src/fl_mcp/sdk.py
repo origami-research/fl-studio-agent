@@ -15,13 +15,13 @@ from __future__ import annotations
 from collections.abc import Sequence
 from contextlib import AbstractContextManager
 from pathlib import Path
-from typing import TYPE_CHECKING, Annotated
+from typing import Annotated
 
 import numpy as np
 from pydantic import BaseModel, Field, TypeAdapter, ValidationError, model_validator
 
 from fl_mcp import errors
-from fl_mcp.audio import AudioAnalysis, _read_wav, analyze_wav
+from fl_mcp.audio import read_wav
 
 from .flp import Effect
 from .schemas import (
@@ -44,9 +44,6 @@ from .schemas import (
 )
 from .session import FLSession, create_session
 from .sounds import SEARCH_LIMIT_MAX
-
-if TYPE_CHECKING:
-    from PIL import Image
 
 SdkChannel = Annotated[int, Field(strict=True, ge=0)]
 SdkPattern = Annotated[int, Field(strict=True, ge=1)]
@@ -307,26 +304,9 @@ class FL:
         they are live in FL immediately. A trial FL Studio cannot save."""
         self._session.save_project()
 
-    def analyze(self, wav: str | Path) -> AudioAnalysis:
-        """Measure a WAV: integrated LUFS, true peak, spectral balance, and ``bpm``, which is
-        FL's tempo when the WAV is one of this session's renders (null for any other)."""
-        path = Path(wav).expanduser().resolve()
-        span = self._session.render_span(path)
-        return analyze_wav(path, None if span is None else span.tempo_bpm)
-
-    def spectrogram(self, wav: str | Path) -> Image.Image:
-        """A picture of a WAV to look at: the spectrum over time with frequency bands named,
-        loudness and stereo width per bar, red where peaks reach 0 dBFS. Bars are numbered
-        for this session's renders (seconds for any other WAV). End a cell with it, or pass
-        it to display(), to see it; it is a PIL image, so crop or resize it as you like."""
-        from fl_mcp.spectrogram import spectrogram
-
-        path = Path(wav).expanduser().resolve()
-        return spectrogram(path, self._session.render_span(path))
-
     def read_wav(self, path: str | Path) -> tuple[np.ndarray, int]:
         """Load PCM WAV samples and sample rate for NumPy processing."""
-        return _read_wav(Path(path))
+        return read_wav(Path(path))
 
     def check(self, bars: int = 2, start_bar: int = 1) -> CheckResult:
         """Play ``bars`` bars (1 to 8) from ``start_bar`` and report which channels

@@ -14,7 +14,6 @@ from mcp.server.mcpserver.tools.base import Tool
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, model_validator
 
 from fl_mcp import __version__
-from fl_mcp.audio import AudioAnalysis
 from fl_mcp.kernel.display import ShownImage, describe
 from fl_mcp.schemas import CheckResult, RenderSpan
 
@@ -217,22 +216,14 @@ class RenderResult(BaseModel):
     actions: Actions
 
 
-# The check and analyze tools return what fl.check() and fl.analyze() do plus
-# the call's actions. They keep the published names those results already had,
-# so the contract's type names do not change under its consumers.
+# The check tool returns what fl.check() does plus the call's actions. It keeps
+# the published name that result already had, so the contract's type name does
+# not change under its consumers.
 class CheckToolResult(CheckResult):
     """What check heard: each channel, the master's peak, and a summary line."""
 
     model_config = ConfigDict(title="CheckResult")
     actions: Actions
-
-
-class AnalyzeResult(AudioAnalysis):
-    """Measurements of a rendered WAV, and its picture as image content after them."""
-
-    model_config = ConfigDict(title="AudioAnalysis")
-    actions: Actions
-    images: ShownImages
 
 
 # -- the workspace tools (docs/39) ----------------------------------------------------

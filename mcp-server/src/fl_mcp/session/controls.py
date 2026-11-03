@@ -311,7 +311,7 @@ def _live_render(session: FLSession, output: Path, seconds: float) -> Path:
         )
     try:
         frames, rate = audio.wav_format(captured)
-        measured = audio.analyze_wav(captured)
+        lufs = audio.integrated_lufs(captured)
     except (OSError, ValueError) as exc:
         log.warning("Bridge WAV %s could not be read: %s%s", captured, exc, stop_detail)
         raise errors.ToolError(
@@ -323,13 +323,13 @@ def _live_render(session: FLSession, output: Path, seconds: float) -> Path:
     if (
         rate != start.sample_rate
         or abs(frames - expected_frames) > expected_frames * 0.01
-        or measured.integrated_lufs <= -60
+        or lufs <= -60
     ):
         log.warning(
             "Bridge WAV did not verify: frames=%s/%s rate=%s/%s lufs=%.1f%s",
-            frames, expected_frames, rate, start.sample_rate, measured.integrated_lufs, stop_detail,
+            frames, expected_frames, rate, start.sample_rate, lufs, stop_detail,
         )
-        silent = measured.integrated_lufs <= -60
+        silent = lufs <= -60
         raise errors.ToolError(
             "render_failed",
             "The render recorded silence." if silent else "The render's recording was incomplete.",

@@ -250,6 +250,38 @@ def test_pip_installs_into_the_workspace_and_the_package_imports(host, workspace
 
 
 @sandbox
+def test_the_listening_libraries_import_and_plot_under_the_sandbox(host, workspace):
+    """The model listens by reading a render and plotting it itself (docs/38): numpy, scipy,
+    soundfile and matplotlib ship with the engine, so they must work confined, with no
+    %pip. matplotlib's first plot builds its font cache in the workspace; the denied
+    system font services must fail fast, not hang the cell."""
+    import wave
+
+    import numpy as np
+
+    wav = workspace.renders / "tone.wav"
+    with wave.open(str(wav), "wb") as out:
+        out.setnchannels(2)
+        out.setsampwidth(2)
+        out.setframerate(44100)
+        tone = (0.3 * np.sin(2 * np.pi * 440 * np.arange(44100) / 44100) * 32767).astype("<i2")
+        out.writeframes(np.repeat(tone[:, None], 2, axis=1).tobytes())
+    code = (
+        "import matplotlib.pyplot as plt, numpy as np, scipy.signal, soundfile\n"
+        f"x, sr = soundfile.read({str(wav)!r})\n"
+        "f, t, s = scipy.signal.spectrogram(x.mean(axis=1), fs=sr)\n"
+        "plt.pcolormesh(t, f, 10 * np.log10(s + 1e-12))\n"
+        "plt.title('tone')\n"
+        "int(f[s.mean(axis=1).argmax()])"
+    )
+    result = host.run(code)
+
+    assert result.outcome == "ok", result
+    assert abs(int(result.result) - 440) < 200
+    assert len(result.shown) == 1  # the open figure showed when the cell ended
+
+
+@sandbox
 @network
 def test_pip_from_pypi_and_public_https_work_under_the_sandbox(host):
     assert host.run("%pip install -q six==1.17.0").outcome == "ok"
