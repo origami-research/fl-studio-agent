@@ -71,19 +71,22 @@ def set_send(
                 fix="Set the level again; the send keeps the state FL already took.",
             ) from exc
     active = _live_read(session, "mixer.getRouteSendActive", [source, target])
-    confirmed_level = _live_read(session, "mixer.getRouteToLevel", [source, target])
-    if not isinstance(active, (bool, int)) or not isinstance(confirmed_level, (int, float)):
-        raise errors.fl_api_error(
-            "mixer.getRouteSendActive", f"reported the send as {active!r} at level {confirmed_level!r}"
-        )
-    sent = MixerSend(source=source, target=target, on=bool(active), level=float(confirmed_level))
+    if not isinstance(active, (bool, int)):
+        raise errors.fl_api_error("mixer.getRouteSendActive", f"reported the send as {active!r}")
+    # A send that is off has no level: FL answers getRouteToLevel "Index out of range" (live, 2026-11-02).
+    confirmed_level = _live_read(session, "mixer.getRouteToLevel", [source, target]) if active else None
+    if active and not isinstance(confirmed_level, (int, float)):
+        raise errors.fl_api_error("mixer.getRouteToLevel", f"reported the send's level as {confirmed_level!r}")
+    sent = MixerSend(
+        source=source, target=target, on=bool(active), level=None if confirmed_level is None else float(confirmed_level)
+    )
     if sent.on != on:
         raise WriteRejected(
             f"FL Studio left the send from {_where(source)} to {_where(target)} {'on' if sent.on else 'off'}.",
             fix="Check both mixer tracks, then send again.",
             retryable=False,
         )
-    if level is not None and abs(sent.level - level) > SEND_LEVEL_TOLERANCE:
+    if level is not None and sent.level is not None and abs(sent.level - level) > SEND_LEVEL_TOLERANCE:
         raise WriteRejected(
             f"FL Studio set the send from {_where(source)} to {_where(target)} to level "
             f"{sent.level:.2f}, not {level:.2f}.",

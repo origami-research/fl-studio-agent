@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Annotated
 
 import numpy as np
-from pydantic import BaseModel, Field, TypeAdapter, ValidationError
+from pydantic import BaseModel, Field, TypeAdapter, ValidationError, model_validator
 
 from fl_mcp import errors
 from fl_mcp.audio import AudioAnalysis, _read_wav, analyze_wav
@@ -31,6 +31,7 @@ from .schemas import (
     ChannelLevels,
     ChannelPreset,
     ChannelRoute,
+    ChannelSound,
     CheckResult,
     MixerSend,
     Note,
@@ -109,6 +110,23 @@ class _SoundsArgs(BaseModel):
     kind: SoundKind | None = None
     plugin: Annotated[str, Field(strict=True)] | None = None
     limit: Annotated[int, Field(strict=True, ge=1, le=SEARCH_LIMIT_MAX)] = 20
+
+
+class _LoadArgs(BaseModel):
+    """A stock sound to load: a Sound from fl.sounds() of the right kind, or its path."""
+
+    kind: SoundKind
+    sound: Sound | Annotated[str, Field(strict=True, min_length=1)]
+
+    @model_validator(mode="after")
+    def _same_kind(self) -> _LoadArgs:
+        if isinstance(self.sound, Sound) and self.sound.kind != self.kind:
+            raise ValueError(f"{self.sound.name!r} is a {self.sound.kind}, not a {self.kind}")
+        return self
+
+    @property
+    def path(self) -> str:
+        return self.sound.path if isinstance(self.sound, Sound) else self.sound
 
 
 _NOTES = TypeAdapter(list[Note])
@@ -202,7 +220,8 @@ class FL:
     def send(self, src_track: int, dst_track: int, level: float | None = None, on: bool = True) -> MixerSend:
         """Send mixer track ``src_track`` to mixer track ``dst_track`` (0 is the master),
         or stop sending with ``on=False``. ``level`` is 0..1 (FL's default send is 0.8);
-        None keeps the send's level. Returns the send as FL now has it.
+        None keeps the send's level. Returns the send as FL now has it; a send that is
+        off has level None.
         """
         try:
             args = _SendArgs(src_track=src_track, dst_track=dst_track, level=level, on=on)
@@ -210,6 +229,8 @@ class FL:
             raise errors.invalid_argument("fl.send", str(exc)) from None
         if args.src_track == args.dst_track:
             raise errors.invalid_argument("fl.send", "a mixer track cannot send to itself")
+        if not args.on and args.level is not None:
+            raise errors.invalid_argument("fl.send", "a send that is off has no level; pass level only with on=True")
         return self._session.set_send(args.src_track, args.dst_track, on=args.on, level=args.level)
 
     def presets(self, channel: str | int) -> list[str]:
@@ -243,6 +264,34 @@ class FL:
         except ValidationError as exc:
             raise errors.invalid_argument("fl.sounds", str(exc)) from None
         return self._session.sounds(args.query, kind=args.kind, plugin=args.plugin, limit=args.limit)
+
+    def load_sample(self, channel: str | int, sample: Sound | str) -> ChannelSound:
+        """Load a stock sample into a sampler channel: a Sound from
+        ``fl.sounds(kind="sample")``, or its path. FL renames the channel to the
+        sample; returns the channel's name as FL now reports it. A plugin channel
+        is refused (give it an instrument preset instead). Use the channel's index
+        afterwards: a lookup by name may still know the old name.
+        """
+        try:
+            args = _LoadArgs(kind="sample", sound=sample)
+        except ValidationError as exc:
+            raise errors.invalid_argument("fl.load_sample", str(exc)) from None
+        return self._session.load_sound(self.track(channel).channel, args.path, "sample")
+
+    def load_preset(self, channel: str | int, preset: Sound | str) -> ChannelSound:
+        """Load a stock preset into a channel: a Sound from ``fl.sounds(kind="preset")``,
+        or its path. An instrument preset puts its plugin on the channel, replacing
+        the instrument (a sampler too), and FL names the channel after the preset:
+        the way to change a channel's instrument. An effect preset adds its effect to
+        the next free slot of the mixer track the channel plays through (``.effect``).
+        Returns the channel's name and instrument as FL now reports them. Use the
+        channel's index afterwards.
+        """
+        try:
+            args = _LoadArgs(kind="preset", sound=preset)
+        except ValidationError as exc:
+            raise errors.invalid_argument("fl.load_preset", str(exc)) from None
+        return self._session.load_sound(self.track(channel).channel, args.path, "preset")
 
     def render(self, output: str | Path) -> Path:
         """Play the song once and record the mix to ``output``: how to hear your edits.

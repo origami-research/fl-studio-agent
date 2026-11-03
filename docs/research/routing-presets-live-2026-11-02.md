@@ -26,9 +26,16 @@ Only documented MIDI controller scripting calls were used, sent through the FLMC
 - After a cold boot, FL took about 3 to 5 minutes before controller requests were answered; the controller's hello arrived first.
 - FL's own assistant tool module was not used: FL restricts it to its own assistant session.
 
+## End to end through `run` (later the same day)
+
+Each SDK method ran once in a `run` cell on the same machine, through the engine's MCP server and its kernel.
+`fl.route`, `fl.presets` (66 FLEX presets) and `fl.set_preset` (to "Bite Me", then back to "80s Theatre") returned FL's readback with one action sentence each.
+`fl.send(6, 7, level=0.5)` returned the send at 0.5, but `fl.send(6, 7, on=False)` raised after turning the send off: FL answers `mixer.getRouteToLevel` with "Index out of range" for a send that is off.
+A send that is off now reads back with `level=None`, and a level with `on=False` is refused; the rerun returned `on=False level=None`.
+`fl.sounds` found FL's real `Data/Patches` layout ([loading note](load-sample-preset-live-2026-11-02.md)).
+
 ## Not verified live
 
-- The SDK methods end to end: they are unit-covered against a scripted controller that answers as FL did above.
 - Whether `plugins.nextPreset` wraps from the last preset to the first; `set_preset` never relies on it.
-- How long a step takes on a plugin with thousands of presets: `fl.presets` reads one name per round trip.
-- The location and layout of FL's stock `Data/Patches` folder that `fl.sounds` searches, on either operating system.
+- How long a step takes on a plugin with thousands of presets: `fl.presets` reads one name per round trip (66 names took about 20 seconds with two preset changes).
+- FL for macOS, for every call here.

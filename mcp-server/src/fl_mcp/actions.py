@@ -25,7 +25,7 @@ import logging
 import math
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 from fl_mcp.audio import AudioAnalysis
@@ -34,6 +34,7 @@ from fl_mcp.schemas import (
     ChannelLevels,
     ChannelPreset,
     ChannelRoute,
+    ChannelSound,
     CheckResult,
     MixerSend,
     PluginParam,
@@ -341,6 +342,17 @@ class ActionLog:
         where = f"channel {result.channel}" if track == result.name else track
         return [_Entry(f"Loaded preset {result.name} on {where}")]
 
+    def _load(self, kwargs: Mapping[str, Any], result: ChannelSound) -> list[_Entry]:
+        # The result's name is FL's live readback; a lookup by name may still know the old one.
+        sound = PurePosixPath(result.sound).stem
+        if result.effect is not None:
+            effect = result.effect
+            where = _where(effect.mixer_track)
+            return [_Entry(f"Added {effect.plugin} ({sound}) to {where} in effect slot {effect.slot}")]
+        what = f"the sample {sound}" if result.plugin is None else f"the {result.plugin} preset {sound}"
+        renamed = "" if result.name == sound else f", now named {result.name}"
+        return [_Entry(f"Loaded {what} into channel {result.channel}{renamed}")]
+
     def _check(self, kwargs: Mapping[str, Any], result: CheckResult) -> list[_Entry]:
         return [_Entry(_checked(result))]
 
@@ -371,6 +383,7 @@ _CALLS: dict[str, Callable[[ActionLog, Mapping[str, Any], Any], list[_Entry]]] =
     "route_channel": ActionLog._route,
     "set_send": ActionLog._send,
     "set_preset": ActionLog._preset,
+    "load_sound": ActionLog._load,
     "check": ActionLog._check,
     "render_wav": ActionLog._render,
     "export_offline": ActionLog._export,

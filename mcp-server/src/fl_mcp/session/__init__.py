@@ -13,6 +13,7 @@ chosen per call from evidence (docs/27 §2; there is no flag):
 - controls.py  - tempo, levels, plugin params
 - routing.py   - channel-to-mixer routing, mixer sends
 - presets.py   - a plugin channel's presets
+- loading.py   - stock samples and presets loaded into a channel (the Bridge)
 - state.py     - snapshot, channel_names, doctor
 """
 

@@ -140,6 +140,26 @@ float NoteVol(const TNoteParams &note);
 // worse than an error response. So the Bridge never sends one.
 NotesParamsBuffer BuildNotesParams(const minijson::Value &args, int ppq_default, bool empty_first);
 
+// --- load_in_channel: FHD_LoadInChannel (id 43) -------------------------------
+// The SDK header: "send a file to the selected channel(s) (mainly for Edison),
+// FileName as PChar in Value". FL reads Value as a NUL-terminated file name
+// during the call, so the Bridge hands it a buffer the Bridge owns, built here
+// from the command's path; a pointer never comes off the wire.
+//
+// FL 2026 reads that name as UTF-8 bytes on both platforms, whatever "PChar"
+// suggests: its id-43 handler converts Value with a one-byte scan and code page
+// 65001 on Windows (Delphi's UTF-8 decode) and with the default code page,
+// UTF-8, on macOS (Free Pascal). It never reads Index, and it loads the file
+// into every selected channel (BRIDGE_FINDINGS.md, "FHD_LoadInChannel").
+struct ChannelFileName {
+  std::vector<unsigned char> bytes;  // the UTF-8 file name, then one zero byte
+  const char *error = nullptr;       // why bytes is empty; a literal, never owned
+};
+
+// Refuses an empty path, invalid UTF-8 (FL would decode a different name), and
+// an embedded NUL (FL would load a truncated name).
+ChannelFileName BuildChannelFileName(const std::string &utf8_path);
+
 // Outcome of one executed command, for the caller to log / report.
 struct PollOutcome {
   bool had_command = false;   // a fresh, not-yet-consumed command was found and handled
@@ -271,7 +291,8 @@ struct ExecResult {
 // claims the id in the ledger BEFORE anything else - same ordering as the
 // pyscript; this is the crash-safety invariant, do not reorder - then checks
 // proto, dispatches the op (add_notes/clear_notes via
-// fl_abi::HostDispatch(host, host_tag, FHD_AddNotesToPR, ...) + FHD_SetDirty -
+// fl_abi::HostDispatch(host, host_tag, FHD_AddNotesToPR, ...) + FHD_SetDirty;
+// load_in_channel via FHD_LoadInChannel with a ChannelFileName + FHD_SetDirty -
 // see native/abi/fl_host_abi.h for why it is never `host->Dispatcher(...)`), and
 // writes responses/<id>.json in the SpoolResponse shape regardless of
 // carrier. Duplicates re-ack from `cache` (nullable) or with a minimal

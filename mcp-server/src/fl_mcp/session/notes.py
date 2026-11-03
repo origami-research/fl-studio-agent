@@ -168,6 +168,49 @@ def _commit(
     return after
 
 
+def select_only(session: FLSession, channel: int, *, unchanged: str) -> None:
+    """Select exactly ``channel`` in FL and confirm it before a Bridge command.
+
+    The Bridge's host calls act on FL's selection: notes land in the first
+    selected channel, and a loaded file in every selected one. The controller's
+    ``select_channels`` selects that one channel and deselects the rest
+    (``channels.selectOneChannel``); the readback is mandatory, so a Bridge
+    command is never sent unless FL reports the requested channel.
+    ``unchanged`` tells the caller's user what did not happen on a refusal.
+    """
+    response = session.link.request("select_channels", args=[[channel]], timeout=LIVE_SET_TIMEOUT_SECONDS)
+    if not response.ok:
+        detail = response.err or "no detail"
+        if errors.is_operation_unsafe(detail):
+            raise errors.operation_unsafe("select_channels")
+        raise errors.ToolError(
+            "fl_api_error",
+            f"FL Studio would not select channel {channel}: {detail}. {unchanged}",
+            "Retry after FL finishes its current operation.",
+            retryable=True,
+        )
+    selected = _selected_channel(session.link)
+    if selected != channel:
+        actual = "an unknown channel" if selected is None else f"channel {selected}"
+        raise errors.ToolError(
+            "fl_api_error",
+            f"FL Studio stayed on {actual} instead of channel {channel}. {unchanged}",
+            "Retry after FL settles.",
+            retryable=True,
+        )
+    # selectedChannel(canBeNone=1, offset=1) is the second selected channel, or
+    # the last one when fewer are selected (live, API 45), so it equals the first
+    # only when exactly one channel is selected.
+    also = session.link.call("channels.selectedChannel", [1, 1])
+    if also != channel:
+        raise errors.ToolError(
+            "fl_api_error",
+            f"FL Studio kept channel {also} selected beside channel {channel}. {unchanged}",
+            "Retry after FL settles.",
+            retryable=True,
+        )
+
+
 class FileLane:
     """Project-write: the file on disk is the source of truth; FL reloads to
     show it. write_notes verifies by re-reading the bytes it wrote."""
@@ -251,39 +294,12 @@ class BridgeLane:
         """Make the Bridge's selected-channel side effect match the target.
 
         The router admitted this lane because the profile proves this exact
-        select-then-verify sequence. The readback is mandatory: a Bridge
-        command is never sent unless FL reports the requested channel.
-        Selection intentionally remains changed so consecutive channel writes
-        do not thrash FL's visible selection.
+        select-then-verify sequence. Selection intentionally remains changed so
+        consecutive channel writes do not thrash FL's visible selection.
         """
-        if target_channel is None:
+        if target_channel is None or self._session.caps.bridge_channel == target_channel:
             return
-        session = self._session
-        if session.caps.bridge_channel == target_channel:
-            return
-        response = session.link.request(
-            "select_channels", args=[[target_channel]], timeout=LIVE_SET_TIMEOUT_SECONDS
-        )
-        if not response.ok:
-            detail = response.err or "no detail"
-            if errors.is_operation_unsafe(detail):
-                raise errors.operation_unsafe("select_channels")
-            raise errors.ToolError(
-                "fl_api_error",
-                f"FL Studio would not select channel {target_channel}: {detail}. No notes were written.",
-                "Retry the write after FL finishes its current operation.",
-                retryable=True,
-            )
-        selected = _selected_channel(session.link)
-        if selected == target_channel:
-            return
-        actual = "an unknown channel" if selected is None else f"channel {selected}"
-        raise errors.ToolError(
-            "fl_api_error",
-            f"FL Studio stayed on {actual} instead of channel {target_channel}, so no notes were written.",
-            "Retry the write after FL settles.",
-            retryable=True,
-        )
+        select_only(self._session, target_channel, unchanged="No notes were written.")
 
     def _send(self, op: str, **args: Any) -> int:
         """Spool one command and block for the bridge's response; returns the

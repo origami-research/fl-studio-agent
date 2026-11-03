@@ -16,6 +16,7 @@ The stable public surface is deliberately small:
 - `fl.route(...)` and `fl.send(...)` for live mixer routing and sends.
 - `fl.presets(...)` and `fl.set_preset(...)` for a plugin channel's presets.
 - `fl.sounds(...)` to search the stock presets and samples FL ships.
+- `fl.load_sample(...)` and `fl.load_preset(...)` to load one of them into a channel.
 
 Notes always go to the channel named by `fl.track(...)`; live Bridge writes select and verify that
 channel first when it is not already selected in FL.
@@ -213,7 +214,7 @@ fl.route("FLEX Bass", 3)
 
 **Availability:** live-only. Turns the send from mixer track `src_track` to `dst_track` on, or off with `on=False`, then applies the routing change.
 `level` is normalized 0 to 1 (FL's default send is 0.8); `None` keeps the send's level.
-Returns `MixerSend(source, target, on, level)` read back from FL.
+Returns `MixerSend(source, target, on, level)` read back from FL; a send that is off has `level=None`, since FL keeps no level for it (it answers "Index out of range"), and `level` with `on=False` is refused.
 If FL takes the send but refuses its level, the error says the send landed.
 
 ```python
@@ -225,7 +226,7 @@ fl.send(3, 5, on=False)
 
 **Availability:** live-only. The names of the channel plugin's presets, in FL's order; a preset's index is its place in this list.
 Every name is one controller round trip.
-A sampler channel is not a plugin and raises `invalid_argument` ("not a plugin; use load_sample").
+A sampler channel is not a plugin and raises `invalid_argument`; `fl.load_sample` changes its sound, and `fl.load_preset` with an instrument preset makes it a plugin channel.
 
 ### `fl.set_preset(channel: str | int, preset: int | str) -> ChannelPreset`
 
@@ -249,10 +250,41 @@ fl.set_preset("FLEX Bass", "Pure Feather")
 Returns sounds whose path holds every word of `query` (any case), in FL's folder order, up to `limit` (at most 200).
 `kind` keeps only presets or only samples; `plugin` keeps that plugin's presets.
 A missing stock folder raises `unknown_target` rather than returning an empty list.
-Loading a found sound into a channel is not available yet.
+`fl.load_sample` and `fl.load_preset` take a found `Sound` or its `path`.
 
 ```python
 kicks = fl.sounds("808 kick", kind="sample")
+```
+
+### `fl.load_sample(channel: str | int, sample: Sound | str) -> ChannelSound`
+
+**Availability:** live-only, through the FL MCP Bridge. Loads a stock sample (a `Sound` from `fl.sounds(kind="sample")`, or its `path`) into a sampler channel.
+FL renames the channel after the sample (`"808 Cowbell"`), numbering it when another channel already has that name (`"808 Kick #2"`).
+Returns `ChannelSound(channel, kind, sound, name, plugin=None)` read back from FL; a channel that does not show the sample raises.
+A plugin channel is refused before anything changes: FL only renames it. Give it an instrument preset with `fl.load_preset` instead.
+Use the channel's index afterwards: name lookups read the saved song's names.
+
+### `fl.load_preset(channel: str | int, preset: Sound | str) -> ChannelSound`
+
+**Availability:** live-only, through the FL MCP Bridge. Loads a stock preset (a `Sound` from `fl.sounds(kind="preset")`, or its `path`) into a channel.
+What it does depends on the preset's folder:
+
+- An instrument preset (`Plugin presets/Generators/<plugin>/...`) puts that plugin on the channel, replacing its instrument, a sampler included, and FL names the channel after the preset.
+  This is how to change a channel's instrument; the channel keeps its mixer track.
+  Returns the channel's new `name` and `plugin`; a channel that does not then play that plugin under the preset's name raises.
+- An effect preset (`Plugin presets/Effects/<plugin>/...`) leaves the instrument alone and adds that effect to the next free slot of the mixer track the channel plays through.
+  `effect` is `MixerEffect(mixer_track, slot, plugin)`, read from the mixer track's slots before and after; a full mixer track is refused first.
+  Each load adds another effect, so loading the same effect preset twice gives two effects.
+
+VST presets (`Plugin presets/VST/...`) are refused: what they load as was not verified.
+FL loads into every selected channel, so the engine selects exactly this channel first and confirms that no other one stays selected.
+A trial FL marks some plugins "TRIAL VERSION" in their window.
+
+```python
+osc = fl.sounds(kind="preset", plugin="3x Osc")[0]
+fl.load_preset("808 Snare", osc)          # channel 3 now plays 3x Osc
+room = fl.sounds("drum room", kind="preset", plugin="Fruity Reeverb 2")[0]
+fl.load_preset(3, room).effect            # MixerEffect(mixer_track=4, slot=0, ...)
 ```
 
 ### `fl.undo() -> None`
@@ -386,7 +418,9 @@ with `Model.model_validate(...)`.
 | `Effect` | `name: str`, `chunk: bytes` (opaque FL-authored plugin state) |
 | `AudioAnalysis` | `bpm: float | None` (FL's tempo for a session render), `key: str | None`, `integrated_lufs: float`, `true_peak_dbfs: float`, `spectral_balance: SpectralBalance` (`low_dbfs`, `mid_dbfs`, `high_dbfs`); decibels in tenths |
 | `ChannelRoute` | `channel: int`, `mixer_track: int` (0 is the master) |
-| `MixerSend` | `source: int`, `target: int`, `on: bool`, `level: float` (normalized, FL's default 0.8) |
+| `MixerSend` | `source: int`, `target: int`, `on: bool`, `level: float | None` (normalized, FL's default 0.8; `None` when the send is off) |
 | `ChannelPreset` | `channel: int`, `index: int` (place in `fl.presets`), `name: str` (the channel's name now) |
 | `Sound` | `kind: "preset" | "sample"`, `name: str`, `plugin: str | None` (a preset's plugin), `path: str` (relative to FL's `Data/Patches`, `/`-separated) |
+| `ChannelSound` | `channel: int`, `kind: "preset" | "sample"`, `sound: str` (the loaded `Sound.path`), `name: str` (the channel's name now), `plugin: str | None` (its instrument plugin; `None` for a sampler), `effect: MixerEffect | None` (what an effect preset added) |
+| `MixerEffect` | `mixer_track: int`, `slot: int` (0-9; FL shows slot 1-10), `plugin: str` (FL's name for it) |
 | `PluginParam` | `index: int`, `name: str`, `value: float` (normalized 0–1), `display: str`, `kind: "continuous" | "stepped" | "enum" | "bool"`, `options: list[str] | None`, `minimum`, `maximum`, `step`, `unit` |

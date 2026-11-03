@@ -204,6 +204,12 @@ def run(code: str, ctx: Context) -> RunResult:
       channels have no presets.
     - fl.sounds("808 kick", kind="sample") -> [Sound(kind, name, plugin, path)]:
       the stock presets and samples FL ships, searched by words.
+      fl.load_sample("808 Clap", sound) -> ChannelSound(channel, kind, sound,
+      name, plugin, effect): that sampler channel now plays the sample, renamed
+      after it. fl.load_preset(channel, sound): an instrument preset puts its
+      plugin on the channel, the way to change an instrument; an effect preset
+      adds its effect to the channel's mixer track (.effect). Pass a Sound or
+      its path; use the channel's index afterwards.
     - fl.check(bars=2, start_bar=1) -> CheckResult: plays those bars and reads
       FL's mixer meters; per channel whether it sounded, its peak dBFS, and why
       it was silent (muted, no notes in those bars, ...); .summary is one line.

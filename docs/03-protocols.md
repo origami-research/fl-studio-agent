@@ -145,7 +145,7 @@ Other v1 ops:
 | `add_notes` | `FHD_AddNotesToPR` | flags=NPF_EmptyFirst gives clear-and-write |
 | `clear_notes` | `FHD_AddNotesToPR` with `Count=0, NPF_EmptyFirst` | [ASSUMED count=0 legal; else 1 dummy note + delete strategy - Spike 1] |
 | `preview_note_on` / `preview_note_off` | `FHD_NoteOn`/`FHD_NoteOff` | audible preview, no writing |
-| `load_sample` | `FHD_LoadInChannel` | absolute path in payload |
+| `load_in_channel` | `FHD_LoadInChannel` | `{"path": "<absolute>"}`, built 2026-11-02. FL reads Value as a NUL-terminated UTF-8 name on both platforms, ignores Index (its "mode": 0, 1, 2 and -1 load alike), and loads into every selected channel, so the server selects exactly one first. The Bridge refuses a path with no file. See native/bridge/BRIDGE_FINDINGS.md, "FHD_LoadInChannel". |
 | `load_audio_clip` | `FHD_LoadAudioClip` | drops at playlist selection |
 | `ping` | - | plugin liveness + version report |
 

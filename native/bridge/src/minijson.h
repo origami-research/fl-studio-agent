@@ -95,6 +95,41 @@ class Parser {
     return true;
   }
 
+  // Reads the four hex digits after p_ (which points at the 'u'); p_ ends on the last digit.
+  bool Hex4(unsigned* out) {
+    unsigned value = 0;
+    for (int i = 0; i < 4; ++i) {
+      const char c = p_[1];
+      unsigned digit;
+      if (c >= '0' && c <= '9') digit = static_cast<unsigned>(c - '0');
+      else if (c >= 'a' && c <= 'f') digit = static_cast<unsigned>(c - 'a' + 10);
+      else if (c >= 'A' && c <= 'F') digit = static_cast<unsigned>(c - 'A' + 10);
+      else return false;
+      value = value * 16 + digit;
+      ++p_;
+    }
+    *out = value;
+    return true;
+  }
+
+  static void AppendUtf8(unsigned cp, std::string* out) {
+    if (cp < 0x80) {
+      out->push_back(static_cast<char>(cp));
+    } else if (cp < 0x800) {
+      out->push_back(static_cast<char>(0xC0 | (cp >> 6)));
+      out->push_back(static_cast<char>(0x80 | (cp & 0x3F)));
+    } else if (cp < 0x10000) {
+      out->push_back(static_cast<char>(0xE0 | (cp >> 12)));
+      out->push_back(static_cast<char>(0x80 | ((cp >> 6) & 0x3F)));
+      out->push_back(static_cast<char>(0x80 | (cp & 0x3F)));
+    } else {
+      out->push_back(static_cast<char>(0xF0 | (cp >> 18)));
+      out->push_back(static_cast<char>(0x80 | ((cp >> 12) & 0x3F)));
+      out->push_back(static_cast<char>(0x80 | ((cp >> 6) & 0x3F)));
+      out->push_back(static_cast<char>(0x80 | (cp & 0x3F)));
+    }
+  }
+
   bool ParseString(std::string* out) {
     if (*p_ != '"') return false;
     ++p_;
@@ -109,10 +144,21 @@ class Parser {
           case 'b': out->push_back('\b'); break;
           case 'f': out->push_back('\f'); break;
           case 'u': {
-            // Not needed by our schema; keep the escape verbatim rather than
-            // silently mangling text we do not understand.
-            out->append("\\u");
-            for (int i = 0; i < 4 && p_[1] != '\0'; ++i) out->push_back(*++p_);
+            // \uXXXX, a surrogate pair for code points past U+FFFF, as UTF-8.
+            // Python's json.dump escapes every non-ASCII character this way, so a
+            // file path reaching the Bridge through the file carrier arrives escaped.
+            unsigned cp = 0;
+            if (!Hex4(&cp)) return false;
+            if (cp >= 0xD800 && cp <= 0xDBFF) {
+              unsigned low = 0;
+              if (p_[1] != '\\' || p_[2] != 'u') return false;
+              p_ += 2;
+              if (!Hex4(&low) || low < 0xDC00 || low > 0xDFFF) return false;
+              cp = 0x10000 + ((cp - 0xD800) << 10) + (low - 0xDC00);
+            } else if (cp >= 0xDC00 && cp <= 0xDFFF) {
+              return false;  // a lone low surrogate
+            }
+            AppendUtf8(cp, out);
             break;
           }
           default: out->push_back(*p_); break;

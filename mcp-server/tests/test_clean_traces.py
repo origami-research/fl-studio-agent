@@ -263,7 +263,8 @@ def _sdk_docs() -> list[tuple[str, str]]:
                 docs.append((f"{cls.__name__}.{name}", inspect.getdoc(member) or ""))
     returned = [Note, Target, schemas.WriteResult, schemas.Channel, schemas.ChannelLevels, schemas.CheckResult,
                 schemas.ChannelCheck, schemas.PluginParam, schemas.AutomationPoint, schemas.AutomationResult,
-                schemas.ChannelRoute, schemas.MixerSend, schemas.ChannelPreset, schemas.Sound]
+                schemas.ChannelRoute, schemas.MixerSend, schemas.ChannelPreset, schemas.Sound,
+                schemas.ChannelSound, schemas.MixerEffect]
     for model in returned:
         docs.append((model.__name__, model.__dict__.get("__doc__") or ""))
         docs.extend((f"{model.__name__}.{field}", field) for field in model.model_fields)

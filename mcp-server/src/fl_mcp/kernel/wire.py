@@ -29,6 +29,7 @@ SessionMethod = Literal[
     "check",
     "clear_notes",
     "export_offline",
+    "load_sound",
     "plugin_params",
     "presets",
     "read_notes",

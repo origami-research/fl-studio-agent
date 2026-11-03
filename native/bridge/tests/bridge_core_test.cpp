@@ -803,6 +803,85 @@ int main() {
   }
 #endif
 
+  // --- 20. the file name FHD_LoadInChannel reads ------------------------------
+  // FL 2026 decodes Value as NUL-terminated UTF-8 on both platforms
+  // (BRIDGE_FINDINGS.md, "FHD_LoadInChannel"): an earlier UTF-16 name on
+  // Windows read as "C" there and loaded nothing.
+  {
+    const std::string path = "C:\\x\\\xC3\x9C\xF0\x9F\xA5\x81.wav";  // C:\x\<U+00DC><U+1F941>.wav
+    bridge_core::ChannelFileName name = bridge_core::BuildChannelFileName(path);
+    CHECK(name.error == nullptr);
+    CHECK(name.bytes == std::vector<unsigned char>({'C', ':', '\\', 'x', '\\', 0xC3, 0x9C, 0xF0, 0x9F, 0xA5,
+                                                    0x81, '.', 'w', 'a', 'v', 0}));
+    // Each refusal names why; FL never sees a name it would read differently.
+    CHECK(bridge_core::BuildChannelFileName("").error != nullptr);
+    CHECK(bridge_core::BuildChannelFileName(std::string("a\0b.wav", 7)).error != nullptr);
+    CHECK(bridge_core::BuildChannelFileName("bad\xC3.wav").error != nullptr);          // no continuation byte
+    CHECK(bridge_core::BuildChannelFileName("bad\xC3").error != nullptr);              // cut off at the end
+    CHECK(bridge_core::BuildChannelFileName("bad\xC0\xAF.wav").error != nullptr);      // overlong '/'
+    CHECK(bridge_core::BuildChannelFileName("bad\xED\xA0\x80.wav").error != nullptr);  // a surrogate
+    CHECK(bridge_core::BuildChannelFileName("bad\xF4\x90\x80\x80.wav").error != nullptr);  // past U+10FFFF
+  }
+
+  // --- 20b. JSON \u escapes decode to UTF-8 -----------------------------------
+  // The file carrier writes commands with Python's json.dump, which escapes every
+  // non-ASCII character, so a path like "C:\x\Ü🥁.wav" arrives as \u escapes.
+  {
+    minijson::Value doc;
+    CHECK(minijson::Parse("{\"path\":\"C:\\\\x\\\\\\u00dc\\ud83e\\udd41.wav\"}", &doc));
+    const minijson::Value *path = doc.Get("path");
+    CHECK(path != nullptr && path->text == "C:\\x\\\xC3\x9C\xF0\x9F\xA5\x81.wav");
+    minijson::Value bad;
+    CHECK(!minijson::Parse("{\"p\":\"\\ud83e\"}", &bad));        // a high surrogate alone
+    CHECK(!minijson::Parse("{\"p\":\"\\udd41\"}", &bad));        // a low surrogate alone
+    CHECK(!minijson::Parse("{\"p\":\"\\u00g0\"}", &bad));        // not hex
+    CHECK(!minijson::Parse("{\"p\":\"\\u00\"}", &bad));          // cut short
+  }
+
+  // --- 21. load_in_channel hands FL the file through FHD_LoadInChannel --------
+  {
+    const std::string dir = TempDir("flmcp_load");
+    CHECK(!dir.empty());
+    const std::string sample = dir + "/808 Kick.wav";
+    WriteFile(sample, "RIFF");
+    MockHost host;
+    bridge_core::ExecResult loaded = bridge_core::ExecuteCommand(
+        host.as_host(), 7, roots, bridge_core::kDefaultPPQ,
+        "{\"proto\":2,\"id\":301,\"op\":\"load_in_channel\",\"args\":{\"path\":\"" +
+            minijson::Escape(sample) + "\"}}",
+        nullptr);
+    CHECK(loaded.outcome.ok);
+    CHECK(Contains(loaded.ack_json, "\"op\": \"load_in_channel\""));
+    CHECK(host.header_slot_calls() == 0);
+    CHECK(host.calls.size() == 2);  // FHD_LoadInChannel, then FHD_SetDirty
+    if (host.calls.size() == 2) {
+      CHECK(host.calls[0].sender == 7);
+      CHECK(host.calls[0].id == FHD_LoadInChannel);
+      CHECK(host.calls[0].index == 0);
+      CHECK(host.calls[1].id == FHD_SetDirty);
+    }
+    CHECK(host.loaded_names.size() == 1);
+    if (host.loaded_names.size() == 1) CHECK(host.loaded_names[0] == sample);  // FL reads the path verbatim
+    CHECK(Contains(loaded.ack_json, "via FHD_LoadInChannel"));
+
+    // A missing file, a missing path, or a non-string path never reaches FL.
+    const char *refused[] = {
+        "{\"proto\":2,\"id\":302,\"op\":\"load_in_channel\",\"args\":{\"path\":\"/no/such/file.wav\"}}",
+        "{\"proto\":2,\"id\":303,\"op\":\"load_in_channel\",\"args\":{}}",
+        "{\"proto\":2,\"id\":304,\"op\":\"load_in_channel\",\"args\":{\"path\":5}}",
+    };
+    for (const char *command : refused) {
+      MockHost untouched;
+      bridge_core::ExecResult refusal =
+          bridge_core::ExecuteCommand(untouched.as_host(), 7, roots, bridge_core::kDefaultPPQ, command, nullptr);
+      CHECK(!refusal.outcome.ok);
+      CHECK(Contains(refusal.ack_json, "\"ok\": false"));
+      CHECK(untouched.calls.empty());
+    }
+    std::error_code ignored;
+    std::filesystem::remove_all(dir, ignored);
+  }
+
   if (g_failures == 0) {
     printf("bridge_core_test: all checks passed\n");
     return 0;

@@ -43,6 +43,7 @@ from fl_mcp.schemas import (
     ChannelLevels,
     ChannelPreset,
     ChannelRoute,
+    ChannelSound,
     CheckResult,
     DoctorReport,
     HelloEvent,
@@ -62,7 +63,7 @@ from fl_mcp.schemas import (
 from fl_mcp.store import Store
 
 from . import check as check_mod
-from . import controls, lifecycle, routing, state
+from . import controls, lifecycle, loading, routing, state
 from . import notes as note_ops
 from . import presets as preset_ops
 from .detect import (
@@ -523,6 +524,10 @@ class FLSession:
     def set_preset(self, channel: int, preset: int | str) -> ChannelPreset:
         with self._write_guard("set_preset"):
             return preset_ops.set_preset(self, channel, preset)
+
+    def load_sound(self, channel: int, sound: str, kind: SoundKind) -> ChannelSound:
+        with self._write_guard("load_sound"):
+            return loading.load_sound(self, channel, sound, kind)
 
     def sounds(
         self, query: str = "", *, kind: SoundKind | None = None, plugin: str | None = None, limit: int = 20

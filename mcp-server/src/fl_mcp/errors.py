@@ -196,7 +196,8 @@ def not_a_plugin(channel: str) -> ToolError:
     return ToolError(
         "invalid_argument",
         f"{channel} is a sampler channel, not a plugin, so it has no presets.",
-        "Use load_sample to change a sampler's sound; presets are for plugin channels.",
+        "Change a sampler's sound with fl.load_sample, or make it a plugin channel with fl.load_preset "
+        "and an instrument preset from fl.sounds(kind='preset').",
     )
 
 

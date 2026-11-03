@@ -242,13 +242,14 @@ class ChannelRoute(BaseModel):
 class MixerSend(BaseModel):
     """A send from one mixer track to another, as FL reports it.
 
-    ``level`` is normalized 0..1 (FL's default send is 0.8).
+    ``level`` is normalized 0..1 (FL's default send is 0.8); None for a send
+    that is off, which FL keeps no level for.
     """
 
     source: int = Field(ge=0)
     target: int = Field(ge=0)
     on: bool
-    level: float
+    level: float | None = None
 
 
 class ChannelPreset(BaseModel):
@@ -353,6 +354,16 @@ class StreamStopArgs(BaseModel):
     pass
 
 
+class LoadInChannelArgs(BaseModel):
+    """One file for FL to load into its selected channels (FHD_LoadInChannel).
+
+    The engine selects exactly one channel over the control wire first, and
+    reads back what FL loaded; the Bridge refuses a path with no file.
+    """
+
+    path: str = Field(min_length=1)
+
+
 # -- discovery passes (native bridge_discover.cpp dispatches wp_* by op) ------
 
 
@@ -386,6 +397,7 @@ SpoolOp = Literal[
     "capture_stop",
     "stream_start",
     "stream_stop",
+    "load_in_channel",
     "wp_getters",
     "wp_timing",
     "wp_target",
@@ -400,6 +412,7 @@ OP_ARGS: dict[str, type[BaseModel]] = {
     "capture_stop": CaptureStopArgs,
     "stream_start": StreamStartArgs,
     "stream_stop": StreamStopArgs,
+    "load_in_channel": LoadInChannelArgs,
     "wp_getters": WpGettersArgs,
     "wp_timing": WpTimingArgs,
     "wp_target": WpTargetArgs,
@@ -484,6 +497,31 @@ class Sound(BaseModel):
     name: str
     plugin: str | None = None  # the plugin a preset is for; None for samples
     path: str  # relative to FL's Data/Patches folder, "/"-separated; what the loaders take
+
+
+class MixerEffect(BaseModel):
+    """An effect in one slot of a mixer track, as FL reports it (slots 0..9)."""
+
+    mixer_track: int = Field(ge=0)
+    slot: int = Field(ge=0)
+    plugin: str
+
+
+class ChannelSound(BaseModel):
+    """What a channel plays after a stock sound was loaded into it, read back from FL.
+
+    ``sound`` is the loaded sound's ``path`` (as ``fl.sounds`` lists it);
+    ``name`` is the channel's name now and ``plugin`` its instrument plugin,
+    None for a sampler. An effect preset leaves the instrument alone and adds
+    its effect to the mixer track the channel plays through: ``effect``.
+    """
+
+    channel: int = Field(ge=0)
+    kind: SoundKind
+    sound: str
+    name: str
+    plugin: str | None = None
+    effect: MixerEffect | None = None
 
 
 class MixerTrack(BaseModel):

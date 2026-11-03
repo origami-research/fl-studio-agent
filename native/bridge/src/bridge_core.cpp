@@ -19,6 +19,8 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <filesystem>
+#include <system_error>
 
 #include "bridge_discover.h"
 #include "fl_host_abi.h"
@@ -112,8 +114,50 @@ bool Contains(const std::vector<int> &ids, int id) {
 // SpoolResponse.op is a closed literal in schemas.py; an unexpected string
 // would fail the server's validation, so anything else is reported as op-less.
 bool IsKnownOp(const std::string &op) {
-  return op == "add_notes" || op == "clear_notes" || op == "ping" ||
+  return op == "add_notes" || op == "clear_notes" || op == "ping" || op == "load_in_channel" ||
          op == "capture_start" || op == "capture_stop" || op == "stream_start" || op == "stream_stop";
+}
+
+// A regular file at a UTF-8 path. FL may raise a dialog for a name it cannot
+// open, and a dialog stalls the GUI thread every command runs on, so a missing
+// file is refused before FL sees it.
+bool IsRegularFile(const std::string &utf8_path) {
+  std::error_code error;
+  return std::filesystem::is_regular_file(std::filesystem::u8path(utf8_path), error) && !error;
+}
+
+// Decode one UTF-8 code point at text[*at], advancing *at. False on any
+// malformed, overlong, surrogate or out-of-range sequence.
+bool NextCodePoint(const std::string &text, std::size_t *at, std::uint32_t *out) {
+  const auto byte = [&](std::size_t i) { return static_cast<unsigned char>(text[i]); };
+  const unsigned char lead = byte(*at);
+  int extra = 0;
+  std::uint32_t cp = 0;
+  if (lead < 0x80) {
+    cp = lead;
+  } else if ((lead & 0xE0) == 0xC0) {
+    extra = 1;
+    cp = lead & 0x1F;
+  } else if ((lead & 0xF0) == 0xE0) {
+    extra = 2;
+    cp = lead & 0x0F;
+  } else if ((lead & 0xF8) == 0xF0) {
+    extra = 3;
+    cp = lead & 0x07;
+  } else {
+    return false;
+  }
+  if (*at + extra >= text.size()) return false;  // a truncated sequence
+  for (int i = 1; i <= extra; ++i) {
+    const unsigned char next = byte(*at + i);
+    if ((next & 0xC0) != 0x80) return false;
+    cp = (cp << 6) | (next & 0x3F);
+  }
+  static const std::uint32_t kMinimum[] = {0, 0x80, 0x800, 0x10000};
+  if (cp < kMinimum[extra] || cp > 0x10FFFF || (cp >= 0xD800 && cp <= 0xDFFF)) return false;
+  *at += extra + 1;
+  *out = cp;
+  return true;
 }
 
 HostCallTrace g_host_call_trace = nullptr;
@@ -172,6 +216,31 @@ std::vector<std::string> SpoolRoots(const char *home, const char *spool_root) {
     roots.push_back(std::string(home) + "/Documents/Image-Line/FL Studio/Settings/" + sub);
   }
   return roots;
+}
+
+// --- load_in_channel -----------------------------------------------------------
+
+ChannelFileName BuildChannelFileName(const std::string &utf8_path) {
+  ChannelFileName name;
+  if (utf8_path.empty()) {
+    name.error = "load_in_channel requires a file path";
+    return name;
+  }
+  if (utf8_path.find('\0') != std::string::npos) {
+    name.error = "the file path holds a NUL character";
+    return name;
+  }
+  std::size_t at = 0;
+  while (at < utf8_path.size()) {
+    std::uint32_t cp = 0;
+    if (!NextCodePoint(utf8_path, &at, &cp)) {
+      name.error = "the file path is not valid UTF-8";
+      return name;
+    }
+  }
+  name.bytes.assign(utf8_path.begin(), utf8_path.end());
+  name.bytes.push_back(0);
+  return name;
 }
 
 // --- transport seam ----------------------------------------------------------
@@ -601,6 +670,35 @@ ExecResult ExecuteCommand(TFruityPlugHost *host, std::intptr_t host_tag,
           summary += " (WARNING: command carried no ppq stamp; assumed default " +
                      std::to_string(ppq_default) + " - horizontal placement unverified)";
         }
+      }
+    }
+  } else if (op == "load_in_channel") {
+    const minijson::Value *args = command.Get("args");
+    const minijson::Value *path = args != nullptr ? args->Get("path") : nullptr;
+    if (host == nullptr) {
+      outcome.error = "no plugin host";
+    } else if (path == nullptr || path->type != minijson::Type::String) {
+      outcome.error = "load_in_channel requires a file path";
+    } else {
+      // Owned here and alive until FL returns: FL reads the name during the call.
+      // Built first: the file check below needs valid UTF-8 (MSVC's u8path throws on bad input).
+      ChannelFileName name = BuildChannelFileName(path->text);
+      if (name.error != nullptr) {
+        outcome.error = name.error;
+      } else if (!IsRegularFile(path->text)) {
+        outcome.error = "no file at " + path->text;
+      } else {
+        Trace("FHD_LoadInChannel:enter", id, 0);
+        // Index 0: FL's handler never reads it (decoded on both platforms; 0, 1,
+        // 2 and -1 loaded alike live on Windows).
+        fl_abi::HostDispatch(host, host_tag, FHD_LoadInChannel, 0,
+                             reinterpret_cast<std::intptr_t>(name.bytes.data()));
+        Trace("FHD_LoadInChannel:return", id, 0);
+        fl_abi::HostDispatch(host, host_tag, FHD_SetDirty, 0, 0);
+        outcome.ok = true;
+        // FL returns nothing and loads into every selected channel; the server
+        // selects one channel first and reads the result back itself.
+        summary = "sent " + path->text + " to the selected channel via FHD_LoadInChannel";
       }
     }
   } else {

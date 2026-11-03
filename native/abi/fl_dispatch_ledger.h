@@ -11,8 +11,8 @@
 // therefore outlive every diagnostic that ever seeds it.
 //
 // This is bulkhead invariant #1 (docs/research/r2 s2.2): the Bridge's normal
-// operation issues only live-proven ids (FHD_AddNotesToPR, FHD_SetDirty, the
-// confirmed getters), and the wp_* discovery ops consult IsUnsafe() /
+// operation issues only live-proven ids (FHD_AddNotesToPR, FHD_SetDirty,
+// FHD_LoadInChannel, the confirmed getters), and the wp_* discovery ops consult IsUnsafe() /
 // IsDocumented() before every dispatcher call, so a dangerous id is skipped by
 // construction even if an operator asks for it.
 //
@@ -110,7 +110,10 @@ inline constexpr UnsafeId kLedger[] = {
     {60, Hazard::kModalUI, "FHD_RenderProject", "prompts the rendering dialog (modal)"},
     {19, Hazard::kPtrDeref, "FHD_MsgBox", "dereferences Index as a 'Title|Message' string"},
     {41, Hazard::kPtrDeref, "FHD_SendSysEx", "dereferences Value as a length-prefixed byte array"},
-    {43, Hazard::kPtrDeref, "FHD_LoadInChannel", "dereferences Value as a filename string"},
+    {43, Hazard::kPtrDeref, "FHD_LoadInChannel",
+     "dereferences Value as a NUL-terminated UTF-8 file name and loads it into every "
+     "selected channel. The Bridge's load_in_channel executor calls this correctly, with "
+     "a name buffer it owns, after the engine selects exactly one channel."},
     {74, Hazard::kPtrDeref, "FHD_ReportError", "dereferences Index as an error string"},
     {85, Hazard::kPtrDeref, "FHD_ShowException", "dereferences Index/Value as exception strings"},
 

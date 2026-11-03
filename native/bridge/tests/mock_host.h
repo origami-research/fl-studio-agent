@@ -8,12 +8,14 @@
 // down. This one disagrees, and `header_slot_calls()` names the disagreement.
 //
 // Only Dispatcher does anything - recording FHD_AddNotesToPR payloads and
-// counting FHD_SetDirty. The captured chords are deep copies so assertions
+// FHD_LoadInChannel file names, and counting FHD_SetDirty. The captured chords are deep copies so assertions
 // survive the caller freeing the real (flexible-array) TNotesParams.
 #pragma once
 
 #include <cstdint>
 #include <vector>
+
+#include <string>
 
 #include "fl_host_mock.h"
 #include FL_MCP_PLUGIN_API_HEADER
@@ -41,6 +43,9 @@ class MockHost : public fl_mock::FpcHost {
  public:
   std::vector<CapturedChord> chords;
   int set_dirty_calls = 0;
+  // Each FHD_LoadInChannel file name as FL reads it. Deep copies: the Bridge
+  // frees its buffer after the call.
+  std::vector<std::string> loaded_names;
   int palette_count = 16;
   // Every call verbatim, so a test can assert the full argument shape and not
   // just the payload. The shape is Fruity Convolver's, read off FL 2026's own
@@ -65,6 +70,10 @@ class MockHost : public fl_mock::FpcHost {
       c.count = p->Count;
       for (int i = 0; i < p->Count; ++i) c.notes.push_back(p->NoteParams[i]);
       chords.push_back(std::move(c));
+    } else if (id == FHD_LoadInChannel && value != 0) {
+      // Read as FL reads it: bytes up to the first zero (a one-byte scan on both platforms).
+      const char *name = reinterpret_cast<const char *>(value);
+      loaded_names.emplace_back(name);
     } else if (id == FHD_SetDirty) {
       set_dirty_calls++;
     }

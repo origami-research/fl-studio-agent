@@ -63,6 +63,12 @@ class FakeMixer:
         def send_active(args):
             return int(self.routing_applied and self.sends.get(tuple(args), False))
 
+        def route_level(args):
+            # Live, FL answered "Index out of range" for the level of a send that is off.
+            if not send_active(args):
+                return refused("RuntimeError: Index out of range")
+            return self.levels.get(tuple(args), DEFAULT_SEND_LEVEL)
+
         return {
             "mixer.trackCount": lambda args: self.tracks,
             "channels.setTargetFxTrack": set_target,
@@ -71,7 +77,7 @@ class FakeMixer:
             "mixer.afterRoutingChanged": routing_changed,
             "mixer.setRouteToLevel": set_level,
             "mixer.getRouteSendActive": send_active,
-            "mixer.getRouteToLevel": lambda args: self.levels.get(tuple(args), DEFAULT_SEND_LEVEL),
+            "mixer.getRouteToLevel": route_level,
         }
 
 
@@ -188,7 +194,7 @@ def test_a_send_turns_off():
     mixer.sends[(2, 5)] = True
     session, _ = make_session(control=FakeControl(hello=HELLO, handlers=mixer.handlers()))
 
-    assert session.set_send(2, 5, on=False).on is False
+    assert session.set_send(2, 5, on=False) == MixerSend(source=2, target=5, on=False, level=None)
     assert mixer.sends[(2, 5)] is False
 
 
@@ -416,6 +422,7 @@ def test_sdk_calls_name_channels_like_fl_track(live):
         lambda fl: fl.send(2, 2),
         lambda fl: fl.send(2, 5, level=1.5),
         lambda fl: fl.send(2, 5, on="yes"),
+        lambda fl: fl.send(2, 5, level=0.4, on=False),
         lambda fl: fl.set_preset("FLEX", -1),
         lambda fl: fl.set_preset("FLEX", ""),
         lambda fl: fl.sounds(limit=0),
@@ -460,7 +467,7 @@ def test_each_change_reads_as_one_sentence_from_fls_readback():
     actions.called("route_channel", {"channel": 1, "mixer_track": 3}, ChannelRoute(channel=1, mixer_track=3))
     actions.called("route_channel", {"channel": 0, "mixer_track": 0}, ChannelRoute(channel=0, mixer_track=0))
     actions.called("set_send", {}, MixerSend(source=3, target=5, on=True, level=0.5))
-    actions.called("set_send", {}, MixerSend(source=3, target=0, on=False, level=0.8))
+    actions.called("set_send", {}, MixerSend(source=3, target=0, on=False))
     actions.called("set_preset", {}, ChannelPreset(channel=1, index=6, name="Pure Feather"))
     # Without a saved song the channel's live name is already the preset's.
     actions.called("set_preset", {}, ChannelPreset(channel=4, index=6, name="Pure Feather"))
