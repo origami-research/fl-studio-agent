@@ -132,6 +132,14 @@ class RenderReceipt(BaseModel):
     mute: list[int] = Field(default_factory=list)
 
 
+class StemsReceipt(BaseModel):
+    """What render_stems confirmed: one verified render per stem, and the channels it
+    ``skipped`` because they have no notes (or audio clip) in the bars it played."""
+
+    stems: list[RenderReceipt]
+    skipped: list[int] = Field(default_factory=list)
+
+
 class WriteResult(BaseModel):
     """What one note write left in FL: the model-facing result of Track.write/clear.
 

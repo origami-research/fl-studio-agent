@@ -19,7 +19,8 @@ from session_fakes import FIVE_CHANNEL_PROJECT, HELLO, FakeControl, isolate_spoo
 
 from fl_mcp import errors
 from fl_mcp.schemas import ControlResponse, Note, Target
-from fl_mcp.session.check import METER_DECAY_SECONDS, _overlaps_looped
+from fl_mcp.session.check import METER_DECAY_SECONDS
+from fl_mcp.session.controls import overlaps_looped
 
 
 @pytest.fixture(autouse=True)
@@ -248,10 +249,10 @@ def test_without_the_song_fl_opened_no_channel_is_called_silent_on_the_note_reco
 
 def test_a_note_in_a_looping_pattern_counts_on_every_pass():
     note = Note(key=60, start=3, length=0.5)  # the last beat of a one-bar pattern
-    assert _overlaps_looped(note, start=4, end=8, length=4)  # second pass
-    assert not _overlaps_looped(note, start=0, end=3, length=4)
+    assert overlaps_looped(note, start=4, end=8, length=4)  # second pass
+    assert not overlaps_looped(note, start=0, end=3, length=4)
     held = Note(key=60, start=3, length=2)  # rings into the next bar
-    assert _overlaps_looped(held, start=4, end=4.5, length=8)
+    assert overlaps_looped(held, start=4, end=4.5, length=8)
 
 
 def test_a_check_after_fl_stopped_answering_says_it_may_be_frozen():

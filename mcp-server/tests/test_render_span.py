@@ -17,7 +17,7 @@ from session_fakes import (
 )
 
 from fl_mcp import errors
-from fl_mcp.schemas import ControlResponse, SpoolResponse
+from fl_mcp.schemas import ControlResponse, Note, SpoolResponse
 from fl_mcp.session import FLSession, controls
 
 
@@ -308,7 +308,7 @@ def test_stems_record_each_channel_alone_one_play_each(monkeypatch, tmp_path):
     rack = _Rack({0: False, 1: False, 2: True})
     session, _, transport = _rig(monkeypatch, tmp_path, {**arrangement(tempo_bpm=120.0, steps=64), **rack.handlers()})
 
-    stems = session.render_stems(tmp_path / "take.wav", "channels", bars=1)
+    stems = session.render_stems(tmp_path / "take.wav", "channels", bars=1).stems
 
     assert [s.path.name for s in stems] == ["take-0-ch0.wav", "take-1-ch1.wav", "take-2-ch2.wav"]
     assert [s.solo for s in stems] == [[0], [1], [2]]
@@ -330,7 +330,7 @@ def test_mixer_stems_solo_the_channels_routed_to_each_track(monkeypatch, tmp_pat
     }
     session, _, transport = _rig(monkeypatch, tmp_path, handlers)
 
-    stems = session.render_stems(tmp_path / "take.wav", "mixer", bars=1)
+    stems = session.render_stems(tmp_path / "take.wav", "mixer", bars=1).stems
 
     assert [(s.path.name, s.solo) for s in stems] == [("take-mixer1-Bus-1.wav", [0, 1]), ("take-mixer2-Bus-2.wav", [2])]
 
@@ -345,3 +345,73 @@ def test_stems_past_the_recording_cap_are_refused_before_any_play(monkeypatch, t
 
     assert excinfo.value.category == "render_failed"
     assert transport.sent == []
+
+
+# -- stems skip the channels with no notes in the bars (box run 2026-11-03) ----------------
+
+
+def _noted(monkeypatch, tmp_path, rack: _Rack, notes: dict, *, mixer=None):
+    """A rig whose song (a project file FL opened) has ``notes`` by (pattern, channel)."""
+    handlers = {**arrangement(tempo_bpm=120.0, steps=64), **rack.handlers()}
+    if mixer is not None:
+        snapshot = handlers["state.snapshot"]
+        handlers["state.snapshot"] = lambda args: {
+            **snapshot(args),
+            "channels": [{**c, "target_mixer_track": mixer[c["idx"]]} for c in snapshot(args)["channels"]],
+            "mixer": [{"idx": t, "name": f"Bus {t}", "vol": 0.8, "pan": 0.0, "muted": False, "solo": False}
+                      for t in sorted(set(mixer.values()))],
+        }
+    project = tmp_path / "song.flp"
+    project.write_bytes(b"FLhd")
+    session, control, transport = _rig(monkeypatch, tmp_path, handlers, project=project)
+    monkeypatch.setattr(FLSession, "all_notes", lambda self: notes)
+    return session, transport
+
+
+def test_stems_record_only_the_channels_with_notes_in_the_bars(monkeypatch, tmp_path):
+    """Live: 20 of 23 stems were silent and took most of 6.5 minutes; each is a full play."""
+    rack = _Rack({i: False for i in range(4)})
+    kick, late = Note(key=36, start=0, length=1), Note(key=48, start=6, length=1)  # bar 1; bar 2 only
+    session, transport = _noted(monkeypatch, tmp_path, rack, {(1, 0): [kick], (1, 2): [late], (2, 3): [kick]})
+
+    receipt = session.render_stems(tmp_path / "take.wav", "channels", bars=1)
+
+    assert [s.solo for s in receipt.stems] == [[0]]
+    assert receipt.skipped == [1, 2, 3]  # no notes; notes in bar 2; notes in another pattern
+    assert len(_captured_seconds(transport)) == 1
+    assert [s.solo for s in session.render_stems(tmp_path / "take.wav", "channels").stems] == [[0], [2]]
+
+
+def test_mixer_stems_record_only_the_tracks_fed_by_channels_with_notes(monkeypatch, tmp_path):
+    rack = _Rack({i: False for i in range(4)})
+    note = Note(key=36, start=0, length=1)
+    session, _ = _noted(monkeypatch, tmp_path, rack, {(1, 1): [note]}, mixer={0: 1, 1: 2, 2: 2, 3: 3})
+
+    receipt = session.render_stems(tmp_path / "take.wav", "mixer", bars=1)
+
+    assert [(s.path.name, s.solo) for s in receipt.stems] == [("take-mixer2-Bus-2.wav", [1])]
+    assert receipt.skipped == [0, 2, 3]
+
+
+def test_named_stems_record_those_channels_notes_or_not(monkeypatch, tmp_path):
+    rack = _Rack({i: False for i in range(3)})
+    session, _ = _noted(monkeypatch, tmp_path, rack, {(1, 0): [Note(key=36, start=0, length=1)]})
+
+    receipt = session.render_stems(tmp_path / "take.wav", "channels", bars=1, channels=(2, 1, 2))
+
+    assert ([s.solo for s in receipt.stems], receipt.skipped) == ([[2], [1]], [])
+    with pytest.raises(errors.ToolError, match="no channel at index 7"):
+        session.render_stems(tmp_path / "take.wav", "channels", channels=(7,))
+    with pytest.raises(errors.ToolError, match="cannot be mixer stems"):
+        session.render_stems(tmp_path / "take.wav", "mixer", channels=(1,))
+
+
+def test_stems_of_bars_with_no_notes_refuse_before_any_play(monkeypatch, tmp_path):
+    rack = _Rack({i: False for i in range(2)})
+    session, transport = _noted(monkeypatch, tmp_path, rack, {})
+
+    with pytest.raises(errors.ToolError, match="No channel has notes in bar 1,") as excinfo:
+        session.render_stems(tmp_path / "take.wav", "channels", bars=1)
+
+    assert excinfo.value.category == "invalid_argument"
+    assert transport.sent == [] and rack.toggles == []

@@ -45,6 +45,7 @@ from .schemas import (
     RenderSpan,
     Sound,
     SoundKind,
+    StemsReceipt,
     Target,
     WriteResult,
 )
@@ -118,7 +119,11 @@ class _SoundsArgs(BaseModel):
 class _RenderArgs(BaseModel):
     bars: Annotated[int, Field(strict=True, ge=1)] | None = None
     start_bar: Annotated[int, Field(strict=True, ge=1)] = 1
-    stems: Literal["channels", "mixer"] | None = None
+    stems: (
+        Literal["channels", "mixer"]
+        | Annotated[list[Annotated[str, Field(strict=True)] | SdkChannel], Field(min_length=1)]
+        | None
+    ) = None
 
 
 class _LoadArgs(BaseModel):
@@ -164,6 +169,22 @@ class Render(type(Path())):
             return super().__repr__()
         heard = "".join(f", {k}={v!r}" for k, v in (("solo", self.solo), ("mute", self.mute)) if v)
         return f"Render({str(self)!r}, span={span!r}{heard})"
+
+
+class Stems(list[Render]):
+    """The stems a render recorded, one Render each, and ``skipped``: the channels it
+    left out because they have no notes in the bars it played."""
+
+    skipped: tuple[int, ...]
+
+    @classmethod
+    def of(cls, receipt: StemsReceipt) -> Stems:
+        stems = cls(Render.of(r) for r in receipt.stems)
+        stems.skipped = tuple(receipt.skipped)
+        return stems
+
+    def __repr__(self) -> str:
+        return f"Stems({list.__repr__(self)}, skipped={getattr(self, 'skipped', ())!r})"
 
 
 class ChannelNotFound(ValueError):
@@ -368,8 +389,8 @@ class FL:
         start_bar: int = 1,
         solo: Sequence[str | int] = (),
         mute: Sequence[str | int] = (),
-        stems: Literal["channels", "mixer"] | None = None,
-    ) -> Render | list[Render]:
+        stems: Literal["channels", "mixer"] | Sequence[str | int] | None = None,
+    ) -> Render | Stems:
         """Play the song and record the mix to ``output``: how to hear your edits.
         It plays in real time, so it takes about as long as what it records.
 
@@ -381,7 +402,10 @@ class FL:
 
         ``stems="channels"`` records each channel alone, ``stems="mixer"`` the channels
         on each mixer track together, one play each (so it takes that many times as
-        long), into files named after ``output``; returns the list of Renders.
+        long), into files named after ``output``; returns a list of Renders. Only
+        channels with notes in those bars are recorded (and only the mixer tracks they
+        feed); the list's ``.skipped`` names the rest by index. ``stems=["Bass", 3]``
+        records exactly those channels, each alone, notes or not.
         """
         try:
             args = _RenderArgs(bars=bars, start_bar=start_bar, stems=stems)
@@ -394,8 +418,14 @@ class FL:
         if args.stems is not None:
             if solo or mute:
                 raise errors.invalid_argument("fl.render", "stems picks the channels itself; leave out solo and mute")
-            receipts = self._session.render_stems(Path(output), args.stems, start_bar=args.start_bar, bars=args.bars)
-            return [Render.of(r) for r in receipts]
+            if isinstance(args.stems, list):
+                by, chosen = "channels", tuple(self.track(c).channel for c in args.stems)
+            else:
+                by, chosen = args.stems, ()
+            receipt = self._session.render_stems(
+                Path(output), by, start_bar=args.start_bar, bars=args.bars, channels=chosen
+            )
+            return Stems.of(receipt)
         return Render.of(
             self._session.render_wav(Path(output), start_bar=args.start_bar, bars=args.bars, **channels)
         )

@@ -26,6 +26,7 @@ from fl_mcp.schemas import (
     PluginParam,
     RenderReceipt,
     SessionState,
+    StemsReceipt,
     Target,
     WriteResult,
 )
@@ -107,11 +108,18 @@ class FakeSession(FLSession):
         span = RENDER_SPAN.model_copy(update={"start_bar": start_bar})
         return RenderReceipt(path=output, span=span, solo=list(solo), mute=list(mute))
 
-    def render_stems(self, output: Path, by: str, start_bar: int = 1, bars: int | None = None) -> list[RenderReceipt]:
-        return [
-            self.render_wav(output.with_name(f"{output.stem}-{c.index}.wav"), start_bar, bars, solo=(c.index,))
-            for c in self._channels
-        ]
+    def render_stems(
+        self, output: Path, by: str, start_bar: int = 1, bars: int | None = None, channels: tuple[int, ...] = ()
+    ) -> StemsReceipt:
+        """Every channel, or the ones named; which channels have notes is the real session's
+        to decide (test_render_span), so this fake records all and skips none."""
+        chosen = channels or tuple(c.index for c in self._channels)
+        return StemsReceipt(
+            stems=[
+                self.render_wav(output.with_name(f"{output.stem}-{i}.wav"), start_bar, bars, solo=(i,))
+                for i in chosen
+            ]
+        )
 
     def export_offline(self, output: Path) -> Path:
         return self.render_wav(output).path

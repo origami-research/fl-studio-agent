@@ -354,8 +354,21 @@ def test_stems_are_one_render_per_channel_and_pick_their_own_channels(fl, tmp_pa
     stems = fl.render(tmp_path / "take.wav", stems="channels", bars=1)
 
     assert [(s.name, s.solo) for s in stems] == [("take-0.wav", (0,)), ("take-1.wav", (1,)), ("take-2.wav", (2,))]
+    assert stems.skipped == () and repr(stems).endswith("skipped=())")
     with pytest.raises(errors.ToolError, match="leave out solo and mute"):
         fl.render(tmp_path / "take.wav", stems="channels", solo=["Bass"])
+
+
+def test_a_list_of_stems_records_exactly_those_channels(fl, fake_session, tmp_path):
+    """The override for the notes rule: named channels are recorded, notes or not."""
+    stems = fl.render(tmp_path / "take.wav", stems=["Bass", 2], bars=1)
+
+    assert [(s.name, s.solo) for s in stems] == [("take-1.wav", (1,)), ("take-2.wav", (2,))]
+    with pytest.raises(ChannelNotFound, match="No channel matching 'Nope'"):
+        fl.render(tmp_path / "take.wav", stems=["Nope"])
+    with pytest.raises(errors.ToolError) as excinfo:
+        fl.render(tmp_path / "take.wav", stems=[])
+    assert excinfo.value.category == "invalid_argument"
 
 
 def test_the_scene_mixer_and_tempo_are_plain_objects_in_run(fl, fake_session):

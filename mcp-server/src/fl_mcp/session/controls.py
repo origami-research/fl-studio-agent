@@ -29,12 +29,15 @@ from fl_mcp.schemas import (
     AutomationPoint,
     AutomationResult,
     ChannelLevels,
+    Note,
     PluginParam,
     PluginParamModel,
     PluginParamSpec,
     RenderReceipt,
     RenderSpan,
+    SessionState,
     SpoolResponse,
+    StemsReceipt,
 )
 
 from .audition import Rack, audition
@@ -216,6 +219,73 @@ def bar_range(span: RenderSpan, start_bar: int, bars: int | None) -> RenderSpan:
     end = span.beats if bars is None else min(span.beats, start + bars * BEATS_PER_BAR)
     beats = end - start
     return span.model_copy(update={"start_bar": start_bar, "beats": beats, "seconds": beats * 60.0 / span.tempo_bpm})
+
+
+def playing_notes(
+    session: FLSession, state: SessionState, start: float, end: float, tool: str
+) -> dict[int, bool] | None:
+    """Per channel: does it have notes (or an audio clip) in the beats [start, end)
+    about to play? None when unknown. Raises when the span starts past the end.
+
+    Pattern mode loops the selected pattern; song mode plays the playlist. The
+    playlist and the notes nobody wrote this session come from the song FL
+    opened (the SDK cannot change the playlist), so without that song the
+    answer is unknown, never assumed. ``tool`` names the caller in a refusal.
+    """
+    loop_mode = _live_int(session, "transport.getLoopMode")
+    if loop_mode == FL_LOOP_MODE_PATTERN:
+        pattern = state.current_pattern
+        if pattern is None:
+            return None
+        length = max(_live_int(session, "patterns.getPatternLength", [pattern]), 1) / FL_STEPS_PER_BEAT
+        if start >= length:
+            bars = math.ceil(length / BEATS_PER_BAR)
+            raise errors.invalid_argument(
+                tool, f"pattern {pattern} is {bars} bar{'s' if bars != 1 else ''} long; start at bar 1 to {bars}"
+            )
+        if session.project is None or not session.project.is_file():
+            return None
+        notes = session.all_notes()
+        return {
+            c.index: any(overlaps_looped(n, start, end, length) for n in notes.get((pattern, c.index), []))
+            for c in state.channels
+        }
+    if loop_mode != FL_LOOP_MODE_SONG:
+        raise errors.fl_api_error("transport.getLoopMode", f"returned unknown loop mode {loop_mode}")
+    last_tick = _live_int(session, "transport.getSongLength", [FL_SONGLENGTH_ABSTICKS])
+    if last_tick <= 0:
+        raise errors.ToolError(
+            "invalid_argument",
+            "FL is in song mode and its playlist is empty, so nothing would play.",
+            f"Place a pattern on the playlist, or switch FL to pattern mode, then {tool} again.",
+        )
+    ppq = state.ppq or 1
+    if start * ppq > last_tick:
+        bars = math.ceil((last_tick + 1) / ppq / BEATS_PER_BAR)
+        raise errors.invalid_argument(tool, f"the song is {bars} bars long; start at bar 1 to {bars}")
+    if session.project is None or not session.project.is_file():
+        return None
+    project = flp.read(session.project)
+    notes = session.all_notes()
+    clips = [
+        clip
+        for clip in project.playlist
+        if clip.position / project.ppq < end and (clip.position + clip.length) / project.ppq > start
+    ]
+    patterns = {clip.pattern for clip in clips if clip.pattern is not None}
+    audio_clips = {clip.channel for clip in clips if clip.channel is not None}
+    return {
+        c.index: c.index in audio_clips or any(notes.get((p, c.index)) for p in patterns) for c in state.channels
+    }
+
+
+def overlaps_looped(note: Note, start: float, end: float, length: float) -> bool:
+    """Whether a note in a pattern of ``length`` beats, looping, sounds in [start, end)."""
+    first = math.floor((start - note.start - note.length) / length)
+    return any(
+        note.start + k * length < end and note.start + note.length + k * length > start
+        for k in range(first, math.ceil((end - note.start) / length) + 1)
+    )
 
 
 def _check_capture_length(span: RenderSpan) -> None:
@@ -437,44 +507,76 @@ def render_wav(
 
 
 def render_stems(
-    session: FLSession, output: Path, by: str, *, start_bar: int = 1, bars: int | None = None
-) -> list[RenderReceipt]:
+    session: FLSession,
+    output: Path,
+    by: str,
+    *,
+    start_bar: int = 1,
+    bars: int | None = None,
+    channels: Sequence[int] = (),
+) -> StemsReceipt:
     """One render per channel (``by="channels"``) or per mixer track, soloing the
     channels routed to it (``by="mixer"``): the Bridge records only the master, so
     each stem is its own play. Files are named ``<output stem>-<label>.wav`` beside
     ``output``.
 
-    Every stem may be silent (a channel with no notes in the bars), so none is
-    refused for silence; the whole set is bounded like one render, at
-    CAPTURE_MAX_SECONDS of recording.
+    Only channels with notes (or an audio clip) in the bars played are recorded, and
+    only the mixer tracks they feed: a silent stem costs a full play (box run
+    2026-11-03: 20 of 23 stems were empty and took most of 6.5 minutes). The rest
+    are reported as ``skipped``. When the session cannot tell (no copy of the song
+    FL opened), every channel is recorded. ``channels`` names the channels to record
+    instead, each alone, notes or not.
+
+    A stem may still be silent, so none is refused for silence; the whole set is
+    bounded like one render, at CAPTURE_MAX_SECONDS of recording.
     """
     if by not in ("channels", "mixer"):
         raise errors.invalid_argument("fl.render", f'stems must be "channels" or "mixer", got {by!r}')
+    if channels and by != "channels":
+        raise errors.invalid_argument("fl.render", "a list of stems names channels; it cannot be mixer stems")
     state = session.snapshot()
+    rack = {c.index: c for c in state.channels}
+    if not rack:
+        raise errors.invalid_argument("fl.render", "FL has no channels to record stems of")
+    missing = [c for c in channels if c not in rack]
+    if missing:
+        raise errors.invalid_argument("fl.render", f"no channel at index {', '.join(map(str, missing))}")
+    _, span, start_tick = _prepare_render(session, start_bar, bars)
+    if channels:
+        heard, skipped = list(dict.fromkeys(channels)), []
+    else:
+        start = (span.start_bar - 1) * BEATS_PER_BAR
+        playing = playing_notes(session, state, start, start + span.beats, "fl.render")
+        heard = [i for i in rack if playing is None or playing.get(i)]
+        skipped = [i for i in rack if i not in heard]
     if by == "channels":
-        groups = [(f"{c.index}-{c.name}", (c.index,)) for c in state.channels]
+        groups = [(f"{i}-{rack[i].name}", (i,)) for i in heard]
     else:
         names = {t.index: t.name for t in state.mixer}
-        tracks = sorted({c.mixer_track for c in state.channels if c.mixer_track is not None})
+        tracks = sorted({rack[i].mixer_track for i in heard if rack[i].mixer_track is not None})
         groups = [
-            (f"mixer{t}-{names.get(t, '')}", tuple(c.index for c in state.channels if c.mixer_track == t))
-            for t in tracks
+            (f"mixer{t}-{names.get(t, '')}", tuple(i for i in heard if rack[i].mixer_track == t)) for t in tracks
         ]
     if not groups:
-        raise errors.invalid_argument("fl.render", "FL has no channels to record stems of")
-    _, span, start_tick = _prepare_render(session, start_bar, bars)
+        last = span.start_bar + max(1, math.ceil(span.beats / BEATS_PER_BAR - 1e-9)) - 1
+        where = f"bar {last}" if last == span.start_bar else f"bars {span.start_bar}-{last}"
+        raise errors.ToolError(
+            "invalid_argument",
+            f"No channel has notes in {where}, so there are no stems to record.",
+            'Render bars that have notes, or name the channels to record: stems=["Bass", "Kick"].',
+        )
     recorded = len(groups) * (span.seconds + RENDER_TAIL_SECONDS)
     if recorded > CAPTURE_MAX_SECONDS:
         raise errors.ToolError(
             "render_failed",
             f"{len(groups)} stems of {span.seconds:.1f} s each record {recorded:.0f} s; "
             f"one call records at most {CAPTURE_MAX_SECONDS:g} s.",
-            "Render fewer bars (bars=, start_bar=), or solo the channels you need one render at a time.",
+            "Render fewer bars (bars=, start_bar=), or name fewer channels (stems=[...]).",
         )
     receipts = []
-    with Rack(session) as rack:
+    with Rack(session) as mutes:
         for label, solo in groups:
-            rack.hear(solo)
+            mutes.hear(solo)
             path = _live_render(
                 session,
                 output.expanduser().resolve().with_name(f"{output.stem}-{_label(label)}.wav"),
@@ -483,7 +585,7 @@ def render_stems(
                 refuse_silence=False,
             )
             receipts.append(RenderReceipt(path=path, span=span, solo=list(solo)))
-    return receipts
+    return StemsReceipt(stems=receipts, skipped=skipped)
 
 
 def _label(text: str) -> str:

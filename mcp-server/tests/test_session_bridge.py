@@ -30,6 +30,7 @@ from session_fakes import (
 )
 
 from fl_mcp import errors, flp
+from fl_mcp.actions import ActionLog
 from fl_mcp.contract import FLLicense
 from fl_mcp.core.router import route
 from fl_mcp.ops import notes as ops_notes
@@ -100,6 +101,19 @@ def selected_channel_control(channel: int = 0) -> FakeControl:
     return FakeControl(hello=HELLO, handlers={"channels.selectedChannel": lambda args: channel})
 
 
+def rewrite(project: Path) -> None:
+    """What FL's save does to the song's file: rewrites it now, so its mtime moves on
+    (never into the future, which would supersede the write's own record)."""
+    stamp = max(time.time_ns(), project.stat().st_mtime_ns + 1)
+    os.utime(project, ns=(stamp, stamp))
+
+
+def fl_saves_to(control: FakeControl, project: Path) -> FakeControl:
+    """FL answering ctl.save by rewriting ``project``, the song it has open."""
+    control.handlers["ctl.save"] = lambda args: rewrite(project)
+    return control
+
+
 def project_flp(monkeypatch, tmp_path, *, ppq=192, file_notes=2):
     """The flp seams the bridge path touches: ppq for the stamp, notes_at for
     the readback. write_notes raises - the bridge path must never file-write."""
@@ -127,7 +141,8 @@ def project_flp(monkeypatch, tmp_path, *, ppq=192, file_notes=2):
 def test_fresh_heartbeat_and_matching_channel_routes_bridge(monkeypatch, tmp_path, bridge_env, no_reload):
     project = project_flp(monkeypatch, tmp_path, ppq=192, file_notes=2)
     spool = FakeSpool(responses={"ping": PING_OK, "add_notes": BRIDGE_OK})
-    session, store = make_session(control=selected_channel_control(0), transport=spool, project=project)
+    control = fl_saves_to(selected_channel_control(0), project)
+    session, store = make_session(control=control, transport=spool, project=project)
 
     result = session.write_notes(TARGET, NOTES, "merge")
 
@@ -525,7 +540,8 @@ def test_failed_saved_readback_leaves_the_acknowledgement_as_confirmation(
     spool = FakeSpool(responses={"ping": PING_OK, "add_notes": BRIDGE_OK})
     project = tmp_path / "agent.flp"
     project.write_bytes(b"FLhd")
-    session, store = make_session(control=selected_channel_control(0), transport=spool, project=project)
+    control = fl_saves_to(selected_channel_control(0), project)
+    session, store = make_session(control=control, transport=spool, project=project)
 
     other = Target(pattern=2, channel=0)
     assert session.write_notes(other, NOTES, "merge").total is None
@@ -613,7 +629,9 @@ def test_bridge_rewrite_saves_live_readback_for_replace_and_merge(
     saves: list[int] = []
     monkeypatch.setattr(flp, "read", lambda path: SimpleNamespace(ppq=96, channels=()))
     monkeypatch.setattr(flp, "notes_at", lambda path, pattern, channel: post_save[len(saves)])
-    monkeypatch.setattr(notes_mod.controls, "save_project", lambda session: saves.append(1))
+    monkeypatch.setattr(
+        notes_mod.controls, "save_project", lambda session: (saves.append(1), rewrite(session.project))
+    )
     spool = FakeSpool(responses={"ping": PING_OK, "add_notes": BRIDGE_OK})
     session, _ = make_session(
         control=selected_channel_control(0), transport=spool, project=tmp_path / "agent.flp"
@@ -634,6 +652,28 @@ def test_bridge_rewrite_saves_live_readback_for_replace_and_merge(
         Note(key=60, start=0, length=1, velocity=100 / 127, pan=0.5),
         Note(key=64, start=1, length=1, velocity=100 / 127, pan=0.5),
     ]
+
+
+def test_a_save_that_left_the_song_file_as_it_was_is_no_readback(monkeypatch, tmp_path, bridge_env, no_reload):
+    """Seen live after #306: a real replace read "(0)" in its action sentence. FL
+    acknowledged ctl.save without rewriting the session's project (another song open,
+    or the file not written yet), and that file's notes from before the write (none on
+    this channel) were taken as FL's state. A save that leaves the file as it was is no
+    readback: FL's acknowledgement confirms the write, as on a trial FL."""
+    project = project_flp(monkeypatch, tmp_path, file_notes=0)
+    spool = FakeSpool(responses={"ping": PING_OK, "add_notes": BRIDGE_OK})
+    control = selected_channel_control(0)  # acknowledges ctl.save and leaves the file alone
+    session, _ = make_session(control=control, transport=spool, project=project)
+    three = [Note(key=60 + i, start=i, length=1) for i in range(3)]
+
+    result = session.write_notes(TARGET, three, "replace")
+
+    assert "ctl.save" in [op for op, _ in control.calls], "FL was asked to save"
+    assert (result.wrote, result.total) == (3, 3)
+    assert session.read_notes(TARGET) == three
+    actions = ActionLog()
+    actions.called("write_notes", {"target": TARGET}, result)
+    assert actions.sentences() == [f"Replaced the notes on {result.track} (3 notes)"]
 
 
 def test_ppq_stamp_falls_back_to_hello_when_file_unreadable(monkeypatch, tmp_path, bridge_env, no_reload):

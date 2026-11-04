@@ -142,8 +142,10 @@ def run(code: str, ctx: Context) -> RunResult:
            relative to fl.stock_folder, readable); fl.load_sample(ch, sound);
            fl.load_preset(ch, sound); fl.presets(ch); fl.set_preset(ch, name).
     Hear:  fl.render("mix.wav", bars=, start_bar=1, solo=[ch], mute=[ch],
-           stems="channels"|"mixer") -> the WAV's Path with .span (start_bar,
-           beats, tempo_bpm, seconds), a list for stems; it plays in real time.
+           stems="channels"|"mixer"|[ch]) -> the WAV's Path with .span (start_bar,
+           beats, tempo_bpm, seconds); it plays in real time. Stems are one play
+           each, a list: only channels with notes in those bars (.skipped are the
+           rest), or exactly the channels listed.
            fl.meters(bars=2, start_bar=1) -> which channels sounded, from FL's
            mixer meters (.summary). fl.read_wav(path) -> (samples, rate), for a
            render or a stock sample.

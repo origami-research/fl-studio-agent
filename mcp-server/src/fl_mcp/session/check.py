@@ -20,17 +20,11 @@ import math
 from collections.abc import Callable, Sequence
 from typing import TYPE_CHECKING
 
-from fl_mcp import errors, flp
-from fl_mcp.schemas import CHECK_MAX_BARS, Channel, ChannelCheck, CheckResult, MixerTrack, Note, SessionState
+from fl_mcp import errors
+from fl_mcp.schemas import CHECK_MAX_BARS, Channel, ChannelCheck, CheckResult, MixerTrack, SessionState
 
 from . import controls
-from .controls import (
-    BEATS_PER_BAR,
-    FL_LOOP_MODE_PATTERN,
-    FL_LOOP_MODE_SONG,
-    FL_SONGLENGTH_ABSTICKS,
-    FL_STEPS_PER_BEAT,
-)
+from .controls import BEATS_PER_BAR, FL_SONGLENGTH_ABSTICKS
 
 if TYPE_CHECKING:
     from .facade import FLSession
@@ -74,7 +68,7 @@ def check(
         raise errors.fl_api_error("state.snapshot", "it reported no tempo or ticks per beat")
     start_beat = (start_bar - 1) * BEATS_PER_BAR
     end_beat = start_beat + bars * BEATS_PER_BAR
-    playing = _playing_notes(session, state, start_beat, end_beat)
+    playing = controls.playing_notes(session, state, start_beat, end_beat, "check")
     seconds = (end_beat - start_beat) * 60.0 / state.tempo_bpm
     tracks = sorted({MASTER} | {c.mixer_track for c in state.channels if c.mixer_track is not None})
 
@@ -125,71 +119,6 @@ def _dbfs(peak: float) -> float | None:
         return None
     level = 20 * math.log10(peak)
     return round(level, 1) if level > SILENCE_DBFS else None
-
-
-def _playing_notes(session: FLSession, state: SessionState, start: float, end: float) -> dict[int, bool] | None:
-    """Per channel: does it have notes (or an audio clip) in the beats about to
-    play? None when unknown. Raises when the span starts past the end.
-
-    Pattern mode loops the selected pattern; song mode plays the playlist. The
-    playlist and the notes nobody wrote this session come from the song FL
-    opened (the SDK cannot change the playlist), so without that song the
-    answer is unknown, never assumed.
-    """
-    loop_mode = controls._live_int(session, "transport.getLoopMode")
-    if loop_mode == FL_LOOP_MODE_PATTERN:
-        pattern = state.current_pattern
-        if pattern is None:
-            return None
-        length = max(controls._live_int(session, "patterns.getPatternLength", [pattern]), 1) / FL_STEPS_PER_BEAT
-        if start >= length:
-            bars = math.ceil(length / BEATS_PER_BAR)
-            raise errors.invalid_argument(
-                "check", f"pattern {pattern} is {bars} bar{'s' if bars != 1 else ''} long; start at bar 1 to {bars}"
-            )
-        if session.project is None or not session.project.is_file():
-            return None
-        notes = session.all_notes()
-        return {
-            c.index: any(_overlaps_looped(n, start, end, length) for n in notes.get((pattern, c.index), []))
-            for c in state.channels
-        }
-    if loop_mode != FL_LOOP_MODE_SONG:
-        raise errors.fl_api_error("transport.getLoopMode", f"returned unknown loop mode {loop_mode}")
-    last_tick = controls._live_int(session, "transport.getSongLength", [FL_SONGLENGTH_ABSTICKS])
-    if last_tick <= 0:
-        raise errors.ToolError(
-            "invalid_argument",
-            "FL is in song mode and its playlist is empty, so nothing would play.",
-            "Place a pattern on the playlist, or switch FL to pattern mode, then check again.",
-        )
-    ppq = state.ppq or 1
-    if start * ppq > last_tick:
-        bars = math.ceil((last_tick + 1) / ppq / BEATS_PER_BAR)
-        raise errors.invalid_argument("check", f"the song is {bars} bars long; start at bar 1 to {bars}")
-    if session.project is None or not session.project.is_file():
-        return None
-    project = flp.read(session.project)
-    notes = session.all_notes()
-    clips = [
-        clip
-        for clip in project.playlist
-        if clip.position / project.ppq < end and (clip.position + clip.length) / project.ppq > start
-    ]
-    patterns = {clip.pattern for clip in clips if clip.pattern is not None}
-    audio = {clip.channel for clip in clips if clip.channel is not None}
-    return {
-        c.index: c.index in audio or any(notes.get((p, c.index)) for p in patterns) for c in state.channels
-    }
-
-
-def _overlaps_looped(note: Note, start: float, end: float, length: float) -> bool:
-    """Whether a note in a pattern of ``length`` beats, looping, sounds in [start, end)."""
-    first = math.floor((start - note.start - note.length) / length)
-    return any(
-        note.start + k * length < end and note.start + note.length + k * length > start
-        for k in range(first, math.ceil((end - note.start) / length) + 1)
-    )
 
 
 def _attribute(

@@ -369,17 +369,30 @@ class BridgeLane:
         """FL's saved post-write state of the target, when FL can save.
 
         Saving through FL closes the live-to-file boundary without a reload,
-        so the parsed file is a readback of the live session. A trial FL
-        cannot save, and a session without a readable project has nothing to
-        save to; both, and a failed save, leave FL's acknowledgement as the
-        confirmation (None here).
+        so the parsed file is a readback of the live session, but only if the
+        save rewrote that file. ctl.save is acknowledged whether or not it did
+        (FL may have another song open, or not have written the file yet);
+        reading the project then returned the notes from before the write
+        (none on an empty channel), so a real write read "(0)" in its action
+        sentence and was recorded with no notes.
+        A trial FL cannot save, and a session without a readable project has
+        nothing to save to; these, a save that left the file as it was, and a
+        failed save leave FL's acknowledgement as the confirmation (None here).
         """
         session = self._session
         project = session.project
         if session.fl_license is FLLicense.TRIAL or project is None or not project.is_file():
             return None
         try:
+            before = project.stat().st_mtime_ns
             controls.save_project(session)
+            if project.stat().st_mtime_ns == before:
+                log.warning(
+                    "bridge command %d applied, but FL's save left %s unchanged (another song open, "
+                    "or the save not written yet); FL's acknowledgement confirms the write",
+                    command_id, project,
+                )
+                return None
             return _project_notes(session, target)
         except (errors.ToolError, flp.FlpError, OSError):
             log.exception("bridge command %d applied; its saved-state readback failed", command_id)

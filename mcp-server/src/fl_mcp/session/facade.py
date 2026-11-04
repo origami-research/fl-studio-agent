@@ -66,6 +66,7 @@ from fl_mcp.schemas import (
     SessionState,
     Sound,
     SoundKind,
+    StemsReceipt,
     Target,
     WriteResult,
 )
@@ -433,11 +434,16 @@ class FLSession:
             return controls.render_wav(self, output, start_bar=start_bar, bars=bars, solo=solo, mute=mute)
 
     def render_stems(
-        self, output: Path, by: str, start_bar: int = 1, bars: int | None = None
-    ) -> list[RenderReceipt]:
+        self,
+        output: Path,
+        by: str,
+        start_bar: int = 1,
+        bars: int | None = None,
+        channels: tuple[int, ...] = (),
+    ) -> StemsReceipt:
         """One play per stem, the whole set under one write guard, like one render."""
         with self._write_guard("render_wav"):
-            return controls.render_stems(self, output, by, start_bar=start_bar, bars=bars)
+            return controls.render_stems(self, output, by, start_bar=start_bar, bars=bars, channels=channels)
 
     def export_offline(self, output: Path) -> Path:
         with self._write_guard("export_offline"):

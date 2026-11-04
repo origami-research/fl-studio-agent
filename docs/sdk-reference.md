@@ -108,7 +108,7 @@ may be quantized.
 confirmed_bpm = fl.set_tempo(128.0)
 ```
 
-### `fl.render(output, *, bars=None, start_bar=1, solo=(), mute=(), stems=None) -> Render | list[Render]`
+### `fl.render(output, *, bars=None, start_bar=1, solo=(), mute=(), stems=None) -> Render | Stems`
 
 **Availability:** live session with the Master Bridge and FL audio output. Reads
 the live arrangement's length from FL (the playlist in song mode, the selected
@@ -129,7 +129,12 @@ Since 2026-11-03 it can record part of the song or some of its channels, so the 
 | `bars`, `start_bar` | Record `bars` bars from `start_bar` (four beats a bar), cut at the song's end; a start past the end is refused. FL plays from that bar in absolute ticks, as `fl.meters` does; notes held over from before it are not re-struck. |
 | `solo` | Only these channels are heard (names or indices, as for `fl.track`; one alone is fine). |
 | `mute` | These channels are silenced. |
-| `stems` | `"channels"`: each channel alone; `"mixer"`: the channels routed to each mixer track together. One play per stem, so it takes that many times as long, bounded at ten minutes of recording in all; files are named `<output>-<label>.wav`. Returns the list. |
+| `stems` | `"channels"`: each channel alone; `"mixer"`: the channels routed to each mixer track together; a list of channels (`["Bass", 3]`): exactly those, each alone. One play per stem, so it takes that many times as long, bounded at ten minutes of recording in all; files are named `<output>-<label>.wav`. Returns a `Stems` list of Renders. |
+
+Since 2026-11-03 (later) `stems="channels"` and `stems="mixer"` record only the channels with notes (or an audio clip) in the bars played, and only the mixer tracks those channels feed, because a silent stem still costs a full play (a live session's 20 empty stems of 23 took most of 6.5 minutes).
+The list's `.skipped` holds the indices of the channels left out, and the action sentence counts them ("Rendered 3 stems, each 0:10 of bars 1-4; skipped 20 channels with no notes").
+When the session has no copy of the song FL opened, it cannot tell, and every channel is recorded.
+If no channel has notes in those bars, it refuses before playing; a list of channels records them anyway.
 
 Solo and mute set each channel's mute in FL's channel rack explicitly and read it back, then set back exactly the channels they changed, also when the render fails; a channel FL will not set back is an error naming it.
 FL's own channel solo is not used, because un-soloing unmutes every channel and would lose the user's mutes.
@@ -146,7 +151,8 @@ pass is done; the harness listens back after you say you are done. Use
 ```python
 wav = fl.render("mix.wav")
 bass = fl.render("bass.wav", bars=4, solo="Bass")
-stems = fl.render("take.wav", stems="channels", bars=8)
+stems = fl.render("take.wav", stems="channels", bars=8)  # stems.skipped: channels with no notes
+kit = fl.render("kit.wav", stems=["Kick", "Snare"], bars=8)
 ```
 
 From the `run` tool only the file name is used: the WAV lands in the session's

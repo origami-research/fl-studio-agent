@@ -38,6 +38,7 @@ from fl_mcp.schemas import (
     MixerSend,
     PluginParam,
     RenderReceipt,
+    StemsReceipt,
     WriteResult,
 )
 
@@ -356,11 +357,12 @@ class ActionLog:
     def _render(self, kwargs: Mapping[str, Any], receipt: RenderReceipt) -> list[_Entry]:
         return [_Entry(f"Rendered {self._rendered(receipt, bars=kwargs.get('bars'))}")]
 
-    def _stems(self, kwargs: Mapping[str, Any], receipts: list[RenderReceipt]) -> list[_Entry]:
-        if not receipts:
+    def _stems(self, kwargs: Mapping[str, Any], receipt: StemsReceipt) -> list[_Entry]:
+        if not receipt.stems:
             return []
-        each = self._rendered(receipts[0], bars=kwargs.get("bars"), alone=False)
-        return [_Entry(f"Rendered {_count(len(receipts), 'stem')}, each {each}")]
+        each = self._rendered(receipt.stems[0], bars=kwargs.get("bars"), alone=False)
+        skipped = f"; skipped {_count(len(receipt.skipped), 'channel')} with no notes" if receipt.skipped else ""
+        return [_Entry(f"Rendered {_count(len(receipt.stems), 'stem')}, each {each}{skipped}")]
 
     def _rendered(self, receipt: RenderReceipt, *, bars: int | None = None, alone: bool = True) -> str:
         """What a render played: "0:34", "0:08 of bars 9-10 of pattern 1, solo Bass"."""

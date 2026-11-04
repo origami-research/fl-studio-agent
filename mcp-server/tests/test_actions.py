@@ -31,6 +31,7 @@ from fl_mcp.schemas import (
     PluginParam,
     RenderReceipt,
     RenderSpan,
+    StemsReceipt,
     Target,
     WriteResult,
 )
@@ -133,13 +134,18 @@ def test_a_render_says_which_bars_and_channels_it_heard():
     actions.called("render_wav", {}, RenderReceipt(path=Path("b.wav"), span=range_span, solo=[4]))
     actions.called("render_wav", {}, RenderReceipt(path=Path("m.wav"), span=_song_span(34.0), mute=[0, 1]))
     stems = [RenderReceipt(path=Path(f"s{i}.wav"), span=range_span, solo=[i]) for i in range(3)]
-    actions.called("render_stems", {}, stems)
+    actions.called("render_stems", {}, StemsReceipt(stems=stems))
+    # Channels with no notes in the bars are not played; the sentence says how many.
+    actions.called("render_stems", {}, StemsReceipt(stems=stems[:2], skipped=[2, 3, 4]))
+    actions.called("render_stems", {}, StemsReceipt(stems=stems[:1], skipped=[4]))
     first_bars = RenderSpan(source="song", beats=8.0, tempo_bpm=120.0, seconds=4.0)
     actions.called("render_wav", {"bars": 2}, RenderReceipt(path=Path("i.wav"), span=first_bars))
     assert actions.sentences() == [
         "Rendered 0:04 of bars 9-10, solo FLEX Bass",
         "Rendered 0:34, muting 808 Kick, 808 Clap",
         "Rendered 3 stems, each 0:04 of bars 9-10",
+        "Rendered 2 stems, each 0:04 of bars 9-10; skipped 3 channels with no notes",
+        "Rendered 1 stem, each 0:04 of bars 9-10; skipped 1 channel with no notes",
         "Rendered 0:04 of bars 1-2",
     ]
 
