@@ -1,5 +1,5 @@
-"""Imported by every Python the kernel and the workspace tools start (pip,
-``!python``, ``python`` in shell) via PYTHONPATH.
+"""Imported by every Python the kernel starts (pip, ``!python``, a subprocess
+running ``python``) via PYTHONPATH.
 
 The kernel itself applies the same fixes directly; see fl_mcp.kernel.private_dirs
 and kernel.child.

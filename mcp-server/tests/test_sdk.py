@@ -28,7 +28,7 @@ from sdk_fakes import DEFAULT_CHANNELS, FakeSession
 from session_fakes import RENDER_SPAN, make_session
 
 from fl_mcp import errors, sdk, theory
-from fl_mcp.schemas import AutomationPoint, ChannelLevels, MixerTrack, Note, SessionState, Target, WriteResult
+from fl_mcp.schemas import AutomationPoint, ChannelLevels, MixerTrack, Note, Target, WriteResult
 from fl_mcp.sdk import ChannelNotFound, connect
 from fl_mcp.session.link import TRANSIENT_RETRY_DELAYS
 
@@ -210,22 +210,22 @@ def test_automation_points_normalize_and_validate_at_the_sdk_boundary(fl):
 
 def test_track_set_channel_levels_validates_at_the_sdk_boundary(fl, fake_session):
     with pytest.raises(errors.ToolError) as exc_info:
-        fl.track("Bass").set_channel_levels(volume=1.1)
+        fl.track("Bass").set_levels(volume=1.1)
 
     assert exc_info.value.category == "invalid_argument"
-    assert "Track.set_channel_levels" in exc_info.value.message
+    assert "Track.set_levels" in exc_info.value.message
     assert "volume" in exc_info.value.message
     assert fake_session.level_calls == []
 
     with pytest.raises(errors.ToolError) as exc_info:
-        fl.track("Bass").set_channel_levels(pan=-1.1)
+        fl.track("Bass").set_levels(pan=-1.1)
 
     assert exc_info.value.category == "invalid_argument"
     assert "pan" in exc_info.value.message
     assert fake_session.level_calls == []
 
     with pytest.raises(errors.ToolError) as exc_info:
-        fl.track("Bass").set_channel_levels(pitch=49)
+        fl.track("Bass").set_levels(pitch=49)
 
     assert exc_info.value.category == "invalid_argument"
     assert "pitch" in exc_info.value.message
@@ -233,7 +233,7 @@ def test_track_set_channel_levels_validates_at_the_sdk_boundary(fl, fake_session
 
 
 def test_track_set_channel_levels_returns_the_confirmed_receipt(fl, fake_session):
-    confirmed = fl.track("Bass").set_channel_levels(volume=0.6, pan=-0.3, pitch=12)
+    confirmed = fl.track("Bass").set_levels(volume=0.6, pan=-0.3, pitch=12)
 
     assert confirmed == ChannelLevels(channel=1, volume=0.6, pan=-0.3, pitch_semitones=12)
     assert fake_session.level_calls == [(1, 0.6, -0.3, 12)]
@@ -301,7 +301,7 @@ def test_channels_lists_what_fl_has(fl):
 
 
 def test_check_reports_what_the_session_heard(fl):
-    result = fl.check(bars=1, start_bar=2)
+    result = fl.meters(bars=1, start_bar=2)
     assert (result.start_bar, result.bars) == (2, 1)
     assert result.summary == "1 of 1 channels sounded in bars 2-2."
 
@@ -360,9 +360,7 @@ def test_stems_are_one_render_per_channel_and_pick_their_own_channels(fl, tmp_pa
 
 def test_the_scene_mixer_and_tempo_are_plain_objects_in_run(fl, fake_session):
     """What get_scene reads, the mixer and the tempo are reachable as Python objects."""
-    fake_session.snapshot = lambda: SessionState(
-        tempo_bpm=120.0, mixer=[MixerTrack(index=0, name="Master"), MixerTrack(index=1, name="Drums", solo=True)]
-    )
+    fake_session.mixer_tracks = lambda: [MixerTrack(index=0, name="Master"), MixerTrack(index=1, name="Drums", solo=True)]
     assert [(t.name, t.solo) for t in fl.mixer] == [("Master", False), ("Drums", True)]
     with pytest.raises(errors.ToolError, match="cannot be read in this session"):  # no song, as get_scene
         fl.scene()

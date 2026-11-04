@@ -57,20 +57,20 @@ def test_tool_output_schemas_are_their_flat_success_models():
 def test_tool_error_reaches_an_mcp_client_as_parseable_is_error(monkeypatch):
     """An anticipated engine failure remains structured after the MCP boundary."""
 
-    class FailingSession:
-        def check(self, start_bar, bars):
+    class FailingKernel:
+        def run(self, code):
             raise ToolError("operation_unsafe", "FL is busy", "retry", retryable=True)
 
     @contextlib.asynccontextmanager
-    async def fake_lifespan(_mcp_server):
-        yield {"session": FailingSession()}
+    async def fake_lifespan(_mcp_server, **_options):
+        yield {"kernel": FailingKernel()}
 
     monkeypatch.setattr(server, "lifespan", fake_lifespan)
 
     async def call() -> None:
         async with InMemoryTransport(create_server()) as (read, write), ClientSession(read, write) as client:
             await client.initialize()
-            result = await client.call_tool("check", {"bars": 2})
+            result = await client.call_tool("run", {"code": "fl.meters()"})
 
         assert result.is_error
         assert json.loads(result.content[0].text) == {
@@ -88,25 +88,25 @@ def test_tool_error_reaches_an_mcp_client_as_parseable_is_error(monkeypatch):
 def test_unexpected_tool_error_reaches_an_mcp_client_as_structured_internal_error(monkeypatch):
     """The SDK must never replace an engine exception with plain-text isError content."""
 
-    class FailingSession:
-        def check(self, start_bar, bars):
-            raise RuntimeError("check exploded")
+    class FailingKernel:
+        def run(self, code):
+            raise RuntimeError("run exploded")
 
     @contextlib.asynccontextmanager
-    async def fake_lifespan(_mcp_server):
-        yield {"session": FailingSession()}
+    async def fake_lifespan(_mcp_server, **_options):
+        yield {"kernel": FailingKernel()}
 
     monkeypatch.setattr(server, "lifespan", fake_lifespan)
 
     async def call() -> None:
         async with InMemoryTransport(create_server()) as (read, write), ClientSession(read, write) as client:
             await client.initialize()
-            result = await client.call_tool("check", {})
+            result = await client.call_tool("run", {"code": "1"})
 
         assert result.is_error
         payload = json.loads(result.content[0].text)
         assert payload["error"] == "internal_error"
-        assert payload["message"] == "check exploded"
+        assert payload["message"] == "run exploded"
         assert payload["fix"] == "Report this; the engine kept running."
         assert payload["retryable"] is False
 
@@ -119,7 +119,7 @@ def test_tools_list_validates_through_the_mcp_layer_and_every_output_schema_is_a
     could list tools. Drive tools/list through a real client to guard it."""
 
     @contextlib.asynccontextmanager
-    async def fake_lifespan(_mcp_server):
+    async def fake_lifespan(_mcp_server, **_options):
         yield {}
 
     monkeypatch.setattr(server, "lifespan", fake_lifespan)
@@ -131,7 +131,7 @@ def test_tools_list_validates_through_the_mcp_layer_and_every_output_schema_is_a
 
     listed = anyio.run(call)
     tools = {tool.name: tool.model_dump(by_alias=True) for tool in listed.tools}
-    assert set(tools) == {"run", "get_scene", "check", "render"}
+    assert set(tools) == {"run"}  # the one tool (owner's decision 2026-11-03)
     for name, tool in tools.items():
         schema = tool["outputSchema"]
         assert schema.get("type") == "object", (

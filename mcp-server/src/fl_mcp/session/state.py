@@ -14,7 +14,17 @@ from fl_mcp.core.carriers.spool import spool_roots
 from fl_mcp.fl.paths import piano_roll_scripts_dir
 from fl_mcp.fl.process import bridge_pid, fl_process_running, pid_alive
 from fl_mcp.profile import installed_bridge_build, profile_gate
-from fl_mcp.schemas import BridgeInstall, Channel, DoctorReport, PlaneStatus, SessionState
+from fl_mcp.schemas import (
+    BridgeInstall,
+    Channel,
+    DoctorReport,
+    MixerEffect,
+    MixerSend,
+    MixerTrack,
+    PatternInfo,
+    PlaneStatus,
+    SessionState,
+)
 
 from . import controls
 from .detect import BRIDGE_HEARTBEAT_FILE, BRIDGE_HEARTBEAT_FRESH_SECONDS, read_heartbeat
@@ -62,7 +72,7 @@ def project_guide(session: FLSession, names: list[str]) -> flp.ProjectGuide:
 
 
 def tempo(session: FLSession) -> float | None:
-    """FL's tempo now - THE tempo read behind fl.tempo and get_scene.
+    """FL's tempo now - THE tempo read behind fl.tempo and fl.scene().
 
     Live from FL whenever FL is connected, so a set_tempo shows at once;
     the project's saved tempo only when FL is not connected (a trial FL
@@ -72,6 +82,52 @@ def tempo(session: FLSession) -> float | None:
     if session.project is not None and session.project.is_file():
         return flp.read(session.project).tempo
     return None
+
+
+def mixer_tracks(session: FLSession) -> list[MixerTrack]:
+    """The controller's ``state.mixer``: the tracks in use, their effects and sends."""
+    rows = session.link.call("state.mixer", timeout=SNAPSHOT_TIMEOUT_SECONDS)
+    try:
+        return [
+            MixerTrack(
+                index=t["idx"],
+                name=t["name"],
+                volume=float(t["vol"]),
+                pan=float(t["pan"]),
+                muted=bool(t["muted"]),
+                solo=bool(t["solo"]),
+                effects=[MixerEffect(mixer_track=t["idx"], slot=slot, plugin=name) for slot, name in t["effects"]],
+                sends=[MixerSend(source=t["idx"], target=target, on=True, level=float(level)) for target, level in t["sends"]],
+            )
+            for t in rows
+        ]
+    except (KeyError, TypeError, ValueError) as exc:
+        raise errors.fl_api_error("state.mixer", f"malformed mixer payload ({exc!r})") from exc
+
+
+def patterns(session: FLSession) -> list[PatternInfo]:
+    """FL's patterns that hold something, plus the selected one: number, name, and length
+    (16th steps, four to a beat). patternCount counts only patterns that are not empty
+    (box run 2026-11-03: 0 on a fresh song, 1 once pattern 1 had notes), and they need not
+    be numbered from 1, so the numbers are found by skipping empty ones."""
+    count = controls._live_int(session, "patterns.patternCount")
+    last = controls._live_int(session, "patterns.patternMax")
+    selected = controls._live_int(session, "patterns.patternNumber")
+    found: list[int] = []
+    n = 1
+    while len(found) < count and n <= last:
+        if not session.link.call("patterns.isPatternDefault", [n]):
+            found.append(n)
+        n += 1
+    numbers = set(found) | ({selected} if 1 <= selected <= last else set())
+    return [
+        PatternInfo(
+            number=n,
+            name=str(session.link.call("patterns.getPatternName", [n])),
+            beats=controls._live_int(session, "patterns.getPatternLength", [n]) / controls.FL_STEPS_PER_BEAT,
+        )
+        for n in sorted(numbers)
+    ]
 
 
 def snapshot(session: FLSession) -> SessionState:

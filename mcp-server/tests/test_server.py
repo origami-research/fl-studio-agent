@@ -11,21 +11,19 @@ import json
 import logging
 import os
 import sys
-from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
 import anyio
 import pytest
 from mcp.types import CallToolResult
-from session_fakes import RENDER_SPAN
 
-from fl_mcp import __version__, errors, server
+from fl_mcp import __version__, server
 from fl_mcp.contract import build_version
 from fl_mcp.kernel.host import RUN_CELL_TIMEOUT_SECONDS, KernelHost
 from fl_mcp.kernel.launch import PosixLauncher, Workspace
 from fl_mcp.platform import MacPlatform
-from fl_mcp.schemas import CheckResult, RenderReceipt, Target
+from fl_mcp.schemas import Target
 
 
 class _FakeSession:
@@ -157,37 +155,18 @@ def test_run_without_a_kernel_is_a_structured_error(tmp_path):
 # -- the tool surface -----------------------------------------------------------
 
 
-def test_the_model_sees_one_tool_per_job():
-    """One way to do each thing (owner, 2026-10-18): read the song, run code,
-    prove it sounds, hear it, measure it. Setup diagnostics are the operator's
-    fl-mcp-doctor, and note reads live in get_scene and the SDK, so neither
-    fl_doctor nor get_notes is offered to a model."""
-    assert [fn.__name__ for fn in server.tool_definitions()] == ["run", "get_scene", "check", "render"]
-
-
-def test_check_returns_the_sessions_result():
-    result = CheckResult(
-        start_bar=3, bars=1, seconds=1.85, master_peak_dbfs=-3.0, channels=[], summary="0 of 0 channels sounded."
-    )
-    session = SimpleNamespace(check=lambda start_bar, bars: result if (start_bar, bars) == (3, 1) else None)
-    checked = server.check(_ctx(session=session), bars=1, start_bar=3)
-    assert CheckResult.model_validate(checked.model_dump(exclude={"actions"})) == result
-
-
-def test_check_refusals_reach_the_model_structured():
-    def refuse(start_bar: int, bars: int) -> CheckResult:
-        raise errors.invalid_argument("check", "bars must be a whole number from 1 to 8, got 40")
-
-    response = server.check(_ctx(session=SimpleNamespace(check=refuse)), bars=40)
-    assert isinstance(response, CallToolResult)
-    assert response.is_error
-    assert json.loads(response.content[0].text)["error"] == "invalid_argument"
+def test_the_model_sees_one_tool():
+    """Owner, 2026-11-03: one tool, run. Reading the song, the meters, renders,
+    listening, files and shell are all Python on fl inside it; setup diagnostics
+    stay the operator's fl-mcp-doctor."""
+    assert [fn.__name__ for fn in server.tool_definitions()] == ["run"]
+    for word in ("fl.meters", "fl.render", "fl.mixer", "fl.playlist", "fl.patterns", "fl.read_wav", "librosa"):
+        assert word in server.run.__doc__, word
 
 
 def test_lifespan_builds_the_kernel_workspace_under_the_box_root(monkeypatch, tmp_path):
     session = _FakeSession()
     monkeypatch.setattr(server, "create_session", lambda: session)
-    monkeypatch.setattr(server.sdk, "connect", lambda _: object())
     monkeypatch.setenv(server.ENV_KERNEL_ROOT, str(tmp_path))
     seen = {}
 
@@ -203,10 +182,26 @@ def test_lifespan_builds_the_kernel_workspace_under_the_box_root(monkeypatch, tm
     assert session.closed
 
 
+def test_workspace_only_starts_no_fl_session_and_its_kernel_refuses_fl(monkeypatch, tmp_path):
+    """--workspace-only (computer-use runs): run is plain Python; no FL session is
+    made, so fl calls are refused instead of reaching for FL."""
+    monkeypatch.setattr(server, "create_session", lambda: pytest.fail("an FL session was started"))
+    monkeypatch.setattr(server, "platform_for", lambda _platform: MacPlatform())  # CI runs on Linux
+    monkeypatch.setenv(server.ENV_KERNEL_ROOT, str(tmp_path))
+    seen = {}
+
+    async def start_and_stop() -> None:
+        async with server.lifespan(None, with_fl=False) as context:
+            seen["kernel"] = context["kernel"]
+            seen["session"] = context["kernel"]._session
+
+    anyio.run(start_and_stop)
+    assert seen["session"] is None
+
+
 def test_lifespan_without_a_box_root_removes_its_temp_workspace(monkeypatch):
     session = _FakeSession()
     monkeypatch.setattr(server, "create_session", lambda: session)
-    monkeypatch.setattr(server.sdk, "connect", lambda _: object())
     monkeypatch.delenv(server.ENV_KERNEL_ROOT, raising=False)
     seen = {}
 
@@ -295,59 +290,13 @@ def test_tools_register_with_ctx_injected_and_absent_from_the_schema():
         srv.add_tool(fn)
 
     tools = {t.name: t for t in srv._tool_manager.list_tools()}
-    assert set(tools) == {"run", "get_scene", "check", "render"}
+    assert set(tools) == {"run"}
     for name, tool in tools.items():
         assert tool.context_kwarg == "ctx", f"{name}: ctx not detected for injection"
         assert "ctx" not in tool.parameters.get("properties", {}), (
             f"{name}: ctx leaked into the input schema as a caller-supplied argument"
         )
-    # The tools that take real arguments still expose them.
     assert "code" in tools["run"].parameters["properties"]
-    assert {"bars", "start_bar"} == set(tools["check"].parameters["properties"])
-    assert tools["render"].parameters.get("properties", {}) == {}
-
-
-# -- render ---------------------------------------------------------------------
-
-
-class _RenderFl:
-    """SDK and session stub: render writes a tiny WAV."""
-
-    def render(self, output: Path) -> Path:
-        return self.render_wav(output).path
-
-    def render_wav(self, output: Path) -> RenderReceipt:
-        import wave
-
-        import numpy as np
-
-        with wave.open(str(output), "wb") as wav:
-            wav.setnchannels(1)
-            wav.setsampwidth(2)
-            wav.setframerate(44100)
-            wav.writeframes((np.zeros(441)).astype("<i2").tobytes())
-        return RenderReceipt(path=output, span=RENDER_SPAN)
-
-
-def _workspace_only(tmp_path: Path) -> Any:
-    """The render tools read only the kernel host's workspace."""
-    return SimpleNamespace(workspace=Workspace.create(tmp_path / "kernel"))
-
-
-def test_render_returns_the_wav_path_and_size_never_the_audio(tmp_path):
-    """0.1.4 put the whole WAV in the result as base64: a 23 s render was ~5.8M tokens and
-    overflowed the model's context on the next request. The result names the file instead."""
-    kernel = _workspace_only(tmp_path)
-    stub = _RenderFl()
-    result = server.render(_ctx(fl=stub, session=stub, kernel=kernel))
-    wav = Path(result.path)
-    # In the renders folder, so model code in run can read the same WAV.
-    assert wav.is_relative_to(kernel.workspace.renders)
-    assert wav.read_bytes()[:4] == b"RIFF"
-    assert result.bytes == wav.stat().st_size
-    assert result.span == RENDER_SPAN  # the caller sees what played and for how long
-    assert set(result.model_dump()) == {"path", "bytes", "span", "actions"}
-    assert len(result.model_dump_json()) < 1000
 
 
 def test_notes_take_positional_arguments_in_the_documented_order(kernel):

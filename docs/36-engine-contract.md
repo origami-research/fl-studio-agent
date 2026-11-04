@@ -14,11 +14,11 @@ and the Bridge port-file schema. `FLMCP_KERNEL_ROOT` is the `run` kernel's
 workspace root; [38](38-python-kernel.md) has the box contract around it. The test suite fails when the checked-in file
 does not match the generated contract.
 
-`tools` is the default surface. `workspace_tools` lists `shell`, `read_file`,
-`write_file`, `edit_file`, `glob` and `grep`, served after `tools` when
-`FLMCP_WORKSPACE_TOOLS=1` and alone under `fl-mcp --workspace-only`; `server`
-names that flag and the `; confined=true|false` ending of
-`serverInfo.description` ([39](39-workspace-tools.md)).
+`tools` is the whole surface: `run` alone since 2026-11-03, when the owner
+replaced `get_scene`, `check`, `render` and the workspace tools with Python on
+`fl` ([sdk-reference](sdk-reference.md)). `server` names `--workspace-only`
+(`run` with no FL session behind it) and the `; confined=true|false` ending of
+`serverInfo.description`.
 
 Tools publish only their success model as `outputSchema`. Anticipated engine
 failures are `ToolErrorResult` JSON in the text content of MCP `isError` tool
@@ -29,12 +29,12 @@ decoding a tool result against its output schema.
 
 ## Actions
 
-Every tool result (`run`, `get_scene`, `check`, `render`, and the workspace tools) carries `actions`: the plain sentences a UI can show as "what the assistant did".
+Every `run` result carries `actions`: the plain sentences a UI can show as "what the assistant did".
 There is one past-tense sentence per change FL confirmed or measurement the engine took during the call, in order.
 Sentences are complete, listing every item; a UI shows one line and expands it, and only a pathological sentence past 2000 characters is cut with "...".
 Examples: "Set tempo to 122 BPM", "Replaced the notes on FLEX Bass (212 notes)", "Checked bars 9-10: 5 of 5 tracks sound, master -1.8 dBFS", "Rendered 0:34".
 Sentences are built from what each call returned (FL's values), never from what was asked for.
-Reads add none, so `get_scene` always returns an empty list, and a failed call adds none: it stays an error.
+Reads add none, and a failed call adds none: it stays an error.
 Only changes in a row merge, so the list keeps FL's order and each sentence is true of the state it describes.
 Three or more changes of one kind in a row become one sentence, such as "Set volume on 3 tracks: kick 0.60, clap 0.42, hat 0.30"; a later value for the same track replaces the earlier one, and merged notes add up.
 Repeated undos read "Undid 4 actions in FL", and an identical sentence repeated in a row is counted ("Saved the song (3 times)").
@@ -43,7 +43,6 @@ A call lists at most 200 actions, then "and N more actions", because a cell can 
 For `run`, the server records each `fl` call it serves while the cell runs, so a cell that raises partway, is interrupted, or loses its kernel still lists the changes FL already has.
 Inside `fl.file_edit()`, changes reach FL only when the block closes and FL reopens the changed song, so they are listed then, followed by "Reopened FL with the changed song"; if closing fails, none of them are listed.
 `fl.read_wav` runs inside the kernel without reaching the server, so what a cell measures from a render is not listed.
-The workspace tools add one sentence per changing call, such as `Ran "pip install mido" (exit 0, 3.1 s)`, `Wrote notes/plan.md (1.2 KB)` and `Edited notes/plan.md (1 change)`; `read_file`, `glob` and `grep` add none.
 `fl_mcp/actions.py` holds the wording.
 
 ## Session audio relay

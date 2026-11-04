@@ -147,16 +147,12 @@ Using the FL Studio trial? Set `FLMCP_FL_LICENSE=trial` in the server's `env`, a
 
 ## Tools
 
-The server exposes four tools, one per job:
+The server exposes one tool, `run`: Python in a persistent kernel bound to the live FL Studio session.
+Everything is code on the `fl` object: read the song (`fl.channels`, `fl.mixer`, `fl.playlist`, `fl.patterns`, notes, `fl.scene()`), write notes, tempo, levels, parameters, routing and sounds, read FL's meters (`fl.meters()`), and render the mix, a few bars, single instruments or stems (`fl.render(...)`) to listen with numpy, scipy, librosa and matplotlib, which come installed.
+Files and shell are plain Python in the same sandbox.
+The tool's description is the whole manual; [docs/sdk-reference.md](docs/sdk-reference.md) is the long form.
 
-| Tool | Purpose |
-| --- | --- |
-| `run` | Execute Python against the FL SDK: write and clear notes, tempo, levels, parameters. Its docstring is the SDK cheatsheet. |
-| `get_scene` | Read what FL has now: a compact musical summary, or the notes (`detail="notes"`, by channel and pattern). |
-| `check` | Play a few bars and read FL's mixer meters: which channels sounded, their peaks, and why a silent one is silent. |
-| `render` | Play the live arrangement once and record the mix to WAV; `run` code reads it with `fl.read_wav` and measures or plots what it wants. |
-
-The working rhythm is write, check at milestones, render at the end.
+The working rhythm is write, check the meters at milestones, render and listen at the end.
 Every result is what FL now has, so nothing needs waiting for, saving, or re-reading.
 FL's transient refusals ("operation unsafe at current time", a busy control wire) are retried inside the engine; a model sees only errors it can act on.
 Setup diagnostics are for the operator, not the model: `fl-mcp-doctor` prints the same report as JSON.
@@ -168,8 +164,8 @@ Three complementary lanes: [`flpkit`](https://pypi.org/project/flpkit/) edits pr
 
 ## Security
 
-The Python the model writes in `run`, and the shell and file tools when they are on, runs in a sandbox limited to its own workspace folder, on macOS and Windows.
-It can read and write that folder and reach the public internet, so `pip install` works.
+The Python the model writes in `run`, and every command it starts, runs in a sandbox limited to its own workspace folder, on macOS and Windows.
+It can read and write that folder, read FL's stock presets and samples, and reach the public internet, so `pip install` works.
 It cannot read your home folder or your other files, reach services on this computer (FL's control ports included), or touch other programs.
 The engine itself, FL Studio and the Bridge are not sandboxed; the model's code reaches FL only through the engine.
 Before any model code runs, the engine checks that the sandbox holds and refuses to run the code if it does not; the MCP server reports `confined=true`.

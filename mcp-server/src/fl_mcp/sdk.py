@@ -38,6 +38,8 @@ from .schemas import (
     MixerTrack,
     Note,
     NoteWriteMode,
+    PatternInfo,
+    PlaylistClip,
     PluginParam,
     RenderReceipt,
     RenderSpan,
@@ -187,8 +189,22 @@ class FL:
 
     @property
     def mixer(self) -> list[MixerTrack]:
-        """FL's mixer tracks now: index, name, volume, pan, muted, solo (0 is the master)."""
+        """FL's mixer tracks in use now (0 is the master): index, name, volume, pan, muted,
+        solo, effects (slot and plugin) and sends (target and level). A track is in use
+        when a channel plays into it, it holds an effect, it was renamed, or a track in
+        use sends to it."""
         return self._session.mixer_tracks()
+
+    @property
+    def playlist(self) -> list[PlaylistClip]:
+        """The playlist's clips in the song FL opened: track, start and length in beats,
+        and the pattern (or audio channel) each plays. The SDK cannot change the playlist."""
+        return self._session.playlist()
+
+    @property
+    def patterns(self) -> list[PatternInfo]:
+        """FL's patterns now: number, name and length in beats."""
+        return self._session.patterns()
 
     @property
     def stock_folder(self) -> Path:
@@ -199,7 +215,7 @@ class FL:
     def scene(
         self, detail: Literal["summary", "notes"] = "summary", channel: str | int | None = None, pattern: int | None = None
     ) -> SceneSummary | SceneNotesResult:
-        """What the get_scene tool returns, as objects: detail="summary" for tempo, key, the
+        """A digest of the song, as objects: detail="summary" for tempo, key, the
         playlist and a digest per channel; "notes" for every note FL has (by channel and
         pattern), optionally of one channel and one pattern."""
         if detail == "summary":
@@ -398,10 +414,11 @@ class FL:
         FL's stock samples (fl.stock_folder / sound.path), which are Ogg Vorbis inside a WAV."""
         return read_wav(Path(path))
 
-    def check(self, bars: int = 2, start_bar: int = 1) -> CheckResult:
+    def meters(self, bars: int = 2, start_bar: int = 1) -> CheckResult:
         """Play ``bars`` bars (1 to 8) from ``start_bar`` and report which channels
-        made sound, from FL's own mixer meters. Takes about that long; FL is
-        stopped afterwards and nothing in the song changes.
+        made sound, from FL's own mixer meters: what a render of the mix cannot tell
+        apart. Takes about that long; FL is stopped afterwards and nothing in the
+        song changes.
 
         Returns each channel's name, ``sounded``, ``peak_dbfs`` and the ``reason``
         it was silent when FL shows one, plus ``summary``: one line to read.
@@ -473,17 +490,17 @@ class Track:
             raise errors.invalid_argument("Track.set_automation", str(exc)) from None
         return self._fl._session.set_automation(self.channel, normalized_points)
 
-    def set_channel_levels(
+    def set_levels(
         self, *, volume: float | None = None, pan: float | None = None, pitch: int | None = None
     ) -> ChannelLevels:
         """Set this channel's volume (0..1), pan (-1..1) and/or pitch (semitones); returns FL's values."""
         try:
             args = _ChannelLevelsArgs(volume=volume, pan=pan, pitch=pitch)
         except ValidationError as exc:
-            raise errors.invalid_argument("Track.set_channel_levels", str(exc)) from None
+            raise errors.invalid_argument("Track.set_levels", str(exc)) from None
         if args.volume is None and args.pan is None and args.pitch is None:
             raise errors.invalid_argument(
-                "Track.set_channel_levels", "pass volume, pan, and/or pitch"
+                "Track.set_levels", "pass volume, pan, and/or pitch"
             )
         return self._fl._session.set_channel_levels(
             self.channel, volume=args.volume, pan=args.pan, pitch_semitones=args.pitch

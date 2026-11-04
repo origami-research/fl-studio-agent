@@ -9,13 +9,10 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-from types import SimpleNamespace
 
 import pytest
-from session_fakes import RENDER_SPAN
 from win32_fakes import SID, FakeWin32
 
-from fl_mcp import server
 from fl_mcp.kernel.launch import KERNEL_JOB, Workspace
 from fl_mcp.kernel.windows import (
     APPCONTAINER_NAME,
@@ -265,12 +262,12 @@ def test_the_kernel_launch_asks_for_the_kernel_job(workspace):
 
 
 def test_a_workspace_is_granted_once_and_a_release_is_final(workspace):
-    """icacls rewrites every file below a granted folder, and the workspace tools launch
-    once per call: regranting on each launch would walk .packages every time. A launch
-    racing shutdown must not grant a finished session again (review, 2026-10-22)."""
+    """icacls rewrites every file below a granted folder, and a lost kernel relaunches:
+    regranting on each launch would walk .packages every time. A launch racing
+    shutdown must not grant a finished session again (review, 2026-10-22)."""
     api = FakeWin32()
     launcher = AppContainerLauncher(api, stock=())
-    argv = ["python", "-I", "-m", "fl_mcp.workspace.op"]
+    argv = ["python", "-I", "-m", "fl_mcp.kernel.child"]
     for _ in range(3):
         launcher(argv, workspace=workspace, env={})
     assert len([c for c in api.calls if c[0] == "grant"]) == 2  # work and renders, once
@@ -347,37 +344,20 @@ class _Recorder:
         monkeypatch.setattr(os, "mkdir", mkdir)
 
 
-class _RenderSession:
-    def render_wav(self, output: Path):
-        from fl_mcp.schemas import RenderReceipt
-
-        output.write_bytes(b"RIFF....WAVE")
-        return RenderReceipt(path=output, span=RENDER_SPAN)
-
-
 def test_every_render_the_server_writes_is_one_the_kernel_can_open(workspace, monkeypatch):
     """Live run 2026-10-19: on locked-down Windows boxes a model rendered, then could not
     open the file. The render tool wrote into a tempfile.mkdtemp folder inside renders,
     which the server (unlike the kernel) does not patch, so the folder was owner-only and
-    the container's inherited read grant never reached the WAV."""
+    the container's inherited read grant never reached the WAV. Every render now lands
+    where fl.render names it, directly in renders."""
     api = FakeWin32()
     _launch(api, workspace)
     grants = {c[1]: c[3] for c in api.calls if c[0] == "grant"}
     recorder = _Recorder(monkeypatch)
-    session = _RenderSession()
-    ctx = SimpleNamespace(
-        request_context=SimpleNamespace(
-            lifespan_context={"session": session, "kernel": SimpleNamespace(workspace=workspace)}
-        )
-    )
-
-    tool = Path(server.render(ctx).path)
     fl_render = workspace.output_path(Path("mix.wav"))  # where fl.render("mix.wav") lands
-    session.render_wav(fl_render)
-    for path in (tool, fl_render):
-        assert path.is_file()
-        assert _container_can_read(path, grants, recorder.private), path
-        assert path.parent == workspace.renders, "no folder between renders and the WAV"
+    fl_render.write_bytes(b"RIFF....WAVE")  # as the server's render_wav writes it
+    assert _container_can_read(fl_render, grants, recorder.private)
+    assert fl_render.parent == workspace.renders, "no folder between renders and the WAV"
 
 
 def test_the_acl_model_rejects_a_render_in_a_private_folder(workspace):

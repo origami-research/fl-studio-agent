@@ -42,7 +42,7 @@ except ImportError:
     arrangement = channels = device = general = midi = None
     mixer = patterns = playlist = plugins = transport = ui = None
 
-SCRIPT_VER = "0.2.1"
+SCRIPT_VER = "0.2.2"
 
 # ---------------------------------------------------------------------------
 # Wire codec (framing, chunking/reassembly) - flmcp_codec.py beside this file is the single
@@ -238,6 +238,58 @@ def _state_snapshot():
     }
 
 
+MIXER_SLOTS = 10
+
+
+def _mixer_tracks():
+    """`state.mixer` - the mixer tracks in use, with their effects and sends, in one
+    round trip: fl.mixer. A track is in use when it is the master, a channel plays
+    into it, it holds an effect, it was renamed from FL's "Insert N", or a track in
+    use sends to it. Sends are scanned only from tracks in use (each scan is one
+    getRouteSendActive per track), so a 127-track mixer costs a few thousand calls
+    inside FL rather than sixteen thousand."""
+    count = mixer.trackCount()
+    rows = {}
+
+    def row(i):
+        if i not in rows:
+            rows[i] = {
+                "idx": i,
+                "name": mixer.getTrackName(i),
+                "vol": mixer.getTrackVolume(i),
+                "pan": mixer.getTrackPan(i),
+                "muted": bool(mixer.isTrackMuted(i)),
+                "solo": bool(mixer.isTrackSolo(i)),
+                "effects": [
+                    [slot, plugins.getPluginName(i, slot)]
+                    for slot in range(MIXER_SLOTS)
+                    if mixer.isTrackPluginValid(i, slot)
+                ],
+                "sends": [],
+            }
+        return rows[i]
+
+    used = {0}
+    used.update(channels.getTargetFxTrack(c) for c in range(channels.channelCount()))
+    for i in range(1, count):
+        if mixer.getTrackName(i) != "Insert %d" % i or any(mixer.isTrackPluginValid(i, s) for s in range(MIXER_SLOTS)):
+            used.add(i)
+    pending = sorted(t for t in used if 0 <= t < count)
+    scanned = set()
+    while pending:
+        i = pending.pop()
+        if i in scanned:
+            continue
+        scanned.add(i)
+        sends = row(i)["sends"]
+        for target in range(count):
+            if target != i and mixer.getRouteSendActive(i, target):
+                sends.append([target, mixer.getRouteToLevel(i, target)])
+                if target not in scanned:
+                    pending.append(target)
+    return [rows[i] for i in sorted(rows)]
+
+
 def _undo_probe():
     """`state.undo_probe` - every undo-history *getter* FL exposes, in one
     round trip. Roadmap open question 17 (docs/08): can this attribute whose
@@ -397,6 +449,7 @@ def _select_channels(args, kwargs):
 COMPOSITE_OPS = {
     "state.snapshot": lambda args, kwargs: _state_snapshot(),
     "state.undo_probe": lambda args, kwargs: _undo_probe(),
+    "state.mixer": lambda args, kwargs: _mixer_tracks(),
     "ctl.save": lambda args, kwargs: transport.globalTransport(
         midi.FPT_Save,
         1,  # [ASSUMED value - live-verify]

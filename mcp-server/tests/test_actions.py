@@ -385,6 +385,10 @@ def host(session, tmp_path):
     kernel.close()
 
 
+def _ctx(**context: object) -> SimpleNamespace:
+    return SimpleNamespace(request_context=SimpleNamespace(lifespan_context=dict(context)))
+
+
 def run(host: KernelHost, code: str):
     return server.run(code, _ctx(kernel=host))
 
@@ -395,7 +399,7 @@ def test_a_cell_reports_its_writes_and_keeps_them_past_a_mid_cell_error(host, se
         "fl.set_tempo(122)\n"
         "kick = theory.drums('x...x...x...x...' * 4, key='C1')\n"
         "fl.track('Kick').write(kick, mode='replace')\n"
-        "fl.track('Bass').set_channel_levels(volume=0.6)\n"
+        "fl.track('Bass').set_levels(volume=0.6)\n"
         "fl.track('Bass').set_param('Cutoff', 0.68)\n"
         "fl.track('Lead').notes()\n"  # a read: no action
         "fl.track('Nope')\n"  # raises: the cell stops here
@@ -454,44 +458,6 @@ def test_an_interrupted_cell_still_reports_what_fl_already_has(session, tmp_path
     assert result.actions == ["Set tempo to 100 BPM", "Wrote 1 note to Kick"]
 
 
-def test_check_and_render_from_code_read_like_the_tools(host):
-    result = run(host, "fl.check(bars=1, start_bar=2)\nfl.render('mix.wav')")
+def test_meters_and_render_from_code_are_listed(host):
+    result = run(host, "fl.meters(bars=1, start_bar=2)\nfl.render('mix.wav')")
     assert result.actions == ["Checked bar 2: 1 of 1 tracks sound, master -6.0 dBFS", "Rendered 0:07 of pattern 1"]
-
-
-# -- the other tools -----------------------------------------------------------------
-
-
-def _ctx(**context: object) -> SimpleNamespace:
-    return SimpleNamespace(request_context=SimpleNamespace(lifespan_context=dict(context)))
-
-
-def test_the_check_tool_reports_what_it_measured(session):
-    checked = server.check(_ctx(session=session), bars=2, start_bar=9)
-    assert checked.actions == ["Checked bars 9-10: 1 of 1 tracks sound, master -6.0 dBFS"]
-    assert checked.summary == "1 of 1 channels sounded in bars 9-10."
-
-
-class _Rendering(FakeSession):
-    """Render writes a real (silent-but-valid) WAV."""
-
-    def render_wav(self, output: Path) -> RenderReceipt:
-        import wave
-
-        with wave.open(str(output), "wb") as wav:
-            wav.setnchannels(1)
-            wav.setsampwidth(2)
-            wav.setframerate(44100)
-            wav.writeframes(b"\x00\x00" * 441)
-        return RenderReceipt(path=output, span=_song_span(34.0))
-
-
-@pytest.fixture
-def rendering(tmp_path) -> SimpleNamespace:
-    session = _Rendering(store=Store("rendering", root=tmp_path / "store"), channels=DEFAULT_CHANNELS)
-    kernel = SimpleNamespace(workspace=Workspace.create(tmp_path / "kernel"))
-    return _ctx(fl=session, session=session, kernel=kernel)
-
-
-def test_the_render_tool_reports_the_render(rendering):
-    assert server.render(rendering).actions == ["Rendered 0:34"]

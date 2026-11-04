@@ -92,7 +92,7 @@ class ClipRow:
     arrangement: int = 0
 
 
-def _read_clips(project: Path) -> list[ClipRow]:
+def read_clips(project: Path) -> list[ClipRow]:
     """Load playlist clips via the flp reader (ticks -> beats). The test seam."""
     proj = flp.read(Path(project))
     return [
@@ -299,7 +299,7 @@ def summarize(
 
     notes_section = {"project_notes": project_notes} if project_notes else {}
     notes_line = [f"project notes: {project_notes}"] if project_notes else []
-    playlist, playlist_line = _playlist_digest(_read_clips(project))
+    playlist, playlist_line = _playlist_digest(read_clips(project))
     automations = _read_automations(project)
     automation_section = (
         {

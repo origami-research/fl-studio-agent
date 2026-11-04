@@ -148,5 +148,5 @@ Using the FL Studio trial? Set `FLMCP_FL_LICENSE=trial` in the server's `env`, a
 
 ## Tools
 
-`run` (Python against the FL SDK; its docstring is the SDK cheatsheet), `get_scene` (what FL has now), `check` (play a few bars and read which channels sounded), and `render` (record the mix to WAV, which `run` code reads with `fl.read_wav`).
+One tool, `run`: Python against the live FL session through the `fl` object (read the song, write, read the meters, render and listen), with numpy, scipy, librosa and matplotlib installed. Its description is the whole manual.
 The full description is in the [repository README](https://github.com/origami-research/fl-studio-agent#tools).

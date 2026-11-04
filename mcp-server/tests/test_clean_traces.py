@@ -161,7 +161,7 @@ def run(box: Any, code: str) -> Any:
 
 def test_write_then_read_on_a_trial_fl_is_definitive_and_plain(box):
     # Run bdea5e90 steps 0-3: look, set the tempo, write the kick.
-    call(box, server.get_scene)
+    run(box, "print(fl.scene().summary)")
     run(box, "print(fl.channels)")
     wrote = run(
         box,
@@ -175,17 +175,16 @@ def test_write_then_read_on_a_trial_fl_is_definitive_and_plain(box):
 
     # Step 4 ("That status is still unconfirmed"): an immediate read returns it.
     assert run(box, 'print(len(fl.track("808 Kick").notes())); print(fl.tempo)').stdout == "16\n100.0\n"
-    # Step 6 read the track's notes with a tool: get_scene is the one read.
-    notes = call(box, server.get_scene, detail="notes", channel=0, pattern=1)
-    assert len(notes.notes) == 16
+    # Step 6 read the track's notes: the scene's notes are the same read.
+    assert run(box, 'print(len(fl.scene("notes", channel=0, pattern=1).notes))').stdout == "16\n"
 
     # Run b5343990 step 5 ("The scene seems stale, showing tempo 130 but no notes").
-    scene = call(box, server.get_scene)
-    assert scene.tempo == 100.0
+    scene = run(box, 's = fl.scene()\nprint(s.tempo, {c["name"]: c["notes"] for c in s.channels})')
     assert scene.actions == [], "a read did nothing in FL"
-    by_name = {c["name"]: c for c in scene.channels}
-    assert by_name["808 Kick"]["notes"] == 16
-    assert by_name["FLEX Bass"]["notes"] == 0, "an empty channel reads as empty, not missing"
+    tempo, counts = scene.stdout.split(" ", 1)
+    assert tempo == "100.0"
+    assert "'808 Kick': 16" in counts
+    assert "'FLEX Bass': 0" in counts, "an empty channel reads as empty, not missing"
 
     # Run b5343990 step 9: a one-note test write, read straight back.
     bass = run(box, 'b = fl.track("FLEX Bass")\nprint(b.write([Note(key="A2", start=0, length=1)], mode="replace"))\nb.notes()')
@@ -193,8 +192,8 @@ def test_write_then_read_on_a_trial_fl_is_definitive_and_plain(box):
     assert bass.result == repr([Note(key=45, start=0, length=1)])
     merged = run(box, 'fl.track("FLEX Bass").write([Note(key="E3", start=1, length=1)])')
     assert merged.result == "WriteResult(wrote=1, track='FLEX Bass', pattern=1, mode='merge', total=2)"
-    detail = call(box, server.get_scene, detail="notes", channel=4)
-    assert [n.midi for n in detail.notes] == [45, 52]
+    detail = run(box, 'print([n.midi for n in fl.scene("notes", channel=4).notes])')
+    assert detail.stdout == "[45, 52]\n"
 
     # Run bdea5e90 step 9: fl.save() on a trial says plainly that nothing is lost.
     saved = call(box, server.run, code="fl.save()")
@@ -213,17 +212,18 @@ def test_write_then_read_on_a_trial_fl_is_definitive_and_plain(box):
         assert not INTERNAL_WORDS.search(payload), payload
 
 
-def test_check_proves_what_sounds_in_plain_words(box):
-    """The cheap proof a model was missing: write, then check, instead of a full render."""
+def test_meters_prove_what_sounds_in_plain_words(box):
+    """The cheap proof a model was missing: write, then read the meters, instead of a full render."""
     run(box, 'fl.track("808 Kick").write(theory.drums("x...x...x...x...", key="C1"), mode="replace")')
-    checked = call(box, server.check)
-    by_name = {c.name: c for c in checked.channels}
-    assert (by_name["808 Kick"].sounded, by_name["808 Kick"].peak_dbfs) == (True, -6.0)
-    assert by_name["FLEX Bass"].reason == "it has no notes in bars 1-2"
-    assert checked.summary.startswith("1 of 5 channels sounded in bars 1-2; the master peaked at -6 dBFS.")
+    checked = run(
+        box,
+        "m = fl.meters()\nk, b = (next(c for c in m.channels if c.name == n) for n in ('808 Kick', 'FLEX Bass'))\n"
+        "print(k.sounded, k.peak_dbfs, b.reason)\nprint(m.summary)",
+    )
+    first, summary = checked.stdout.splitlines()
+    assert first == "True -6.0 it has no notes in bars 1-2"
+    assert summary.startswith("1 of 5 channels sounded in bars 1-2; the master peaked at -6 dBFS.")
     assert checked.actions == ["Checked bars 1-2: 1 of 5 tracks sound, master -6.0 dBFS"]
-    # The same check from code crosses the kernel and reads the same.
-    assert run(box, "print(fl.check().summary)").stdout == checked.summary + "\n"
     assert box.control.calls[-1] == ("transport.stop", []), "FL is left stopped"
     for payload in box.payloads:
         assert not INTERNAL_WORDS.search(payload), payload
@@ -237,7 +237,7 @@ def test_a_refused_write_is_a_plain_error_and_reads_stay_true(box):
     refused = call(box, server.run, code='fl.track("808 Kick").write([Note(key=36, start=0, length=1)])')
     assert refused.outcome == "error" and refused.actions == []
     assert "FL Studio refused the note edit, so nothing was written." in refused.traceback
-    assert call(box, server.get_scene, detail="notes", channel=0).notes == []
+    assert run(box, 'print(fl.scene("notes", channel=0).notes)').stdout == "[]\n"
     for payload in box.payloads:
         assert not INTERNAL_WORDS.search(payload), payload
 
@@ -247,7 +247,7 @@ def test_a_refused_write_is_a_plain_error_and_reads_stay_true(box):
 
 def test_tool_descriptions_and_schemas_speak_plainly():
     contract = build_contract()
-    for tool in contract["tools"] + contract["workspace_tools"]:
+    for tool in contract["tools"]:
         text = tool["description"] + json.dumps(tool["inputSchema"]) + json.dumps(tool["outputSchema"])
         assert not INTERNAL_WORDS.search(text), (tool["name"], INTERNAL_WORDS.search(text))
 
@@ -288,7 +288,6 @@ _ERROR_TYPES = {
     "ConcurrentWrite",
     "ToolErrorResult",
     "WireError",
-    "OpError",  # the workspace tools' refusals (fl_mcp.workspace.ops)
 }
 
 
@@ -316,19 +315,11 @@ def test_every_action_sentence_speaks_plainly():
     tree = ast.parse(Path(actions.__file__).read_text(encoding="utf-8"))
     sentences = [n.value for n in ast.walk(tree) if isinstance(n, ast.Constant) and isinstance(n.value, str)]
     assert any(text.startswith("Replaced the notes on ") for text in sentences), "the scan must see the sentences"
-    assert any(text.startswith("Ran ") for text in sentences), "and the workspace tools' sentences"
     assert [text for text in sentences if INTERNAL_WORDS.search(text)] == []
-
-
-def test_workspace_file_hints_speak_plainly():
-    from fl_mcp.workspace.ops import HINTS
-
-    assert [hint for hint in HINTS.values() if INTERNAL_WORDS.search(hint)] == []
 
 
 def test_every_error_message_and_fix_speaks_plainly():
     strings = _error_strings()
     assert len(strings) > 50, "the scan must actually see the engine's errors"
-    assert any(where.startswith("ops.py:") for where, _ in strings), "and the workspace tools' refusals"
     offenders = [(where, text) for where, text in strings if INTERNAL_WORDS.search(text)]
     assert offenders == []

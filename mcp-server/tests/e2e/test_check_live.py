@@ -1,4 +1,4 @@
-"""fl.check() against real FL: the meters hear a written part and not an empty one.
+"""fl.meters() against real FL: the meters hear a written part and not an empty one.
 
 Run deliberately with ``FL_E2E=1``. This starts FL through the dev-session
 owner, which also tears it down; it refuses to overlap another FL session.
@@ -38,7 +38,7 @@ kick = fl.track(0)
 kick.write(theory.drums("x...x...x...x...", key="C1"), mode="replace")
 for channel in fl.channels[1:]:
     fl.track(channel.index).clear()
-result = fl.check(bars=1)
+result = fl.meters(bars=1)
 print("CHECK=" + json.dumps(result.model_dump()))
 print("PLAYING=" + json.dumps(fl._session.snapshot().playing))
 '''

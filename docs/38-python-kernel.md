@@ -6,8 +6,10 @@
 
 `run` executes model code in a separate, long-lived Python process: a kernel, like a Jupyter notebook's.
 The code is full Python: every import, introspection, files, `time.sleep`, and package installs with `%pip install x` or `!pip install x`.
-numpy, scipy, matplotlib, soundfile and Pillow ship with the engine (since 2026-11-03), so the model can read a render and measure or plot it with no install.
-librosa is left to `%pip install librosa`: its numba and llvmlite add about 170 MB, cap the engine's numpy, and often lack wheels for a new Python, which would fail the whole engine install.
+`run` is the only tool (owner's decision 2026-11-03): reading the song, the meters, renders, files and shell are all code in it.
+numpy, scipy, soundfile, librosa, matplotlib, pyloudnorm, mido, music21 and Pillow ship with the engine, so the model can read a render and measure or plot it with no install; anything else is `%pip install`.
+librosa brings numba and llvmlite (about 55 MB of wheels, 170 MB installed) and caps numpy below 2.6; the kernel points `NUMBA_CACHE_DIR` into the workspace, because numba's default cache beside the install is read-only in the sandbox.
+music21 adds about 20 MB. No torch or other large ML library is preinstalled.
 The boundary is the operating system, not a Python allowlist.
 On Windows, the production FL boxes, the kernel is an AppContainer process that can reach only its own workspace.
 On macOS it is a Seatbelt sandbox with the same reach (since 2026-10-26; until then the macOS kernel ran unconfined, with the user's own access).
@@ -16,7 +18,7 @@ The namespace guard, its import and builtin lists, and the `restricted_namespace
 PR #196 said its filter was "not a Python security sandbox; the contestant box remains the real boundary".
 This design makes that boundary explicit and narrow: the model's code runs with less access than the engine, not the same access minus a filter.
 
-The workspace tools (`shell` and the file tools, [39](39-workspace-tools.md)) run behind the same boundary, one process per call through the same launcher.
+Every process the kernel starts (`!cmd`, `subprocess`, `%pip`) inherits the same boundary.
 
 ## How it works
 
@@ -105,7 +107,7 @@ FL's stock content is readable so the model can load a sample and listen to it b
 It is read only, never run, and nothing else of FL's install is granted: on macOS the profile reads that one folder by its real path and only looks up its parents; on Windows see "Files" below.
 
 `%pip` and `!pip` use the engine's interpreter with `PIP_TARGET=<root>/work/.packages`, which the kernel appends to `sys.path`.
-Every other Python started in the workspace (`!python`, `python` in the `shell` tool) appends it too, through the `sitecustomize` on its `PYTHONPATH`.
+Every other Python started in the workspace (`!python`, a subprocess running `python`) appends it too, through the `sitecustomize` on its `PYTHONPATH`.
 The engine's own packages stay first on the path, so an install cannot replace the SDK's numpy or pydantic.
 
 The kernel's environment is built, not inherited: `PATH`, the Windows system variables, proxy settings, and workspace locations.
@@ -201,7 +203,7 @@ A change that breaks a probed property (reading or writing outside the workspace
 
 ### Opting out, for engine development only
 
-`FLMCP_KERNEL_UNCONFINED=1` makes the macOS kernel and workspace tools a plain subprocess with your own access, and `serverInfo` says `confined=false`.
+`FLMCP_KERNEL_UNCONFINED=1` makes the macOS kernel a plain subprocess with your own access, and `serverInfo` says `confined=false`.
 It exists for working on the engine itself when the sandbox is in the way; never set it where a model you do not control writes the code.
 Unset or `0` keeps the sandbox; any other value stops the server at startup.
 Windows has no such setting.
@@ -223,9 +225,9 @@ Windows has no such setting.
 - `fl.track(...).write(...)`, `fl.set_tempo(...)` and `fl.render(...)` work in the same kernel.
 - `%pip install six` then `import six` succeeds, and so does an HTTPS fetch (set `FLMCP_NETWORK_TESTS=1`).
 - A cell killed past its budget takes the processes it started with it.
-- In `shell`, `osascript -e 'tell application "Finder" to get version'`, `pbpaste` and `defaults read -g` print nothing.
+- A shell command from `run` (`subprocess`): `osascript -e 'tell application "Finder" to get version'`, `pbpaste` and `defaults read -g` print nothing.
 
-The same job then starts the server over stdio as a client would (`.github/scripts/macos_smoke.py`): it must report `confined=true`, write inside its workspace, and refuse a write outside it through `write_file` and `shell`.
+The same job then starts the server over stdio as a client would (`.github/scripts/macos_smoke.py`): it must report `confined=true`, list only `run`, write inside its workspace, and refuse a write outside it from Python and from a shell command.
 Each release runs that check again on a fresh macOS runner against the package `uvx` installs from PyPI (`release.yml`, `macos-smoke`).
 
 ## Box contract
@@ -254,7 +256,7 @@ There is no launch-mode setting: on Windows the kernel is always an AppContainer
 5. Never grant `ALL APPLICATION PACKAGES` or the kernel SID on the hosting harness's directories, user profiles, the spool root, or any parent of `FLMCP_KERNEL_ROOT`.
 
 The FL user, which runs the MCP server, creates the AppContainer profile and grants the workspace when it is first used; that needs no administrator rights.
-The workspace tools add one variable and one server mode; see [39's box contract](39-workspace-tools.md#box-contract).
+`fl-mcp --workspace-only` serves `run` with no FL session, for computer-use runs ([39](39-workspace-tools.md)).
 
 **Acceptance on a box** (run cells through `run` after provisioning)
 

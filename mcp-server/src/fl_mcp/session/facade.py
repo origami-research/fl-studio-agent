@@ -58,6 +58,8 @@ from fl_mcp.schemas import (
     MixerTrack,
     Note,
     NoteWriteMode,
+    PatternInfo,
+    PlaylistClip,
     PluginParam,
     PluginParamModel,
     RenderReceipt,
@@ -600,8 +602,19 @@ class FLSession:
         return state.channel_names(self)
 
     def mixer_tracks(self) -> list[MixerTrack]:
-        """FL's mixer tracks now, from the one composite snapshot."""
-        return self.snapshot().mixer
+        """The mixer tracks in use, with effects and sends: one controller round trip."""
+        return state.mixer_tracks(self)
+
+    def playlist(self) -> list[PlaylistClip]:
+        """The playlist's clips in the song FL opened (the SDK cannot change the playlist)."""
+        return [
+            PlaylistClip(track=c.track, start=c.start_beat, length=c.length_beats, pattern=c.pattern, channel=c.channel)
+            for c in scene.read_clips(self._scene_project())
+        ]
+
+    def patterns(self) -> list[PatternInfo]:
+        """FL's patterns now, read live."""
+        return state.patterns(self)
 
     def _mutes(self, when: str) -> dict[tuple[int, str], bool] | None:
         """Each channel's mute, keyed by index and name so a shifted channel never matches."""
@@ -612,7 +625,7 @@ class FLSession:
             return None
 
     def scene_summary(self) -> SceneSummary:
-        """get_scene's summary: tempo, inferred key, playlist and a digest per channel."""
+        """fl.scene()'s summary: tempo, inferred key, playlist and a digest per channel."""
         project = self._scene_project()
         rows = scene.rows_from_notes(self.all_notes())
         channels = self.channel_names()
@@ -624,7 +637,7 @@ class FLSession:
         )
 
     def scene_notes(self, channel: int | None = None, pattern: int | None = None) -> SceneNotesResult:
-        """get_scene's notes: every note FL has, by channel and pattern, optionally one of each."""
+        """fl.scene("notes"): every note FL has, by channel and pattern, optionally one of each."""
         self._scene_project()
         rows = scene.rows_from_notes(self.all_notes())
         return SceneNotesResult.model_validate({"notes": scene.notes_detail(rows, channel, pattern)})

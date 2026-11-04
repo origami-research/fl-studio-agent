@@ -14,7 +14,6 @@ import os
 import re
 import signal
 import subprocess
-import uuid
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -67,7 +66,7 @@ class Workspace:
     write. ``canary`` sits outside both for the boundary probe.
 
     Every file the server writes for the kernel lands directly in ``renders``
-    (``output_path``, ``fresh_render``), never in a folder made inside it: on
+    (``output_path``), never in a folder made inside it: on
     Windows the kernel reads a render only through the grant it inherits from
     ``renders``, and a private folder in between (``tempfile.mkdtemp`` is mode
     0o700, an owner-only ACL since Python 3.12.4) would cut that inheritance.
@@ -116,10 +115,6 @@ class Workspace:
             )
         return self.renders / name
 
-    def fresh_render(self) -> Path:
-        """A new file name in renders for a render the server starts itself."""
-        return self.renders / f"render-{uuid.uuid4().hex[:12]}.wav"
-
     def kernel_env(self, environ: Mapping[str, str], python: Path) -> dict[str, str]:
         """The kernel's whole environment: every per-user location is in the workspace."""
         env = {name: environ[name] for name in _INHERITED_ENV if name in environ}
@@ -139,6 +134,9 @@ class Workspace:
             PIP_TARGET=str(self.packages),
             PIP_CACHE_DIR=str(home / ".cache" / "pip"),
             PIP_DISABLE_PIP_VERSION_CHECK="1",
+            # librosa's numba functions cache compiled code beside their source by default,
+            # which is the engine's read-only install inside the sandbox.
+            NUMBA_CACHE_DIR=str(home / ".cache" / "numba"),
             # macOS: the cache /usr/bin/git and the other developer-tool shims keep.
             xcrun_db=str(home / ".cache" / "xcrun_db"),
             # Every Python the kernel starts imports KERNEL_SITE's sitecustomize.

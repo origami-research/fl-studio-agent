@@ -538,6 +538,28 @@ class MixerTrack(BaseModel):
     pan: float = 0.0
     muted: bool = False
     solo: bool = False
+    # Filled by fl.mixer (the controller's state.mixer read); the snapshot carries none.
+    effects: list[MixerEffect] = Field(default_factory=list)
+    sends: list[MixerSend] = Field(default_factory=list)
+
+
+class PatternInfo(BaseModel):
+    """One of FL's patterns: its number, name and length in beats."""
+
+    number: int = Field(ge=1)
+    name: str
+    beats: float = Field(ge=0)
+
+
+class PlaylistClip(BaseModel):
+    """One playlist clip: on ``track``, from ``start`` for ``length`` beats, playing
+    ``pattern`` or, for an audio clip, ``channel``."""
+
+    track: int
+    start: float
+    length: float
+    pattern: int | None = None
+    channel: int | None = None
 
 
 class SessionState(BaseModel):

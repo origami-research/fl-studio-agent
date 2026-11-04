@@ -32,6 +32,8 @@ SessionMethod = Literal[
     "live_channels",
     "load_sound",
     "mixer_tracks",
+    "patterns",
+    "playlist",
     "plugin_params",
     "presets",
     "read_notes",

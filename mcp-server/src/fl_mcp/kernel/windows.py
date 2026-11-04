@@ -209,7 +209,7 @@ class AppContainerLauncher:
     confined: ClassVar[bool] = True
     # Workspaces granted, and those released. icacls rewrites the ACL of every
     # file below a folder it grants, so a workspace is granted once, not on
-    # every launch: the workspace tools launch one process per call. A release
+    # every launch (a lost kernel relaunches). A release
     # is final, so a launch racing shutdown cannot grant a finished session again.
     _granted: set[Path] = field(default_factory=set, compare=False, repr=False)
     _released: set[Path] = field(default_factory=set, compare=False, repr=False)

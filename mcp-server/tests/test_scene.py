@@ -100,7 +100,7 @@ def fake_notes(monkeypatch):
     """Patch the project readers so these tests need no .flp on disk; returns the rows."""
 
     def install(rows, clips=(), automations=()):
-        monkeypatch.setattr(scene, "_read_clips", lambda _path: list(clips))
+        monkeypatch.setattr(scene, "read_clips", lambda _path: list(clips))
         monkeypatch.setattr(scene, "_read_automations", lambda _path: list(automations))
         return rows
 

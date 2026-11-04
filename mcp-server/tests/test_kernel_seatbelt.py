@@ -28,7 +28,6 @@ from fl_mcp.kernel.launch import Workspace
 from fl_mcp.kernel.seatbelt import SANDBOX_EXEC, Profile, SeatbeltLauncher, _Reach, build_profile
 from fl_mcp.schemas import Target
 from fl_mcp.store import Store
-from fl_mcp.workspace.runner import WorkspaceRunner
 
 # The real-sandbox tests start sandbox-exec, kernels and network calls, so they
 # run where asked: CI's macos-sandbox job sets FLMCP_SANDBOX_TESTS=1.
@@ -301,8 +300,8 @@ def test_pip_installs_into_the_workspace_and_the_package_imports(host, workspace
 @sandbox
 def test_the_listening_libraries_import_and_plot_under_the_sandbox(host, workspace):
     """The model listens by reading a render and plotting it itself (docs/38): numpy, scipy,
-    soundfile and matplotlib ship with the engine, so they must work confined, with no
-    %pip. matplotlib's first plot builds its font cache in the workspace; the denied
+    soundfile, matplotlib, librosa, pyloudnorm, mido and music21 ship with the engine, so
+    they must work confined, with no %pip. matplotlib's first plot builds its font cache in the workspace; the denied
     system font services must fail fast, not hang the cell."""
     import wave
 
@@ -328,6 +327,21 @@ def test_the_listening_libraries_import_and_plot_under_the_sandbox(host, workspa
     assert result.outcome == "ok", result
     assert abs(int(result.result) - 440) < 200
     assert len(result.shown) == 1  # the open figure showed when the cell ended
+
+    # The rest of the preinstalled set: librosa (numba must cache in the workspace, its
+    # default beside the read-only install is denied), loudness, MIDI files, notation.
+    more = (
+        "import librosa, mido, music21, pyloudnorm\n"
+        "y = x.mean(axis=1)\n"
+        "rms = float(librosa.feature.rms(y=y).mean())\n"
+        "lufs = pyloudnorm.Meter(sr).integrated_loudness(x)\n"
+        "onsets = librosa.onset.onset_detect(y=y, sr=sr)  # peak picking is numba-compiled\n"
+        "mid = mido.MidiFile(); mid.tracks.append(mido.MidiTrack()); mid.save('t.mid')\n"
+        "(rms > 0.1, bool(-20 < lufs < 0), onsets.ndim, mido.MidiFile('t.mid').type, music21.pitch.Pitch('A4').midi)"
+    )
+    extra = host.run(more)
+    assert extra.outcome == "ok", extra
+    assert extra.result == "(True, True, 1, 1, 69)"
 
 
 @sandbox
@@ -366,60 +380,32 @@ def _gone(pid: int, within: float = 5.0) -> bool:
     return False
 
 
-# -- the workspace tools under the real sandbox ---------------------------------------------------
-
-
-@pytest.fixture
-def runner(workspace) -> Iterator[WorkspaceRunner]:
-    runner = WorkspaceRunner(workspace, SeatbeltLauncher(), os.environ)
-    yield runner
-    runner.close()
-
-
-def _shell(runner: WorkspaceRunner, command: str, timeout_s: int = 20) -> dict:
-    return runner.call(
-        "shell", {"command": command, "timeout_s": timeout_s, "log_number": 1}, timeout=timeout_s + 15
-    )
+# -- shell from run, which replaced the workspace tools (2026-11-03) ------------------------------
 
 
 @sandbox
-def test_workspace_tools_pass_the_probe_and_work_in_the_workspace(runner):
-    assert runner.confined
-    assert runner.call("write_file", {"path": "a.txt", "content": "hi"}, timeout=30)["created"] is True
-    assert "hi" in runner.call("read_file", {"path": "a.txt"}, timeout=30)["content"]
-    pool = "import multiprocessing as m\nif __name__ == '__main__':\n    print(m.Pool(2).map(abs, [-1, -2]))\n"
-    runner.call("write_file", {"path": "pool.py", "content": pool}, timeout=30)
-    out = _shell(runner, "cat a.txt && python -c 'import fl_mcp; print(1)' && python pool.py && git --version")
-    assert out["exit_code"] == 0, out
-    assert out["stdout"].startswith("hi1\n[1, 2]\ngit version")
-
-
-@sandbox
-def test_workspace_tools_cannot_reach_outside_the_workspace(runner, workspace, tmp_path):
-    from fl_mcp.errors import ToolError
-
-    for path in (str(Path.home() / ".ssh" / "known_hosts"), str(workspace.canary)):
-        with pytest.raises(ToolError, match=r"(?i)permission|not permitted"):
-            runner.call("read_file", {"path": path}, timeout=30)
+def test_a_shell_command_from_run_stays_inside_the_sandbox(host, tmp_path):
+    """Files and shell are Python in run now: a subprocess inherits the kernel's
+    sandbox, so it cannot write outside, read the home folder, reach this machine,
+    drive other apps or read the pasteboard."""
     outside = tmp_path / "outside.txt"
     with _listener() as port:
-        out = _shell(
-            runner,
+        command = (
             f"echo x > {outside}; ls {Path.home()}; "
             f"python -c 'import socket; socket.create_connection((\"127.0.0.1\", {port}), timeout=3)'; "
             "osascript -e 'tell application \"Finder\" to get version'; "
-            "pbpaste; defaults read -g AppleLocale",
+            "pbpaste; defaults read -g AppleLocale"
         )
+        result = host.run(
+            "import subprocess\n"
+            f"r = subprocess.run({command!r}, shell=True, capture_output=True, text=True, timeout=60)\n"
+            "(r.stdout, r.stderr.count('Operation not permitted'))"
+        )
+    assert result.outcome == "ok", result
+    stdout, denied = eval(result.result)
     assert not outside.exists()
-    assert out["stdout"] == ""  # no Finder version, no pasteboard, no user preferences
-    assert out["stderr"].count("Operation not permitted") >= 3, out["stderr"]
-
-
-@sandbox
-def test_a_shell_call_stops_everything_it_started(runner, workspace):
-    result = _shell(runner, "sleep 60 & echo $! > bg.pid; echo started")
-    assert result["stdout"] == "started\n"
-    assert _gone(int((workspace.work / "bg.pid").read_text()))
+    assert stdout == ""  # no Finder version, no pasteboard, no user preferences
+    assert denied >= 3, result
 
 
 @sandbox

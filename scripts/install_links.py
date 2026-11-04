@@ -34,7 +34,7 @@ SERVER_KEY = "fl-studio"  # the name clients list it under; matches the server's
 REGISTRY_NAME = "io.github.origami-research/fl-studio-agent"
 REPO_URL = "https://github.com/origami-research/fl-studio-agent"
 TITLE = "FL Studio Agent"
-DESCRIPTION = "Drive FL Studio from an AI agent: write notes, set tempo and levels, check what sounds, render."
+DESCRIPTION = "Drive FL Studio from an AI agent through one Python tool: write notes, mix, check what sounds, render and listen."
 PYTHON = "3.12"
 BUNDLE_PYTHON = ">=3.11,<3.13"  # the bundle's uv honors a project's requires-python
 UVX_ARGS = ["--python", PYTHON]
@@ -122,8 +122,9 @@ def bundle_manifest(ver: str) -> dict:
         "version": ver,
         "description": DESCRIPTION,
         "long_description": (
-            "Lets Claude write notes into FL Studio, set tempo, levels and plugin parameters, check which "
-            "channels sound, and render the mix to WAV. Before first use, close FL Studio and run "
+            "Gives Claude one tool, run: Python bound to the live FL Studio session. It writes notes, sets tempo, "
+            "levels and plugin parameters, checks which channels sound, renders the mix or single instruments to "
+            "WAV, and analyses them with numpy, librosa and matplotlib. Before first use, close FL Studio and run "
             f"`{SETUP_COMMAND}` once (on Windows from an administrator terminal): it installs the FL-side scripts "
             "and the prebuilt, checksum-verified Bridge plugin, the native FL effect the server requires "
             "to write notes and render. "
