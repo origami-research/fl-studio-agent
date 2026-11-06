@@ -578,14 +578,15 @@ def test_an_undo_that_reached_a_renders_mute_change_sets_it_back_and_says_so():
     def snapshot(args):
         return {**answer, "channels": [{**c, "muted": c["idx"] == 1 and muted["1"]} for c in answer["channels"]]}
 
-    def mute(args):
-        muted["1"] = bool(args[1])
+    def set_mutes(args):
+        (pairs,) = args
+        muted.update({str(index): bool(value) for index, value in pairs})
+        return [[index, muted[str(index)]] for index, _ in pairs]
 
     control = _rack(**{
         "state.snapshot": snapshot,
         "general.undo": lambda args: muted.update({"1": True}),
-        "channels.muteChannel": mute,
-        "channels.isChannelMuted": lambda args: muted["1"] if args[0] == 1 else False,
+        "ctl.set_mutes": set_mutes,
     })
     session, _ = make_session(control=control)
 
@@ -593,7 +594,7 @@ def test_an_undo_that_reached_a_renders_mute_change_sets_it_back_and_says_so():
         session.undo()
 
     assert muted["1"] is False
-    assert ("channels.muteChannel", [1, 0]) in control.calls
+    assert ("ctl.set_mutes", [[[1, 0]]]) in control.calls
     assert "write the track again" in excinfo.value.fix
 
 
@@ -605,7 +606,7 @@ def test_an_undo_that_changed_the_channels_or_could_not_be_read_stands():
     session, _ = make_session(control=control)
 
     assert session.undo() is None
-    assert "channels.muteChannel" not in [op for op, _ in control.calls]
+    assert "ctl.set_mutes" not in [op for op, _ in control.calls]
 
     failing = _rack(**{"state.snapshot": lambda args: ControlResponse(id=1, ok=False, err="timed out"),
                        "general.undo": lambda args: 0})

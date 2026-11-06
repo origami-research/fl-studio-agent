@@ -75,7 +75,7 @@ from . import check as check_mod
 from . import controls, lifecycle, loading, routing, state
 from . import notes as note_ops
 from . import presets as preset_ops
-from .audition import set_muted
+from .audition import set_mutes
 from .detect import (
     BRIDGE_PING_TIMEOUT_SECONDS,
     BridgeBreaker,
@@ -249,6 +249,9 @@ class FLSession:
         self._audio_stream_thread: threading.Thread | None = None
         self._audio_endpoint: AudioEndpoint | None = None
         self._audio_bridge_pid: int | None = None
+        # Channel mutes a solo or mute render could not confirm it set back, by index and
+        # name: the next one sets them back first (audition.py, #309).
+        self.unrestored_mutes: dict[tuple[int, str], bool] = {}
 
     @property
     def control(self) -> ControlCarrier | None:
@@ -571,8 +574,7 @@ class FLSession:
             flipped = sorted(key for key, muted in before.items() if after[key] != muted)
             if not flipped:
                 return
-            for key in flipped:
-                set_muted(self, key[0], before[key])
+            set_mutes(self, {key[0]: before[key] for key in flipped})
         raise errors.ToolError(
             "fl_api_error",
             "FL's last undo step was a mute change from a solo or mute render, so it was set back "

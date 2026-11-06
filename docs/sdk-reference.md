@@ -136,7 +136,8 @@ The list's `.skipped` holds the indices of the channels left out, and the action
 When the session has no copy of the song FL opened, it cannot tell, and every channel is recorded.
 If no channel has notes in those bars, it refuses before playing; a list of channels records them anyway.
 
-Solo and mute set each channel's mute in FL's channel rack explicitly and read it back, then set back exactly the channels they changed, also when the render fails; a channel FL will not set back is an error naming it.
+Solo and mute set the channel mutes in FL's channel rack explicitly, all in one controller call that reads each one back, and play only once FL answers again; afterwards they set back exactly the channels they changed in one call, also when the render fails.
+If FL does not answer the restore, it waits up to 30 s for FL and sends it once more; if FL still does not answer, the error names every channel that may still be muted (or unmuted), and the next solo or mute render sets them back first.
 FL's own channel solo is not used, because un-soloing unmutes every channel and would lose the user's mutes.
 A muted channel is silent and everything else stays, so a soloed channel is heard through its whole mixer routing and effects, as in the mix.
 A silent whole-song render is refused, because it means FL's audio path is broken; a silent range, solo or stem is returned as the answer.

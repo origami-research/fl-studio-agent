@@ -413,6 +413,24 @@ def test_select_channels_selects_exactly_one_channel(monkeypatch):
     assert selected == [4]
 
 
+def test_set_mutes_sets_each_channel_explicitly_in_one_round_trip_and_reads_every_one_back(monkeypatch):
+    muted = {0: False, 1: True, 2: False}
+    sets = []
+
+    def mute(index, value):
+        sets.append((index, value))
+        muted[index] = bool(value)
+
+    monkeypatch.setattr(flmcp, "channels", SimpleNamespace(muteChannel=mute, isChannelMuted=lambda i: muted[i]))
+
+    result = flmcp._dispatch({"id": 13, "op": "ctl.set_mutes", "args": [[[0, 1], [1, 0]]]})
+
+    assert result == {"id": 13, "ok": True, "ret": [[0, True], [1, False]]}
+    assert sets == [(0, 1), (1, 0)] and muted[2] is False
+    refused = flmcp._dispatch({"id": 14, "op": "ctl.set_mutes", "args": [0, 1]})
+    assert refused["ok"] is False and "pairs" in refused["err"]
+
+
 # --- MCPTools bridge -------------------------------------------------------
 
 

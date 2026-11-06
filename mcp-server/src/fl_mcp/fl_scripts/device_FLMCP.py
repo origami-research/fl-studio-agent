@@ -42,7 +42,7 @@ except ImportError:
     arrangement = channels = device = general = midi = None
     mixer = patterns = playlist = plugins = transport = ui = None
 
-SCRIPT_VER = "0.2.2"
+SCRIPT_VER = "0.2.3"
 
 # ---------------------------------------------------------------------------
 # Wire codec (framing, chunking/reassembly) - flmcp_codec.py beside this file is the single
@@ -446,6 +446,19 @@ def _select_channels(args, kwargs):
     return channel
 
 
+def _set_mutes(args, kwargs):
+    """`ctl.set_mutes` - set many channels' mutes in one round trip, each explicitly (1 mutes,
+    0 unmutes; never a toggle, so a repeat is harmless), and read every one back:
+    [[index, 0 or 1], ...] -> [[index, muted], ...]. A solo render on a 23-channel song
+    sent each change as its own pair of requests around playback, and FL stopped
+    answering midway (issue #309)."""
+    if kwargs or len(args) != 1 or not isinstance(args[0], list):
+        raise ValueError("set_mutes requires one list of [channel index, 0 or 1] pairs")
+    for index, value in args[0]:
+        channels.muteChannel(index, value)
+    return [[index, bool(channels.isChannelMuted(index))] for index, _ in args[0]]
+
+
 COMPOSITE_OPS = {
     "state.snapshot": lambda args, kwargs: _state_snapshot(),
     "state.undo_probe": lambda args, kwargs: _undo_probe(),
@@ -457,6 +470,7 @@ COMPOSITE_OPS = {
         midi.GT_All,
     ),
     "select_channels": _select_channels,
+    "ctl.set_mutes": _set_mutes,
     "mcp.import_tools": _mcp_import_tools,
     "mcp.call": _mcp_call,
     "ctl.hello": lambda args, kwargs: _hello_fields(),

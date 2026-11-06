@@ -17,7 +17,7 @@ from session_fakes import (
 )
 
 from fl_mcp import errors
-from fl_mcp.schemas import ControlResponse, Note, SpoolResponse
+from fl_mcp.schemas import Note, SpoolResponse
 from fl_mcp.session import FLSession, controls
 
 
@@ -213,22 +213,44 @@ def test_silence_is_refused_only_for_the_whole_mix(monkeypatch, tmp_path):
         session.render_wav(tmp_path / "mix.wav")
 
 
-class _Rack:
-    """FL's channel rack mutes as the controller answers them: muteChannel(index, value)
-    sets one (measured on FL 2026: value 1 mutes, 0 unmutes, a repeat changes nothing)."""
+BUSY = errors.ToolError("control_plane_unavailable", "FL Studio is busy and did not answer in time.", "Retry.")
 
-    def __init__(self, muted: dict[int, bool], *, stuck: frozenset[int] = frozenset()) -> None:
+
+class _Rack:
+    """FL's channel rack mutes as the controller's ``ctl.set_mutes`` answers them: each
+    [index, value] pair sets one channel (measured on FL 2026: 1 mutes, 0 unmutes, a repeat
+    changes nothing) and the answer reads every one back."""
+
+    def __init__(
+        self, muted: dict[int, bool], *, miss: frozenset[tuple[str, int]] = frozenset(), freeze_after: int = 0
+    ) -> None:
         self.muted = dict(muted)
-        self.stuck = stuck  # channels FL stops answering for after their first change
-        self.toggles: list[int] = []
+        # Calls FL does not answer: ("set", n) the nth set_mutes, ("ping", n) the nth ping
+        # since the first set_mutes; and after ``freeze_after`` set_mutes, nothing until thawed.
+        self.miss, self.freeze_after, self.frozen = miss, freeze_after, False
+        self.sets = self.pings = 0
+        self.ops: list[dict[int, bool]] = []  # every set_mutes FL applied, in order
+
+    @property
+    def toggles(self) -> list[int]:
+        return [index for op in self.ops for index in op]
 
     def handlers(self) -> dict:
-        def toggle(args):
-            index, value = args
-            if index in self.stuck and index in self.toggles:
-                return ControlResponse(id=0, ok=False, err="refused")
-            self.toggles.append(index)
-            self.muted[index] = bool(value)
+        def set_mutes(args):
+            self.sets += 1
+            if self.frozen or ("set", self.sets) in self.miss:
+                raise BUSY
+            (pairs,) = args
+            self.ops.append({index: bool(value) for index, value in pairs})
+            self.muted.update(self.ops[-1])
+            self.frozen = self.sets == self.freeze_after
+            return [[index, self.muted[index]] for index, _ in pairs]
+
+        def ping(args):
+            self.pings += bool(self.ops)
+            if self.frozen or ("ping", self.pings) in self.miss:
+                raise BUSY
+            return "pong"
 
         answer = snapshot_answer([f"ch{i}" for i in sorted(self.muted)])
         return {
@@ -236,8 +258,8 @@ class _Rack:
                 **answer,
                 "channels": [{**c, "muted": self.muted[c["idx"]]} for c in answer["channels"]],
             },
-            "channels.muteChannel": toggle,
-            "channels.isChannelMuted": lambda args: self.muted[args[0]],
+            "ctl.set_mutes": set_mutes,
+            "ping": ping,
         }
 
 
@@ -254,6 +276,11 @@ def test_solo_mutes_the_others_for_the_render_and_puts_every_mute_back(monkeypat
     assert during == [{0: True, 1: False, 2: True, 3: True}]
     assert rack.muted == {0: False, 1: False, 2: False, 3: True}
     assert (receipt.solo, receipt.mute) == ([1], [])
+    # One controller op each way, and FL answered between the mutes and the play (#309:
+    # a mute and a read per channel, 44 requests on 23 channels, and FL stopped answering).
+    assert rack.ops == [{0: True, 2: True}, {0: False, 2: False}]
+    ops = [op for op, _ in control.calls]
+    assert ops.index("ctl.set_mutes") < len(ops) - 1 - ops[::-1].index("ping") < ops.index("transport.start")
 
 
 def test_mute_silences_only_those_channels(monkeypatch, tmp_path):
@@ -262,7 +289,7 @@ def test_mute_silences_only_those_channels(monkeypatch, tmp_path):
 
     session.render_wav(tmp_path / "no-drums.wav", mute=(0, 2))
 
-    assert sorted(rack.toggles) == [0, 0, 2, 2]  # muted for the render, then set back
+    assert rack.ops == [{0: True, 2: True}, {0: False, 2: False}]  # muted for the render, then set back
     assert rack.muted == {0: False, 1: False, 2: False}
 
 
@@ -277,20 +304,62 @@ def test_the_mutes_go_back_when_the_render_fails(monkeypatch, tmp_path):
     assert rack.muted == {0: False, 1: False}
 
 
-def test_a_channel_fl_will_not_set_back_is_an_error_naming_it(monkeypatch, tmp_path):
-    rack = _Rack({0: False, 1: False}, stuck=frozenset({0}))
+def test_nothing_plays_when_fl_does_not_answer_after_the_mutes(monkeypatch, tmp_path):
+    rack = _Rack({0: False, 1: False}, miss=frozenset({("ping", 1)}))  # the ping after the mutes
+    session, control, transport = _rig(monkeypatch, tmp_path, {**arrangement(), **rack.handlers()})
+
+    with pytest.raises(errors.ToolError, match="nothing was played") as excinfo:
+        session.render_wav(tmp_path / "bass.wav", solo=(1,))
+
+    assert excinfo.value.category == "render_failed"
+    assert "transport.start" not in [op for op, _ in control.calls] and transport.sent == []
+    assert rack.muted == {0: False, 1: False}
+
+
+def test_a_restore_fl_misses_is_sent_again_once_fl_answers(monkeypatch, tmp_path):
+    rack = _Rack({0: False, 1: False}, miss=frozenset({("set", 2)}))  # the first restore
+    session, _, _ = _rig(monkeypatch, tmp_path, {**arrangement(), **rack.handlers()})
+
+    session.render_wav(tmp_path / "bass.wav", solo=(1,))
+
+    assert rack.muted == {0: False, 1: False}
+    assert session.unrestored_mutes == {}
+
+
+def test_fl_going_silent_names_every_channel_it_may_have_left_and_the_next_render_sets_them_back(
+    monkeypatch, tmp_path
+):
+    """#309: FL stopped answering during a solo render; the result must say which channels
+    may still be muted, and the session sets them back when FL answers again."""
+    rack = _Rack({0: False, 1: False, 2: True}, freeze_after=1)  # silent after the mutes
     session, _, transport = _rig(monkeypatch, tmp_path, {**arrangement(), **rack.handlers()})
 
-    with pytest.raises(errors.ToolError, match="ch0 is still muted") as excinfo:
-        session.render_wav(tmp_path / "bass.wav", solo=(1,))
-    assert "already failed" not in excinfo.value.message
+    with pytest.raises(errors.ToolError) as excinfo:
+        session.render_wav(tmp_path / "pad.wav", solo=(2,))
 
-    # When the render failed first, its reason stays in the message.
-    rack.toggles.clear()
-    rack.muted[0] = False  # someone set it back by hand
-    transport.responses["capture_stop"] = SpoolResponse(id=2, ok=False, err="no audio")
-    with pytest.raises(errors.ToolError, match=r"ch0 is still muted\..*already failed.*recorded no audio"):
-        session.render_wav(tmp_path / "bass.wav", solo=(1,))
+    message = excinfo.value.message
+    assert "These may still be muted: ch0 (0), ch1 (1). These may still be unmuted: ch2 (2)." in message
+    assert "already failed: FL did not answer after the channel mutes changed" in message
+    assert "next solo or mute render sets them back" in excinfo.value.fix
+    assert rack.muted == {0: True, 1: True, 2: False} and transport.sent == []
+
+    rack.frozen = False  # FL answers again
+    session.render_wav(tmp_path / "bass.wav", solo=(1,))
+
+    assert rack.ops[1] == {0: False, 1: False, 2: True}  # the owed restore, before anything else
+    assert rack.muted == {0: False, 1: False, 2: True}
+    assert session.unrestored_mutes == {}
+
+
+def test_an_owed_restore_skips_a_channel_that_is_no_longer_the_same(monkeypatch, tmp_path):
+    rack = _Rack({0: False, 1: False})
+    session, _, _ = _rig(monkeypatch, tmp_path, {**arrangement(), **rack.handlers()})
+    session.unrestored_mutes.update({(0, "Bass"): True, (1, "ch1"): False})  # 0 is another channel now
+
+    session.render_wav(tmp_path / "x.wav", mute=(1,))
+
+    assert rack.ops == [{1: True}, {1: False}]
+    assert session.unrestored_mutes == {}
 
 
 @pytest.mark.parametrize(("solo", "mute", "message"), [((1,), (1,), "in both solo and mute"), ((9,), (), "no channel at index 9")])

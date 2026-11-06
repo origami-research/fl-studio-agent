@@ -88,6 +88,9 @@ composites executed script-side:
   channels: [{idx, name, muted, vol, pan, target_mixer_track}], mixer: [{idx, name,
   vol, pan, muted, solo}] }` (*tempo read via `mixer.getCurrentTempo()`
   [ASSUMED name - Spike 3]).
+- `ctl.set_mutes([[channel, 0|1], ...])` → `[[channel, muted], ...]`: sets many channel
+  mutes explicitly in one round trip and reads each back; a solo or mute render uses it
+  once each way (issue #309).
 - `state.plugin_params(chan_or_track)` → `[{idx, name, value}]` - built from
   `plugins.getParamCount/getParamName/getParamValue`. Potentially thousands of params
   (VSTs) - paginated by the op's args and chunked in the response.
