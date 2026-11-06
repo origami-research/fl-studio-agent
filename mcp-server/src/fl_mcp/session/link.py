@@ -69,6 +69,63 @@ SETTLE_POLL_SECONDS = 1.0
 TRANSIENT_RETRY_DELAYS = (0.25, 0.5, 1.0, 2.0, 2.0)
 TRANSIENT_RETRY_WINDOW_SECONDS = 6.0
 
+# Every channel index on the wire is FL's global index, the one the song file and the
+# session use. Without the flag FL counts only the channels in the channel rack's active
+# filter group, so channel 0 can be any channel and a write lands on the wrong one. The
+# FL API functions that take a channel, by the position of their global-index flag (FL
+# API stubs, API v33+): a caller passes every argument before it, and request appends it.
+GLOBAL_INDEX_FLAG_AT = {
+    "channels.channelCount": 0,
+    "channels.selectedChannel": 2,
+    "channels.getChannelName": 1,
+    "channels.setChannelName": 2,
+    "channels.getChannelColor": 1,
+    "channels.setChannelColor": 2,
+    "channels.isChannelMuted": 1,
+    "channels.muteChannel": 2,
+    "channels.isChannelSolo": 1,
+    "channels.soloChannel": 1,
+    "channels.getChannelVolume": 2,
+    "channels.setChannelVolume": 3,
+    "channels.getChannelPan": 1,
+    "channels.setChannelPan": 3,
+    "channels.getChannelPitch": 2,
+    "channels.setChannelPitch": 4,
+    "channels.getChannelType": 1,
+    "channels.isChannelSelected": 1,
+    "channels.selectOneChannel": 1,
+    "channels.selectChannel": 2,
+    "channels.getChannelMidiInPort": 1,
+    "channels.getTargetFxTrack": 1,
+    "channels.setTargetFxTrack": 2,
+    "channels.getRecEventId": 1,
+    "channels.getGridBit": 2,
+    "channels.setGridBit": 3,
+    "channels.quickQuantize": 2,
+    "plugins.isValid": 2,
+    "plugins.getPluginName": 3,
+    "plugins.getParamCount": 2,
+    "plugins.getParamName": 3,
+    "plugins.getParamValue": 3,
+    "plugins.setParamValue": 5,
+    "plugins.getParamValueString": 4,
+    "plugins.getName": 4,
+    "plugins.getPresetCount": 2,
+    "plugins.nextPreset": 2,
+    "plugins.prevPreset": 2,
+}
+
+
+def global_index_args(op: str, args: list[Any] | None) -> list[Any] | None:
+    """``args`` with FL's global-index flag appended when ``op`` takes a channel."""
+    flag_at = GLOBAL_INDEX_FLAG_AT.get(op)
+    if flag_at is None:
+        return args
+    given = list(args or [])
+    if len(given) != flag_at:
+        raise ValueError(f"{op} takes {flag_at} arguments before its global-index flag, got {given!r}")
+    return [*given, 1]
+
 
 class ControlLink:
     """Owns the control wire, its factory, and the recycle clock. Everything
@@ -258,7 +315,9 @@ class ControlLink:
         mid-cycle) and a wire held by another session's call (control_plane_busy:
         the request was never sent). A timeout is NOT retried: FL may have parked
         the call and apply it late (issue #47), so repeating it could apply twice.
-        No wire raises control_plane_unavailable."""
+        No wire raises control_plane_unavailable. A channel is always FL's global
+        index (GLOBAL_INDEX_FLAG_AT)."""
+        args = global_index_args(op, args)
         delays = list(TRANSIENT_RETRY_DELAYS)
         deadline = self._clock() + TRANSIENT_RETRY_WINDOW_SECONDS
         while True:

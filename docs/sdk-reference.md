@@ -66,6 +66,7 @@ the configured project file). Returns channel index, name, normalized volume,
 pan, mute state, and `about`: what the project's own notes (FL's Project info)
 say the channel is for, from a line `<channel name>: <text>`; `None` when they
 say nothing ([07](07-template-project.md)).
+Every channel is listed by FL's global index, the song file's, whatever filter group FL's channel rack shows.
 
 ```python
 for channel in fl.channels:

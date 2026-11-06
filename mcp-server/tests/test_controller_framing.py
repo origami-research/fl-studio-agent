@@ -353,12 +353,12 @@ def test_state_snapshot_composite_op(monkeypatch):
         flmcp,
         "channels",
         SimpleNamespace(
-            channelCount=lambda: 1,
-            getChannelName=lambda i: "Bass",
-            isChannelMuted=lambda i: False,
-            getChannelVolume=lambda i: 0.8,
-            getChannelPan=lambda i: 0.5,
-            getTargetFxTrack=lambda i: 0,
+            channelCount=lambda globalCount: 1,
+            getChannelName=lambda i, useGlobalIndex: "Bass",
+            isChannelMuted=lambda i, useGlobalIndex: False,
+            getChannelVolume=lambda i, mode, useGlobalIndex: 0.8,
+            getChannelPan=lambda i, useGlobalIndex: 0.5,
+            getTargetFxTrack=lambda i, useGlobalIndex: 0,
         ),
     )
 
@@ -405,23 +405,25 @@ def test_unknown_mcp_composite_op():
 
 def test_select_channels_selects_exactly_one_channel(monkeypatch):
     selected = []
-    monkeypatch.setattr(flmcp, "channels", SimpleNamespace(selectOneChannel=selected.append))
+    monkeypatch.setattr(flmcp, "channels", SimpleNamespace(selectOneChannel=lambda *args: selected.append(args)))
 
     result = flmcp._dispatch({"id": 12, "op": "select_channels", "args": [[4]]})
 
     assert result == {"id": 12, "ok": True, "ret": 4}
-    assert selected == [4]
+    assert selected == [(4, 1)]  # by FL's global index
 
 
 def test_set_mutes_sets_each_channel_explicitly_in_one_round_trip_and_reads_every_one_back(monkeypatch):
     muted = {0: False, 1: True, 2: False}
     sets = []
 
-    def mute(index, value):
+    def mute(index, value, use_global):
         sets.append((index, value))
         muted[index] = bool(value)
 
-    monkeypatch.setattr(flmcp, "channels", SimpleNamespace(muteChannel=mute, isChannelMuted=lambda i: muted[i]))
+    monkeypatch.setattr(
+        flmcp, "channels", SimpleNamespace(muteChannel=mute, isChannelMuted=lambda i, use_global: muted[i])
+    )
 
     result = flmcp._dispatch({"id": 13, "op": "ctl.set_mutes", "args": [[[0, 1], [1, 0]]]})
 
@@ -429,6 +431,64 @@ def test_set_mutes_sets_each_channel_explicitly_in_one_round_trip_and_reads_ever
     assert sets == [(0, 1), (1, 0)] and muted[2] is False
     refused = flmcp._dispatch({"id": 14, "op": "ctl.set_mutes", "args": [0, 1]})
     assert refused["ok"] is False and "pairs" in refused["err"]
+
+
+class _FilteredRack:
+    """FL's channel rack with a filter group active: without the global flag (FL API v33+
+    useGlobalIndex) an index counts only the channels the group shows, so index 0 is
+    whichever channel the group lists first."""
+
+    def __init__(self, names: list[str], shown: list[int]) -> None:
+        self.names, self.shown = names, shown
+        self.muted = dict.fromkeys(range(len(names)), False)
+        self.selected: int | None = None
+
+    def _at(self, index: int, use_global: bool) -> int:
+        return index if use_global else self.shown[index]
+
+    def channelCount(self, globalCount=False):
+        return len(self.names) if globalCount else len(self.shown)
+
+    def getChannelName(self, index, useGlobalIndex=False):
+        return self.names[self._at(index, useGlobalIndex)]
+
+    def isChannelMuted(self, index, useGlobalIndex=False):
+        return self.muted[self._at(index, useGlobalIndex)]
+
+    def muteChannel(self, index, value=-1, useGlobalIndex=False):
+        self.muted[self._at(index, useGlobalIndex)] = bool(value)
+
+    def getChannelVolume(self, index, mode=False, useGlobalIndex=False):
+        return 0.8
+
+    def getChannelPan(self, index, useGlobalIndex=False):
+        return 0.0
+
+    def getTargetFxTrack(self, index, useGlobalIndex=False):
+        return self._at(index, useGlobalIndex) + 10
+
+    def selectOneChannel(self, index, useGlobalIndex=False):
+        self.selected = self._at(index, useGlobalIndex)
+
+
+def test_channels_are_fls_global_indices_whatever_filter_group_the_rack_shows(monkeypatch):
+    """Lane A, 2026-11-04: with a filter group active, the controller's channel indices
+    counted only that group's channels, so a write could land on the wrong channel."""
+    rack = _FilteredRack(["Kick", "Snare", "Bass", "Piano"], shown=[2, 3])  # the group shows Bass, Piano
+    monkeypatch.setattr(flmcp, "channels", rack)
+    monkeypatch.setattr(flmcp, "general", SimpleNamespace(getRecPPQ=lambda: 96))
+    monkeypatch.setattr(flmcp, "mixer", SimpleNamespace(getCurrentTempo=lambda: 120.0, trackCount=lambda: 0))
+    monkeypatch.setattr(flmcp, "transport", SimpleNamespace(isPlaying=lambda: False, getSongPos=lambda: 0.0))
+    monkeypatch.setattr(flmcp, "patterns", SimpleNamespace(patternNumber=lambda: 1, patternCount=lambda: 1))
+
+    snap = flmcp._dispatch({"id": 15, "op": "state.snapshot"})["ret"]
+    assert [(c["idx"], c["name"], c["target_mixer_track"]) for c in snap["channels"]] == [
+        (0, "Kick", 10), (1, "Snare", 11), (2, "Bass", 12), (3, "Piano", 13)
+    ]
+    flmcp._dispatch({"id": 16, "op": "select_channels", "args": [[1]]})
+    assert rack.selected == 1  # Snare, which the group does not even show
+    muted = flmcp._dispatch({"id": 17, "op": "ctl.set_mutes", "args": [[[0, 1]]]})
+    assert muted["ret"] == [[0, True]] and rack.muted == {0: True, 1: False, 2: False, 3: False}
 
 
 # --- MCPTools bridge -------------------------------------------------------

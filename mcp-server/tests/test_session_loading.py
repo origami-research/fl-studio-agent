@@ -127,7 +127,7 @@ class FakeFL:
             return self.selected[min(offset, len(self.selected) - 1)]
 
         def plugin_name(args):
-            index, slot = args
+            index, slot, _user_name, _global = args
             name = self.channels[index]["plugin"] if slot == -1 else self.slots[index][slot]
             return name if name is not None else refused("RuntimeError: Plugin not valid")
 

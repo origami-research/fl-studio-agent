@@ -422,6 +422,24 @@ def test_a_real_refusal_is_not_retried():
     assert len(control.calls) == 1 and clock.sleeps == []
 
 
+def test_a_channel_is_always_fls_global_index_never_the_filter_groups():
+    """With a channel rack filter group active, FL counts an unflagged index within the
+    group (Lane A, 2026-11-04); every channel op gets FL's global-index flag."""
+    link, control, _ = _link({"channels.getChannelName": lambda args: "Bass", "plugins.getParamValue": lambda args: 0.5,
+                              "mixer.getTrackName": lambda args: "Drums"})
+
+    link.call("channels.getChannelName", [3])
+    link.call("plugins.getParamValue", [0, 3, -1])
+    link.call("mixer.getTrackName", [3])
+
+    assert control.calls == [
+        ("channels.getChannelName", [3, 1]), ("plugins.getParamValue", [0, 3, -1, 1]), ("mixer.getTrackName", [3])
+    ]
+    with pytest.raises(ValueError, match="2 arguments before its global-index flag"):
+        link.call("channels.getChannelVolume", [3])  # a short call would put the flag in mode's place
+    assert len(control.calls) == 3
+
+
 def test_set_tempo_lands_through_a_transient_refusal():
     """The whole session path: the model's set_tempo returns FL's tempo, not an error."""
     tempo = {"value": 130_000}

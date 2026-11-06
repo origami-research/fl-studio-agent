@@ -42,7 +42,7 @@ except ImportError:
     arrangement = channels = device = general = midi = None
     mixer = patterns = playlist = plugins = transport = ui = None
 
-SCRIPT_VER = "0.2.3"
+SCRIPT_VER = "0.2.4"
 
 # ---------------------------------------------------------------------------
 # Wire codec (framing, chunking/reassembly) - flmcp_codec.py beside this file is the single
@@ -203,6 +203,13 @@ ALLOWED = {
 }
 
 
+# Channels are always FL's global index (the trailing 1 / GLOBAL below): without it FL
+# counts only the channel rack's active filter group, so an index means a different
+# channel than in the song file. The server's direct calls get the same flag
+# (session/link.py GLOBAL_INDEX_FLAG_AT).
+GLOBAL = 1
+
+
 def _state_snapshot():
     """`state.snapshot` - the one composite read the server calls most; see
     docs/11 §"Composite ops"."""
@@ -216,13 +223,13 @@ def _state_snapshot():
         "channels": [
             {
                 "idx": i,
-                "name": channels.getChannelName(i),
-                "muted": bool(channels.isChannelMuted(i)),
-                "vol": channels.getChannelVolume(i),
-                "pan": channels.getChannelPan(i),
-                "target_mixer_track": channels.getTargetFxTrack(i),
+                "name": channels.getChannelName(i, GLOBAL),
+                "muted": bool(channels.isChannelMuted(i, GLOBAL)),
+                "vol": channels.getChannelVolume(i, False, GLOBAL),
+                "pan": channels.getChannelPan(i, GLOBAL),
+                "target_mixer_track": channels.getTargetFxTrack(i, GLOBAL),
             }
-            for i in range(channels.channelCount())
+            for i in range(channels.channelCount(GLOBAL))
         ],
         "mixer": [
             {
@@ -270,7 +277,7 @@ def _mixer_tracks():
         return rows[i]
 
     used = {0}
-    used.update(channels.getTargetFxTrack(c) for c in range(channels.channelCount()))
+    used.update(channels.getTargetFxTrack(c, GLOBAL) for c in range(channels.channelCount(GLOBAL)))
     for i in range(1, count):
         if mixer.getTrackName(i) != "Insert %d" % i or any(mixer.isTrackPluginValid(i, s) for s in range(MIXER_SLOTS)):
             used.add(i)
@@ -442,7 +449,7 @@ def _select_channels(args, kwargs):
     channel = args[0][0]
     if not isinstance(channel, int) or isinstance(channel, bool) or channel < 0:
         raise ValueError("select_channels requires one non-negative integer channel index")
-    channels.selectOneChannel(channel)
+    channels.selectOneChannel(channel, GLOBAL)
     return channel
 
 
@@ -455,8 +462,8 @@ def _set_mutes(args, kwargs):
     if kwargs or len(args) != 1 or not isinstance(args[0], list):
         raise ValueError("set_mutes requires one list of [channel index, 0 or 1] pairs")
     for index, value in args[0]:
-        channels.muteChannel(index, value)
-    return [[index, bool(channels.isChannelMuted(index))] for index, _ in args[0]]
+        channels.muteChannel(index, value, GLOBAL)
+    return [[index, bool(channels.isChannelMuted(index, GLOBAL))] for index, _ in args[0]]
 
 
 COMPOSITE_OPS = {

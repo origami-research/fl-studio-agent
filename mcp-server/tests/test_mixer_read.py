@@ -36,7 +36,7 @@ def _fl_mixer(monkeypatch, *, names, effects, sends, targets):
     ), raising=False)
     monkeypatch.setattr(flmcp, "plugins", SimpleNamespace(getPluginName=lambda i, slot: effects[i][slot]), raising=False)
     monkeypatch.setattr(flmcp, "channels", SimpleNamespace(
-        channelCount=lambda: len(targets), getTargetFxTrack=lambda c: targets[c]
+        channelCount=lambda globalCount: len(targets), getTargetFxTrack=lambda c, useGlobalIndex: targets[c]
     ), raising=False)
     return calls
 

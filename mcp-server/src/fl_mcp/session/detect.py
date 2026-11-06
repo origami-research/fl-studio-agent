@@ -21,7 +21,7 @@ from fl_mcp import errors
 from fl_mcp.core.carriers.spool import spool_roots
 from fl_mcp.profile import load_profile as load_profile  # re-export: facade's one profile seam
 
-from .link import LIVE_READ_TIMEOUT_SECONDS
+from .link import LIVE_READ_TIMEOUT_SECONDS, global_index_args
 
 if TYPE_CHECKING:
     from fl_mcp.core.transport import Transport
@@ -201,7 +201,9 @@ def _selected_channel(link: ControlLink) -> int | None:
     try:
         # A probe, read on every capability check: one attempt, never the
         # link's retries (a busy wire would multiply into every op's latency).
-        resp = link.control.send_request("channels.selectedChannel", timeout=LIVE_READ_TIMEOUT_SECONDS)
+        resp = link.control.send_request(
+            "channels.selectedChannel", global_index_args("channels.selectedChannel", [0, 0]), timeout=LIVE_READ_TIMEOUT_SECONDS
+        )
     except errors.ToolError:
         return None
     if not resp.ok:

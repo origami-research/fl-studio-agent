@@ -50,7 +50,7 @@ class FakeMixer:
 
     def handlers(self) -> dict[str, Any]:
         def set_target(args):
-            channel, track = args
+            channel, track, _global = args
             self.targets[channel] = track
 
         def set_route(args):
@@ -139,7 +139,7 @@ def test_route_returns_the_mixer_track_fl_reports():
     session, control = session_with(mixer)
 
     assert session.route_channel(1, 5) == ChannelRoute(channel=1, mixer_track=5)
-    assert ("channels.setTargetFxTrack", [1, 5]) in control.calls
+    assert ("channels.setTargetFxTrack", [1, 5, 1]) in control.calls
     assert ops(control)[-1] == "channels.getTargetFxTrack", "the result is read back after the write"
 
 

@@ -443,7 +443,7 @@ def test_levels_live_all_fields_with_readback():
 
     # The result is FL's readback, not an echo of the request.
     assert (levels.volume, levels.pan, levels.pitch_semitones) == (0.5, -0.25, 12)
-    assert ("channels.setChannelPitch", [2, 12, 1]) in control.calls
+    assert ("channels.setChannelPitch", [2, 12, 1, 0, 1]) in control.calls
 
 
 def test_levels_live_partial_failure_raises_and_never_falls_through(monkeypatch, tmp_path, no_reload):
@@ -656,7 +656,7 @@ def _param_control(values: dict[int, float] | None = None) -> FakeControl:
     quantum = 1 / 64  # FL quantizes to the control's grid (E2: 0.42 -> 0.41875)
 
     def set_value(args):
-        value, index, _ch, _slot = args
+        value, index, _ch, _slot, _pickup, _global = args
         state[index] = round(value / quantum) * quantum
         return None
 
@@ -702,7 +702,7 @@ def test_set_plugin_param_uses_the_index_advertised_by_params_on_the_generic_wir
     confirmed = session.set_plugin_param(0, param.index, 0.5)
 
     assert confirmed.index == param.index == 2
-    assert ("plugins.setParamValue", [0.5, 2, 0, -1]) in control.calls
+    assert ("plugins.setParamValue", [0.5, 2, 0, -1, 0, 1]) in control.calls
 
 
 @pytest.mark.parametrize("index", [-1, 3, True, 1.5])
@@ -810,7 +810,7 @@ def test_set_plugin_param_resolves_a_numeric_display_string_against_its_range():
 
     session.set_plugin_param(0, "Cutoff", "440")
 
-    assert ("plugins.setParamValue", [pytest.approx(420 / 980), 0, 0, -1]) in control.calls
+    assert ("plugins.setParamValue", [pytest.approx(420 / 980), 0, 0, -1, 0, 1]) in control.calls
 
 
 def test_bool_param_accepts_option_and_round_trips():

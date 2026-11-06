@@ -73,6 +73,10 @@ log = logging.getLogger(__name__)
 # FL's plugins.* convention for "the channel's own generator, not a mixer
 # effect slot" (the slot argument every call here passes).
 GENERATOR_SLOT = -1
+# FL's PIM_None: a set applies the value at once, with no controller pickup.
+PICKUP_NONE = 0
+# getChannelPitch / setChannelPitch's mode for whole semitones.
+PITCH_SEMITONES = 1
 _NUMBER = re.compile(r"^\s*([+-]?(?:\d+(?:\.\d*)?|\.\d+))\s*$")
 
 
@@ -670,9 +674,9 @@ def set_channel_levels(
         # what already landed - it never falls through to the file path,
         # which would reload FL and discard the fields that landed live.
         requested = [
-            ("volume", "channels.setChannelVolume", [channel, volume]),
-            ("pan", "channels.setChannelPan", [channel, pan]),
-            ("pitch_semitones", "channels.setChannelPitch", [channel, pitch_semitones, 1]),
+            ("volume", "channels.setChannelVolume", [channel, volume, PICKUP_NONE]),
+            ("pan", "channels.setChannelPan", [channel, pan, PICKUP_NONE]),
+            ("pitch_semitones", "channels.setChannelPitch", [channel, pitch_semitones, PITCH_SEMITONES, PICKUP_NONE]),
         ]
         applied: list[str] = []
         for field_name, op, args in requested:
@@ -691,9 +695,9 @@ def set_channel_levels(
 
         readbacks = {}
         for field_name, op, args in (
-            ("volume", "channels.getChannelVolume", [channel]),
+            ("volume", "channels.getChannelVolume", [channel, False]),  # 0..1, not dB
             ("pan", "channels.getChannelPan", [channel]),
-            ("pitch_semitones", "channels.getChannelPitch", [channel, 1]),
+            ("pitch_semitones", "channels.getChannelPitch", [channel, PITCH_SEMITONES]),
         ):
             resp = session.link.request(op, args, timeout=LIVE_READ_TIMEOUT_SECONDS)
             if not resp.ok or resp.ret is None:
@@ -772,7 +776,7 @@ def _plugin_model(session: FLSession, channel: int) -> PluginParamModel | None:
     """Select static semantics only when the session was explicitly given them."""
     if not session.plugin_param_models:
         return None
-    plugin = str(_live_read(session, "plugins.getPluginName", [channel, GENERATOR_SLOT]))
+    plugin = str(_live_read(session, "plugins.getPluginName", [channel, GENERATOR_SLOT, False]))
     return next((model for model in session.plugin_param_models if model.plugin == plugin), None)
 
 
@@ -918,7 +922,9 @@ def set_plugin_param(session: FLSession, channel: int, param: int | str, value: 
     # FL's generic plugin API is positional: value first, then the index
     # advertised by getParamCount/getParamName/getParamValue.
     session.link.call(
-        "plugins.setParamValue", [requested, index, channel, GENERATOR_SLOT], timeout=LIVE_SET_TIMEOUT_SECONDS
+        "plugins.setParamValue",
+        [requested, index, channel, GENERATOR_SLOT, PICKUP_NONE],
+        timeout=LIVE_SET_TIMEOUT_SECONDS,
     )
 
     confirmed = float(_live_read(session, "plugins.getParamValue", [index, channel, GENERATOR_SLOT]))

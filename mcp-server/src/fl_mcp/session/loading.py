@@ -91,13 +91,13 @@ def _instrument(session: FLSession, channel: int) -> tuple[str, str | None, bool
         return name, None, True
     if not _live_read(session, "plugins.isValid", [channel, GENERATOR_SLOT]):
         return name, None, False
-    return name, str(_live_read(session, "plugins.getPluginName", [channel, GENERATOR_SLOT])), False
+    return name, str(_live_read(session, "plugins.getPluginName", [channel, GENERATOR_SLOT, False])), False
 
 
 def _effects(session: FLSession, track: int) -> list[str | None]:
     """Each effect slot of a mixer track: its plugin's name, or None when empty."""
     return [
-        str(_live_read(session, "plugins.getPluginName", [track, slot]))
+        str(_live_read(session, "plugins.getPluginName", [track, slot, False]))
         if _live_read(session, "mixer.isTrackPluginValid", [track, slot])
         else None
         for slot in range(MIXER_SLOTS)

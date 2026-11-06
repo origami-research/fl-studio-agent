@@ -79,6 +79,12 @@ security boundary; there is no `eval`, no `exec`, no arbitrary code execution. (
 where we deliberately diverge from Flapi, which is a general remote REPL. An MCP server
 driven by a model should expose named functions, not an interpreter.)
 
+### Channel indices are global
+
+Every channel index on the wire is FL's global index, the one the song file uses.
+FL's channel functions otherwise count only the channels in the channel rack's active filter group, so with a group showing, channel 0 can be any channel and a write lands on the wrong one.
+The composites pass FL's `useGlobalIndex` flag themselves (`channelCount(1)`, `getChannelName(i, 1)`, ...), and the server's `ControlLink.request` appends it to every direct `channels.*` and `plugins.*` call (`GLOBAL_INDEX_FLAG_AT` in `session/link.py`), whose caller passes every argument before it.
+
 ### Composite ops (`state.*`)
 
 Round trips are the expensive resource, so common read patterns get single-frame
