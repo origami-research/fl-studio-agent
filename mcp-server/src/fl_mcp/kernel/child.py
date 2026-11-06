@@ -20,6 +20,7 @@ import itertools
 import os
 import queue
 import signal
+import subprocess
 import sys
 import threading
 import traceback
@@ -33,6 +34,7 @@ from fl_mcp import sdk
 from fl_mcp.contract import RunResult
 from fl_mcp.kernel import wire
 from fl_mcp.kernel.cell import new_namespace, run_cell
+from fl_mcp.kernel.null_device import share_null_device
 from fl_mcp.kernel.private_dirs import share_private_dirs
 from fl_mcp.kernel.probe import probe
 
@@ -176,6 +178,7 @@ def main(argv: list[str] | None = None) -> None:
     faulthandler.enable()  # a native crash leaves its stack on stderr for the server's log
     if sys.platform == "win32":
         share_private_dirs(os)
+        share_null_device(os, subprocess, os.environ["TMP"])
     with contextlib.suppress(OSError):  # model code may have removed it; tempfile needs it
         Path(os.environ["TMP"]).mkdir(exist_ok=True)
     # Figures become images in the run result, never windows on the machine running FL.

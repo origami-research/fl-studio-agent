@@ -36,6 +36,10 @@ The server never unpickles or evaluates anything the kernel sends.
 
 The kernel moves the wire off fds 0 and 1 at startup, so `input()` reads an empty pipe (never the null device, which an AppContainer is denied) and a stray `os.write(1, ...)` lands in the server log instead of the protocol.
 
+On Windows the null device (`NUL`, `\Device\Null`) is denied to the AppContainer: its DACL grants Everyone, SYSTEM, Administrators and RESTRICTED but no AppContainer SID, no capability covers it, only an administrator may change it (and not across a reboot), and Windows refuses a per-process device map that would point `NUL` elsewhere (dev box, 2026-11-06).
+So every Python in the kernel's tree (the kernel itself, and through its `sitecustomize` pip, `!python` and any script it starts) gets a stand-in in its workspace (`kernel/null_device.py`): `os.devnull` names `devnull` in the workspace's temp folder, and `subprocess.DEVNULL` is a new empty file there for each process started, deleted when its last handle closes, so a child's stdin reads end of file and its output is discarded with the file.
+A program that opens `NUL` itself is still refused: cmd's `> NUL` fails with "Access is denied", so redirect to a file or use `subprocess.DEVNULL` instead.
+
 The server never lets the kernel stall it.
 Each line it reads from the kernel is bounded (64 MiB), each write to the kernel has a 10 s deadline, and kernel stderr reaches the server log for at most 200 lines per kernel.
 A kernel that breaks any of these is killed and the cell ends `kernel_lost`.
@@ -266,6 +270,9 @@ The FL user, which runs the MCP server, creates the AppContainer profile and gra
 - `import socket; socket.create_connection(("127.0.0.1", 445), timeout=3)` raises (no loopback).
 - `%pip install six` then `import six` succeeds.
 - `p = fl.render("x.wav"); fl.read_wav(p)[1]` returns the sample rate.
+- `subprocess.run([sys.executable, "-V"], stdout=subprocess.DEVNULL)` succeeds, a child given `stdin=subprocess.DEVNULL` reads end of file, and `open(os.devnull, "w")` works.
+
+CI's `windows-sandbox` job runs real AppContainer kernels on a Windows runner set up with step 3's firewall rule (`test_kernel_appcontainer.py`, with `FLMCP_SANDBOX_TESTS=1`; a skipped test fails the job): the kernel boots past its probe, cannot write outside its workspace, and has the null-device stand-in.
 
 ## Known noise
 
@@ -278,6 +285,6 @@ It lands in the server log for the kernel, and in the output of `%pip` and `!pyt
 - The macOS sandbox rests on `sandbox-exec`, which Apple marks deprecated; see "Why Seatbelt" for how a change would show.
 - The probe's home and loopback checks are new on Windows (2026-10-26) and not yet run on a Windows box; the box lockdown check already proved both denied.
 
-- First real-Windows run (dev box, 2026-10-18) found that the null device and 0o700 directories are denied inside the container; both are fixed above.
+- First real-Windows run (dev box, 2026-10-18) found that the null device and 0o700 directories are denied inside the container; 0o700 directories are fixed above, and Python's `os.devnull` and `subprocess.DEVNULL` get a workspace stand-in, but a native program's `NUL` (cmd's `> NUL`) stays denied.
 - `PIP_TARGET` installs a package's dependencies even when the engine venv already has them; imports still resolve to the engine's copies first.
 - One AppContainer SID per box (the firewall rule needs a fixed SID): concurrent sessions on one box would share it, and a server that crashes leaves its grants until the harness deletes the kernel root.

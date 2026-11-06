@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import ast
 import contextlib
+import inspect
 import os
 import subprocess
 import sys
@@ -28,6 +29,7 @@ from fl_mcp.kernel import wire
 from fl_mcp.kernel.cell import expand_magics
 from fl_mcp.kernel.host import KernelHost
 from fl_mcp.kernel.launch import KERNEL_SITE, PosixLauncher, Workspace
+from fl_mcp.kernel.null_device import share_null_device
 from fl_mcp.kernel.private_dirs import share_private_dirs
 from fl_mcp.schemas import Channel, RenderReceipt, Target
 from fl_mcp.store import Store
@@ -518,20 +520,49 @@ def test_private_mkdir_inherits_instead(tmp_path):
     assert calls == [("private", 0o777, None), ("shared", 0o755, 3), ("default", 0o777, None)]
 
 
-def test_every_python_the_kernel_starts_gets_the_private_mkdir_fix_on_windows(workspace):
+def test_the_null_device_stand_in_is_a_workspace_file_and_a_fresh_one_per_process(tmp_path):
+    """An AppContainer is denied NUL (box run 2026-11-06): os.devnull and subprocess.DEVNULL
+    become workspace files, a new self-deleting one for each process started."""
+    opened = []
+    fake_os = SimpleNamespace(
+        path=os.path, makedirs=lambda path, exist_ok: opened.append(("makedirs", path)),
+        open=lambda path, flags: opened.append((path, flags)) or len(opened),
+        O_RDWR=1, O_CREAT=2, O_EXCL=4, O_BINARY=8, O_TEMPORARY=16, O_NOINHERIT=32,
+    )
+    fake_subprocess = SimpleNamespace(Popen=type("Popen", (), {}))
+    share_null_device(fake_os, fake_subprocess, str(tmp_path))
+
+    assert fake_os.devnull == str(tmp_path / "devnull")
+    first, second = fake_subprocess.Popen(), fake_subprocess.Popen()
+    assert first._get_devnull() == first._get_devnull()  # one file for all three streams of a process
+    second._get_devnull()
+    files = [call for call in opened if call[0] != "makedirs"]
+    assert len(files) == 2 and files[0][0] != files[1][0]
+    assert all(Path(path).parent == tmp_path and flags == 63 for path, flags in files)
+
+
+def test_every_python_the_kernel_starts_gets_the_windows_fixes(workspace):
     """pip and !python are separate interpreters; the kernel's PYTHONPATH sitecustomize patches them."""
     env = workspace.kernel_env(os.environ, python=Path(sys.executable))
     assert env["PYTHONPATH"] == str(KERNEL_SITE)
     site = KERNEL_SITE / "sitecustomize.py"
     probe = (
-        "import os, sys\n"
-        "import fl_mcp.kernel.private_dirs\n"  # imported before faking the platform
+        "import os, subprocess, sys\n"
+        "import fl_mcp.kernel.private_dirs, fl_mcp.kernel.null_device\n"  # imported before faking the platform
         "sys.platform = 'win32'\n"
         f"exec(compile(open({str(site)!r}).read(), 'sitecustomize', 'exec'), {{}})\n"
-        "print(os.mkdir.__qualname__)"
+        "print(os.mkdir.__qualname__, subprocess.Popen._get_devnull.__qualname__, os.devnull == os.path.join(os.environ['TMP'], 'devnull'))"
     )
-    out = subprocess.run([sys.executable, "-c", probe], capture_output=True, text=True, check=True)
-    assert out.stdout.strip() == "share_private_dirs.<locals>.mkdir"
+    out = subprocess.run(
+        [sys.executable, "-c", probe], capture_output=True, text=True, check=True, env=dict(os.environ, TMP=str(workspace.tmp))
+    )
+    assert out.stdout.split() == ["share_private_dirs.<locals>.mkdir", "share_null_device.<locals>._get_devnull", "True"]
+
+
+def test_the_stand_in_replaces_the_one_subprocess_method_that_opens_the_null_device():
+    """CPython's Popen opens os.devnull in _get_devnull only; a Python that renamed it would
+    leave DEVNULL on the denied device, so this fails first."""
+    assert "os.open(os.devnull" in inspect.getsource(subprocess.Popen._get_devnull)
 
 
 # -- a kernel without FL ------------------------------------------------------

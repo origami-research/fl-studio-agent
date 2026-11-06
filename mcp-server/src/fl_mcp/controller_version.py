@@ -10,7 +10,8 @@ from __future__ import annotations
 import re
 from importlib.resources import files
 
-_SCRIPT_VER = re.compile(r'^SCRIPT_VER = "(?P<version>[^"]+)"$', re.MULTILINE)
+# \r?: a Windows checkout may give the script CRLF line ends.
+_SCRIPT_VER = re.compile(r'^SCRIPT_VER = "(?P<version>[^"]+)"\r?$', re.MULTILINE)
 
 
 def controller_script_bytes() -> bytes:
