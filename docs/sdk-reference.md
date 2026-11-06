@@ -31,8 +31,8 @@ the current channel list in the message.
 When `FLMCP_SPOOL_ROOT` is set, the session is running a live match and never
 kills or reopens FL. `file_edit()` and every file-lane fallback raise retryable
 `file_lane_requires_reload` before changing the project file. Use Bridge notes
-and wire tempo, parameters, or channel levels instead. Automation clips and
-adding effects have no live equivalent yet.
+and wire tempo, parameters, or channel levels instead. Automation clips have no
+live equivalent yet; an effect is added live by loading its preset (`fl.load_preset`).
 
 ```python
 from fl_mcp.sdk import connect
@@ -370,17 +370,6 @@ semitones from -48 to 48. Pass at least one value.
 
 ```python
 confirmed = fl.track("Bass").set_levels(volume=0.9, pan=-0.15)
-```
-
-### `fl.add_effect(insert_index: int, plugin_name: str) -> tuple[Effect, ...]`
-
-**Availability:** project write. Adds an effect using an FL-authored opaque
-record and returns the saved-file readback of the slot it filled. Current evidence only
-supports `fl.add_effect(0, "Fruity Parametric EQ 2")`: Master's first slot (FL's slot 1), when empty.
-Other plugins or insert placements refuse rather than synthesize plugin state.
-
-```python
-effects = fl.add_effect(0, "Fruity Parametric EQ 2")
 ```
 
 ### `track.params(query: str | None = None, limit: int = 40) -> list[PluginParam]`

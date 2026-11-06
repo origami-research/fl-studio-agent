@@ -19,7 +19,6 @@ from session_fakes import RENDER_SPAN
 
 from fl_mcp import errors, server
 from fl_mcp.actions import GROUP_AT, MAX_ACTIONS, MAX_CHARS, ActionLog
-from fl_mcp.flp import Effect
 from fl_mcp.kernel.host import KernelHost
 from fl_mcp.kernel.launch import PosixLauncher, Workspace
 from fl_mcp.schemas import (
@@ -94,8 +93,6 @@ def test_each_kind_of_change_reads_as_one_plain_sentence():
     actions.called(
         "set_automation", {}, AutomationResult(channel=4, points=[AutomationPoint(position=0, value=0.5)] * 8)
     )
-    eq = Effect(name="Fruity Parametric EQ 2", chunk=b"")
-    actions.called("add_effect", {"insert_index": 0, "plugin_name": "Fruity Parametric EQ 2"}, (eq,))
     actions.called("check", {}, check_result())
     actions.called("render_wav", {}, RenderReceipt(path=Path("r.wav"), span=_song_span(34.2)))
     actions.called("render_wav", {}, RenderReceipt(path=Path("r.wav"), span=RENDER_SPAN))
@@ -114,8 +111,6 @@ def test_each_kind_of_change_reads_as_one_plain_sentence():
         "Set 808 Clap pan to -0.15",
         "Set 808 Clap pitch to +2 semitones",
         "Replaced the automation on FLEX Bass (8 points)",
-        "Reopened FL with the changed song",
-        "Added Fruity Parametric EQ 2 to the master",
         "Reopened FL with the changed song",
         "Checked bars 9-10: 5 of 5 tracks sound, master -1.8 dBFS",
         "Rendered 0:34",
@@ -155,8 +150,8 @@ def _song_span(seconds: float) -> RenderSpan:
 
 
 def test_sentences_use_what_fl_returned_not_what_was_asked():
-    """FL snaps values (tempo to 1/1000 BPM, a stepped control to its steps), a replace
-    reports the count FL has afterwards, and an effect is named from FL's readback."""
+    """FL snaps values (tempo to 1/1000 BPM, a stepped control to its steps), and a replace
+    reports the count FL has afterwards."""
     actions = log()
     actions.called("set_tempo", {"bpm": 122.00049}, 122.0)
     actions.called(
@@ -166,15 +161,11 @@ def test_sentences_use_what_fl_returned_not_what_was_asked():
     )
     volume(actions, 0, 0.6)
     note_write(actions, 3, 16, "replace", total=12)  # FL kept 12: two pairs landed on the same step
-    other = Effect(name="Fruity Limiter", chunk=b"")
-    actions.called("add_effect", {"insert_index": 0, "plugin_name": "Fruity Parametric EQ 2"}, (other,))
     assert actions.sentences() == [
         "Set tempo to 122 BPM",
         "Set FLEX Bass cutoff to 0.70",
         "Set 808 Kick volume to 0.60",
         "Replaced the notes on 808 Snare (12 notes)",
-        "Changed the effects on the master; it now has Fruity Limiter",
-        "Reopened FL with the changed song",
     ]
 
 

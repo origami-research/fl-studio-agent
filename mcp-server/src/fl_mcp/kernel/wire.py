@@ -14,7 +14,7 @@ import functools
 import inspect
 from typing import IO, Annotated, Any, Literal, get_args, get_type_hints
 
-from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError, create_model
+from pydantic import BaseModel, Field, TypeAdapter, ValidationError, create_model
 
 from fl_mcp import errors
 from fl_mcp.contract import RunResult
@@ -24,7 +24,6 @@ from fl_mcp.session import FLSession
 
 # The FLSession surface that sdk.FL and sdk.Track call; a test pins it to sdk.py.
 SessionMethod = Literal[
-    "add_effect",
     "channel_names",
     "check",
     "clear_notes",
@@ -60,8 +59,6 @@ SESSION_METHODS = frozenset(get_args(SessionMethod))
 FILE_EDIT_ENTER = "file_edit_enter"
 FILE_EDIT_EXIT = "file_edit_exit"
 CallMethod = SessionMethod | Literal["file_edit_enter", "file_edit_exit"]
-# Effect carries opaque plugin bytes; JSON needs them as base64.
-_BYTES_AS_BASE64 = ConfigDict(ser_json_bytes="base64", val_json_bytes="base64")
 
 
 class WireError(BaseModel):
@@ -192,8 +189,8 @@ def _schema(method: str) -> tuple[inspect.Signature, type[BaseModel], type[BaseM
         for name, param in signature.parameters.items()
         if name != "self"
     }
-    args_model = create_model(f"{method}_args", __config__=_BYTES_AS_BASE64, **fields)
-    result_model = create_model(f"{method}_result", __config__=_BYTES_AS_BASE64, value=(hints["return"], ...))
+    args_model = create_model(f"{method}_args", **fields)
+    result_model = create_model(f"{method}_result", value=(hints["return"], ...))
     return signature, args_model, result_model
 
 

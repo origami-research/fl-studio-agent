@@ -35,7 +35,6 @@ from fl_mcp.core.carriers.spool import SpoolCarrier
 from fl_mcp.core.carriers.udp import UdpCarrier
 from fl_mcp.core.carriers.wire import ControlUnavailable
 from fl_mcp.core.transport import Transport
-from fl_mcp.errors import NotePlaneUnavailable
 from fl_mcp.fl.paths import fl_patches_dir, primary_settings_dir
 from fl_mcp.fl.process import bridge_pid
 from fl_mcp.observer import Observer
@@ -495,21 +494,6 @@ class FLSession:
             return controls.set_channel_levels(
                 self, channel, volume=volume, pan=pan, pitch_semitones=pitch_semitones
             )
-
-    def add_effect(self, insert_index: int, plugin_name: str) -> tuple[flp.Effect, ...]:
-        """Add an FL-authored native effect record to the insert's first slot (FL's
-        slot 1) and return that slot's file readback."""
-        with self._write_guard("add_effect"):
-            if self.project is None:
-                raise NotePlaneUnavailable(
-                    "Effects cannot be added in this session: there is no saved song to edit.",
-                    fix="Shape the sound with Track.set_param or levels instead.",
-                    retryable=False,
-                )
-            self._prepare_file_write()
-            confirmed = tuple(flp.add_effect(self.project, insert_index, plugin_name, slot=1))
-            self._reload_fl()
-            return confirmed
 
     def set_automation(self, channel: int, points: list[AutomationPoint]) -> AutomationResult:
         with self._write_guard("set_automation"):

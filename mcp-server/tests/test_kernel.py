@@ -24,7 +24,6 @@ from sdk_fakes import DEFAULT_CHANNELS, FakeSession
 
 from fl_mcp import errors
 from fl_mcp.errors import ToolError
-from fl_mcp.flp import Effect
 from fl_mcp.kernel import wire
 from fl_mcp.kernel.cell import expand_magics
 from fl_mcp.kernel.host import KernelHost
@@ -404,11 +403,6 @@ def test_wire_methods_are_exactly_what_the_sdk_calls_on_its_session():
 def test_wire_rejects_a_call_outside_the_sdk_surface():
     with pytest.raises(ValidationError):
         wire.parse_from_kernel(b'{"op": "call", "id": 1, "method": "close", "args": {}}')
-
-
-def test_wire_round_trips_opaque_effect_bytes():
-    effects = (Effect(name="Fruity Parametric EQ 2", chunk=b"\xff\x00\x10"),)
-    assert wire.decode_result("add_effect", wire.encode_result("add_effect", effects)) == effects
 
 
 # -- review findings: the server never blocks, late signals never misfire ------------

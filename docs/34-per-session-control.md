@@ -35,8 +35,8 @@ A session-mode FL process is never killed by the engine. FL 2026 exposes no
 verified controller-script operation that reloads the current `.flp` in place,
 so the file lane refuses before writing with retryable
 `file_lane_requires_reload`. During a match use the Bridge for notes and the
-control wire for tempo, plugin parameters, and channel levels; automation clips
-and adding effects still have no live equivalent.
+control wire for tempo, plugin parameters, and channel levels; an effect is added
+live by loading its preset, and automation clips still have no live equivalent.
 
 The note plane also requires a tick from a live Bridge process in the last 10
 seconds. `fl-mcp-doctor` reports a stopped tick as not ready instead of treating its

@@ -35,7 +35,6 @@ def trial(monkeypatch, tmp_path):
     monkeypatch.setattr(lifecycle, "reload_fl", lambda *args, **kwargs: touched.append("reload"))
     monkeypatch.setattr(flp, "set_tempo", lambda *args, **kwargs: touched.append("flp.set_tempo"))
     monkeypatch.setattr(flp, "write_automation", lambda *args, **kwargs: touched.append("flp.write_automation"))
-    monkeypatch.setattr(flp, "add_effect", lambda *args, **kwargs: touched.append("flp.add_effect"))
     monkeypatch.setattr(
         "fl_mcp.session.controls.subprocess.run", lambda *args, **kwargs: touched.append("subprocess")
     )
@@ -48,11 +47,10 @@ def trial(monkeypatch, tmp_path):
     [
         lambda session, _tmp: session.set_tempo(140),  # no control wire: the file fallback
         lambda session, _tmp: session.set_automation(0, [AutomationPoint(position=0, value=0.5)]),
-        lambda session, _tmp: session.add_effect(0, "Fruity Limiter"),
         lambda session, _tmp: session._reload_fl(),
         lambda session, tmp: session.export_offline(tmp / "mix.wav"),
     ],
-    ids=["tempo-file-fallback", "automation", "add-effect", "reload", "export-offline"],
+    ids=["tempo-file-fallback", "automation", "reload", "export-offline"],
 )
 def test_trial_refuses_every_reopen_path_before_acting(trial, call):
     session, touched, tmp_path = trial

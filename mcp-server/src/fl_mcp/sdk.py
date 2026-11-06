@@ -24,7 +24,6 @@ from fl_mcp import errors
 from fl_mcp.audio import read_wav
 from fl_mcp.contract import SceneNotesResult, SceneSummary
 
-from .flp import Effect
 from .schemas import (
     AutomationPoint,
     AutomationResult,
@@ -87,11 +86,6 @@ class _ChannelLevelsArgs(BaseModel):
     volume: NormalizedValue | None = None
     pan: Annotated[float, Field(strict=True, ge=-1, le=1)] | None = None
     pitch: Annotated[int, Field(strict=True, ge=-48, le=48)] | None = None
-
-
-class _AddEffectArgs(BaseModel):
-    insert_index: SdkChannel
-    plugin_name: Annotated[str, Field(strict=True, min_length=1)]
 
 
 class _RouteArgs(BaseModel):
@@ -287,17 +281,6 @@ class FL:
         """Set FL's tempo now; returns the tempo FL reports afterwards."""
         return self._session.set_tempo(bpm)
 
-    def add_effect(self, insert_index: int, plugin_name: str) -> tuple[Effect, ...]:
-        """Add Fruity Parametric EQ 2 to Master's first slot, when empty (FL's slot 1,
-        the one supported placement); returns the effect now in that slot.
-        Outside a match only.
-        """
-        try:
-            args = _AddEffectArgs(insert_index=insert_index, plugin_name=plugin_name)
-        except ValidationError as exc:
-            raise errors.invalid_argument("fl.add_effect", str(exc)) from None
-        return self._session.add_effect(args.insert_index, args.plugin_name)
-
     def route(self, channel: str | int, mixer_track: int) -> ChannelRoute:
         """Play a channel (index, exact name, or a unique part of the name) through
         ``mixer_track``, where 0 is the master. Returns the mixer track FL now routes it to.
@@ -461,14 +444,14 @@ class FL:
         self._session.undo()
 
     def file_edit(self) -> AbstractContextManager[None]:
-        """Batch edits that rewrite the saved song (automation, effects) into one FL reopen.
+        """Batch edits that rewrite the saved song (automation) into one FL reopen.
 
         Outside a match only: during a match FL is never reopened, so this raises.
         Notes, tempo, parameters and levels apply live and need no batching::
 
             with fl.file_edit():
                 fl.track("Bass").set_automation(points)
-                fl.add_effect(0, "Fruity Parametric EQ 2")
+                fl.track("Lead").set_automation(more_points)
         """
         # Each file-lane op rewrites the .flp and normally reloads FL - a full
         # restart; the batch reloads once on exit. Session mode refuses it.

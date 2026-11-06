@@ -260,7 +260,7 @@ def fl_trial_unsupported(action: str) -> ToolError:
         "fl_trial_unsupported",
         f"This FL Studio is a trial, which cannot save or reopen songs, so {action} is not available.",
         "Nothing is lost: your edits are live in FL and render plays them. Notes, tempo, "
-        "parameters and levels all work; saving, automation clips, adding effects and offline "
+        "parameters, levels and loading sounds all work; saving, automation clips and offline "
         "export do not.",
         retryable=False,
     )
@@ -287,7 +287,7 @@ def file_lane_requires_reload() -> ToolError:
     return ToolError(
         "file_lane_requires_reload",
         "This edit rewrites the saved song, which FL would have to reopen; FL is never reopened during a match.",
-        "Notes, tempo, parameters and levels work live. Automation clips and adding effects are "
+        "Notes, tempo, parameters, levels and loading sounds work live. Automation clips are "
         "not available during a match.",
         retryable=False,
     )

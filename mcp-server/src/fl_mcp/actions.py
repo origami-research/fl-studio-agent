@@ -53,7 +53,7 @@ MAX_ACTIONS = 200
 # This many changes of one kind in a row read as one sentence.
 GROUP_AT = 3
 # Calls that rewrite the saved song and reopen FL to apply it.
-SONG_REWRITES = frozenset({"set_automation", "add_effect"})
+SONG_REWRITES = frozenset({"set_automation"})
 # Calls held inside an unfinished fl.file_edit() block, past which they are only counted.
 _MAX_HELD = 10_000
 
@@ -315,14 +315,6 @@ class ActionLog:
         track = self._name(result.channel)
         return [_Entry(f"Replaced the automation on {track} ({_count(len(result.points), 'point')})")]
 
-    def _effect(self, kwargs: Mapping[str, Any], effects: tuple[Any, ...]) -> list[_Entry]:
-        # The names are FL's readback of that insert after the change.
-        names = [effect.name for effect in effects]
-        where = _where(kwargs["insert_index"])
-        if kwargs["plugin_name"] in names:
-            return [_Entry(f"Added {kwargs['plugin_name']} to {where}")]
-        return [_Entry(f"Changed the effects on {where}; it now has {', '.join(names) or 'none'}")]
-
     def _route(self, kwargs: Mapping[str, Any], result: ChannelRoute) -> list[_Entry]:
         return [_Entry(f"Routed {self._name(result.channel)} to {_where(result.mixer_track)}")]
 
@@ -397,7 +389,6 @@ _CALLS: dict[str, Callable[[ActionLog, Mapping[str, Any], Any], list[_Entry]]] =
     "set_plugin_param": ActionLog._param,
     "set_tempo": ActionLog._tempo,
     "set_automation": ActionLog._automation,
-    "add_effect": ActionLog._effect,
     "route_channel": ActionLog._route,
     "set_send": ActionLog._send,
     "set_preset": ActionLog._preset,
