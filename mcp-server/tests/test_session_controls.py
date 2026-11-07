@@ -59,6 +59,24 @@ def test_set_tempo_live_returns_the_readback_not_the_request():
     assert ("mixer.setCurrentTempo", [130.0, 1]) in control.calls
 
 
+def fake_render_cli(monkeypatch, render):
+    """Stand in for FL's command-line render, and only for it.
+
+    ``subprocess.run`` is one attribute of the process-wide ``subprocess`` module, so a plain
+    patch also catches the session's other callers: on macOS the link looks FL up with
+    ``pgrep`` (``fl_pids``), and a fake built for the render rejected that call
+    (the v0.1.7 publish run, on a macOS runner; Linux CI never calls ``pgrep``).
+    """
+    real_run = subprocess.run
+
+    def run(command, *args, **kwargs):
+        if command and command[0] == str(FakePlatform.render_executable):
+            return render(command, *args, **kwargs)
+        return real_run(command, *args, **kwargs)
+
+    monkeypatch.setattr(subprocess, "run", run)
+
+
 def test_export_offline_saves_then_subprocesses_the_resolved_fl_path(monkeypatch, tmp_path):
     project = tmp_path / "live.flp"
     output = tmp_path / "mix.wav"
@@ -71,7 +89,7 @@ def test_export_offline_saves_then_subprocesses_the_resolved_fl_path(monkeypatch
         commands.append(command)
         project.with_suffix(".wav").write_bytes(b"RIFF....WAVE")
 
-    monkeypatch.setattr("fl_mcp.session.controls.subprocess.run", render)
+    fake_render_cli(monkeypatch, render)
     control = FakeControl(hello=HELLO, handlers={"ctl.save": lambda args: events.append("save")})
     session, _ = make_session(control=control, project=project)
 
@@ -318,7 +336,7 @@ def test_export_offline_raises_when_cli_wav_is_missing_or_empty(monkeypatch, tmp
         if wav is not None:
             project.with_suffix(".wav").write_bytes(wav)
 
-    monkeypatch.setattr("fl_mcp.session.controls.subprocess.run", render)
+    fake_render_cli(monkeypatch, render)
     control = FakeControl(hello=HELLO, handlers={"ctl.save": lambda args: None})
     session, _ = make_session(control=control, project=project)
 
@@ -334,7 +352,7 @@ def test_export_offline_maps_a_subprocess_timeout_to_render_failed(monkeypatch, 
     def render(command, check, timeout, env=None):
         raise subprocess.TimeoutExpired(command, timeout)
 
-    monkeypatch.setattr("fl_mcp.session.controls.subprocess.run", render)
+    fake_render_cli(monkeypatch, render)
     control = FakeControl(hello=HELLO, handlers={"ctl.save": lambda args: None})
     session, _ = make_session(control=control, project=project)
 
@@ -968,7 +986,7 @@ def test_render_child_never_inherits_the_live_session_identity(monkeypatch, tmp_
         seen["env"] = env
         raise subprocess.TimeoutExpired(command, timeout)
 
-    monkeypatch.setattr("fl_mcp.session.controls.subprocess.run", render)
+    fake_render_cli(monkeypatch, render)
     control = FakeControl(hello=HELLO, handlers={"ctl.save": lambda args: None})
     session, _ = make_session(control=control, project=project)
 
