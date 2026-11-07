@@ -34,7 +34,10 @@ SERVER_KEY = "fl-studio"  # the name clients list it under; matches the server's
 REGISTRY_NAME = "io.github.origami-research/fl-studio-agent"
 REPO_URL = "https://github.com/origami-research/fl-studio-agent"
 TITLE = "FL Studio Agent"
-DESCRIPTION = "Drive FL Studio from an AI agent through one Python tool: write notes, mix, check what sounds, render and listen."
+DESCRIPTION = "Drive FL Studio from an AI agent with one Python tool: write notes, mix, render and listen."
+# The MCP Registry rejects a description over 100 characters (HTTP 422 "expected length <= 100");
+# v0.1.7's 113-character description failed its registry publish after PyPI and the tag were out.
+REGISTRY_DESCRIPTION_MAX = 100
 PYTHON = "3.12"
 BUNDLE_PYTHON = ">=3.11,<3.13"  # the bundle's uv honors a project's requires-python
 UVX_ARGS = ["--python", PYTHON]
@@ -305,6 +308,9 @@ def main(argv: list[str]) -> int:
     if argv and not check:
         print(__doc__)
         return 2
+    if len(DESCRIPTION) > REGISTRY_DESCRIPTION_MAX:
+        print(f"DESCRIPTION is {len(DESCRIPTION)} characters; the MCP Registry accepts at most {REGISTRY_DESCRIPTION_MAX}")
+        return 1
     stale = []
     for path, content in outputs().items():
         current = path.read_text(encoding="utf-8") if path.is_file() else None
