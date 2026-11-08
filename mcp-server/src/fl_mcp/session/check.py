@@ -3,8 +3,11 @@
 Plays a short span and polls FL's own mixer meters (``mixer.getTrackPeaks``,
 API v1: the current peak of a mixer track, 1.0 = 0 dBFS), keeping each track's
 loudest reading. A channel is heard on the mixer track it is routed to
-(``channels.getTargetFxTrack``, carried by ``state.snapshot``). Every call is a
-plain module call through the controller, so any installed controller serves it.
+(``channels.getTargetFxTrack``, carried by ``state.snapshot``). Each sweep reads
+every track in one controller op (``state.peaks``, controller 0.2.5): one request
+per track, 24 every 50 ms on the 23-channel default project while FL played 23
+sampled instruments, left FL not answering mid-playback (#317). Playback starts
+only once FL answers and its stop is sent again if FL missed it (playback.py).
 
 What the meters cannot say is reported as such, never guessed: two channels on
 one mixer track are measured together, and a channel routed straight to the
@@ -21,9 +24,10 @@ from collections.abc import Callable, Sequence
 from typing import TYPE_CHECKING
 
 from fl_mcp import errors
+from fl_mcp.controller_version import controller_protocol_matches
 from fl_mcp.schemas import CHECK_MAX_BARS, Channel, ChannelCheck, CheckResult, MixerTrack, SessionState
 
-from . import controls
+from . import controls, playback
 from .controls import BEATS_PER_BAR, FL_SONGLENGTH_ABSTICKS
 
 if TYPE_CHECKING:
@@ -31,13 +35,15 @@ if TYPE_CHECKING:
 
 # FL's mixer track 0 is the master.
 MASTER = 0
-# getTrackPeaks mode: the louder of left and right (IL API stubs, midi.PEAK_LR).
-PEAK_LR = 2
 # At or below -60 dBFS a track is silent: the threshold render uses for a silent mix.
 SILENCE_DBFS = -60.0
 # Pause between meter sweeps. FL's meters fall back slowly enough that a hit
-# between two sweeps still reads near its peak on the next one.
-PEAK_POLL_SECONDS = 0.05
+# between two sweeps still reads near its peak on the next one; until #317 a sweep
+# came every 0.05 s.
+PEAK_POLL_SECONDS = 0.15
+# What a check says when FL did not confirm the stop after it played.
+MAY_STILL_PLAY = "FL did not confirm it stopped after the meter check, so it may still be playing."
+STOP_FIX = "Stop FL's playback (space bar in FL) if it is still playing, then retry once FL answers."
 # After stopping a song that was already playing, let its meters fall to silence.
 METER_DECAY_SECONDS = 0.5
 
@@ -55,13 +61,17 @@ def check(
         raise errors.invalid_argument("check", f"start_bar must be a whole number from 1, got {start_bar!r}")
     if isinstance(bars, bool) or not isinstance(bars, int) or not 1 <= bars <= CHECK_MAX_BARS:
         raise errors.invalid_argument("check", f"bars must be a whole number from 1 to {CHECK_MAX_BARS}, got {bars!r}")
-    if session._ensure_hello() is None:
+    hello = session._ensure_hello()
+    if hello is None:
         raise errors.fl_stopped_answering("nothing could be played") if session.link.stopped_answering else errors.ToolError(
             "control_plane_unavailable",
             "FL Studio is not answering, so nothing could be played.",
             "FL may still be starting. Retry the check in a moment.",
             retryable=True,
         )
+    if not controller_protocol_matches(hello.script_ver):
+        # An older controller has no state.peaks: refuse before FL plays, not on the first sweep.
+        raise errors.controller_outdated("state.peaks")
     link = session.link
     state = session.snapshot()
     if state.tempo_bpm is None or not state.ppq:
@@ -78,6 +88,7 @@ def check(
     # a render) must not read as sound in this one.
     sleep(METER_DECAY_SECONDS)
     link.command("transport.setSongPos", [start_beat * state.ppq, FL_SONGLENGTH_ABSTICKS])
+    playback.confirm_answering(session, "control_plane_unavailable", "the meter check")
     peaks = dict.fromkeys(tracks, 0.0)
     try:
         # Inside the try: a start FL parks and applies late still meets the stop
@@ -85,13 +96,26 @@ def check(
         link.command("transport.start")
         deadline = clock() + seconds
         while True:
-            for track in tracks:
-                peaks[track] = max(peaks[track], _peak(session, track))
+            for track, peak in _peaks(session, tracks).items():
+                peaks[track] = max(peaks[track], peak)
             if clock() >= deadline:
                 break
             sleep(PEAK_POLL_SECONDS)
-    finally:
-        link.command("transport.stop")
+    except errors.ToolError as failed:
+        # A sweep FL did not answer (#317) is when the stop is most likely missed too: say so.
+        if playback.stop(session) is None:
+            raise
+        raise errors.ToolError(
+            failed.category, f"{failed.message} {MAY_STILL_PLAY}", STOP_FIX, retryable=failed.retryable
+        ) from failed
+    except BaseException:
+        playback.stop(session)
+        raise
+    stop_error = playback.stop(session)
+    if stop_error is not None:
+        raise errors.ToolError(
+            stop_error.category, f"{stop_error.message} {MAY_STILL_PLAY}", STOP_FIX, retryable=True
+        )
 
     levels = {track: _dbfs(peak) for track, peak in peaks.items()}
     results = _attribute(state, levels, playing, f"bars {start_bar}-{start_bar + bars - 1}")
@@ -105,12 +129,17 @@ def check(
     )
 
 
-def _peak(session: FLSession, track: int) -> float:
-    """One meter reading: FL's current peak on a mixer track, 1.0 = 0 dBFS."""
-    value = session.link.call("mixer.getTrackPeaks", [track, PEAK_LR])
-    if isinstance(value, bool) or not isinstance(value, int | float):
-        raise errors.fl_api_error("mixer.getTrackPeaks", f"returned {value!r}, not a level")
-    return float(value)
+def _peaks(session: FLSession, tracks: Sequence[int]) -> dict[int, float]:
+    """One meter sweep in one round trip: FL's current peak on each mixer track, 1.0 = 0 dBFS."""
+    answer = session.link.call("state.peaks", [list(tracks)])
+    try:
+        peaks = {int(track): value for track, value in answer}
+    except (TypeError, ValueError) as exc:
+        raise errors.fl_api_error("state.peaks", f"malformed answer {answer!r}") from exc
+    bad = {t: v for t, v in peaks.items() if isinstance(v, bool) or not isinstance(v, int | float)}
+    if bad or sorted(peaks) != sorted(tracks):
+        raise errors.fl_api_error("state.peaks", f"returned {answer!r}, not a level for each of tracks {list(tracks)}")
+    return {track: float(value) for track, value in peaks.items()}
 
 
 def _dbfs(peak: float) -> float | None:

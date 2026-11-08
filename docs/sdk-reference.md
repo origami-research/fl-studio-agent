@@ -137,6 +137,7 @@ The list's `.skipped` holds the indices of the channels left out, and the action
 When the session has no copy of the song FL opened, it cannot tell, and every channel is recorded.
 If no channel has notes in those bars, it refuses before playing; a list of channels records them anyway.
 
+Every render plays only once FL answers, and a stop FL misses afterwards is sent again once FL answers.
 Solo and mute set the channel mutes in FL's channel rack explicitly, all in one controller call that reads each one back, and play only once FL answers again; afterwards they set back exactly the channels they changed in one call, also when the render fails.
 If FL does not answer the restore, it waits up to 30 s for FL and sends it once more; if FL still does not answer, the error names every channel that may still be muted (or unmuted), and the next solo or mute render sets them back first.
 FL's own channel solo is not used, because un-soloing unmutes every channel and would lose the user's mutes.
@@ -201,9 +202,12 @@ for start in np.arange(0, wav.span.seconds, 240 / wav.span.tempo_bpm):
 
 **Availability:** live-only. Plays `bars` bars (1 to 8) from `start_bar` and
 polls FL's own mixer meters (`mixer.getTrackPeaks`) for each channel's mixer
-track and the master, keeping the loudest reading. FL is stopped afterwards
-(stopped first if it was playing); no mute, solo or note changes. It takes
-about the span's length in real time.
+track and the master, keeping the loudest reading. Each sweep reads every track
+in one controller call, every 0.15 s, and playback starts only once FL answers.
+FL is stopped afterwards (stopped first if it was playing); a stop FL misses is
+sent again once FL answers, and if FL never confirms it the call fails saying FL
+may still be playing. No mute, solo or note changes. It takes about the span's
+length in real time.
 
 Each `ChannelCheck` has `name`, `sounded`, `peak_dbfs`, `mixer_track` and
 `reason`. A silent channel names why when FL or the session's note record says

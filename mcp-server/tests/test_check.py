@@ -1,15 +1,17 @@
 """fl.check(): which channels actually sounded, from FL's own mixer meters.
 
 The real FLSession, link and check run against a scripted FL controller whose
-meters (``mixer.getTrackPeaks``) report simulated peaks while "playing". The
-rules held here: a silent channel is reported silent with the reason FL shows,
-a level is never claimed for a channel that cannot be told apart, FL is left
-stopped, and no mute or solo state is touched. What the meters read on real FL
+meters (``state.peaks``, every track in one op) report simulated peaks while
+"playing". The rules held here: a silent channel is reported silent with the
+reason FL shows, a level is never claimed for a channel that cannot be told
+apart, a sweep is one request however many tracks there are (#317), nothing plays
+until FL answers, FL is left stopped, and no mute or solo state is touched. What the meters read on real FL
 is the live gate (tests/e2e), not this file.
 """
 
 from __future__ import annotations
 
+import math
 import shutil
 from pathlib import Path
 from typing import Any
@@ -19,7 +21,7 @@ from session_fakes import FIVE_CHANNEL_PROJECT, HELLO, FakeControl, isolate_spoo
 
 from fl_mcp import errors
 from fl_mcp.schemas import ControlResponse, Note, Target
-from fl_mcp.session.check import METER_DECAY_SECONDS
+from fl_mcp.session.check import METER_DECAY_SECONDS, PEAK_POLL_SECONDS
 from fl_mcp.session.controls import overlaps_looped
 
 
@@ -42,6 +44,8 @@ class FakeClock:
         self.sleeps.append(seconds)
         self.now += seconds
 
+
+BUSY = errors.ToolError("control_plane_unavailable", "FL Studio is busy and did not answer in time.", "Retry.")
 
 # idx, name, mixer track, muted
 CHANNELS = [
@@ -73,7 +77,7 @@ class PlayingFL(FakeControl):
                 "transport.setSongPos": lambda args: None,
                 "transport.start": lambda args: self._play(True),
                 "transport.stop": lambda args: self._play(False),
-                "mixer.getTrackPeaks": lambda args: self._peak(peaks, args),
+                "state.peaks": lambda args: [[track, self._peak(peaks, track)] for track in args[0]],
             },
         )
 
@@ -98,9 +102,7 @@ class PlayingFL(FakeControl):
     def _play(self, playing: bool) -> None:
         self.playing = playing
 
-    def _peak(self, peaks: dict[int, list[float]], args: list[Any]) -> float:
-        track, mode = args
-        assert mode == 2, "the louder of left and right"
+    def _peak(self, peaks: dict[int, list[float]], track: int) -> float:
         if not self.playing:
             return 0.0
         n = self.reads.get(track, 0)
@@ -166,12 +168,88 @@ def test_check_plays_from_the_bar_asked_and_leaves_fl_stopped_with_mutes_untouch
 
     ops = control.ops()
     assert ("transport.setSongPos", [2 * 4 * 96, 2]) in control.calls  # bar 3 in absolute ticks
-    assert ops.index("transport.setSongPos") < ops.index("transport.start") < ops.index("mixer.getTrackPeaks")
+    assert ops.index("transport.setSongPos") < ops.index("transport.start") < ops.index("state.peaks")
     assert ops[-1] == "transport.stop" and control.playing is False
     assert not [op for op in ops if "mute" in op.lower() or "solo" in op.lower()]
     # Earlier meters settle first, then one bar at 120 BPM: two seconds of polling.
     assert clock.sleeps[0] == METER_DECAY_SECONDS
     assert 1.95 <= sum(clock.sleeps[1:]) < 2.2
+
+
+def test_each_sweep_reads_every_track_in_one_request(song):
+    """Issue #317: on the 23-channel default project a sweep was one request per mixer
+    track, 24 every 50 ms while FL played 23 sampled instruments, and FL stopped
+    answering mid-playback. Now one op reads all of them, every PEAK_POLL_SECONDS."""
+    control = PlayingFL({1: [0.5]})
+    clock = FakeClock()
+    seeded(control, clock, song).check(1, 2)
+
+    sweeps = [args for op, args in control.calls if op == "state.peaks"]
+    assert sweeps and all(args == [[0, 1, 2, 3, 4, 5]] for args in sweeps)  # the master and every routed track
+    assert "mixer.getTrackPeaks" not in control.ops()
+    assert len(sweeps) == 1 + math.ceil(4.0 / PEAK_POLL_SECONDS - 1e-9)  # four seconds of play, one op per sweep
+    assert 0.1 <= PEAK_POLL_SECONDS <= 0.2  # FL's meters hold a hit long enough to read it
+
+
+def test_nothing_plays_until_fl_answers(song):
+    control = PlayingFL({1: [0.5]})
+    control.handlers["ping"] = lambda args: (_ for _ in ()).throw(BUSY) if "transport.setSongPos" in control.ops() else "pong"
+    with pytest.raises(errors.ToolError, match="nothing was played") as excinfo:
+        seeded(control, FakeClock(), song).check(1, 1)
+
+    assert excinfo.value.retryable is True
+    assert "transport.start" not in control.ops()
+
+
+def test_a_stop_fl_misses_is_sent_again_once_fl_answers(song):
+    control = PlayingFL({1: [0.5]})
+    stops = []
+
+    def stop(args):
+        stops.append(control.ops().count("ping"))
+        if len(stops) == 1:
+            raise BUSY
+        control.playing = False
+
+    control.handlers["transport.stop"] = stop
+    result = seeded(control, FakeClock(), song).check(1, 1)
+
+    assert by_name(result)["Kick"].sounded is True
+    assert control.playing is False and len(stops) == 2
+    assert stops[1] == stops[0] + 1  # between the two stops the session waited for FL to answer
+
+
+def test_a_stop_fl_never_confirms_is_an_error_saying_fl_may_still_be_playing(song):
+    control = PlayingFL({1: [0.5]})
+    control.handlers["transport.stop"] = lambda args: (_ for _ in ()).throw(BUSY)
+    with pytest.raises(errors.ToolError, match="may still be playing") as excinfo:
+        seeded(control, FakeClock(), song).check(1, 1)
+
+    assert excinfo.value.retryable is True
+    assert control.ops().count("transport.stop") == 2
+
+
+def test_a_sweep_fl_does_not_answer_also_says_fl_may_still_be_playing(song):
+    """The #317 freeze: a sweep timed out, then the stop did too. The error names both."""
+    control = PlayingFL({1: [0.5]})
+    control.handlers["state.peaks"] = lambda args: (_ for _ in ()).throw(BUSY)
+    control.handlers["transport.stop"] = lambda args: (_ for _ in ()).throw(BUSY)
+    with pytest.raises(errors.ToolError) as excinfo:
+        seeded(control, FakeClock(), song).check(1, 1)
+
+    assert excinfo.value.message.startswith("FL Studio is busy")
+    assert "may still be playing" in excinfo.value.message
+    assert control.ops().count("transport.stop") == 2
+
+
+def test_an_older_controller_is_refused_before_fl_plays(song):
+    control = PlayingFL({1: [0.5]})
+    control.hello = HELLO.model_copy(update={"script_ver": "0.2.4"})
+    with pytest.raises(errors.ToolError, match="older than this server") as excinfo:
+        seeded(control, FakeClock(), song).check(1, 1)
+
+    assert "fl-mcp-install" in excinfo.value.fix
+    assert "transport.start" not in control.ops()
 
 
 def test_check_stops_a_playing_song_first_and_lets_its_meters_fall(song):
@@ -186,7 +264,7 @@ def test_check_stops_a_playing_song_first_and_lets_its_meters_fall(song):
 
 def test_check_stops_fl_even_when_a_meter_read_fails(song):
     control = PlayingFL({})
-    control.handlers["mixer.getTrackPeaks"] = lambda args: ControlResponse(id=0, ok=False, err="TypeError: bad")
+    control.handlers["state.peaks"] = lambda args: ControlResponse(id=0, ok=False, err="TypeError: bad")
     clock = FakeClock()
     with pytest.raises(errors.ToolError) as excinfo:
         seeded(control, clock, song).check(1, 2)

@@ -97,6 +97,9 @@ composites executed script-side:
 - `ctl.set_mutes([[channel, 0|1], ...])` → `[[channel, muted], ...]`: sets many channel
   mutes explicitly in one round trip and reads each back; a solo or mute render uses it
   once each way (issue #309).
+- `state.peaks([track, ...])` → `[[track, peak], ...]`: every requested mixer track's
+  current meter peak (`mixer.getTrackPeaks`, louder of left and right, 1.0 = 0 dBFS) in
+  one round trip; each `fl.meters` sweep is one call (issue #317).
 - `state.plugin_params(chan_or_track)` → `[{idx, name, value}]` - built from
   `plugins.getParamCount/getParamName/getParamValue`. Potentially thousands of params
   (VSTs) - paginated by the op's args and chunked in the response.

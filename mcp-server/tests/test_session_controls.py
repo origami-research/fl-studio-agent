@@ -255,8 +255,9 @@ def _verified_live_render(monkeypatch, tmp_path, stop):
     return session, control
 
 
-def test_live_render_retries_an_unacknowledged_stop_after_capture(monkeypatch, tmp_path):
-    """Regression: a slow first stop acknowledgement cannot discard a verified WAV."""
+def test_live_render_resends_an_unacknowledged_stop_once_fl_answers(monkeypatch, tmp_path):
+    """Regression: a slow first stop acknowledgement cannot discard a verified WAV; the
+    stop is sent again after FL answers a ping (playback.stop)."""
     stops = 0
 
     def stop(args):
@@ -268,7 +269,9 @@ def test_live_render_retries_an_unacknowledged_stop_after_capture(monkeypatch, t
     session, control = _verified_live_render(monkeypatch, tmp_path, stop)
 
     assert controls._live_render(session, tmp_path / "mix.wav", 1.0) == tmp_path / "mix.wav"
-    assert [op for op, _ in control.calls].count("transport.stop") == 2
+    ops = [op for op, _ in control.calls]
+    first = ops.index("transport.stop")
+    assert ops.count("transport.stop") == 2 and "ping" in ops[first:ops.index("transport.stop", first + 1)]
     assert [op for op, _ in session.transport.sent] == ["capture_stop", "capture_start", "capture_stop"]
 
 

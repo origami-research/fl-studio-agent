@@ -40,6 +40,7 @@ from fl_mcp.schemas import (
     StemsReceipt,
 )
 
+from . import playback
 from .audition import Rack, audition
 from .link import LIVE_READ_TIMEOUT_SECONDS, LIVE_SET_TIMEOUT_SECONDS
 
@@ -335,6 +336,7 @@ def _live_render(
     refused; a range or a soloed render may be silent and is returned as it is.
     """
     response_timeout = min(10.0, max(2.0, seconds / 2.0 + 2.0))
+    playback.confirm_answering(session, "render_failed", "the render")
     start = _capture_start(session, seconds, response_timeout)
     if not start.ok:
         log.warning("the Bridge refused capture_start: %s", start.err)
@@ -365,20 +367,11 @@ def _live_render(
         time.sleep(seconds + 1.0)
     finally:
         try:
-            session.link.command("transport.stop")
-        except errors.ToolError as exc:
-            stop_error = exc
+            stop_error = playback.stop(session)
         finally:
             with session._transport_use():
                 stopped_cmd = session.transport.send("capture_stop")
                 stopped = session.transport.await_response(stopped_cmd, timeout=response_timeout)
-        if stop_error is not None:
-            try:
-                session.link.command("transport.stop")
-            except errors.ToolError as exc:
-                stop_error = exc
-            else:
-                stop_error = None
 
     stop_detail = (
         f"; transport.stop was unacknowledged: {stop_error.message}"
@@ -453,8 +446,8 @@ def _live_render(
         )
     if stop_error is not None:
         log.warning(
-            "transport.stop was unacknowledged after two attempts; FL may still be playing; "
-            "the next transport command re-seats it: %s",
+            "transport.stop was unacknowledged, also once FL was given time to answer; FL may still "
+            "be playing; the next transport command re-seats it: %s",
             stop_error.message,
         )
     output.parent.mkdir(parents=True, exist_ok=True)

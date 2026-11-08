@@ -89,7 +89,7 @@ def trial_fl() -> FakeControl:
             "transport.setSongPos": lambda args: None,
             "transport.start": lambda args: state.update(playing=True),
             "transport.stop": lambda args: state.update(playing=False),
-            "mixer.getTrackPeaks": lambda args: 0.5 if state["playing"] and args[0] in (0, 1) else 0.0,
+            "state.peaks": lambda args: [[t, 0.5 if state["playing"] and t in (0, 1) else 0.0] for t in args[0]],
         },
     )
 

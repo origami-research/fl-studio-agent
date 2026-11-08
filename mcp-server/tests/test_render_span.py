@@ -19,6 +19,7 @@ from session_fakes import (
 from fl_mcp import errors
 from fl_mcp.schemas import Note, SpoolResponse
 from fl_mcp.session import FLSession, controls
+from fl_mcp.session.playback import ANSWER_BEFORE_PLAY_SECONDS
 
 
 def _rig(monkeypatch, tmp_path, handlers, *, project=None):
@@ -165,6 +166,32 @@ def test_a_bar_range_plays_from_its_bar_and_records_only_its_length(monkeypatch,
     assert receipt.span.seconds == pytest.approx(4.0)
     assert _captured_seconds(transport) == pytest.approx([4.0 + controls.RENDER_TAIL_SECONDS])
     assert _set_pos(control) == [[8 * 4 * 96, controls.FL_SONGLENGTH_ABSTICKS]]
+
+
+def test_a_render_plays_only_once_fl_answers(monkeypatch, tmp_path):
+    """Every render, solo or not, starts recording and playing only after FL answers a ping (#317)."""
+    session, control, transport = _rig(monkeypatch, tmp_path, arrangement())
+    answered = control.send_request
+    before_play = []
+
+    def send_request(op, args=None, kwargs=None, timeout=2.0):
+        if op == "ping" and timeout == ANSWER_BEFORE_PLAY_SECONDS:
+            before_play.append([sent for sent, _ in transport.sent])
+            if fl_busy:
+                raise BUSY
+        return answered(op, args, kwargs, timeout)
+
+    monkeypatch.setattr(control, "send_request", send_request)
+    fl_busy = False
+    session.render_wav(tmp_path / "mix.wav")
+    assert before_play == [[]]  # before the Bridge is even asked to record
+
+    fl_busy = True
+    transport.sent.clear()
+    with pytest.raises(errors.ToolError, match="nothing was played") as excinfo:
+        session.render_wav(tmp_path / "mix.wav")
+    assert excinfo.value.category == "render_failed" and excinfo.value.retryable
+    assert transport.sent == [] and [op for op, _ in control.calls].count("transport.start") == 1
 
 
 def test_the_whole_song_still_starts_where_every_render_has(monkeypatch, tmp_path):
@@ -339,7 +366,7 @@ def test_fl_going_silent_names_every_channel_it_may_have_left_and_the_next_rende
 
     message = excinfo.value.message
     assert "These may still be muted: ch0 (0), ch1 (1). These may still be unmuted: ch2 (2)." in message
-    assert "already failed: FL did not answer after the channel mutes changed" in message
+    assert "already failed: FL did not answer before the render, so nothing was played" in message
     assert "next solo or mute render sets them back" in excinfo.value.fix
     assert rack.muted == {0: True, 1: True, 2: False} and transport.sent == []
 

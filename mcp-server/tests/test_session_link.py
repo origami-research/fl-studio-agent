@@ -422,6 +422,18 @@ def test_a_real_refusal_is_not_retried():
     assert len(control.calls) == 1 and clock.sleeps == []
 
 
+def test_a_composite_an_older_controller_lacks_says_to_rerun_the_installer():
+    """A server update adds composites (state.peaks, #317) that a controller installed by
+    an older release refuses as unknown; the error says how to fix it, not "check the arguments"."""
+    old = ControlResponse(id=1, ok=False, err="unknown composite op 'state.peaks'")
+    link, control, _ = _link({"state.peaks": lambda args: old})
+    with pytest.raises(errors.ToolError) as excinfo:
+        link.call("state.peaks", [[0, 1]])
+    assert excinfo.value.category == "fl_api_error"
+    assert "older than this server" in excinfo.value.message and "fl-mcp-install" in excinfo.value.fix
+    assert len(control.calls) == 1
+
+
 def test_a_channel_is_always_fls_global_index_never_the_filter_groups():
     """With a channel rack filter group active, FL counts an unflagged index within the
     group (Lane A, 2026-11-04); every channel op gets FL's global-index flag."""

@@ -49,6 +49,9 @@ STOPPED_AFTER_SECONDS = 30.0
 # How often a live link re-reads which FL process is answering it (a process listing).
 PID_RECHECK_SECONDS = 30.0
 
+# How the controller refuses a composite op it does not have (device_FLMCP._dispatch):
+# an older install than this server.
+UNKNOWN_COMPOSITE = "unknown composite op"
 # FL can stay "unsafe at current time" for a few seconds after a load; give the
 # controller's OnIdle deferral time to land a mutating call (v1-measured).
 LIVE_SET_TIMEOUT_SECONDS = 8.0
@@ -344,12 +347,15 @@ class ControlLink:
     def call(self, op: str, args: list[Any] | None = None, *, timeout: float = LIVE_READ_TIMEOUT_SECONDS) -> Any:
         """One controller call, converted to policy once (addendum A11): FL's
         answer, or a typed error. A refusal that outlived the retries ->
-        operation_unsafe; any other refusal -> fl_api_error with FL's own detail."""
+        operation_unsafe; a composite the installed controller lacks -> controller_outdated;
+        any other refusal -> fl_api_error with FL's own detail."""
         resp = self.request(op, args, timeout=timeout)
         if not resp.ok:
             detail = resp.err or "no detail"
             if errors.is_operation_unsafe(detail):
                 raise errors.operation_unsafe(op)
+            if detail.startswith(UNKNOWN_COMPOSITE):
+                raise errors.controller_outdated(op)
             raise errors.fl_api_error(op, detail)
         return resp.ret
 

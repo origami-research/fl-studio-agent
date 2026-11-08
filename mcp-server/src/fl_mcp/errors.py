@@ -193,6 +193,17 @@ def fl_api_error(op: str, detail: str) -> ToolError:
     )
 
 
+def controller_outdated(op: str) -> ToolError:
+    """FL's controller script answered that it has no such composite op: it was installed
+    by an older release (the composites live in the script, docs/05)."""
+    return ToolError(
+        "fl_api_error",
+        f"FL Studio's installed controller script has no '{op}': it is older than this server.",
+        "Close FL Studio, run `uvx --python 3.12 --from fl-studio-agent fl-mcp-install` again "
+        "(on Windows from a terminal opened as administrator), then reopen FL Studio.",
+    )
+
+
 def invalid_argument(call: str, detail: str) -> ToolError:
     return ToolError(
         "invalid_argument",

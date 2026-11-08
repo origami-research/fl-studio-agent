@@ -2,8 +2,8 @@
 
 A render with ``solo`` or ``mute`` sets channel mutes in FL's channel rack explicitly
 (``muteChannel(index, 1 or 0)``, never a toggle, so setting one twice is harmless), all
-of them in one controller op (``ctl.set_mutes``) that reads every one back, then waits
-until FL answers again before anything plays. One op each way, not one per channel: a
+of them in one controller op (``ctl.set_mutes``) that reads every one back; the render
+then plays only once FL answers again (playback.py). One op each way, not one per channel: a
 solo render on the 23-channel agent project sent 44 requests around playback, and FL
 stopped answering midway, leaving 22 channels muted (#309). FL's own channel solo is
 not used: un-soloing unmutes every channel, which would wipe the user's own mutes.
@@ -15,7 +15,7 @@ told apart that way.)
 
 Afterwards exactly the channels it changed are changed back in one op and read back,
 also when the render failed. If FL does not answer, the restore waits up to
-RESTORE_WAIT_SECONDS for it and sends the same op again; if FL still does not answer,
+playback.WAIT_FOR_FL_SECONDS for it and sends the same op again; if FL still does not answer,
 the error names every channel that may still be muted or unmuted, and the session sets
 them back before its next solo or mute render, because the song would otherwise sound
 different from what the model believes.
@@ -35,19 +35,12 @@ from typing import TYPE_CHECKING
 from fl_mcp import errors
 
 from .link import LIVE_SET_TIMEOUT_SECONDS
+from .playback import again_once_answering
 
 if TYPE_CHECKING:
     from .facade import FLSession
 
 log = logging.getLogger(__name__)
-
-# How long FL may take to answer after the mutes change before the render gives up
-# without playing: FL answers in milliseconds when it is well.
-ANSWER_BEFORE_PLAY_SECONDS = 10.0
-# How long a restore FL did not answer waits for FL before sending it once more; the
-# session reports FL as stopped after 30 s of silence (link.STOPPED_AFTER_SECONDS).
-RESTORE_WAIT_SECONDS = 30.0
-
 
 @contextlib.contextmanager
 def audition(session: FLSession, solo: Sequence[int], mute: Sequence[int]) -> Iterator[None]:
@@ -95,8 +88,7 @@ class Rack:
         owed.clear()
 
     def hear(self, solo: Sequence[int], mute: Sequence[int] = ()) -> None:
-        """Only ``solo`` (every channel as it was, when empty) sound, minus ``mute``; returns
-        once FL has every mute and answers again, so nothing plays into a busy FL."""
+        """Only ``solo`` (every channel as it was, when empty) sound, minus ``mute``."""
         want = {i: (i not in solo if solo else muted) or i in mute for i, muted in self.was.items()}
         change = {i: m for i, m in want.items() if m != self._now[i]}
         if not change:
@@ -104,46 +96,16 @@ class Rack:
         self._changed.update(change)  # before the op: a change FL applied but did not confirm is set back too
         set_mutes(self._session, change)
         self._now.update(change)
-        try:
-            self._session.link.call("ping", timeout=ANSWER_BEFORE_PLAY_SECONDS)
-        except errors.ToolError as exc:
-            raise errors.ToolError(
-                "render_failed",
-                f"FL did not answer after the channel mutes changed, so nothing was played: {exc.message}",
-                "Retry the render once FL answers again.",
-                retryable=True,
-            ) from exc
 
     def __exit__(self, exc_type: object, failed: BaseException | None, tb: object) -> None:
         if not self._changed:
             return
         back = {i: self.was[i] for i in self._changed}
-        error = _restore(self._session, back)
+        error = again_once_answering(self._session, lambda: set_mutes(self._session, back), "the channel mute restore")
         if error is None:
             return
         self._session.unrestored_mutes.update({(i, self.names[i]): m for i, m in back.items()})
         raise unrestored(back, self.names, error, failed)
-
-
-def _restore(session: FLSession, back: Mapping[int, bool]) -> errors.ToolError | None:
-    """Set ``back`` in one op; when FL does not take it, wait for FL to answer and send it
-    once more. The last failure, or None when FL confirmed every channel."""
-    try:
-        set_mutes(session, back)
-    except errors.ToolError as first:
-        log.warning("could not set the channel mutes back after a render; waiting for FL: %s", first.message)
-    else:
-        return None
-    try:
-        session.link.call("ping", timeout=RESTORE_WAIT_SECONDS)
-    except errors.ToolError as exc:
-        log.warning("FL did not answer within %gs of a failed mute restore: %s", RESTORE_WAIT_SECONDS, exc.message)
-    try:
-        set_mutes(session, back)
-    except errors.ToolError as again:
-        log.warning("FL did not set the channel mutes back after a render: %s", again.message)
-        return again
-    return None
 
 
 def unrestored(

@@ -491,6 +491,24 @@ def test_channels_are_fls_global_indices_whatever_filter_group_the_rack_shows(mo
     assert muted["ret"] == [[0, True]] and rack.muted == {0: True, 1: False, 2: False, 3: False}
 
 
+def test_peaks_reads_every_requested_track_in_one_round_trip(monkeypatch):
+    """fl.meters' sweep: one request for all tracks, not one per track (#317)."""
+    reads = []
+
+    def peak(track, mode):
+        reads.append((track, mode))
+        return track / 10
+
+    monkeypatch.setattr(flmcp, "mixer", SimpleNamespace(getTrackPeaks=peak))
+
+    result = flmcp._dispatch({"id": 15, "op": "state.peaks", "args": [[0, 3, 7]]})
+
+    assert result == {"id": 15, "ok": True, "ret": [[0, 0.0], [3, 0.3], [7, 0.7]]}
+    assert reads == [(0, 2), (3, 2), (7, 2)]  # midi.PEAK_LR: the louder of left and right
+    refused = flmcp._dispatch({"id": 16, "op": "state.peaks", "args": [0, 3]})
+    assert refused["ok"] is False and "track indices" in refused["err"]
+
+
 # --- MCPTools bridge -------------------------------------------------------
 
 

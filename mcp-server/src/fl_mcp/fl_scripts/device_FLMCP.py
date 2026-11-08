@@ -42,7 +42,7 @@ except ImportError:
     arrangement = channels = device = general = midi = None
     mixer = patterns = playlist = plugins = transport = ui = None
 
-SCRIPT_VER = "0.2.4"
+SCRIPT_VER = "0.2.5"
 
 # ---------------------------------------------------------------------------
 # Wire codec (framing, chunking/reassembly) - flmcp_codec.py beside this file is the single
@@ -466,10 +466,25 @@ def _set_mutes(args, kwargs):
     return [[index, bool(channels.isChannelMuted(index, GLOBAL))] for index, _ in args[0]]
 
 
+# getTrackPeaks mode: the louder of left and right (IL API stubs, midi.PEAK_LR).
+PEAK_LR = 2
+
+
+def _peaks(args, kwargs):
+    """`state.peaks` - every requested mixer track's current meter peak (1.0 = 0 dBFS) in
+    one round trip: [track, ...] -> [[track, peak], ...]. fl.meters reads this once per
+    sweep while FL plays; one request per track (24 every 50 ms on the 23-channel default
+    project) left FL not answering mid-playback (issue #317)."""
+    if kwargs or len(args) != 1 or not isinstance(args[0], list):
+        raise ValueError("peaks requires one list of mixer track indices")
+    return [[track, mixer.getTrackPeaks(track, PEAK_LR)] for track in args[0]]
+
+
 COMPOSITE_OPS = {
     "state.snapshot": lambda args, kwargs: _state_snapshot(),
     "state.undo_probe": lambda args, kwargs: _undo_probe(),
     "state.mixer": lambda args, kwargs: _mixer_tracks(),
+    "state.peaks": _peaks,
     "ctl.save": lambda args, kwargs: transport.globalTransport(
         midi.FPT_Save,
         1,  # [ASSUMED value - live-verify]
