@@ -19,6 +19,8 @@ The stable public surface is deliberately small:
 - `fl.presets(...)` and `fl.set_preset(...)` for a plugin channel's presets.
 - `fl.sounds(...)` to search the stock presets and samples FL ships.
 - `fl.load_sample(...)` and `fl.load_preset(...)` to load one of them into a channel.
+- `fl.new_pattern(...)`, `fl.rename_pattern(...)` and `fl.place(...)` to arrange the song live: a pattern per section, its clips in the playlist.
+- `fl.automate(...)` to move a control over time live (filter sweeps, volume rides, risers).
 
 Notes always go to the channel named by `fl.track(...)`; live Bridge writes select and verify that
 channel first when it is not already selected in FL.
@@ -31,8 +33,9 @@ the current channel list in the message.
 When `FLMCP_SPOOL_ROOT` is set, the session is running a live match and never
 kills or reopens FL. `file_edit()` and every file-lane fallback raise retryable
 `file_lane_requires_reload` before changing the project file. Use Bridge notes
-and wire tempo, parameters, or channel levels instead. Automation clips have no
-live equivalent yet; an effect is added live by loading its preset (`fl.load_preset`).
+and wire tempo, parameters, or channel levels instead. Automation is written live
+with `fl.automate` (pattern automation, not an automation clip); an effect is added
+live by loading its preset (`fl.load_preset`).
 
 ```python
 from fl_mcp.sdk import connect
@@ -167,7 +170,7 @@ Plain objects for model code, since 2026-11-03.
 `fl.scene()` is a digest of the song, what the removed `get_scene` tool returned (`SceneSummary`: tempo, inferred key, the playlist and a digest per channel); `fl.scene("notes", channel=, pattern=)` is every note FL has (`SceneNotesResult`), optionally of one channel (a name or index) and one pattern.
 `fl.mixer` lists the mixer tracks in use (`MixerTrack`: index, name, volume, pan, muted, solo, `effects` as `MixerEffect(mixer_track, slot, plugin)` and `sends` as `MixerSend(source, target, on, level)`; 0 is the master).
 A track is in use when it is the master, a channel plays into it, it holds an effect, it was renamed from FL's "Insert N", or a track in use sends to it; the controller reads it all in one round trip (`state.mixer`).
-`fl.playlist` lists the clips of the song FL opened (`PlaylistClip(track, start, length, pattern, channel)`, beats); the SDK cannot change the playlist, and a trial FL never saves, so it is what FL opened.
+`fl.playlist` lists the clips of the song FL opened (`PlaylistClip(track, start, length, pattern, channel)`, beats), then the clips `fl.place` and `fl.automate` added this session (FL has no clip getter; an added clip's `track` is `None` when FL did not report it).
 `fl.patterns` reads FL's patterns live (`PatternInfo(number, name, beats)`).
 `fl.stock_folder` is FL's `Data/Patches` folder, which run code may read but not change: a `Sound`'s `path` from `fl.sounds` is relative to it, so a sample can be loaded and listened to before it is chosen.
 
@@ -308,6 +311,49 @@ room = fl.sounds("drum room", kind="preset", plugin="Fruity Reeverb 2")[0]
 fl.load_preset(3, room).effect            # MixerEffect(mixer_track=4, slot=0, ...)
 ```
 
+### `fl.new_pattern(name: str, copy_of: int | str | None = None) -> PatternInfo`, `fl.rename_pattern(pattern, name) -> PatternInfo`
+
+**Availability:** live-only (2026-11-09).
+`new_pattern` selects FL's next empty pattern (`patterns.findFirstNextEmptyPat`) and names it; with `copy_of` (a pattern's number or name) FL copies that pattern into it first (`patterns.clonePattern(source, dest)`, controller API 43), and the copy reads as the source's notes.
+`rename_pattern` renames one (`patterns.setPatternName`).
+Each returns `PatternInfo(number, name, beats)` read back from FL.
+Write a pattern's notes with `fl.track(channel, pattern=number)`.
+FL has no call that deletes a pattern.
+
+### `fl.place(pattern: int | str, bars: int | list[int]) -> list[PlacedClip]`
+
+**Availability:** live-only, FL for Windows verified (2026-11-09, [note](research/arrangement-automation-live-2026-11-09.md)).
+Puts a pattern in the song at each bar: FL adds a clip of it there, on a playlist track FL picks.
+FL's controller API has no call that adds a clip, so this uses FL's documented recording: in song mode FL adds the recorded pattern's clip where playback started.
+The engine records the FL MCP effect's mix level at its current value for one beat (inert: the effect passes audio through), so FL plays a moment from each bar.
+FL adds a pattern's clip only where no clip of that pattern starts at or before the bar (live: 11 of 11 added, 4 of 4 after an earlier clip not), so the engine places a pattern's bars from the last back, and refuses a bar after one of its existing clips before anything records; place a copy (`fl.new_pattern(name, copy_of=...)`) there instead.
+A bar past the song's end gets a time marker first, because FL moves the playhead no further than the song's end and a marker extends it.
+FL is left in song mode, so `fl.render` plays the arranged song.
+Clips cannot be moved or removed live; whether `fl.undo()` takes one back was not checked.
+Returns `PlacedClip(pattern, name, bar, beats, track)`; `track` is the playlist track FL newly reports playing at that bar, or `None` when FL reports none (it reports only some clips of notes, and only while it plays), in which case FL's recording ran but the clip is not confirmed.
+If the engine stops waiting for a recording, it asks the controller to stop it and leave FL stopped and not recording (`ctl.cancel`).
+FL asks "What would you like to record?" as a modal before it records unless that question was answered with "Don't show this in the future"; on Windows the engine reads that answer (`HKCU\Software\Image-Line\FL Studio <N>\RMC\PopupRec`) and refuses with the steps until it is set.
+
+### `fl.automate(points, *, bar, param="volume", channel=None, mixer_track=None, slot=None, pattern=None) -> AutomationTake`
+
+**Availability:** live-only, FL for Windows verified (2026-11-09).
+Moves a control over time from `bar`: `points` are `AutomationPoint(position, value)` (beats from `bar`, 0..1 across the control's range, the first at beat 0, joined by straight lines; `tension` is refused).
+The control is a channel's `"volume"`, `"pan"` or instrument parameter (index or name), a mixer track's `"volume"` or `"pan"`, or with `slot` a parameter of that track's effect.
+FL records the moves (`general.processRECEvent`, one value per controller idle tick, while recording in song mode) into a new pattern named after the control, which FL places at `bar`; FL keeps recorded automation in the pattern, not as an automation clip.
+Automating again with `pattern=` at the same bar replaces the moves over the beats given (live: a shorter take replaced only its own span).
+The engine then plays the span back and reads the control (`device.getLinkedValue`) at each idle tick, and raises if FL plays it more than 0.03 from the line asked for.
+It plays in real time twice, so it takes about twice the automation's length.
+Returns `AutomationTake(target, pattern, bar, beats, points, max_error)`, where `points` are FL's playback.
+
+```python
+build = fl.new_pattern("Build")
+fl.track("Lead", pattern=build.number).write(riff, mode="replace")
+fl.place(build.number, 9)
+fl.automate([{"position": 0, "value": 0.15}, {"position": 16, "value": 0.95}],
+            bar=9, channel="Lead", param="cutoff")
+fl.render("song.wav")
+```
+
 ### `fl.undo() -> None`
 
 **Availability:** live-only. Invokes FL's undo command. The session's note
@@ -424,6 +470,8 @@ with `Model.model_validate(...)`.
 | --- | --- |
 | `Note` | Positional or keyword, in this order: `Note(60, 0, 1, 0.8)` is `Note(key=60, start=0, length=1, velocity=0.8)`. `key: int` (MIDI 0–127; note names such as `"C4"` are accepted on construction), `start: float` (beats), `length: float` (beats, >0), `velocity: float` (0–1, default .8), `pan: float` (0–1, default .5), `color: int` (0–15, default 0) |
 | `NoteWriteMode` | Literal `"merge"` or `"replace"` |
+| `PlacedClip` | `pattern: int`, `name: str`, `bar: int`, `beats: float`, `track: int | None` (the playlist track FL newly reported playing there; `None`: not confirmed) |
+| `AutomationTake` | `target: str` (the control), `pattern: PatternInfo`, `bar: int`, `beats: float`, `points: list[AutomationPoint]` (FL's playback, beats from `bar`), `max_error: float` |
 | `AutomationPoint` | `position: float` (beats, >=0), `value: float` (normalized, -0.001–1.001), `tension: float` (-1–1, default 0) |
 | `ChannelLevels` | `channel: int`, `volume: float` (0–1), `pan: float` (-1–1), `pitch_semitones: int` (-48–48) |
 | `Effect` | `name: str`, `chunk: bytes` (opaque FL-authored plugin state) |

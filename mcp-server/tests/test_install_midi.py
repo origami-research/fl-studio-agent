@@ -309,3 +309,12 @@ def test_windows_assignment_warns_when_fl_never_ran_for_this_user():
 def test_windows_assignment_fails_on_a_read_back_mismatch():
     reg = _FakeRegistry([rf"{IL}\FL Studio 26\General"], refuse="Enabled")
     assert install.configure_midi_registry(reg).status == "FAIL"
+
+
+def test_fl_settings_reads_a_section_of_the_newest_fl_key():
+    # FL keeps the questions it was told not to ask again under RMC (live: PopupRec=1).
+    reg = _FakeRegistry([f"{IL}\\FL Studio 21\\RMC", f"{IL}\\FL Studio 26\\RMC"])
+    reg.keys[f"{IL}\\FL Studio 26\\RMC"] = {"PopupRec": "1"}
+
+    assert install.fl_settings("RMC", reg) == {"PopupRec": "1"}
+    assert install.fl_settings("RMC", _FakeRegistry()) == {}

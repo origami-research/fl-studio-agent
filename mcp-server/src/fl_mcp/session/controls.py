@@ -234,7 +234,7 @@ def playing_notes(
 
     Pattern mode loops the selected pattern; song mode plays the playlist. The
     playlist and the notes nobody wrote this session come from the song FL
-    opened (the SDK cannot change the playlist), so without that song the
+    opened, with the clips added this session, so without that song the
     answer is unknown, never assumed. ``tool`` names the caller in a refusal.
     """
     loop_mode = _live_int(session, "transport.getLoopMode")
@@ -270,13 +270,9 @@ def playing_notes(
         raise errors.invalid_argument(tool, f"the song is {bars} bars long; start at bar 1 to {bars}")
     if session.project is None or not session.project.is_file():
         return None
-    project = flp.read(session.project)
     notes = session.all_notes()
-    clips = [
-        clip
-        for clip in project.playlist
-        if clip.position / project.ppq < end and (clip.position + clip.length) / project.ppq > start
-    ]
+    # The song FL opened, plus the clips fl.place and fl.automate added since.
+    clips = [clip for clip in session.playlist() if clip.start < end and clip.start + clip.length > start]
     patterns = {clip.pattern for clip in clips if clip.pattern is not None}
     audio_clips = {clip.channel for clip in clips if clip.channel is not None}
     return {

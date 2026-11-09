@@ -30,12 +30,15 @@ from typing import Any
 
 from fl_mcp.schemas import (
     AutomationResult,
+    AutomationTake,
     ChannelLevels,
     ChannelPreset,
     ChannelRoute,
     ChannelSound,
     CheckResult,
     MixerSend,
+    PatternInfo,
+    PlacedClip,
     PluginParam,
     RenderReceipt,
     StemsReceipt,
@@ -343,6 +346,26 @@ class ActionLog:
         renamed = "" if result.name == sound else f", now named {result.name}"
         return [_Entry(f"Loaded {what} into channel {result.channel}{renamed}")]
 
+    def _new_pattern(self, kwargs: Mapping[str, Any], result: PatternInfo) -> list[_Entry]:
+        source = kwargs.get("copy_of")
+        made = f"pattern {result.number} {result.name}"
+        return [_Entry(f"Made {made}" if source is None else f"Copied pattern {source} into {made}")]
+
+    def _rename_pattern(self, kwargs: Mapping[str, Any], result: PatternInfo) -> list[_Entry]:
+        return [_Entry(f"Renamed pattern {result.number} to {result.name}")]
+
+    def _place(self, kwargs: Mapping[str, Any], result: list[PlacedClip]) -> list[_Entry]:
+        if not result:
+            return []
+        bars = ", ".join(str(c.bar) for c in result)
+        where = "bar" if len(result) == 1 else "bars"
+        return [_Entry(f"Placed {result[0].name} in the song at {where} {bars}")]
+
+    def _automate(self, kwargs: Mapping[str, Any], result: AutomationTake) -> list[_Entry]:
+        last = result.bar + max(1, math.ceil(result.beats / 4 - 1e-9)) - 1
+        span = f"bar {result.bar}" if last == result.bar else f"bars {result.bar}-{last}"
+        return [_Entry(f"Automated {result.target} over {span} in pattern {result.pattern.number}")]
+
     def _check(self, kwargs: Mapping[str, Any], result: CheckResult) -> list[_Entry]:
         return [_Entry(_checked(result))]
 
@@ -393,6 +416,10 @@ _CALLS: dict[str, Callable[[ActionLog, Mapping[str, Any], Any], list[_Entry]]] =
     "set_send": ActionLog._send,
     "set_preset": ActionLog._preset,
     "load_sound": ActionLog._load,
+    "new_pattern": ActionLog._new_pattern,
+    "rename_pattern": ActionLog._rename_pattern,
+    "place": ActionLog._place,
+    "automate": ActionLog._automate,
     "check": ActionLog._check,
     "render_wav": ActionLog._render,
     "render_stems": ActionLog._stems,

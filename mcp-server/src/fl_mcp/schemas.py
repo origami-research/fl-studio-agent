@@ -561,13 +561,39 @@ class PatternInfo(BaseModel):
 
 class PlaylistClip(BaseModel):
     """One playlist clip: on ``track``, from ``start`` for ``length`` beats, playing
-    ``pattern`` or, for an audio clip, ``channel``."""
+    ``pattern`` or, for an audio clip, ``channel``. A clip added this session has track
+    None when FL did not report it."""
 
-    track: int
+    track: int | None
     start: float
     length: float
     pattern: int | None = None
     channel: int | None = None
+
+
+class PlacedClip(BaseModel):
+    """A clip placed in the playlist: ``pattern`` (and its ``name``) from ``bar``, ``beats``
+    long, on the playlist ``track`` FL newly reports playing there. ``track`` None: FL
+    reported none (it reports only some clips of notes), so the clip is not confirmed."""
+
+    pattern: int = Field(ge=1)
+    name: str
+    bar: int = Field(ge=1)
+    beats: float = Field(ge=0)
+    track: int | None = None
+
+
+class AutomationTake(BaseModel):
+    """Automation FL recorded and played back: ``target`` moved over ``beats`` from ``bar``,
+    kept in ``pattern`` (whose clip plays it there). ``points`` are FL's own playback
+    (beats from ``bar``, 0..1), ``max_error`` the furthest it played from what was asked."""
+
+    target: str
+    pattern: PatternInfo
+    bar: int = Field(ge=1)
+    beats: float = Field(gt=0)
+    points: list[AutomationPoint]
+    max_error: float = Field(ge=0)
 
 
 class SessionState(BaseModel):

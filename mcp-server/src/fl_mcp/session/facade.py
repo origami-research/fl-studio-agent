@@ -45,6 +45,7 @@ from fl_mcp.profile import profile_gate
 from fl_mcp.schemas import (
     AutomationPoint,
     AutomationResult,
+    AutomationTake,
     Channel,
     ChannelLevels,
     ChannelPreset,
@@ -58,6 +59,7 @@ from fl_mcp.schemas import (
     Note,
     NoteWriteMode,
     PatternInfo,
+    PlacedClip,
     PlaylistClip,
     PluginParam,
     PluginParamModel,
@@ -71,8 +73,8 @@ from fl_mcp.schemas import (
 )
 from fl_mcp.store import Store
 
+from . import arrangement, controls, lifecycle, loading, routing, state
 from . import check as check_mod
-from . import controls, lifecycle, loading, routing, state
 from . import notes as note_ops
 from . import presets as preset_ops
 from .audition import set_mutes
@@ -238,6 +240,9 @@ class FLSession:
         self._transport_lock = threading.Lock()
         self._write_state_lock = threading.Lock()
         self._write_action: str | None = None
+        # Clips FL added to the playlist this session (fl.place, fl.automate): FL has no
+        # clip getter, so the playlist reads the song FL opened plus these.
+        self._placed: list[PlacedClip] = []
         # Development-mode file-edit batching: file-lane ops write the .flp
         # but defer the FL reload so N edits cost ONE reboot, not N. Session
         # mode refuses this lane before a file mutation because FL has no
@@ -525,6 +530,56 @@ class FLSession:
         with self._write_guard("set_send"):
             return routing.set_send(self, source, target, on=on, level=level)
 
+    def new_pattern(self, name: str, copy_of: int | str | None = None) -> PatternInfo:
+        with self._write_guard("new_pattern"):
+            source = None if copy_of is None else arrangement.resolve_pattern(self, "fl.new_pattern", copy_of)
+            return arrangement.new_pattern(self, name, source)
+
+    def rename_pattern(self, pattern: int | str, name: str) -> PatternInfo:
+        with self._write_guard("rename_pattern"):
+            return arrangement.rename_pattern(
+                self, arrangement.resolve_pattern(self, "fl.rename_pattern", pattern), name
+            )
+
+    def place(self, pattern: int | str, bars: list[int]) -> list[PlacedClip]:
+        with self._write_guard("place"):
+            number = arrangement.resolve_pattern(self, "fl.place", pattern)
+            return arrangement.place(self, number, bars)
+
+    def automate(
+        self,
+        points: list[AutomationPoint],
+        bar: int,
+        param: int | str,
+        channel: int | None = None,
+        mixer_track: int | None = None,
+        slot: int | None = None,
+        pattern: int | str | None = None,
+    ) -> AutomationTake:
+        with self._write_guard("automate"):
+            target, label = arrangement.automation_target(
+                self, channel=channel, mixer_track=mixer_track, slot=slot, param=param
+            )
+            number = None if pattern is None else arrangement.resolve_pattern(self, "fl.automate", pattern)
+            return arrangement.automate(self, target, label, points, bar, number)
+
+    def first_clip_beat(self, pattern: int) -> float | None:
+        """Where the pattern's first clip that this session knows of starts, in beats: in the
+        song FL opened, or added since. None when it has none."""
+        starts = [(c.bar - 1) * controls.BEATS_PER_BAR for c in self._placed if c.pattern == pattern]
+        if self.project is not None and self.project.is_file():
+            starts += [c.start_beat for c in scene.read_clips(self.project) if c.pattern == pattern]
+        return min(starts) if starts else None
+
+    def record_clip(self, clip: PlacedClip) -> None:
+        self._placed.append(clip)
+
+    def copy_pattern_notes(self, source: int, dest: int) -> None:
+        """A pattern FL copied reads as the source's notes: record them for the copy."""
+        for (pattern, channel), notes in self.all_notes().items():
+            if pattern == source and notes:
+                self.store.record_write(Target(pattern=dest, channel=channel), [], notes, "replace", "live", 0)
+
     def presets(self, channel: int) -> list[str]:
         return preset_ops.presets(self, channel)
 
@@ -598,11 +653,21 @@ class FLSession:
         return state.mixer_tracks(self)
 
     def playlist(self) -> list[PlaylistClip]:
-        """The playlist's clips in the song FL opened (the SDK cannot change the playlist)."""
-        return [
+        """The playlist's clips in the song FL opened, then the clips added this session
+        (FL has no clip getter; an added clip's track is None when FL did not report it)."""
+        opened = [
             PlaylistClip(track=c.track, start=c.start_beat, length=c.length_beats, pattern=c.pattern, channel=c.channel)
             for c in scene.read_clips(self._scene_project())
         ]
+        known = {(c.pattern, c.start) for c in opened}
+        added = [
+            PlaylistClip(
+                track=c.track, start=(c.bar - 1) * controls.BEATS_PER_BAR, length=c.beats, pattern=c.pattern
+            )
+            for c in self._placed
+        ]
+        # A save of FL's song holds the added clips too; list each clip once.
+        return opened + [c for c in added if (c.pattern, c.start) not in known]
 
     def patterns(self) -> list[PatternInfo]:
         """FL's patterns now, read live."""

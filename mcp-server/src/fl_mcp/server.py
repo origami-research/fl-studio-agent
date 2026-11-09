@@ -138,6 +138,16 @@ def run(code: str, ctx: Context) -> RunResult:
            beats, velocity); t.clear(); t.set_levels(volume=0..1, pan=-1..1,
            pitch=semitones); t.params("cutoff") / t.set_param("cutoff", 0.55);
            fl.route(ch, mixer_track); fl.send(src, dst, level=0.8, on=True).
+    Song:  p = fl.new_pattern("Drop", copy_of=None) (a pattern per section; write
+           it with fl.track(ch, pattern=p.number)); fl.rename_pattern(p, name);
+           fl.place(p, [17, 33]) puts it in the song at those bars (every bar for
+           a pattern in one call: FL adds a pattern's clip only before its first;
+           clips cannot be moved or removed) and leaves FL in song mode, so
+           fl.render plays the arranged song. fl.automate([{"position": 0,
+           "value": 0.1}, {"position": 16, "value": 0.9}], bar=13, channel=ch,
+           param="volume"|"pan"|plugin param) or mixer_track=n (+ slot=s for an
+           effect's param): FL records it into a new pattern placed at bar; it
+           plays twice in real time. Pattern 1 already starts the song.
     Sounds: fl.sounds("808 kick", kind="sample"|"preset") -> stock sounds (path
            relative to fl.stock_folder, readable); fl.load_sample(ch, sound);
            fl.load_preset(ch, sound); fl.presets(ch); fl.set_preset(ch, name).

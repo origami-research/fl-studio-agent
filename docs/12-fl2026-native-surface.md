@@ -27,7 +27,7 @@ Method: strings on `FLEngine_x64.dylib`, full marshal-decode and disassembly of 
 7. FL exposes NO external endpoint.
    The live FL process holds zero sockets; the internal `TMCPServer` feeds Gopher's webview via a JS bridge (`window.flHelper.onMCPTools`).
    Our own transport into FL's embedded Python (virtual MIDI + controller script) remains mandatory.
-8. Two capabilities are absent even from FL's own tooling: playlist/arrangement clip placement, and automation clips.
+8. Two capabilities are absent even from FL's own tooling: playlist/arrangement clip placement, and automation clips. (Corrected 2026-11-09: FL's recording places clips and writes pattern automation live, and the controller API creates patterns; see [the note](research/arrangement-automation-live-2026-11-09.md).)
    `arrangement`, `patterns`, `general`, `device` are imported by MCPTools but never called.
 9. Readback return path: `runPRScript` returns a value natively, but the proven mechanism is the script writing a spool file inside FL's Settings tree (sandbox allows `open()` there; `os.remove` blocked; no `encoding=` kwarg).
 
@@ -39,7 +39,7 @@ Three swaps at the bottom of the stack:
 1. Note plane: the custom C++ Bridge plugin + file spool is replaced by control-plane calls to `ilmcp.runPRScript`.
    The plugin (never verified, crashed FL 2026 ten times) deletes.
 2. The two API walls fall: plugin loading and instrument creation become `ilmcp.addEffect` / `ilmcp.addChannel`.
-   The template project shrinks to at most a pattern bank (pattern creation still has no API).
+   The template project shrinks to at most a pattern bank (pattern creation still has no API). (Corrected 2026-11-09: FL's recording places clips and writes pattern automation live, and the controller API creates patterns; see [the note](research/arrangement-automation-live-2026-11-09.md).)
 3. Note readback becomes cheap via a dump script, so the shadow score demotes from source-of-truth to write-through cache and the freshness ladder (docs/11 layers 3-5) collapses toward "just ask FL".
 
 Survivorship: KEEP the MCP server, schemas, kernel, action log, theory helpers, fake-FL tests, installer.
@@ -62,11 +62,11 @@ Net tracked-tree delta: roughly -2,700 to -2,900 LOC.
 | Write notes to any channel's active pattern | selection + `ilmcp.runPRScript` | gated on probe |
 | Read notes back (fresh, any open score) | dump script → spool file | gated on probe |
 | Pattern selection / switching | public API | code path exists |
-| Pattern CREATION | none anywhere | wall; template pattern bank |
+| Pattern CREATION | `patterns.findFirstNextEmptyPat`, `clonePattern` (2026-11-09) | live: `fl.new_pattern` |
 | Browser / plugin-database enumeration | `ilmcp.getBrowserNames` | gated on probe |
 | Playlist track metadata (name/colour) | `playlist.*` | trivial |
-| Playlist/arrangement CLIP placement | none anywhere | HARD WALL |
-| Automation clips (create/edit envelopes) | none anywhere | HARD WALL |
+| Playlist/arrangement CLIP placement | no call; FL's song-mode recording adds a clip (2026-11-09) | live, add only: `fl.place` |
+| Automation clips (create/edit envelopes) | no call; FL's recording writes pattern automation (2026-11-09) | live as pattern automation: `fl.automate`; clips NONE |
 | Plugin internal state (e.g. wavetable editors) | none anywhere | HARD WALL (true of every approach) |
 | Offline render | CLI render on saved copies | designed, unbuilt (M4) |
 | Headless operation | FL requires GUI + license | out of scope by design |

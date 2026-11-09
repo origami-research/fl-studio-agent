@@ -246,16 +246,30 @@ def _stale_device_keys(registry: FLRegistry, devices: str) -> list[str]:
     return stale
 
 
+def _newest_fl_key(registry: FLRegistry) -> str | None:
+    versions = [(int(m.group(1)), name) for name in registry.subkeys(IMAGE_LINE_KEY)
+                if (m := _FL_SETTINGS_KEY.fullmatch(name))]
+    return f"{IMAGE_LINE_KEY}\\{max(versions)[1]}" if versions else None
+
+
+def fl_settings(section: str, registry: FLRegistry | None = None) -> dict[str, str]:
+    """One section of FL for Windows' settings for this user (empty when FL never ran),
+    e.g. "RMC", where FL keeps the questions it was told not to ask again: ticking "Don't
+    show this in the future" on its record question wrote RMC\\PopupRec=1 at once (live,
+    2026-11-09)."""
+    registry = registry if registry is not None else CurrentUserRegistry()
+    root = _newest_fl_key(registry)
+    return registry.values(f"{root}\\{section}") if root is not None else {}
+
+
 def configure_midi_registry(registry: FLRegistry) -> InstallStep:
     """Make the newest ``FL Studio <N>`` settings key hold exactly the FLMCP
     controller assignment and nothing FL remembered that unlinks it, then read
     it back. FL reads it at startup and rewrites it on a clean exit, so the
     caller closes FL first, and a box re-applies it before every FL launch."""
-    versions = [(int(m.group(1)), name) for name in registry.subkeys(IMAGE_LINE_KEY)
-                if (m := _FL_SETTINGS_KEY.fullmatch(name))]
-    if not versions:
+    root = _newest_fl_key(registry)
+    if root is None:
         return _warn(f"no HKCU\\{IMAGE_LINE_KEY}\\FL Studio <N> key; start FL once as this user, then rerun the install")
-    root = f"{IMAGE_LINE_KEY}\\{max(versions)[1]}"
     devices = f"{root}\\Devices"
     for path in _stale_device_keys(registry, devices):
         registry.delete_key(path)

@@ -18,6 +18,7 @@ a guarded block below and the pure framing/dispatch functions never touch it
 at import time.
 """
 
+import contextlib
 import importlib
 import os
 import sys
@@ -42,7 +43,7 @@ except ImportError:
     arrangement = channels = device = general = midi = None
     mixer = patterns = playlist = plugins = transport = ui = None
 
-SCRIPT_VER = "0.2.5"
+SCRIPT_VER = "0.2.6"
 
 # ---------------------------------------------------------------------------
 # Wire codec (framing, chunking/reassembly) - flmcp_codec.py beside this file is the single
@@ -480,6 +481,289 @@ def _peaks(args, kwargs):
     return [[track, mixer.getTrackPeaks(track, PEAK_LR)] for track in args[0]]
 
 
+# ---------------------------------------------------------------------------
+# Recording jobs - the documented way FL writes automation and puts a pattern in the
+# playlist live (docs/research/arrangement-automation-live-2026-11-09.md). FL records a
+# control's moves into the selected pattern while it records, and in song mode it adds
+# that pattern's clip where playback started (FL manual, "Recording automation" and
+# "Note / MIDI recording"). A job runs on OnIdle, one step per tick, because the record
+# question FL may ask is a modal that froze FL when raised inside OnSysEx (live).
+# ---------------------------------------------------------------------------
+
+# Name FL gives the Bridge effect; its slot's mix level is the inert control a placement
+# records (the Bridge passes audio through unchanged, so its mix changes nothing heard).
+BRIDGE_PLUGIN_NAME = "FL MCP Bridge"
+# FL's transport state (recording armed, playing) shows a few ticks after the call.
+JOB_STEP_SECONDS = 3.0
+# A job that records past its window by this much is stopped and reported.
+JOB_SLACK_SECONDS = 5.0
+# A failed job keeps FL stopped and not recording this long before reporting.
+JOB_CLEANUP_SECONDS = 1.0
+# A play job reads which playlist tracks are active this many ticks after the start.
+ACTIVITY_SETTLE_TICKS = 3
+# A playback keeps at most this many samples, evenly spaced, and reports them only once
+# it ends: a status carrying every tick's sample (about 400 for 16 beats), asked for
+# five times a second while FL played, was followed by FL no longer answering (take,
+# 2026-11-09), the kind of flood #317 removed from the meters.
+SAMPLE_ROWS_MAX = 64
+
+_jobs = {"current": None, "last": None, "seq": 0}
+
+
+def _now():
+    import time
+
+    return time.time()
+
+
+def _find_bridge():
+    for track in range(mixer.trackCount()):
+        for slot in range(MIXER_SLOTS):
+            if mixer.isTrackPluginValid(track, slot) and plugins.getPluginName(track, slot) == BRIDGE_PLUGIN_NAME:
+                return track, slot
+    raise ValueError("no mixer track holds the FL MCP plugin")
+
+
+def _target_event(target):
+    """FL's REC event id for a control: a channel's volume, pan or plugin parameter, a
+    mixer track's volume or pan, an effect's parameter or mix level, or the Bridge's mix."""
+    kind, param = target.get("kind"), target.get("param")
+    if kind == "channel":
+        base = channels.getRecEventId(target["channel"], GLOBAL)
+        named = {"volume": midi.REC_Chan_Vol, "pan": midi.REC_Chan_Pan}
+        if param in named:
+            return base + named[param]
+        if isinstance(param, int) and param >= 0:
+            return base + midi.REC_Chan_Plugin_First + param
+    elif kind == "mixer":
+        base = mixer.getTrackPluginId(target["track"], 0)
+        named = {"volume": midi.REC_Mixer_Vol, "pan": midi.REC_Mixer_Pan}
+        if param in named:
+            return base + named[param]
+    elif kind == "effect":
+        base = mixer.getTrackPluginId(target["track"], target["slot"])
+        if param == "mix":
+            return base + midi.REC_Plug_MixLevel
+        if isinstance(param, int) and param >= 0:
+            return base + midi.REC_Plug_Plugin_First + param
+    elif kind == "bridge":
+        track, slot = _find_bridge()
+        return mixer.getTrackPluginId(track, slot) + midi.REC_Plug_MixLevel
+    raise ValueError("cannot automate %r" % (target,))
+
+
+def _value_at(points, tick):
+    """The straight-line value of ``points`` ([[tick, 0..1], ...], sorted) at ``tick``."""
+    if tick <= points[0][0]:
+        return points[0][1]
+    for i in range(1, len(points)):  # FL's Python 3.9 has no itertools.pairwise
+        (t0, v0), (t1, v1) = points[i - 1], points[i]
+        if tick <= t1:
+            return v0 + (v1 - v0) * (tick - t0) / max(1, t1 - t0)
+    return points[-1][1]
+
+
+def _start_job(args, kwargs):
+    """`ctl.record` - start one job, a recording or a playback; `ctl.job` reports it.
+
+    spec: {"mode": "record" | "play", "start": abs tick, "length": ticks, "seconds":
+    expected length, "pattern": record into (record), "target": control (record: what is
+    recorded; play: what is sampled, optional), "points": [[tick from start, 0..1], ...]
+    (record; None holds the control's current value), "tracks": play reads which playlist
+    tracks are active at the start, "marker": the name of the time marker FL needs to
+    start past the song's end}."""
+    if kwargs or len(args) != 1 or not isinstance(args[0], dict):
+        raise ValueError("a job takes one spec object")
+    if _jobs["current"] is not None:
+        raise RuntimeError("a recording job is already running")
+    spec = dict(args[0])
+    if spec.get("mode") not in ("record", "play"):
+        raise ValueError("mode must be record or play")
+    event = _target_event(spec["target"]) if spec.get("target") else None
+    if transport.isRecording():  # toggling record would end the person's own recording
+        raise RuntimeError("FL is already recording")
+    if spec["mode"] == "record":
+        if event is None:
+            raise ValueError("a recording needs a target")
+        points = spec.get("points") or [[0, device.getLinkedValue(event)]]
+    else:
+        points = None
+    _jobs["seq"] += 1
+    _jobs["current"] = {
+        "id": _jobs["seq"], "spec": spec, "event": event, "points": points, "phase": "prepare",
+        "since": _now(), "events": 0, "first": None, "last": None, "rows": [], "tracks": None, "ticks": 0,
+    }
+    return {"job": _jobs["seq"]}
+
+
+def _job_status(args, kwargs):
+    job = _jobs["current"] or _jobs["last"]
+    if job is None:
+        return None
+    keys = ("id", "phase", "events", "first", "last", "tracks", "error")
+    status = {key: job.get(key) for key in keys}
+    if job["phase"] in ("done", "failed"):
+        status["rows"] = job["rows"]
+    return status
+
+
+def _finish(job, error=None):
+    job["phase"] = "failed" if error is not None else "done"
+    if error is not None:
+        job["error"] = error
+    _jobs["last"], _jobs["current"] = job, None
+
+
+def _fail(job, error):
+    """Stop the job and leave FL stopped and not recording before reporting it failed:
+    an arm FL shows a tick or more later is undone too (JOB_CLEANUP_SECONDS)."""
+    job["error"], job["phase"], job["since"], job["disarm_sent"] = error, "cleanup", _now(), False
+
+
+def _cleanup_step(job):
+    for step in (_cleanup_stop, _cleanup_disarm):
+        with contextlib.suppress(Exception):  # one failing call must not skip the other
+            step(job)
+    settled = not job.get("playing_seen") and not job.get("recording_seen")
+    waited = _now() - job["since"]
+    if (settled and waited >= JOB_CLEANUP_SECONDS) or waited >= 3 * JOB_CLEANUP_SECONDS:
+        _finish(job, job["error"])
+
+
+def _cleanup_stop(job):
+    job["playing_seen"] = bool(transport.isPlaying())
+    if job["playing_seen"]:
+        transport.stop()
+
+
+def _cleanup_disarm(job):
+    job["recording_seen"] = bool(transport.isRecording())
+    if job["recording_seen"] and not job["disarm_sent"]:
+        transport.record()
+        job["disarm_sent"] = True
+    elif not job["recording_seen"]:
+        job["disarm_sent"] = False
+
+
+def _cancel_job(args, kwargs):
+    """`ctl.cancel` - the engine stopped waiting: stop the job, leave FL stopped, not recording."""
+    job = _jobs["current"]
+    if job is None or job["phase"] == "cleanup":
+        return None
+    _fail(job, "the engine stopped waiting for it")
+    return job["id"]
+
+
+def _job_tick():
+    job = _jobs["current"]
+    if job is None:
+        return
+    if job["phase"] == "cleanup":
+        _cleanup_step(job)
+        return
+    try:
+        _job_step(job)
+    except Exception as exc:
+        _fail(job, "%s: %s" % (type(exc).__name__, exc))
+
+
+def _job_step(job):
+    spec, phase = job["spec"], job["phase"]
+    start, end = spec["start"], spec["start"] + spec["length"]
+    waited = _now() - job["since"]
+
+    def advance(next_phase):
+        job["phase"], job["since"] = next_phase, _now()
+
+    if phase == "prepare":
+        if transport.isPlaying():  # start() would pause it, not play from the start
+            transport.stop()
+        if spec["mode"] == "record":
+            patterns.jumpToPattern(spec["pattern"])
+        if transport.getLoopMode() != 1:
+            transport.setLoopMode()
+        advance("song")
+    elif phase == "song":
+        # The song position means the song's only once FL is in song mode, and FL moves
+        # it no further than the song's end; a time marker extends the song (live).
+        if transport.getLoopMode() == 1 and not transport.isPlaying():
+            if start > transport.getSongLength(midi.SONGLENGTH_ABSTICKS) + 1:
+                if spec["mode"] == "play":  # nothing plays past the song's end
+                    job["tracks"] = []
+                    _finish(job)
+                    return
+                arrangement.addAutoTimeMarker(start, spec.get("marker") or "")
+            transport.setSongPos(start, midi.SONGLENGTH_ABSTICKS)
+            if spec["mode"] == "record":
+                transport.record()
+                advance("arming")
+            else:
+                advance("placed")
+        elif waited > JOB_STEP_SECONDS:
+            _fail(job, "FL did not stop and switch to song mode")
+    elif phase == "arming":
+        if transport.isRecording():
+            advance("placed")
+        elif waited > JOB_STEP_SECONDS:
+            _fail(job, "FL did not arm recording")
+    elif phase == "placed":
+        if abs(arrangement.currentTime(0) - start) <= 1:
+            transport.start()
+            advance("starting")
+        elif waited > JOB_STEP_SECONDS:
+            _fail(job, "FL did not move to the start position")
+        else:  # the song's new end (a marker) may show a tick later
+            transport.setSongPos(start, midi.SONGLENGTH_ABSTICKS)
+    elif phase == "starting":
+        if transport.isPlaying():
+            advance("running")
+        elif waited > JOB_STEP_SECONDS:
+            _fail(job, "FL did not start playing")
+    elif phase == "running":
+        # getSongPos stops at the song's end; currentTime is where FL is playing.
+        pos = arrangement.currentTime(0)
+        looped = job["last"] is not None and pos < start  # FL went back to the song's start
+        if start <= pos < end and not looped:
+            job["first"] = pos if job["first"] is None else job["first"]
+            job["last"] = pos
+            job["ticks"] += 1
+            if spec["mode"] == "record":
+                value = _value_at(job["points"], pos - start)
+                general.processRECEvent(job["event"], round(value * midi.FromMIDI_Max), midi.REC_MIDIController)
+                job["events"] += 1
+            else:
+                spacing = spec["length"] / SAMPLE_ROWS_MAX
+                if job["event"] is not None and (not job["rows"] or pos - job["rows"][-1][0] >= spacing):
+                    job["rows"].append([pos, device.getLinkedValue(job["event"])])
+                if spec.get("tracks") and job["tracks"] is None and job["ticks"] >= ACTIVITY_SETTLE_TICKS:
+                    job["tracks"] = [
+                        t for t in range(1, playlist.trackCount() + 1) if playlist.getTrackActivityLevel(t) > 0
+                    ]
+        if spec.get("tracks") and job["tracks"] is None and pos >= end:
+            job["tracks"] = [t for t in range(1, playlist.trackCount() + 1) if playlist.getTrackActivityLevel(t) > 0]
+        if pos >= end or looped or not transport.isPlaying():
+            transport.stop()
+            advance("stopping")
+        elif waited > spec.get("seconds", 0) + JOB_SLACK_SECONDS:
+            _fail(job, "FL played past the job's window")
+    elif phase == "stopping":
+        if not transport.isPlaying():
+            if spec["mode"] == "record":
+                transport.record()
+                advance("disarming")
+            else:
+                transport.setSongPos(start, midi.SONGLENGTH_ABSTICKS)
+                _finish(job)
+        elif waited > JOB_STEP_SECONDS:
+            _fail(job, "FL did not stop")
+    elif phase == "disarming":
+        if not transport.isRecording():
+            transport.setSongPos(start, midi.SONGLENGTH_ABSTICKS)
+            _finish(job)
+        elif waited > JOB_STEP_SECONDS:
+            _fail(job, "FL did not stop recording")
+
+
 COMPOSITE_OPS = {
     "state.snapshot": lambda args, kwargs: _state_snapshot(),
     "state.undo_probe": lambda args, kwargs: _undo_probe(),
@@ -493,6 +777,9 @@ COMPOSITE_OPS = {
     ),
     "select_channels": _select_channels,
     "ctl.set_mutes": _set_mutes,
+    "ctl.record": _start_job,
+    "ctl.job": _job_status,
+    "ctl.cancel": _cancel_job,
     "mcp.import_tools": _mcp_import_tools,
     "mcp.call": _mcp_call,
     "ctl.hello": lambda args, kwargs: _hello_fields(),
@@ -672,8 +959,9 @@ def OnSysEx(event):
 
 
 def OnIdle():
-    """Retry operations deferred by FL's unsafe-at-current-time guard."""
+    """Retry operations deferred by FL's unsafe-at-current-time guard; step a recording job."""
     _retry_deferred_ops()
+    _job_tick()
 
 
 def OnProjectLoad(status):

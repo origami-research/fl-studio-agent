@@ -12,13 +12,14 @@ session/flp/store. A private function appearing here is a design smell.
 
 from __future__ import annotations
 
+import itertools
 from collections.abc import Sequence
 from contextlib import AbstractContextManager
 from pathlib import Path
 from typing import Annotated, Literal
 
 import numpy as np
-from pydantic import BaseModel, Field, TypeAdapter, ValidationError, model_validator
+from pydantic import BaseModel, BeforeValidator, Field, TypeAdapter, ValidationError, model_validator
 
 from fl_mcp import errors
 from fl_mcp.audio import read_wav
@@ -27,6 +28,7 @@ from fl_mcp.contract import SceneNotesResult, SceneSummary
 from .schemas import (
     AutomationPoint,
     AutomationResult,
+    AutomationTake,
     Channel,
     ChannelLevels,
     ChannelPreset,
@@ -38,6 +40,7 @@ from .schemas import (
     Note,
     NoteWriteMode,
     PatternInfo,
+    PlacedClip,
     PlaylistClip,
     PluginParam,
     RenderReceipt,
@@ -97,6 +100,51 @@ class _SendArgs(BaseModel):
     dst_track: SdkChannel
     level: NormalizedValue | None = None
     on: Annotated[bool, Field(strict=True)] = True
+
+
+# A pattern by number or name; a PatternInfo from fl.new_pattern or fl.patterns stands for its number.
+SdkPatternRef = Annotated[
+    SdkPattern | Annotated[str, Field(strict=True, min_length=1)],
+    BeforeValidator(lambda value: value.number if isinstance(value, PatternInfo) else value),
+]
+SdkBar = Annotated[int, Field(strict=True, ge=1)]
+
+
+class _NewPatternArgs(BaseModel):
+    name: Annotated[str, Field(strict=True, min_length=1)]
+    copy_of: SdkPatternRef | None = None
+
+
+class _RenamePatternArgs(BaseModel):
+    pattern: SdkPatternRef
+    name: Annotated[str, Field(strict=True, min_length=1)]
+
+
+class _PlaceArgs(BaseModel):
+    pattern: SdkPatternRef
+    bars: SdkBar | Annotated[list[SdkBar], Field(min_length=1)]
+
+
+class _AutomateArgs(BaseModel):
+    points: Annotated[list[AutomationPoint], Field(min_length=2)]
+    bar: SdkBar
+    param: SdkChannel | Annotated[str, Field(strict=True, min_length=1)]
+    mixer_track: SdkChannel | None = None
+    slot: Annotated[int, Field(strict=True, ge=0, le=9)] | None = None
+    pattern: SdkPatternRef | None = None
+
+    @model_validator(mode="after")
+    def _straight_lines(self) -> _AutomateArgs:
+        positions = [p.position for p in self.points]
+        if positions[0] != 0:
+            raise ValueError("the first point is at beat 0, where the automation starts")
+        if any(b <= a for a, b in itertools.pairwise(positions)):
+            raise ValueError("point positions must increase")
+        if any(p.tension for p in self.points):
+            raise ValueError("points are joined by straight lines; leave out tension")
+        if any(not 0 <= p.value <= 1 for p in self.points):
+            raise ValueError("values are 0..1 across the control's range")
+        return self
 
 
 class _SetPresetArgs(BaseModel):
@@ -212,8 +260,9 @@ class FL:
 
     @property
     def playlist(self) -> list[PlaylistClip]:
-        """The playlist's clips in the song FL opened: track, start and length in beats,
-        and the pattern (or audio channel) each plays. The SDK cannot change the playlist."""
+        """The playlist's clips: those in the song FL opened, then those added this session
+        with fl.place and fl.automate: track (None when FL did not report it), start and
+        length in beats, and the pattern (or audio channel) each plays."""
         return self._session.playlist()
 
     @property
@@ -306,6 +355,83 @@ class FL:
         if not args.on and args.level is not None:
             raise errors.invalid_argument("fl.send", "a send that is off has no level; pass level only with on=True")
         return self._session.set_send(args.src_track, args.dst_track, on=args.on, level=args.level)
+
+    def new_pattern(self, name: str, copy_of: int | str | PatternInfo | None = None) -> PatternInfo:
+        """Make a new pattern named ``name``: FL's next empty one, or a copy of the pattern
+        ``copy_of`` (number, name or PatternInfo) with its notes. Write notes to it with
+        fl.track(channel, pattern=number); put it in the song with fl.place."""
+        try:
+            args = _NewPatternArgs(name=name, copy_of=copy_of)
+        except ValidationError as exc:
+            raise errors.invalid_argument("fl.new_pattern", str(exc)) from None
+        return self._session.new_pattern(args.name, args.copy_of)
+
+    def rename_pattern(self, pattern: int | str | PatternInfo, name: str) -> PatternInfo:
+        """Rename a pattern (by number or name); returns the name FL now shows."""
+        try:
+            args = _RenamePatternArgs(pattern=pattern, name=name)
+        except ValidationError as exc:
+            raise errors.invalid_argument("fl.rename_pattern", str(exc)) from None
+        return self._session.rename_pattern(args.pattern, args.name)
+
+    def place(self, pattern: int | str | PatternInfo, bars: int | Sequence[int]) -> list[PlacedClip]:
+        """Put a pattern (number, name or PatternInfo) in the song at each of ``bars``: FL adds a clip
+        of it there, on a playlist track it picks, and the song plays it from that bar.
+        Give every bar a pattern plays at in one call: FL adds a pattern's clip only
+        before its first clip, so a later bar for a pattern already in the song is
+        refused (place a copy from fl.new_pattern(name, copy_of=...) there instead).
+        FL plays a moment from each bar to add it, and leaves song mode on so a render
+        plays the song. Clips cannot be moved or removed. Returns each clip with the track
+        FL newly reports playing at that bar; track None means FL reported none, so that
+        clip is not confirmed (FL reports only some clips of notes)."""
+        try:
+            args = _PlaceArgs(pattern=pattern, bars=bars if isinstance(bars, int) else list(bars))
+        except ValidationError as exc:
+            raise errors.invalid_argument("fl.place", str(exc)) from None
+        bars_list = [args.bars] if isinstance(args.bars, int) else args.bars
+        return self._session.place(args.pattern, bars_list)
+
+    def automate(
+        self,
+        points: Sequence[AutomationPointInput],
+        *,
+        bar: int,
+        param: int | str = "volume",
+        channel: str | int | None = None,
+        mixer_track: int | None = None,
+        slot: int | None = None,
+        pattern: int | str | PatternInfo | None = None,
+    ) -> AutomationTake:
+        """Move a control over time from ``bar``: a filter sweep, a volume ride, a riser.
+        ``points`` are {"position": beats from bar, "value": 0..1} joined by straight
+        lines, the first at beat 0; values span the control's range (pan: 0.5 centre).
+
+        The control: ``channel`` (as for fl.track) with param "volume", "pan" or one of
+        its instrument's parameters (index or name, see Track.params); or ``mixer_track``
+        (0 is the master) with "volume" or "pan", or with ``slot`` for a parameter of the
+        effect in that slot (see fl.mixer).
+
+        FL records the moves into a new pattern named after the control and puts it in
+        the song at ``bar``; to change them, automate again with ``pattern`` set to that
+        pattern at the same bar, which replaces the moves over the beats you give. It
+        plays in real time twice (recording, then playing back to check), so it takes
+        about twice as long as the automation. Returns FL's playback: ``points`` and
+        ``max_error``, and the ``pattern``."""
+        try:
+            args = _AutomateArgs(
+                points=_AUTOMATION_POINTS.validate_python(points),
+                bar=bar,
+                param=param,
+                mixer_track=mixer_track,
+                slot=slot,
+                pattern=pattern,
+            )
+        except ValidationError as exc:
+            raise errors.invalid_argument("fl.automate", str(exc)) from None
+        index = None if channel is None else self.track(channel).channel
+        return self._session.automate(
+            args.points, args.bar, args.param, index, args.mixer_track, args.slot, args.pattern
+        )
 
     def presets(self, channel: str | int) -> list[str]:
         """The names of a plugin channel's presets, in FL's order: a preset's index is
