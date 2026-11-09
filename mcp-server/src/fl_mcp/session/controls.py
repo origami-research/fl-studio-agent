@@ -26,8 +26,6 @@ from fl_mcp.core.carriers import CarrierUnavailable
 from fl_mcp.errors import NotePlaneUnavailable, WriteRejected
 from fl_mcp.schemas import (
     CAPTURE_MAX_SECONDS,
-    AutomationPoint,
-    AutomationResult,
     ChannelLevels,
     Note,
     PluginParam,
@@ -712,42 +710,6 @@ def set_channel_levels(
 
     log.warning("set_channel_levels: the control wire is not connected and no project file is configured")
     raise NotePlaneUnavailable("FL Studio is not accepting a level change right now.")
-
-
-def set_automation(session: FLSession, channel: int, points: list[AutomationPoint]) -> AutomationResult:
-    """Replace an existing automation clip and return its saved-file readback.
-
-    There is no verified live automation writer.  ``flpkit`` carries the
-    channel's opaque header/trailer and verifies its own splice; this second,
-    independent project parse is the session boundary's confirmed result.
-    """
-    if session.project is None:
-        raise NotePlaneUnavailable(
-            "Automation clips cannot be written in this session: there is no saved song to edit.",
-            fix="Shape the sound with Track.set_param or levels instead.",
-            retryable=False,
-        )
-    try:
-        session._prepare_file_write()
-        saved = flp.write_automation(session.project, channel, points)
-        project = flp.read(session.project)
-        confirmed = next(item.automation for item in project.channels if item.index == channel)
-    except (flp.FlpError, IndexError, StopIteration) as exc:
-        raise WriteRejected(
-            f"The automation clip could not be written: {exc}",
-            fix="Use a channel that already has an automation clip, then retry.",
-        ) from exc
-    if confirmed != saved:
-        log.warning("automation write on channel %d read back differently on the session parse", channel)
-        raise WriteRejected(
-            "The automation clip did not save as written, so FL was not reopened.",
-            fix="Retry the write.",
-        )
-    session._reload_fl()
-    return AutomationResult(
-        channel=channel,
-        points=[AutomationPoint(position=p.position, value=p.value, tension=p.tension) for p in confirmed],
-    )
 
 
 # -- plugin parameters (live-only; E2-verified ops) --------------------------

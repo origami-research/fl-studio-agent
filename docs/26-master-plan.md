@@ -11,7 +11,7 @@ Confirmed shape:
 - Bridge writes selected-channel notes live and can target any pattern through `PatNum`; channel targeting stays file-lane because `ChanNum` is ignored and no channel object is available.
 - Note-content reads stay file-based; host calls do not provide a note readback getter.
 - FL push callbacks cover transport, position, focus/selection, context, and routing. Score edits require poll-and-diff.
-- Existing automation-clip writes are file-lane and save/reparse verified. Creating a new automation clip with a target link still needs an FL-authored minimal pair.
+- Automation is written live as pattern automation by `fl.automate`; the file-lane edit of an existing automation clip was removed on 2026-11-09. Creating a new automation clip with a target link still needs an FL-authored minimal pair.
 - Mixer routing, effect chains, instruments, presets, and samples remain Tier 2/3 gaps tracked in docs/24.
 
 ## Invariants

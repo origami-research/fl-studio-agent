@@ -398,11 +398,6 @@ def test_unknown_composite_op():
     assert result == {"id": 10, "ok": False, "err": "unknown composite op 'state.does_not_exist'"}
 
 
-def test_unknown_mcp_composite_op():
-    result = flmcp._dispatch({"id": 11, "op": "mcp.does_not_exist"})
-    assert result == {"id": 11, "ok": False, "err": "unknown composite op 'mcp.does_not_exist'"}
-
-
 def test_select_channels_selects_exactly_one_channel(monkeypatch):
     selected = []
     monkeypatch.setattr(flmcp, "channels", SimpleNamespace(selectOneChannel=lambda *args: selected.append(args)))
@@ -507,79 +502,6 @@ def test_peaks_reads_every_requested_track_in_one_round_trip(monkeypatch):
     assert reads == [(0, 2), (3, 2), (7, 2)]  # midi.PEAK_LR: the louder of left and right
     refused = flmcp._dispatch({"id": 16, "op": "state.peaks", "args": [0, 3]})
     assert refused["ok"] is False and "track indices" in refused["err"]
-
-
-# --- MCPTools bridge -------------------------------------------------------
-
-
-def test_mcp_import_tools_reports_every_candidate_dir_on_failure(monkeypatch, tmp_path):
-    monkeypatch.setattr(flmcp, "_DEFAULT_MCP_TOOLS_DIRS", [str(tmp_path / "nope-a"), str(tmp_path / "nope-b")])
-    monkeypatch.setitem(flmcp._mcp_state, "module", None)
-    result = flmcp._dispatch({"id": 20, "op": "mcp.import_tools"})
-    assert result["ok"] is True
-    ret = result["ret"]
-    assert ret["imported"] is False
-    assert "nope-a" in ret["err"] and "nope-b" in ret["err"]
-    assert ret["whitelist"] == sorted(flmcp.MCP_TOOL_WHITELIST)
-
-
-def test_mcp_import_tools_succeeds_against_a_stub_module(monkeypatch, tmp_path):
-    (tmp_path / "MCPTools.py").write_text(
-        "def get_session_context():\n    return {}\n"
-        "def add_effect(plugin, target_tracks, slot_number):\n    return True\n"
-    )
-    monkeypatch.setitem(flmcp._mcp_state, "module", None)
-    result = flmcp._dispatch({"id": 21, "op": "mcp.import_tools", "kwargs": {"tools_dir": str(tmp_path)}})
-    assert result["ok"] is True
-    ret = result["ret"]
-    assert ret["imported"] is True
-    assert ret["tools_dir"] == str(tmp_path)
-    assert "get_session_context" in ret["available"]
-    assert "add_effect" in ret["available"]
-    assert "add_channel" in ret["missing"]  # whitelisted but not defined on our stub
-
-
-def test_mcp_call_requires_a_function_name():
-    result = flmcp._dispatch({"id": 22, "op": "mcp.call"})
-    assert result["ok"] is False
-    assert "requires the MCPTools function name" in result["err"]
-
-
-def test_mcp_call_rejects_names_outside_the_whitelist(monkeypatch):
-    monkeypatch.setitem(flmcp._mcp_state, "module", SimpleNamespace(os_system=lambda *a: None))
-    result = flmcp._dispatch({"id": 23, "op": "mcp.call", "args": ["os_system", "echo hi"]})
-    assert result["ok"] is False
-    assert "not a whitelisted MCPTools function" in result["err"]
-
-
-def test_mcp_call_requires_import_first(monkeypatch):
-    monkeypatch.setitem(flmcp._mcp_state, "module", None)
-    result = flmcp._dispatch({"id": 24, "op": "mcp.call", "args": ["get_session_context"]})
-    assert result["ok"] is False
-    assert "call mcp.import_tools first" in result["err"]
-
-
-def test_mcp_call_dispatches_positional_and_keyword_args(monkeypatch):
-    calls = []
-    fake_module = SimpleNamespace(
-        add_effect=lambda plugin, target_tracks, slot_number=1: calls.append((plugin, target_tracks, slot_number))
-    )
-    monkeypatch.setitem(flmcp._mcp_state, "module", fake_module)
-    result = flmcp._dispatch(
-        {"id": 25, "op": "mcp.call", "args": ["add_effect", "Fruity Limiter", "10"], "kwargs": {"slot_number": 1}}
-    )
-    assert result == {"id": 25, "ok": True, "ret": None}
-    assert calls == [("Fruity Limiter", "10", 1)]
-
-
-def test_mcp_call_captures_exceptions_from_the_whitelisted_function(monkeypatch):
-    def boom(*a, **kw):
-        raise RuntimeError("FL says no")
-
-    monkeypatch.setitem(flmcp._mcp_state, "module", SimpleNamespace(get_tempo=boom))
-    result = flmcp._dispatch({"id": 26, "op": "mcp.call", "args": ["get_tempo"]})
-    assert result["ok"] is False
-    assert "RuntimeError: FL says no" in result["err"]
 
 
 def test_ctl_hello_answers_the_same_fields_the_wire_pushes(monkeypatch):

@@ -12,7 +12,6 @@ The stable public surface is deliberately small:
 - `fl.meters(...)` to prove in seconds which channels sound (the `check` tool until 2026-11-03).
 - `fl.render(...)` and `fl.read_wav(...)` for render/audio workflows: the model measures and plots the samples itself.
 - `fl.scene(...)`, `fl.mixer`, `fl.playlist`, `fl.patterns` and `fl.stock_folder` for what FL has, as plain objects.
-- `fl.track(...).set_automation(...)` for existing FL-authored automation clips.
 - `with fl.file_edit(): ...` to batch file-lane edits into a single FL reload in development mode.
 - `fl.track(...).params(...)` and `set_param(...)` for live generator plugin parameters.
 - `fl.route(...)` and `fl.send(...)` for live mixer routing and sends.
@@ -398,19 +397,6 @@ target now: this session's confirmed writes over the project FL loaded.
 ```python
 for note in fl.track("Bass").notes():
     print(note.key, note.start)
-```
-
-### `track.set_automation(points: list[AutomationPoint]) -> AutomationResult`
-
-**Availability:** project write. Replaces this channel's existing automation
-clip and returns points confirmed by reparsing the saved project. It requires
-an existing FL-authored clip.
-
-```python
-fl.track("Bass").set_automation([
-    AutomationPoint(position=0, value=0.2),
-    AutomationPoint(position=4, value=0.8),
-])
 ```
 
 ### `track.set_levels(volume: float | None = None, pan: float | None = None, pitch: int | None = None) -> ChannelLevels`

@@ -261,7 +261,7 @@ def _sdk_docs() -> list[tuple[str, str]]:
             if not name.startswith("_"):
                 docs.append((f"{cls.__name__}.{name}", inspect.getdoc(member) or ""))
     returned = [Note, Target, schemas.WriteResult, schemas.Channel, schemas.ChannelLevels, schemas.CheckResult,
-                schemas.ChannelCheck, schemas.PluginParam, schemas.AutomationPoint, schemas.AutomationResult,
+                schemas.ChannelCheck, schemas.PluginParam, schemas.AutomationPoint,
                 schemas.ChannelRoute, schemas.MixerSend, schemas.ChannelPreset, schemas.Sound,
                 schemas.ChannelSound, schemas.MixerEffect, schemas.PatternInfo, schemas.PlacedClip,
                 schemas.AutomationTake, schemas.PlaylistClip]
@@ -277,7 +277,7 @@ def test_sdk_docstrings_and_returned_types_speak_plainly():
 
 
 def test_returned_models_carry_no_internal_fields():
-    for model in (schemas.WriteResult, schemas.AutomationResult):
+    for model in (schemas.WriteResult, schemas.AutomationTake):
         assert issubclass(model, BaseModel)
         assert not INTERNAL_WORDS.search(" ".join(model.model_fields)), model
 

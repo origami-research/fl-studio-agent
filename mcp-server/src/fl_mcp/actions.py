@@ -29,7 +29,6 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 
 from fl_mcp.schemas import (
-    AutomationResult,
     AutomationTake,
     ChannelLevels,
     ChannelPreset,
@@ -55,8 +54,6 @@ MAX_CHARS = 2000
 MAX_ACTIONS = 200
 # This many changes of one kind in a row read as one sentence.
 GROUP_AT = 3
-# Calls that rewrite the saved song and reopen FL to apply it.
-SONG_REWRITES = frozenset({"set_automation"})
 # Calls held inside an unfinished fl.file_edit() block, past which they are only counted.
 _MAX_HELD = 10_000
 
@@ -211,8 +208,6 @@ class ActionLog:
                 self._held_more += 1
             return
         self._describe(method, kwargs, value)
-        if method in SONG_REWRITES:
-            self._add(_Entry("Reopened FL with the changed song"))
 
     def hold(self) -> None:
         """An fl.file_edit() block opened: its changes reach FL only when it closes."""
@@ -234,8 +229,6 @@ class ActionLog:
         for call in held:
             self._describe(*call)
         self._more += more
-        if any(method in SONG_REWRITES for method, _, _ in held):
-            self._add(_Entry("Reopened FL with the changed song"))
 
     def sentences(self) -> list[str]:
         out = [_fit(sentence) for run in self._runs for sentence in run.sentences()]
@@ -313,10 +306,6 @@ class ActionLog:
 
     def _tempo(self, kwargs: Mapping[str, Any], bpm: float) -> list[_Entry]:
         return [_Entry(_TEMPO.one("tempo", _bpm(bpm)), _TEMPO, ("tempo",), ("tempo",), "tempo", _bpm(bpm))]
-
-    def _automation(self, kwargs: Mapping[str, Any], result: AutomationResult) -> list[_Entry]:
-        track = self._name(result.channel)
-        return [_Entry(f"Replaced the automation on {track} ({_count(len(result.points), 'point')})")]
 
     def _route(self, kwargs: Mapping[str, Any], result: ChannelRoute) -> list[_Entry]:
         return [_Entry(f"Routed {self._name(result.channel)} to {_where(result.mixer_track)}")]
@@ -411,7 +400,6 @@ _CALLS: dict[str, Callable[[ActionLog, Mapping[str, Any], Any], list[_Entry]]] =
     "set_channel_levels": ActionLog._levels,
     "set_plugin_param": ActionLog._param,
     "set_tempo": ActionLog._tempo,
-    "set_automation": ActionLog._automation,
     "route_channel": ActionLog._route,
     "set_send": ActionLog._send,
     "set_preset": ActionLog._preset,

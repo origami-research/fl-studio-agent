@@ -16,7 +16,7 @@ from fl_mcp.core.router import (
     route,
     satisfied,
 )
-from fl_mcp.ops import automation, levels, mixer, notes, params, playlist
+from fl_mcp.ops import levels, mixer, notes, params, playlist
 from fl_mcp.schemas import Note
 
 # -- fakes: lanes are (name, served kinds, provides) - exactly the data a real
@@ -24,7 +24,7 @@ from fl_mcp.schemas import Note
 # set_mixer) to prove new live capabilities need no new routing rule.
 
 BRIDGE_KINDS = frozenset({"write_notes", "clear_notes", "set_params", "set_mixer"})
-FILE_KINDS = frozenset({"write_notes", "clear_notes", "write_playlist", "write_automation", "set_levels"})
+FILE_KINDS = frozenset({"write_notes", "clear_notes", "write_playlist", "set_levels"})
 
 
 class FakeLane:
@@ -98,8 +98,6 @@ TABLE = [
     pytest.param(notes.CLEAR, {}, True, "bridge", id="notes.clear/full-evidence"),
     pytest.param(notes.CLEAR, {"bridge_live": False}, None, "project-write", id="notes.clear/bridge-down"),
     pytest.param(playlist.WRITE, {}, None, "project-write", id="playlist.write/file-even-when-live"),
-    pytest.param(automation.WRITE, {}, None, "project-write", id="automation.write/file-even-when-live"),
-    pytest.param(automation.WRITE, {"bridge_live": False}, None, "project-write", id="automation.write/offline"),
     pytest.param(levels.SET, {}, None, "project-write", id="levels.set/bridge-kind-unserved"),
     pytest.param(params.SET, {}, True, "bridge", id="params.set/live"),
     pytest.param(params.SET, {"bridge_live": False}, None, None, id="params.set/no-live-lane-raises"),
@@ -153,12 +151,6 @@ GLUE = [
         id="playlist.write_playlist",
     ),
     pytest.param(
-        automation.set_automation,
-        (3, [(0.0, 0.5)]),
-        ("write_automation", Capability.FILE, Target(channel=3), "replace", [(0.0, 0.5)]),
-        id="automation.set_automation",
-    ),
-    pytest.param(
         levels.set_levels,
         (4, [{"volume": 0.8}]),
         ("set_levels", Capability.TARGETED, Target(channel=4), "replace", [{"volume": 0.8}]),
@@ -191,7 +183,7 @@ def test_ops_build_correct_operations(glue, args, expected):
     assert receipt.backend == "recorder"
 
 
-ALL_SPECS = [notes.WRITE, notes.CLEAR, playlist.WRITE, automation.WRITE, levels.SET, params.SET, mixer.SET]
+ALL_SPECS = [notes.WRITE, notes.CLEAR, playlist.WRITE, levels.SET, params.SET, mixer.SET]
 
 
 def test_every_spec_carries_provenance():
@@ -221,4 +213,4 @@ def test_route_fits_the_real_session_evidence_and_breaker():
     breaker = BridgeBreaker(lambda: True)
     op = notes.WRITE.at(Target(pattern=1, channel=0), mode="merge")
     assert route(op, evidence, [bridge_lane(), file_lane()], breaker).name == "bridge"
-    assert route(automation.WRITE.at(Target(channel=2)), evidence, [bridge_lane(), file_lane()], breaker).name == "project-write"
+    assert route(playlist.WRITE.at(Target()), evidence, [bridge_lane(), file_lane()], breaker).name == "project-write"

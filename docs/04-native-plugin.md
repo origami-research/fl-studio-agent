@@ -2,6 +2,7 @@
 
 > **SUPERSEDED (2026-08-26):** FL 2026's native `ilmcp.runPRScript` replaces this plugin as the note-write path.
 > See [12-fl2026-native-surface.md](12-fl2026-native-surface.md).
+> (Corrected: the same day's live probe found `ilmcp` isolated from our scripts, so it replaces nothing; see docs/12 §4.)
 > Kept as historical record; the plugin survives only as a fallback until the doc-12 gating probe passes.
 
 The load-bearing component. A silent FL-native effect whose sole purpose is to execute

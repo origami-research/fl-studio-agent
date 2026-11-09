@@ -39,17 +39,5 @@ def gen_levels(rng: random.Random) -> dict[str, float | int]:
     }
 
 
-def gen_points(rng: random.Random) -> list[flp.AutomationPointSpec]:
-    positions = sorted(rng.sample(range(128), rng.randint(1, 16)))
-    return [
-        flp.AutomationPointSpec(
-            position=position * 0.25,
-            value=rng.randint(0, 1 << 16) / (1 << 16),
-            tension=rng.randint(-64, 64) / 64,
-        )
-        for position in positions
-    ]
-
-
 def gen_tempo(rng: random.Random) -> float:
     return rng.randint(60_000, 400_000) / 1000

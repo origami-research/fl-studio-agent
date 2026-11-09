@@ -14,8 +14,6 @@ from pathlib import Path
 from session_fakes import RENDER_SPAN
 
 from fl_mcp.schemas import (
-    AutomationPoint,
-    AutomationResult,
     Channel,
     ChannelCheck,
     ChannelLevels,
@@ -130,9 +128,6 @@ class FakeSession(FLSession):
 
             raise errors.control_plane_unavailable("ctl.save", 0.0)
         return self.control.send_request("ctl.save").ret
-
-    def set_automation(self, channel: int, points: list[AutomationPoint]) -> AutomationResult:
-        return AutomationResult(channel=channel, points=points)
 
     def set_channel_levels(
         self,

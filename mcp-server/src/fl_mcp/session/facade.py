@@ -44,7 +44,6 @@ from fl_mcp.plugin_models import load_bundled_param_models
 from fl_mcp.profile import profile_gate
 from fl_mcp.schemas import (
     AutomationPoint,
-    AutomationResult,
     AutomationTake,
     Channel,
     ChannelLevels,
@@ -503,10 +502,6 @@ class FLSession:
                 self, channel, volume=volume, pan=pan, pitch_semitones=pitch_semitones
             )
 
-    def set_automation(self, channel: int, points: list[AutomationPoint]) -> AutomationResult:
-        with self._write_guard("set_automation"):
-            return controls.set_automation(self, channel, points)
-
     def plugin_params(
         self,
         channel: int,
@@ -775,12 +770,12 @@ class FLSession:
     def file_edit(self) -> Iterator[None]:
         """Batch development-mode file-lane edits into ONE reload.
 
-        File-lane ops (automation, channel levels, added plugins, and the file
-        fallback for notes/tempo) each rewrite the .flp and normally reload FL -
-        a full SIGKILL+relaunch. Inside this block the edits still apply to the
-        .flp but the reload is deferred to a single reboot on exit, so a batch
-        of edits costs one reload instead of N. The first file write saves
-        live bridge work before it mutates the .flp. Nestable."""
+        The file fallbacks for notes, tempo and channel levels each rewrite the
+        .flp and normally reload FL - a full SIGKILL+relaunch. Inside this block
+        the edits still apply to the .flp but the reload is deferred to a single
+        reboot on exit, so a batch of edits costs one reload instead of N. The
+        first file write saves live bridge work before it mutates the .flp.
+        Nestable."""
         self._require_file_lane()
         if self._reload_batch_depth == 0:
             self._file_write_prepared = False

@@ -1,7 +1,7 @@
 """Generic operation routing: an Operation + the evidence -> the Lane that applies it.
 
 This is docs/30 Surface 3, the note-only predicate of session/detect.py
-generalized to ANY capability. Notes, playlist, automation, levels, params and
+generalized to ANY capability. Notes, playlist, levels, params and
 mixer all flow through the ONE rule in route(); adding a capability adds an
 OpSpec (data) in fl_mcp/ops/ plus, when a lane learns to execute it, an entry
 in that lane's served-kinds table - never a routing branch.
@@ -63,7 +63,7 @@ Mode = Literal["merge", "replace"]
 @dataclass(frozen=True)
 class Target:
     """A coordinate in the project. An op sets the axes that exist for it:
-    notes/automation at (pattern, channel), levels/params at a channel, mixer
+    notes at (pattern, channel), levels/params at a channel, mixer
     at a track, playlist at the arrangement (no axes). Routing reads only
     ``channel`` (the one evidence-gated axis); lanes and formats read the
     rest."""
@@ -79,7 +79,7 @@ class Operation:
     ``mode`` rides along because both codec.patch (G1) and the bridge wire
     take it; routing never reads it."""
 
-    kind: str  # "write_notes", "write_automation", "set_mixer", ...
+    kind: str  # "write_notes", "set_levels", "set_mixer", ...
     target: Target
     requires: Capability
     mode: Mode = "replace"

@@ -46,7 +46,6 @@ SessionMethod = Literal[
     "save_project",
     "scene_notes",
     "scene_summary",
-    "set_automation",
     "set_channel_levels",
     "set_plugin_param",
     "set_preset",

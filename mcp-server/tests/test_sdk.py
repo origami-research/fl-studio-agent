@@ -27,7 +27,7 @@ from sdk_fakes import DEFAULT_CHANNELS, FakeSession
 from session_fakes import RENDER_SPAN
 
 from fl_mcp import errors, sdk, theory
-from fl_mcp.schemas import AutomationPoint, ChannelLevels, MixerTrack, Note, Target, WriteResult
+from fl_mcp.schemas import ChannelLevels, MixerTrack, Note, Target, WriteResult
 from fl_mcp.sdk import ChannelNotFound, connect
 from fl_mcp.session.link import TRANSIENT_RETRY_DELAYS
 
@@ -182,26 +182,6 @@ def test_clear_applies_immediately(fl):
     receipt = fl.track("Bass").clear()
     assert receipt.total == 0
     assert fl.track("Bass").notes() == []
-
-
-def test_track_automation_returns_the_confirmed_points(fl):
-    points = [AutomationPoint(position=0, value=0.2), AutomationPoint(position=4, value=0.8)]
-
-    receipt = fl.track("Bass").set_automation(points)
-
-    assert receipt.channel == 1
-    assert receipt.points == points
-
-
-def test_automation_points_normalize_and_validate_at_the_sdk_boundary(fl):
-    receipt = fl.track("Bass").set_automation([{"position": 0, "value": 0.2}])
-    assert receipt.points == [AutomationPoint(position=0, value=0.2)]
-
-    with pytest.raises(errors.ToolError) as exc_info:
-        fl.track("Bass").set_automation([{"position": 0, "value": 2.0}])
-    assert exc_info.value.category == "invalid_argument"
-    assert "Track.set_automation" in exc_info.value.message
-    assert "value" in exc_info.value.message
 
 
 # -- channel levels -----------------------------------------------------------

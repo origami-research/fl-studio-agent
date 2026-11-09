@@ -116,7 +116,7 @@ This item splits into two capabilities with opposite verdicts, and conflating th
 ### 2a. Routing and mixer levels: probably ZERO new RE - verify, then wire it
 
 Surface 3 documents mixer WRITES we have never exercised: `mixer.setRouteTo`, `setTrackVolume`, `setTrackPan`, `muteTrack`, `soloTrack`, `setTrackName` (docs/05-controller-script.md module table).
-The controller script already whitelists the `mixer` module for passthrough, and the live-verified MCPTools public set includes `set_mixer_routing`, `route_channels_to_mixer`, `reset_mixer_routing`, and `get_mixer_routing` (fl-scripts/controller/device_FLMCP.py `MCP_TOOL_WHITELIST`; MCPTools import is LIVE, docs/12 §4).
+The controller script already whitelists the `mixer` module for passthrough,.
 And FL pushes `FPD_RoutingChanged` to plugins on routing edits - confirmed live in the probe window (PROBE_VERDICT Q3) - so a routing write has a free push-side confirmation signal, not just polling.
 
 **Decisive experiment** (minutes inside the consolidated live window, no plugin work): over the existing wire, call `mixer.setRouteTo(src, dest, 1)` on a scratch project, then verify on three independent channels - `mixer.getRouteSendActive` readback, the Bridge/observer seeing `FPD_RoutingChanged`, and a Cmd+S file diff.

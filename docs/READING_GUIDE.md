@@ -24,7 +24,7 @@ The OS/FL-coupled edge lives in `fl_mcp/fl/` (`paths.py`, `process.py`, `install
 |---|---|---|
 | Notes read/write | `flpkit/formats/notes.py` + `fl_mcp/ops/notes.py` | Codec + Router |
 | Playlist / arrangement | `flpkit/formats/playlist.py` + `fl_mcp/ops/playlist.py` | Codec + Router |
-| Automation read/write existing clip | `flpkit/formats/automation.py` + `fl_mcp/ops/automation.py` | Codec + Router |
+| Automation read (clips) / write (live) | `flpkit/formats/automation.py` + `fl_mcp/scene.py`; `fl_mcp/session/arrangement.py` | Codec / control wire |
 | Channel levels | `flpkit/formats/levels.py` + `fl_mcp/ops/levels.py` | Codec + Router |
 | Tempo | `flpkit/formats/tempo.py` + `fl_mcp/session/controls.py` | Codec / control wire |
 | Plugin parameters | `fl_mcp/ops/params.py` | Router + Transport |

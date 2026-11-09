@@ -36,7 +36,7 @@ verified controller-script operation that reloads the current `.flp` in place,
 so the file lane refuses before writing with retryable
 `file_lane_requires_reload`. During a match use the Bridge for notes and the
 control wire for tempo, plugin parameters, and channel levels; an effect is added
-live by loading its preset, and automation clips still have no live equivalent.
+live by loading its preset, and automation is written live by `fl.automate`.
 
 The note plane also requires a tick from a live Bridge process in the last 10
 seconds. `fl-mcp-doctor` reports a stopped tick as not ready instead of treating its

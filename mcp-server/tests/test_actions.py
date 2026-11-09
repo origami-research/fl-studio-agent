@@ -22,8 +22,6 @@ from fl_mcp.actions import GROUP_AT, MAX_ACTIONS, MAX_CHARS, ActionLog
 from fl_mcp.kernel.host import KernelHost
 from fl_mcp.kernel.launch import PosixLauncher, Workspace
 from fl_mcp.schemas import (
-    AutomationPoint,
-    AutomationResult,
     ChannelCheck,
     ChannelLevels,
     CheckResult,
@@ -90,9 +88,6 @@ def test_each_kind_of_change_reads_as_one_plain_sentence():
     actions.called(
         "set_channel_levels", {"channel": 1, "pan": -0.15, "pitch_semitones": 2}, levels(1, pan=-0.15, pitch=2)
     )
-    actions.called(
-        "set_automation", {}, AutomationResult(channel=4, points=[AutomationPoint(position=0, value=0.5)] * 8)
-    )
     actions.called("check", {}, check_result())
     actions.called("render_wav", {}, RenderReceipt(path=Path("r.wav"), span=_song_span(34.2)))
     actions.called("render_wav", {}, RenderReceipt(path=Path("r.wav"), span=RENDER_SPAN))
@@ -110,8 +105,6 @@ def test_each_kind_of_change_reads_as_one_plain_sentence():
         "Set 808 Kick volume to 0.60",
         "Set 808 Clap pan to -0.15",
         "Set 808 Clap pitch to +2 semitones",
-        "Replaced the automation on FLEX Bass (8 points)",
-        "Reopened FL with the changed song",
         "Checked bars 9-10: 5 of 5 tracks sound, master -1.8 dBFS",
         "Rendered 0:34",
         "Rendered 0:07 of pattern 1",
@@ -335,19 +328,15 @@ def test_a_file_edit_blocks_changes_count_only_once_fl_reopened_with_them():
     a failed reopen must not list them."""
     applied = log()
     applied.hold()
-    applied.called(
-        "set_automation", {}, AutomationResult(channel=4, points=[AutomationPoint(position=0, value=0.5)] * 2)
-    )
+    applied.called("set_tempo", {"bpm": 100.0}, 100.0)
     assert applied.sentences() == [], "nothing is listed while the block is open"
     applied.release(applied=True)
-    assert applied.sentences() == ["Replaced the automation on FLEX Bass (2 points)", "Reopened FL with the changed song"]
+    assert applied.sentences() == ["Set tempo to 100 BPM"]
 
     failed = log()
     failed.hold()
     failed.hold()
-    failed.called(
-        "set_automation", {}, AutomationResult(channel=4, points=[AutomationPoint(position=0, value=0.5)])
-    )
+    failed.called("set_tempo", {"bpm": 100.0}, 100.0)
     failed.release(applied=True)
     failed.release(applied=False)
     assert failed.sentences() == []

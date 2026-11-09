@@ -285,13 +285,6 @@ class AutomationPoint(BaseModel):
     tension: float = Field(default=0.0, ge=-1, le=1)
 
 
-class AutomationResult(BaseModel):
-    """The automation clip's points as saved, read back after the write."""
-
-    channel: int = Field(ge=0)
-    points: list[AutomationPoint]
-
-
 class PlaneStatus(BaseModel):
     connected: bool
     detail: str | None = None

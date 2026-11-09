@@ -43,7 +43,7 @@ Three swaps at the bottom of the stack:
 3. Note readback becomes cheap via a dump script, so the shadow score demotes from source-of-truth to write-through cache and the freshness ladder (docs/11 layers 3-5) collapses toward "just ask FL".
 
 Survivorship: KEEP the MCP server, schemas, kernel, action log, theory helpers, fake-FL tests, installer.
-PROMOTE `control.py` and `device_FLMCP.py` (now the single path to every capability; Lane B2's `mcp.import_tools`/`mcp.call` bridge graduates to core).
+PROMOTE `control.py` and `device_FLMCP.py` (now the single path to every capability).
 DEMOTE records/shadow score and the template project.
 RETIRE (only after the gating probe passes) all of `native/`, the spool note plane, the dispatcher probe, and their tests; archive docs/04.
 Net tracked-tree delta: roughly -2,700 to -2,900 LOC.
@@ -57,13 +57,13 @@ Net tracked-tree delta: roughly -2,700 to -2,900 LOC.
 | Step sequencer | `channels.setGridBit` | code done, live-unverified |
 | Mixer: vol/pan/colour/mute/solo/full routing matrix | public API | code done, live-unverified |
 | Plugin params (any VST/AU/native), by index or name | `plugins.*` | code done, live-unverified |
-| Load/remove effect plugins | `ilmcp.addEffect` | gated on probe |
-| Add/remove instruments (channels) | `ilmcp.addChannel` | gated on probe |
-| Write notes to any channel's active pattern | selection + `ilmcp.runPRScript` | gated on probe |
+| Load/remove effect plugins | `ilmcp.addEffect` | refuted: `ilmcp` is isolated (section 4) |
+| Add/remove instruments (channels) | `ilmcp.addChannel` | refuted: `ilmcp` is isolated (section 4) |
+| Write notes to any channel's active pattern | selection + `ilmcp.runPRScript` | refuted: `ilmcp` is isolated (section 4) |
 | Read notes back (fresh, any open score) | dump script → spool file | gated on probe |
 | Pattern selection / switching | public API | code path exists |
 | Pattern CREATION | `patterns.findFirstNextEmptyPat`, `clonePattern` (2026-11-09) | live: `fl.new_pattern` |
-| Browser / plugin-database enumeration | `ilmcp.getBrowserNames` | gated on probe |
+| Browser / plugin-database enumeration | `ilmcp.getBrowserNames` | refuted: `ilmcp` is isolated (section 4) |
 | Playlist track metadata (name/colour) | `playlist.*` | trivial |
 | Playlist/arrangement CLIP placement | no call; FL's song-mode recording adds a clip (2026-11-09) | live, add only: `fl.place` |
 | Automation clips (create/edit envelopes) | no call; FL's recording writes pattern automation (2026-11-09) | live as pattern automation: `fl.automate`; clips NONE |
@@ -80,7 +80,9 @@ Live result (full data: `fl-scripts/controller/probe/PROBE_REPORT.json`):
 3. Public-API tools through our transport: PASS. `get_session_context` returned the full live project JSON; `open_piano_roll_for_channel` opened the piano roll for a named channel.
 4. `ilmcp`-bound tools: FAIL. `add_effect` and `run_piano_roll_script` raise - the native `ilmcp` module is registered only in FL's own MCP/Gopher session, not in the MIDI-controller interpreter.
 
-Consequences: the ~40 public-API tools are ours today through the control plane.
+Consequences: the ~40 public-API tools were reachable through the control plane, but only by injecting a stand-in for FL's private `ilmcp` module.
+That stand-in gets around Image-Line's deliberate isolation of `ilmcp`, so the controller's `mcp.import_tools`/`mcp.call` bridge was removed on 2026-11-09.
+Those capabilities come from FL's documented controller API instead.
 Plugin loading, channel creation, and programmatic piano-roll script execution are NOT reachable from our transport; the note plane falls back to the C++ plugin or the keystroke-triggered pyscript, and the template project stays load-bearing for plugin/pattern provisioning.
 Incidental fixes made during the run: the installed controller script had been hand-patched with `__file__` (undefined in FL's interpreter, killed the script at load - reverted to the repo copy); FL's MIDI assignment was completed by writing `reg.xml` directly (input+output port 1); stale CoreMIDI ghost endpoints (from a killed probe process) had bound FL to a dead port - cleared by restarting `MIDIServer`.
 
@@ -123,7 +125,7 @@ Already done (156 tests green, against fake FL): MCP server (~18 tools), noteboo
 
 - M0: consolidate docs (this doc), extend `host_probe.py` with the note-write step.
 - M1 (gating, needs one live FL session): run the probe, record the verdict.
-- M2: rewire note ops onto the control plane; graduate `mcp.import_tools`/`mcp.call`; replicate the public-API tool set as controller ops.
+- M2: rewire note ops onto the control plane; replicate the public-API tool set as controller ops.
 - M3: readback via dump; shadow score demoted to cache; delete `native/` + spool note plane + their tests; archive docs/04.
 - M4: installer covers controller script + MIDI port + template only; render plane; Windows parity.
 

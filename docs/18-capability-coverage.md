@@ -44,7 +44,7 @@ Status: ✅ built · 🟡 partial · 🔵 reachable, unbuilt · ⛔ impossible.
 |---|---|---|
 | List / rename / select channels | LIVE + FILE | ✅ |
 | Volume / pan / mute / solo | LIVE + FILE | ✅ |
-| **Create / delete channels** | FILE (insert channel events) or NATIVE `ilmcp.addChannel` | 🔵 |
+| **Create / delete channels** | FILE (insert channel events); `ilmcp.addChannel` is isolated from our scripts ([docs/12 §4](12-fl2026-native-surface.md)) | 🔵 |
 | Route channel → mixer track | LIVE + FILE | ✅ |
 | Step-sequencer grid | LIVE (`setGridBit`) | ✅ |
 | Channel pitch / fine tune | FILE + LIVE (partial) | 🟡 |
@@ -70,7 +70,7 @@ Status: ✅ built · 🟡 partial · 🔵 reachable, unbuilt · ⛔ impossible.
 | Volume / pan / mute / solo | LIVE + FILE | ✅ |
 | Full send-routing matrix | LIVE + FILE | ✅ |
 | Track naming / color | LIVE + FILE | ✅ |
-| **Add / remove effects** | NATIVE `ilmcp.addEffect` (session-scoped) or FILE | 🔵 (FILE path is the general answer) |
+| **Add / remove effects** | FILE; `ilmcp.addEffect` is isolated from our scripts ([docs/12 §4](12-fl2026-native-surface.md)) | 🔵 (FILE path is the general answer) |
 
 ### Plugins / sound design
 | Capability | Mechanism | Status |

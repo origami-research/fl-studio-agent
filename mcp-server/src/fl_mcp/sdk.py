@@ -27,7 +27,6 @@ from fl_mcp.contract import SceneNotesResult, SceneSummary
 
 from .schemas import (
     AutomationPoint,
-    AutomationResult,
     AutomationTake,
     Channel,
     ChannelLevels,
@@ -570,14 +569,16 @@ class FL:
         self._session.undo()
 
     def file_edit(self) -> AbstractContextManager[None]:
-        """Batch edits that rewrite the saved song (automation) into one FL reopen.
+        """Batch edits that rewrite the saved song into one FL reopen.
 
         Outside a match only: during a match FL is never reopened, so this raises.
-        Notes, tempo, parameters and levels apply live and need no batching::
+        Notes, tempo and levels apply live. Only when FL's control wire is down in
+        development do they rewrite the saved song instead, each reopening FL;
+        inside this block FL reopens once::
 
             with fl.file_edit():
-                fl.track("Bass").set_automation(points)
-                fl.track("Lead").set_automation(more_points)
+                fl.track("Bass").write(notes)
+                fl.set_tempo(124)
         """
         # Each file-lane op rewrites the .flp and normally reloads FL - a full
         # restart; the batch reloads once on exit. Session mode refuses it.
@@ -620,14 +621,6 @@ class Track:
         """The notes on this track's pattern as FL has them now, including your writes."""
         target = Target(pattern=self.pattern, channel=self.channel)
         return self._fl._session.read_notes(target)
-
-    def set_automation(self, points: Sequence[AutomationPointInput]) -> AutomationResult:
-        """Replace this channel's existing automation clip. Outside a match only."""
-        try:
-            normalized_points = _AUTOMATION_POINTS.validate_python(points)
-        except ValidationError as exc:
-            raise errors.invalid_argument("Track.set_automation", str(exc)) from None
-        return self._fl._session.set_automation(self.channel, normalized_points)
 
     def set_levels(
         self, *, volume: float | None = None, pan: float | None = None, pitch: int | None = None

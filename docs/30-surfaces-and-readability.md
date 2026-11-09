@@ -84,4 +84,4 @@ class CapabilityTag:
 
 ## Example trace
 
-Automation write is a file-backed capability. `flpkit/formats/automation.py` describes the automation bytes and verifier. `fl_mcp/ops/automation.py` binds that format to the operation and provenance tag. The router chooses the file lane, and the file lane calls `codec.patch`. No capability-specific writer is allowed outside that path.
+Playlist write is a file-backed capability. `flpkit/formats/playlist.py` describes the playlist bytes and verifier. `fl_mcp/ops/playlist.py` binds that format to the operation and provenance tag. The router chooses the file lane, and the file lane calls `codec.patch`. No capability-specific writer is allowed outside that path.

@@ -1,6 +1,6 @@
 """Promotion gate for new automation clips and their target links.
 
-Existing-clip point replacement is verified separately.  A creator needs an
+Automation is written live by fl.automate.  A file creator needs an
 FL-authored one-change pair that proves both the new channel/event set and the
 target link, so this stays an expected failure until that evidence is checked
 in and decoded.

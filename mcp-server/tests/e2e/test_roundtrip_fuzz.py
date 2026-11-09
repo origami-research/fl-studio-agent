@@ -28,7 +28,7 @@ from typing import Any
 
 import flpkit as flp
 import pytest
-from fuzz import gen_clips, gen_levels, gen_notes, gen_points, gen_tempo
+from fuzz import gen_clips, gen_levels, gen_notes, gen_tempo
 
 from e2e.matrix import MATRIX, _pattern_ids, requires_fl_data
 
@@ -43,7 +43,6 @@ class Ctx:
     fresh_pattern: int
     channel: int
     patterns: tuple[int, ...]  # patterns that exist, for clip generation
-    automation_channel: int  # an existing kind-5 channel whose blob we patch
 
 
 @dataclass(frozen=True)
@@ -58,7 +57,7 @@ class FuzzRow:
 
 
 def _make_ctx(tmp_path: Path) -> Ctx:
-    # The one matrix project carrying every row's element, automation included.
+    # The one matrix project carrying every row's element.
     source = next(p.source for p in MATRIX if p.id == "demo-80-stride-automation")
     if source is None:
         pytest.fail("demo-80-stride-automation template missing from the FL corpus - re-pin the matrix")
@@ -71,7 +70,6 @@ def _make_ctx(tmp_path: Path) -> Ctx:
         fresh_pattern=max(_pattern_ids(target.read_bytes()), default=0) + 1,
         channel=next(c.index for c in project.channels if not c.is_automation),
         patterns=tuple(sorted({item.pattern for item in project.playlist if item.pattern is not None})),
-        automation_channel=next(c.index for c in project.channels if c.is_automation),
     )
 
 
@@ -94,18 +92,9 @@ def _clips_view(ctx: Ctx) -> list[flp.FlpPlaylistItem]:
     return [item for item in flp.read(ctx.path).playlist if item.arrangement == 0]
 
 
-def _points_apply(ctx: Ctx, rng: random.Random) -> list[Any]:
-    from flpkit import codec
-    from flpkit.formats import AutomationFormat
-
-    flp.write_automation(ctx.path, ctx.automation_channel, gen_points(rng), mode="replace")
-    return codec.read(ctx.path, AutomationFormat(), codec.Target(channel=ctx.automation_channel))
-
-
 ROWS = (
     FuzzRow("notes", _notes_apply, _notes_view),
     FuzzRow("playlist", _clips_apply, _clips_view),
-    FuzzRow("automation", _points_apply, None),
     FuzzRow("levels", lambda ctx, rng: flp.set_channel_levels(ctx.path, ctx.channel, **gen_levels(rng)), None),
     FuzzRow("tempo", lambda ctx, rng: flp.set_tempo(ctx.path, gen_tempo(rng)), lambda ctx: flp.read(ctx.path).tempo),
 )

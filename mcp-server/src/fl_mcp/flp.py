@@ -25,7 +25,6 @@ from flpkit import (
     LEVEL_MAX,
     PAN_CENTRE,
     VOLUME_DEFAULT,
-    FlpAutomationPoint,
     FlpChannel,
     FlpError,
     FlpNote,
@@ -38,14 +37,13 @@ from flpkit import (
     write_notes,
 )
 
-from .schemas import AutomationPoint, ChannelLevels
+from .schemas import ChannelLevels
 
 __all__ = [
     "LEVEL_MAX",
     "PAN_CENTRE",
     "VOLUME_DEFAULT",
     "ChannelLevels",
-    "FlpAutomationPoint",
     "FlpChannel",
     "FlpError",
     "FlpNote",
@@ -57,7 +55,6 @@ __all__ = [
     "read",
     "set_channel_levels",
     "set_tempo",
-    "write_automation",
     "write_notes",
 ]
 
@@ -80,26 +77,6 @@ def set_channel_levels(
         pan=levels.pan,
         pitch_semitones=levels.pitch_semitones,
     )
-
-
-def write_automation(
-    path: Path, channel: int, points: Sequence[AutomationPoint]
-) -> tuple[FlpAutomationPoint, ...]:
-    """Patch through flpkit, then return flpkit's saved-file readback.
-
-    ``flpkit.write_automation`` is the canonical codec and performs the
-    splice's own encode/save/reparse equality check.  This seam exposes the
-    resulting parsed points so the session can independently reparse and
-    compare its boundary readback before it reloads FL.
-    """
-    flpkit.write_automation(path, channel, points)
-    project = read(path)
-    for item in project.channels:
-        if item.index == channel:
-            if item.automation is None:
-                raise FlpError(f"channel {channel} has no automation readback after save")
-            return item.automation
-    raise FlpError(f"channel {channel} is absent from the saved-file automation readback")
 
 
 # The project's own comments (FL's File > Project info): text, UTF-16 since FL 11.5.

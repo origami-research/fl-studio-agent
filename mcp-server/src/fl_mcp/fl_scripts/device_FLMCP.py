@@ -19,9 +19,7 @@ at import time.
 """
 
 import contextlib
-import importlib
 import os
-import sys
 import traceback
 
 try:
@@ -43,7 +41,7 @@ except ImportError:
     arrangement = channels = device = general = midi = None
     mixer = patterns = playlist = plugins = transport = ui = None
 
-SCRIPT_VER = "0.2.6"
+SCRIPT_VER = "0.2.7"
 
 # ---------------------------------------------------------------------------
 # Wire codec (framing, chunking/reassembly) - flmcp_codec.py beside this file is the single
@@ -310,137 +308,6 @@ def _undo_probe():
         "history_last": general.getUndoHistoryLast(),
         "history_hint": general.getUndoLevelHint(),
     }
-
-
-# ---------------------------------------------------------------------------
-# MCPTools bridge - FL Studio 2026 ships its own `MCPTools.pyc` (used by its
-# built-in Gopher assistant) exposing ~47 tools this script's own ALLOWED
-# table doesn't reach: add_effect/add_channel/remove_channels (create/destroy
-# - Surface 1 in docs/01 cannot do this), plugin-parameter get/set by name,
-# and run_piano_roll_script/save_piano_roll_script. Direct `import MCPTools`
-# here is expected to fail with a bytecode-magic-number mismatch (MCPTools.pyc
-# is compiled for CPython 3.12; this interpreter is CPython 3.9 per docs/01), reproduced
-# empirically outside FL. mcp.import_tools/mcp.call below still attempt the
-# live import at runtime - FL's actual embedded interpreter is unverified
-# against a live run - and report success/failure rather than assume either.
-# ---------------------------------------------------------------------------
-
-_mcp_state = {"module": None}
-
-# FL's default Tools/MCP dir, by platform. Pass tools_dir explicitly to
-# mcp.import_tools if FL is installed elsewhere or under a different version
-# folder - these are best-effort defaults, not the only candidates tried.
-_DEFAULT_MCP_TOOLS_DIRS = [
-    "/Applications/FL Studio 2026.app/Contents/Resources/FL/System/Tools/MCP",
-    r"C:\Program Files\Image-Line\FL Studio 2026\System\Tools\MCP",
-]
-
-# The public MCPTools functions, hardcoded from decompiling MCPTools.pyc
-# (stubbing its FL-module + `ilmcp` imports under a matching CPython 3.12 and
-# reading `inspect.signature` per function). Not read live via get_mcp_tools_json(): that call reads a
-# registry populated by the real `ilmcp.mcp_tool` decorator, which returns an
-# empty list under any stand-in decorator, since nothing registered into it.
-# Private (`_`-prefixed) helpers and the `mcp_tool`/`whenDone` names are
-# deliberately excluded - only names FL's own assistant would call as a tool.
-MCP_TOOL_WHITELIST = frozenset(
-    {
-        "add_channel", "add_effect", "get_browser_names", "get_channel_volumes",
-        "get_highlight_names", "get_mcp_tools_json", "get_mixer_routing",
-        "get_mixer_tracks_volume", "get_playlist_track_names",
-        "get_plugin_parameter_list", "get_plugin_parameter_value",
-        "get_session_context", "get_tempo", "list_channel_names",
-        "mute_channels", "mute_mixer_tracks", "open_piano_roll_for_channel",
-        "play", "quantize_channel", "remove_channels", "remove_effect",
-        "rename_channels", "rename_mixer_tracks", "rename_playlist_tracks",
-        "reset_mixer_routing", "reset_mixer_tracks", "route_channels_to_mixer",
-        "run_piano_roll_script", "save_piano_roll_script", "select_channels",
-        "set_channels_colour", "set_channels_pan", "set_channels_volume",
-        "set_channels_volume_db", "set_mixer_routing", "set_mixer_tracks_colour",
-        "set_mixer_tracks_pan", "set_mixer_tracks_volume_db",
-        "set_mixer_tracks_volume_percent", "set_playlist_tracks_colour",
-        "set_plugin_parameter_value", "set_step_sequencer_pattern",
-        "set_step_sequencer_step", "set_tempo", "show_highlight",
-        "show_or_hide_window", "solo_channels", "solo_mixer_tracks", "stop",
-    }
-)
-
-
-class _IlmcpUnavailable:
-    """Stand-in for FL's native `ilmcp` module when it isn't registered in
-    this interpreter (live-verified: the MIDI-scripting context doesn't get
-    it; only FL's own MCP/Gopher session does). Importing MCPTools with this
-    stub keeps its ~40 public-API tools callable; the 8 ilmcp-bound ones
-    raise a structured error instead of NameError at import time.
-    """
-
-    def __getattr__(self, name):
-        def _unavailable(*_args, **_kwargs):
-            raise RuntimeError(
-                f"ilmcp.{name} is not reachable from the controller-script "
-                "interpreter (native module registered only in FL's own MCP session)"
-            )
-        return _unavailable
-
-
-def _import_mcp_tools(tools_dir=None):
-    """Best-effort import of FL's bundled MCPTools module.
-
-    Returns ``(imported: bool, detail: str)`` - on success `detail` is the
-    directory that worked (with a ``[ilmcp stubbed]`` marker when the native
-    module was absent and a stub was injected); on failure it's every
-    candidate tried and why.
-    """
-    candidates = [tools_dir] if tools_dir else _DEFAULT_MCP_TOOLS_DIRS
-    errors = []
-    for candidate in candidates:
-        if not candidate or not os.path.isdir(candidate):
-            errors.append(f"{candidate!r}: not a directory")
-            continue
-        if candidate not in sys.path:
-            sys.path.insert(0, candidate)
-        for stub_ilmcp in (False, True):
-            if stub_ilmcp:
-                if "ilmcp" in sys.modules:
-                    break  # real ilmcp exists; the first attempt's error was something else
-                sys.modules["ilmcp"] = _IlmcpUnavailable()
-            try:
-                _mcp_state["module"] = importlib.import_module("MCPTools")
-                return True, candidate + (" [ilmcp stubbed]" if stub_ilmcp else "")
-            except Exception as exc:
-                if stub_ilmcp:
-                    sys.modules.pop("ilmcp", None)
-                sys.modules.pop("MCPTools", None)
-                errors.append(
-                    f"{candidate!r}{' [ilmcp stubbed]' if stub_ilmcp else ''}: "
-                    f"{type(exc).__name__}: {exc}"
-                )
-    return False, "; ".join(errors)
-
-
-def _mcp_import_tools(args, kwargs):
-    tools_dir = kwargs.get("tools_dir") or (args[0] if args else None)
-    ok, detail = _import_mcp_tools(tools_dir)
-    if not ok:
-        return {"imported": False, "err": detail, "whitelist": sorted(MCP_TOOL_WHITELIST)}
-    module = _mcp_state["module"]
-    present = sorted(name for name in MCP_TOOL_WHITELIST if callable(getattr(module, name, None)))
-    missing = sorted(MCP_TOOL_WHITELIST - set(present))
-    return {"imported": True, "tools_dir": detail, "available": present, "missing": missing}
-
-
-def _mcp_call(args, kwargs):
-    if not args:
-        raise ValueError("mcp.call requires the MCPTools function name as args[0]")
-    fn_name = args[0]
-    if fn_name not in MCP_TOOL_WHITELIST:
-        raise ValueError(f"{fn_name!r} is not a whitelisted MCPTools function")
-    module = _mcp_state["module"]
-    if module is None:
-        raise RuntimeError("MCPTools not imported - call mcp.import_tools first")
-    fn = getattr(module, fn_name, None)
-    if not callable(fn):
-        raise RuntimeError(f"MCPTools has no callable {fn_name!r}")
-    return fn(*args[1:], **kwargs)
 
 
 def _select_channels(args, kwargs):
@@ -780,11 +647,9 @@ COMPOSITE_OPS = {
     "ctl.record": _start_job,
     "ctl.job": _job_status,
     "ctl.cancel": _cancel_job,
-    "mcp.import_tools": _mcp_import_tools,
-    "mcp.call": _mcp_call,
     "ctl.hello": lambda args, kwargs: _hello_fields(),
 }
-COMPOSITE_NAMESPACES = ("state.", "mcp.", "ctl.")
+COMPOSITE_NAMESPACES = ("state.", "ctl.")
 
 
 # ---------------------------------------------------------------------------

@@ -18,7 +18,7 @@ import pytest
 
 router = pytest.importorskip("fl_mcp.core.router", reason="fl_mcp.core.router not merged yet (G3)")
 
-OP_KINDS = ("write_notes", "write_automation", "set_mixer", "write_playlist")
+OP_KINDS = ("write_notes", "set_levels", "set_mixer", "write_playlist")
 
 
 @dataclass

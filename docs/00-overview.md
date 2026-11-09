@@ -3,6 +3,7 @@
 > **AMENDED (2026-08-26):** the "unlock" below (the C++ effect plugin + `FHD_AddNotesToPR`) is superseded by FL 2026's own native tooling (`ilmcp`).
 > Plugin loading and instrument creation are no longer walls.
 > See [12-fl2026-native-surface.md](12-fl2026-native-surface.md) for the current architecture and capability matrix.
+> (Corrected: the same day's live probe found `ilmcp` registered only in FL's own assistant session, isolated from our scripts, so it supersedes nothing here; see docs/12 §4.)
 
 ## What we are building
 

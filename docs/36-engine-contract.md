@@ -41,7 +41,7 @@ Repeated undos read "Undid 4 actions in FL", and an identical sentence repeated 
 Changes are told apart by channel and pattern, not by name: two channels with one name are listed as "Sampler (channel 0)" and "Sampler (channel 2)".
 A call lists at most 200 actions, then "and N more actions", because a cell can loop on `fl` calls without using its time budget.
 For `run`, the server records each `fl` call it serves while the cell runs, so a cell that raises partway, is interrupted, or loses its kernel still lists the changes FL already has.
-Inside `fl.file_edit()`, changes reach FL only when the block closes and FL reopens the changed song, so they are listed then, followed by "Reopened FL with the changed song"; if closing fails, none of them are listed.
+Inside `fl.file_edit()`, changes reach FL only when the block closes and FL reopens the changed song, so they are listed then; if closing fails, none of them are listed.
 `fl.read_wav` runs inside the kernel without reaching the server, so what a cell measures from a render is not listed.
 `fl_mcp/actions.py` holds the wording.
 

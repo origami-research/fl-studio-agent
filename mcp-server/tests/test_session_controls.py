@@ -26,7 +26,7 @@ from session_fakes import (
 )
 
 from fl_mcp import errors, flp
-from fl_mcp.schemas import AutomationPoint, ControlResponse, PluginParamModel, PluginParamSpec, RenderReceipt
+from fl_mcp.schemas import ControlResponse, PluginParamModel, PluginParamSpec, RenderReceipt
 from fl_mcp.session import FLSession, NotePlaneUnavailable, WriteRejected, controls
 from fl_mcp.session import facade as facade_mod
 
@@ -499,79 +499,6 @@ def test_levels_require_at_least_one_field():
     session, _ = make_session(control=FakeControl(hello=HELLO))
     with pytest.raises(ValueError, match="nothing to change"):
         session.set_channel_levels(2)
-
-
-# --- set_automation ---------------------------------------------------------
-
-
-def test_automation_project_backend_returns_reparsed_points(monkeypatch, tmp_path, no_reload):
-    saved = [flp.FlpAutomationPoint(position=1.0, value=0.25, tension=-0.5)]
-    monkeypatch.setattr(flp, "write_automation", lambda *args: saved)
-    monkeypatch.setattr(
-        flp,
-        "read",
-        lambda _path: type(
-            "Project", (), {"channels": [type("Channel", (), {"index": 2, "automation": saved})()]}
-        )(),
-    )
-    session, _ = make_session(project=tmp_path / "agent.flp")
-
-    receipt = session.set_automation(2, [AutomationPoint(position=1, value=0.25, tension=-0.5)])
-
-    assert receipt.points == [AutomationPoint(position=1, value=0.25, tension=-0.5)]
-    assert no_reload == [True]
-
-
-def test_automation_refuses_a_session_reparse_mismatch(monkeypatch, tmp_path, no_reload):
-    saved = [flp.FlpAutomationPoint(position=1.0, value=0.25, tension=-0.5)]
-    reparsed = [flp.FlpAutomationPoint(position=1.0, value=0.5, tension=-0.5)]
-    monkeypatch.setattr(flp, "write_automation", lambda *args: saved)
-    monkeypatch.setattr(
-        flp,
-        "read",
-        lambda _path: type(
-            "Project", (), {"channels": [type("Channel", (), {"index": 2, "automation": reparsed})()]}
-        )(),
-    )
-    session, _ = make_session(project=tmp_path / "agent.flp")
-
-    with pytest.raises(WriteRejected, match="did not save as written"):
-        session.set_automation(2, [AutomationPoint(position=1, value=0.25, tension=-0.5)])
-    assert no_reload == []
-
-
-def test_automation_file_seam_rejects_a_missing_readback(monkeypatch, tmp_path):
-    monkeypatch.setattr(flp.flpkit, "write_automation", lambda *args: 1)
-    monkeypatch.setattr(
-        flp,
-        "read",
-        lambda _path: type(
-            "Project", (), {"channels": [type("Channel", (), {"index": 2, "automation": None})()]}
-        )(),
-    )
-
-    with pytest.raises(flp.FlpError, match="no automation readback"):
-        flp.write_automation(tmp_path / "agent.flp", 2, [AutomationPoint(position=1, value=0.25)])
-
-
-def test_automation_file_seam_rejects_an_absent_readback_channel(monkeypatch, tmp_path):
-    monkeypatch.setattr(flp.flpkit, "write_automation", lambda *args: 1)
-    monkeypatch.setattr(
-        flp,
-        "read",
-        lambda _path: type(
-            "Project", (), {"channels": [type("Channel", (), {"index": 1, "automation": ()})()]}
-        )(),
-    )
-
-    with pytest.raises(flp.FlpError, match="absent from the saved-file automation readback"):
-        flp.write_automation(tmp_path / "agent.flp", 2, [AutomationPoint(position=1, value=0.25)])
-
-
-def test_automation_requires_a_project_file():
-    session, _ = make_session()
-    with pytest.raises(NotePlaneUnavailable, match="Automation clips cannot be written"):
-        session.set_automation(2, [])
 
 
 # --- undo (addendum A11) ------------------------------------------------------

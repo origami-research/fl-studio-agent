@@ -7,4 +7,4 @@ its file here plus flpkit's format for it - never a third file."""
 
 # Importing the catalog materializes it: each module's Operation.spec
 # registers its CapabilityTag in core.provenance at import.
-from . import automation, levels, mixer, notes, params, playlist  # noqa: F401
+from . import levels, mixer, notes, params, playlist  # noqa: F401
