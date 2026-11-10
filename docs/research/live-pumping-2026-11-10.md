@@ -2,6 +2,7 @@
 
 **Scope.** The kick ducking a pad or bass, drawn live with `fl.automate` on each ducked part's mixer track volume instead of bounced through numpy and a sampler ([earlier note](sidechain-samples-live-2026-11-09.md)).
 Also why the run kernel missed its start limit on a freshly reset box (#324).
+Runs used FL Studio 26.1.6 (trial) for Windows on the dev box fl-mcp-03 (2 vCPU), restored from the arena image, the packaged agent project at 120 BPM, and the controller 0.2.8.
 Probe scripts, logs and WAVs are kept outside the repository (`~/.cache/release-019` on the operator's Mac).
 
 ## The probe
