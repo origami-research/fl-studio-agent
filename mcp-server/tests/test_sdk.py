@@ -394,6 +394,23 @@ def test_params_limit_and_set_param_validate_at_the_sdk_boundary(fl):
     assert "value" in exc_info.value.message
 
 
+@pytest.mark.parametrize(("track", "slot"), [(-1, 0), (17, 10), (17, -1), (17, True), ("17", 0)])
+def test_an_effect_outside_the_mixers_slots_is_refused_at_the_sdk_boundary(fl, track, slot):
+    with pytest.raises(errors.ToolError) as exc_info:
+        fl.effect(track, slot)
+    assert exc_info.value.category == "invalid_argument"
+    assert "fl.effect" in exc_info.value.message
+
+
+def test_an_effects_params_and_set_param_work_like_a_tracks(fl):
+    limiter = fl.effect(17, 0)
+
+    assert [param.name for param in limiter.params("res")] == ["Resonance"]
+    assert limiter.set_param("Cutoff", 0.2).value == 0.2
+    with pytest.raises(errors.ToolError, match=r"Effect\.set_param"):
+        limiter.set_param(0, 2.0)
+
+
 def test_set_param_accepts_index_or_name_and_returns_readback(fl):
     assert fl.track("Bass").set_param(0, 0.75) == sdk.PluginParam(
         index=0, name="Cutoff", value=0.75, display="0.75", kind="continuous"

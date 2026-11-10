@@ -137,7 +137,9 @@ def run(code: str, ctx: Context) -> RunResult:
            0.8)], mode="merge"|"replace") (key or "C4", start and length in
            beats, velocity); t.clear(); t.set_levels(volume=0..1, pan=-1..1,
            pitch=semitones); t.params("cutoff") / t.set_param("cutoff", 0.55);
-           fl.route(ch, mixer_track); fl.send(src, dst, level=0.8, on=True).
+           fl.route(ch, mixer_track); fl.send(src, dst, level=0.8, on=True);
+           fl.effect(mixer_track, slot).params() / .set_param(name, 0..1), with
+           FL's text for each value (display: "-35.4dB").
     Song:  p = fl.new_pattern("Drop", copy_of=None) (a pattern per section; write
            it with fl.track(ch, pattern=p.number)); fl.rename_pattern(p, name);
            fl.place(p, [17, 33]) puts it in the song at those bars (every bar for
@@ -149,8 +151,13 @@ def run(code: str, ctx: Context) -> RunResult:
            effect's param): FL records it into a new pattern placed at bar; it
            plays twice in real time. Pattern 1 already starts the song.
     Sounds: fl.sounds("808 kick", kind="sample"|"preset") -> stock sounds (path
-           relative to fl.stock_folder, readable); fl.load_sample(ch, sound);
-           fl.load_preset(ch, sound); fl.presets(ch); fl.set_preset(ch, name).
+           relative to fl.stock_folder, readable); fl.load_sample(ch, sound) also
+           takes a WAV you wrote: chop, stretch, reverse or re-pitch in Python, and
+           write a note as long as the sample; fl.load_preset(ch, sound) (an effect
+           preset adds the effect: .effect); fl.presets(ch); fl.set_preset(ch, name).
+           Sidechain pumping: code cannot set a compressor's sidechain input, so
+           render the part alone, dip its gain after each kick in numpy, load that
+           WAV into a spare sampler and clear the part's own notes.
     Hear:  fl.render("mix.wav", bars=, start_bar=1, solo=[ch], mute=[ch],
            stems="channels"|"mixer"|[ch]) -> the WAV's Path with .span (start_bar,
            beats, tempo_bpm, seconds); it plays in real time. Stems are one play

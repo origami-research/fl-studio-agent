@@ -452,6 +452,15 @@ def test_a_channel_is_always_fls_global_index_never_the_filter_groups():
     assert len(control.calls) == 3
 
 
+def test_a_value_string_takes_its_flag_after_the_slot():
+    """FL's getParamValueString is (paramIndex, index, slotIndex, useGlobalIndex): live on FL
+    2026, a fifth argument raised "function takes at most 4 arguments (5 given)"."""
+    link, control, _ = _link({"plugins.getParamValueString": lambda args: "-35.4dB"})
+
+    assert link.call("plugins.getParamValueString", [8, 17, 0]) == "-35.4dB"
+    assert control.calls == [("plugins.getParamValueString", [8, 17, 0, 1])]
+
+
 def test_set_tempo_lands_through_a_transient_refusal():
     """The whole session path: the model's set_tempo returns FL's tempo, not an error."""
     tempo = {"value": 130_000}

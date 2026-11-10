@@ -166,6 +166,14 @@ class FakeSession(FLSession):
             kind="continuous",
         )
 
+    def effect_params(
+        self, mixer_track: int, slot: int, *, query: str | None = None, limit: int = 40
+    ) -> list[PluginParam]:
+        return self.plugin_params(mixer_track, query=query, limit=limit)
+
+    def set_effect_param(self, mixer_track: int, slot: int, param: int | str, value: float) -> PluginParam:
+        return self.set_plugin_param(mixer_track, param, value)
+
     @contextlib.contextmanager
     def _write_guard(self, action: str) -> Iterator[None]:
         yield  # one caller at a time in these tests; the real guard is tested on FLSession

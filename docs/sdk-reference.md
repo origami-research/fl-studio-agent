@@ -13,11 +13,11 @@ The stable public surface is deliberately small:
 - `fl.render(...)` and `fl.read_wav(...)` for render/audio workflows: the model measures and plots the samples itself.
 - `fl.scene(...)`, `fl.mixer`, `fl.playlist`, `fl.patterns` and `fl.stock_folder` for what FL has, as plain objects.
 - `with fl.file_edit(): ...` to batch file-lane edits into a single FL reload in development mode.
-- `fl.track(...).params(...)` and `set_param(...)` for live generator plugin parameters.
+- `fl.track(...).params(...)` and `set_param(...)` for live generator plugin parameters; `fl.effect(track, slot)` for a mixer effect's.
 - `fl.route(...)` and `fl.send(...)` for live mixer routing and sends.
 - `fl.presets(...)` and `fl.set_preset(...)` for a plugin channel's presets.
 - `fl.sounds(...)` to search the stock presets and samples FL ships.
-- `fl.load_sample(...)` and `fl.load_preset(...)` to load one of them into a channel.
+- `fl.load_sample(...)` and `fl.load_preset(...)` to load one of them, or a sample made in Python, into a channel.
 - `fl.new_pattern(...)`, `fl.rename_pattern(...)` and `fl.place(...)` to arrange the song live: a pattern per section, its clips in the playlist.
 - `fl.automate(...)` to move a control over time live (filter sweeps, volume rides, risers).
 
@@ -280,12 +280,42 @@ A missing stock folder raises `unknown_target` rather than returning an empty li
 kicks = fl.sounds("808 kick", kind="sample")
 ```
 
-### `fl.load_sample(channel: str | int, sample: Sound | str) -> ChannelSound`
+### `fl.load_sample(channel: str | int, sample: Sound | str | Path) -> ChannelSound`
 
-**Availability:** live-only, through the FL MCP Bridge. Loads a stock sample (a `Sound` from `fl.sounds(kind="sample")`, or its `path`) into a sampler channel.
-FL renames the channel after the sample (`"808 Cowbell"`), numbering it when another channel already has that name (`"808 Kick #2"`).
+**Availability:** live-only, through the FL MCP Bridge. Loads a sample into a sampler channel: a stock sample (a `Sound` from `fl.sounds(kind="sample")`, or its `path`, which starts `Packs/`), or an audio file the code wrote (WAV, FLAC, Ogg, AIFF or MP3; a path relative to the workspace or absolute).
+FL renames the channel after the file (`"808 Cowbell"`), numbering it when another channel already has that name (`"808 Kick #2"`).
 Returns `ChannelSound(channel, kind, sound, name, plugin=None)` read back from FL; a channel that does not show the sample raises.
 A plugin channel is refused before anything changes: FL only renames it. Give it an instrument preset with `fl.load_preset` instead.
+
+A file the code wrote travels as its bytes, at most 47 MB (one kernel message): the engine never opens a path in the workspace, where a link could point anywhere.
+The engine decodes the bytes, refuses anything that is not audio, and writes its own 32-bit float WAV, named like the file, under its data folder (`samples/<content hash>/`), once per content; FL loads that file and the project refers to it.
+
+A note plays the sample from its start, at its own pitch on MIDI 60 and resampled on other keys.
+Some sampler channels stop the sample when the note ends (live, 2026-11-09: "Sampler 1" cut a 1.5 s chop on a quarter-beat note, "Sampler 2" played it whole), so write a note as long as the sample.
+FL documents no call for a sampler's reverse, loop or stretch settings; shape the audio in Python instead ([note](research/sidechain-samples-live-2026-11-09.md)):
+
+```python
+import numpy as np, soundfile
+x, sr = fl.read_wav(fl.stock_folder / fl.sounds("vocal", kind="sample")[0].path)
+step = int(sr * 30 / fl.tempo)                     # an eighth note at the song's tempo
+chops = [x[i * step:(i + 1) * step] for i in range(len(x) // step)]
+bar = np.concatenate([chops[i % len(chops)] for i in (0, 0, 3, 1, 2, 2, 5, 1)])
+soundfile.write("chop.wav", bar[::-1], sr)          # reversed; librosa.effects.time_stretch / pitch_shift also work
+fl.load_sample("Sampler 1", "chop.wav")
+fl.track("chop").write([Note(60, b, 4) for b in range(0, 16, 4)])
+```
+
+Sidechain pumping is done the same way, because code cannot set a compressor's sidechain input (it is not a plugin parameter; [note](research/sidechain-samples-live-2026-11-09.md)): render the part alone, dip its gain after each kick, load the result into a spare sampler, and clear the part's notes.
+
+```python
+pad = fl.render("pad.wav", bars=8, solo=["Pad"]); x, sr = fl.read_wav(pad)
+beat = 60 / pad.span.tempo_bpm
+since_kick = (np.arange(len(x)) / sr) % beat        # kicks on every beat
+gain = 1 - 0.7 * np.exp(-since_kick / 0.12)         # duck 70 %, back in about a quarter second
+soundfile.write("pad pumped.wav", x * gain[:, None], sr)
+fl.load_sample("Sampler 2", "pad pumped.wav")
+fl.track("pad pumped").write([Note(60, 0, 32)]); fl.track("Pad").clear()
+```
 
 ### `fl.load_preset(channel: str | int, preset: Sound | str) -> ChannelSound`
 
@@ -352,6 +382,22 @@ fl.automate([{"position": 0, "value": 0.15}, {"position": 16, "value": 0.95}],
             bar=9, channel="Lead", param="cutoff")
 fl.render("song.wav")
 ```
+
+### `fl.effect(mixer_track: int, slot: int) -> Effect`
+
+**Availability:** live-only. The effect in `slot` (0 to 9; FL shows slot 1 to 10) of mixer track `mixer_track` (0 is the master), as `fl.mixer` and `fl.load_preset(...).effect` list them.
+A track FL does not have, a slot outside 0 to 9, or a slot with no effect is refused before FL is asked.
+`effect.params(query=None, limit=40)` and `effect.set_param(param, value)` work as `track.params` and `track.set_param` do, through FL's plugin calls with the mixer track and slot.
+Each `PluginParam.display` is FL's own text for the value where the plugin gives one ("-35.4dB", "20.0:1", "14.92ms").
+
+```python
+fx = fl.load_preset("Pad", fl.sounds(kind="preset", plugin="Fruity Reeverb 2")[0]).effect
+reverb = fl.effect(fx.mixer_track, fx.slot)
+reverb.params("decay")                     # [PluginParam(index=5, name='Decay time', display='2.2sec', ...)]
+reverb.set_param("Decay time", 0.3)
+```
+
+A compressor's sidechain input is not among its parameters (Fruity Limiter lists 18, Fruity Compressor 6): FL sets it only in the plugin's window, so code cannot key one track's compressor from another.
 
 ### `fl.undo() -> None`
 
@@ -468,4 +514,4 @@ with `Model.model_validate(...)`.
 | `Sound` | `kind: "preset" | "sample"`, `name: str`, `plugin: str | None` (a preset's plugin), `path: str` (relative to FL's `Data/Patches`, `/`-separated) |
 | `ChannelSound` | `channel: int`, `kind: "preset" | "sample"`, `sound: str` (the loaded `Sound.path`), `name: str` (the channel's name now), `plugin: str | None` (its instrument plugin; `None` for a sampler), `effect: MixerEffect | None` (what an effect preset added) |
 | `MixerEffect` | `mixer_track: int`, `slot: int` (0-9; FL shows slot 1-10), `plugin: str` (FL's name for it) |
-| `PluginParam` | `index: int`, `name: str`, `value: float` (normalized 0–1), `display: str`, `kind: "continuous" | "stepped" | "enum" | "bool"`, `options: list[str] | None`, `minimum`, `maximum`, `step`, `unit` |
+| `PluginParam` | `index: int`, `name: str`, `value: float` (normalized 0–1), `display: str` (a captured model's display, else FL's own text, else the number), `kind: "continuous" | "stepped" | "enum" | "bool"`, `options: list[str] | None`, `minimum`, `maximum`, `step`, `unit` |

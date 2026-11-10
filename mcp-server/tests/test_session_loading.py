@@ -12,12 +12,15 @@ selected when the file is sent, and every result is FL's readback.
 
 from __future__ import annotations
 
+import io
 import re
 import shutil
 from pathlib import Path, PurePosixPath
 from typing import Any
 
+import numpy as np
 import pytest
+import soundfile
 from session_fakes import (
     HELLO,
     FakeControl,
@@ -248,6 +251,81 @@ def test_a_full_mixer_track_is_refused_before_fl_is_asked(box):
     assert not touched_fl(control, spool)
 
 
+# -- audio the model made ---------------------------------------------------------------
+
+
+def wav_bytes(frames: int = 11025, rate: int = 44100) -> bytes:
+    buffer = io.BytesIO()
+    soundfile.write(buffer, np.full((frames, 2), 0.25), rate, format="WAV")
+    return buffer.getvalue()
+
+
+@pytest.fixture
+def data_root(tmp_path, monkeypatch):
+    """The engine's own data folder, where it writes the WAVs FL loads."""
+    root = tmp_path / "FLMCP"
+    monkeypatch.setattr(loading_mod, "app_data_root", lambda: root)
+    return root
+
+
+def test_audio_the_model_made_loads_from_a_wav_the_engine_wrote(box, data_root):
+    """FL is never pointed into the kernel's workspace: it loads the engine's own copy,
+    named like the model's file so FL names the channel after it."""
+    session, fl, control, _ = box
+
+    loaded = session.load_audio(1, "My Chop.wav", wav_bytes())
+
+    assert loaded == ChannelSound(channel=1, kind="sample", sound="My Chop.wav", name="My Chop", plugin=None)
+    assert ("select_channels", [[1]]) in control.calls
+    [sent] = loads(box[3])
+    path = Path(sent["path"])
+    assert path.is_relative_to(data_root / "samples") and path.name == "My Chop.wav"
+    samples, rate = soundfile.read(path, always_2d=True)
+    assert rate == 44100 and samples.shape == (11025, 2)
+
+
+def test_the_same_audio_is_written_once_and_loads_again_from_it(box, data_root):
+    session, _, _, spool = box
+
+    session.load_audio(1, "chop.wav", wav_bytes())
+    session.load_audio(2, "chop.wav", wav_bytes())
+    session.load_audio(3, "chop.wav", wav_bytes(frames=4410))
+
+    first, again, other = (sent["path"] for sent in loads(spool))
+    assert first == again != other
+    assert len(list((data_root / "samples").rglob("*.wav"))) == 2
+
+
+@pytest.mark.parametrize(
+    "name", ["../x.wav", "a/b.wav", "a\\b.wav", "C:x.wav", "x.wav:stream", "NUL.wav", "..", ". .wav", "a\x01.wav", ""]
+)
+def test_a_name_that_could_leave_the_folder_is_refused_before_anything_is_written(box, data_root, name):
+    session, _, control, spool = box
+
+    with pytest.raises(errors.ToolError) as raised:
+        session.load_audio(1, name, wav_bytes())
+    assert raised.value.category == "invalid_argument"
+    assert not data_root.exists()
+    assert not touched_fl(control, spool)
+
+
+def test_bytes_that_are_not_audio_are_refused_before_anything_is_written(box, data_root):
+    session, _, control, spool = box
+
+    with pytest.raises(errors.ToolError, match="not an audio file"):
+        session.load_audio(1, "notes.wav", b"RIFF and then some text")
+    assert not data_root.exists()
+    assert not touched_fl(control, spool)
+
+
+def test_audio_into_a_plugin_channel_is_refused_before_fl_is_asked(box, data_root):
+    session, _, control, spool = box
+
+    with pytest.raises(errors.ToolError, match="plays FLEX, not samples"):
+        session.load_audio(4, "chop.wav", wav_bytes())
+    assert not touched_fl(control, spool)
+
+
 # -- refusals before FL ----------------------------------------------------------------
 
 
@@ -357,6 +435,44 @@ def test_the_sdk_takes_fl_sounds_results_or_their_paths(live):
     assert fl.load_preset("FLEX", sytrus).plugin == "Sytrus"
 
 
+def test_the_sdk_sends_a_file_the_model_wrote_as_its_bytes(live, data_root, tmp_path, monkeypatch):
+    """The kernel reads its own file and the server never opens a path in the workspace."""
+    fl, _, spool = live
+    monkeypatch.chdir(tmp_path)
+    Path("chop.wav").write_bytes(wav_bytes())
+
+    assert fl.load_sample("808 Clap", "chop.wav").name == "chop"
+    assert fl.load_sample(2, Path("chop.wav")).name == "chop #2"
+    assert all(Path(sent["path"]).is_relative_to(data_root) for sent in loads(spool))
+
+
+def test_the_sdk_refuses_a_missing_or_oversized_file_before_fl_is_asked(live, tmp_path, monkeypatch):
+    fl, control, spool = live
+    monkeypatch.chdir(tmp_path)
+    Path("big.wav").write_bytes(wav_bytes())
+    monkeypatch.setattr(sdk, "MAX_AUDIO_BYTES", 1000)
+
+    for sample, words in (("nothing.wav", "no file at"), ("big.wav", "is over")):
+        with pytest.raises(errors.ToolError, match=words):
+            fl.load_sample(1, sample)
+    assert not touched_fl(control, spool)
+
+
+def test_the_run_kernel_carries_audio_as_bytes():
+    blob = wav_bytes(frames=10) + bytes(range(256))
+    call = wire.encode_call("load_audio", (1, "chop.wav", blob), {})
+
+    assert wire.decode_call(call) == {"channel": 1, "name": "chop.wav", "audio": blob}
+
+
+def test_the_largest_audio_file_fits_one_kernel_message():
+    """A message past the limit kills the kernel, so the SDK refuses a file before that."""
+    blob = bytes(wire.MAX_AUDIO_BYTES)
+    line = wire.encode(wire.encode_call("load_audio", (1, "x" * 96 + ".wav", blob), {}))
+
+    assert len(line) <= wire.MAX_MESSAGE_BYTES
+
+
 def test_a_name_fl_just_gave_a_channel_finds_it_at_once(live):
     """Live, FL renamed each channel it loaded into, and the lookup still knew only
     the saved song's names, so the model fell back to channel numbers. Every
@@ -419,11 +535,13 @@ def test_each_load_reads_as_one_sentence_from_fls_readback():
                                                   plugin="Sytrus"))
     actions.called("load_sound", {}, ChannelSound(channel=2, kind="preset", sound=REEVERB, name="808 HiHat",
                                                   effect=MixerEffect(mixer_track=3, slot=1, plugin="Fruity Reeverb 2")))
+    actions.called("load_audio", {}, ChannelSound(channel=3, kind="sample", sound="My Chop.wav", name="My Chop"))
 
     assert actions.sentences() == [
         "Loaded the sample 808 Cowbell into channel 1",
         "Loaded the sample 808 Kick into channel 2, now named 808 Kick #2",
         "Loaded the Sytrus preset 3o3ish 2 into channel 4",
         "Added Fruity Reeverb 2 (Drum Room) to mixer track 3 in effect slot 1",
+        "Loaded the sample My Chop into channel 3",
     ]
     assert not any(re.search("stale", s) for s in actions.sentences())

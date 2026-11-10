@@ -11,7 +11,7 @@ import wave
 import numpy as np
 import pytest
 
-from fl_mcp.audio import integrated_lufs, read_wav
+from fl_mcp.audio import decode_audio, integrated_lufs, read_wav
 
 
 def _write(path, samples, sample_rate):
@@ -93,23 +93,28 @@ def test_loudness_memory_does_not_grow_with_render_length(tmp_path):
     assert int(growth_mib) < 64
 
 
-def test_read_wav_reads_fls_stock_samples_ogg_vorbis_inside_a_wav(tmp_path):
-    """FL 2026's Packs samples are Vorbis in a WAV (format 0x674F, the data chunk an Ogg
-    stream): the stdlib, scipy and libsndfile refused them on a box, so the model could not
-    listen to a sample before choosing it. read_wav unwraps the Ogg stream."""
+def _ogg_in_wav(rate: int) -> bytes:
+    """A stock sample's layout: a WAV whose format is 0x674F and whose data chunk is an Ogg stream."""
     import io
 
     import soundfile
 
-    rate = 44100
     tone = 0.5 * np.sin(2 * np.pi * 440 * np.arange(rate) / rate)
     ogg = io.BytesIO()
     soundfile.write(ogg, np.stack([tone, tone], axis=1), rate, format="OGG", subtype="VORBIS")
     stream = ogg.getvalue()
     fmt = (0x674F).to_bytes(2, "little") + (2).to_bytes(2, "little") + rate.to_bytes(4, "little") + bytes(18)
     body = b"WAVE" + b"fmt " + len(fmt).to_bytes(4, "little") + fmt + b"data" + len(stream).to_bytes(4, "little") + stream
+    return b"RIFF" + len(body).to_bytes(4, "little") + body
+
+
+def test_read_wav_reads_fls_stock_samples_ogg_vorbis_inside_a_wav(tmp_path):
+    """FL 2026's Packs samples are Vorbis in a WAV (format 0x674F, the data chunk an Ogg
+    stream): the stdlib, scipy and libsndfile refused them on a box, so the model could not
+    listen to a sample before choosing it. read_wav unwraps the Ogg stream."""
+    rate = 44100
     path = tmp_path / "Kick.wav"
-    path.write_bytes(b"RIFF" + len(body).to_bytes(4, "little") + body)
+    path.write_bytes(_ogg_in_wav(rate))
 
     samples, got_rate = read_wav(path)
 
@@ -125,3 +130,26 @@ def test_read_wav_still_refuses_what_is_not_audio(tmp_path):
 
     with pytest.raises(wave.Error, match="fmt chunk and/or data chunk missing"):  # the stdlib's own error
         read_wav(path)
+
+
+def test_decode_audio_reads_what_a_model_writes_and_a_stock_sample_it_passes_on():
+    """fl.load_sample sends a file the model made as its bytes, and the engine decodes them
+    before FL sees anything: a float WAV soundfile wrote, FLAC, and a stock sample's Ogg-in-WAV."""
+    import io
+
+    import soundfile
+
+    rate = 48000
+    loud = np.stack([np.linspace(-1.5, 1.5, rate)] * 2, axis=1)  # past full scale: float keeps it
+    for fmt, subtype in (("WAV", "FLOAT"), ("FLAC", "PCM_24")):
+        buffer = io.BytesIO()
+        soundfile.write(buffer, loud.clip(-1, 1) if fmt == "FLAC" else loud, rate, format=fmt, subtype=subtype)
+        samples, got_rate = decode_audio(buffer.getvalue())
+        assert got_rate == rate and samples.shape == (rate, 2), fmt
+    assert abs(decode_audio(io.BytesIO(_ogg_in_wav(44100)).getvalue())[0].shape[0] - 44100) < 2048
+
+
+@pytest.mark.parametrize("blob", [b"", b"not audio at all", b"RIFF\x10\x00\x00\x00WAVEjunk\x04\x00\x00\x00abcd"])
+def test_decode_audio_refuses_what_is_not_audio(blob):
+    with pytest.raises(ValueError, match=r"not an audio file|no frames"):
+        decode_audio(blob)

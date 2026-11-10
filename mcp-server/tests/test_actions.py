@@ -303,6 +303,26 @@ def test_parameter_sweeps_group_per_track():
     assert actions.sentences() == ["Set 3 parameters on FLEX Bass: cutoff 0.68, resonance 0.30, attack 0.10"]
 
 
+def test_an_effects_parameters_read_as_the_effect_they_are_on():
+    actions = log()
+    for index, (name, value) in enumerate([("Comp threshold", 0.1), ("Comp ratio", 1.0), ("Comp release time", 0.3)]):
+        actions.called(
+            "set_effect_param",
+            {"mixer_track": 17, "slot": 0, "param": name, "value": value},
+            PluginParam(index=8 + index, name=name, value=value, display=str(value), kind="continuous"),
+        )
+    actions.called(
+        "set_effect_param",
+        {"mixer_track": 0, "slot": 7, "param": "Gain", "value": 0.5},
+        PluginParam(index=0, name="Gain", value=0.5, display="0.5", kind="continuous"),
+    )
+    assert actions.sentences() == [
+        "Set 3 parameters on the effect in slot 0 of mixer track 17: Comp threshold 0.10, Comp ratio 1.00, "
+        "Comp release time 0.30",
+        "Set Gain to 0.50 on the effect in slot 7 of the master",
+    ]
+
+
 def test_repeats_are_counted_and_the_list_is_bounded():
     """Review of #257: `while True: fl.undo()` grew the list without bound (time in fl
     calls is not charged to the cell)."""

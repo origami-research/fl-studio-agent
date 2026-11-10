@@ -28,8 +28,10 @@ SessionMethod = Literal[
     "channel_names",
     "check",
     "clear_notes",
+    "effect_params",
     "export_offline",
     "live_channels",
+    "load_audio",
     "load_sound",
     "mixer_tracks",
     "new_pattern",
@@ -47,6 +49,7 @@ SessionMethod = Literal[
     "scene_notes",
     "scene_summary",
     "set_channel_levels",
+    "set_effect_param",
     "set_plugin_param",
     "set_preset",
     "set_send",
@@ -58,6 +61,12 @@ SessionMethod = Literal[
     "write_notes",
 ]
 SESSION_METHODS = frozenset(get_args(SessionMethod))
+# The longest message the server reads from a kernel, into memory: a longer line is an
+# attack or a runaway print, never a legitimate SDK call or cell result, and kills the kernel.
+MAX_MESSAGE_BYTES = 64 << 20
+# The largest audio file one call carries: base64 makes it a third larger, and the rest of
+# the message is a few hundred bytes.
+MAX_AUDIO_BYTES = (MAX_MESSAGE_BYTES - (1 << 20)) * 3 // 4
 # FLSession.file_edit is a context manager; the wire carries its two halves.
 FILE_EDIT_ENTER = "file_edit_enter"
 FILE_EDIT_EXIT = "file_edit_exit"
@@ -185,7 +194,7 @@ def parse_from_kernel(line: bytes) -> Ready | Call | Done:
 def _schema(method: str) -> tuple[inspect.Signature, type[BaseModel], type[BaseModel]]:
     """Argument and return models built from FLSession's own annotations."""
     function = getattr(FLSession, method)
-    hints = get_type_hints(function)
+    hints = get_type_hints(function, include_extras=True)  # keeps a type's own codec (AudioBytes)
     signature = inspect.signature(function)
     fields: dict[str, Any] = {
         name: (hints[name], ... if param.default is inspect.Parameter.empty else param.default)

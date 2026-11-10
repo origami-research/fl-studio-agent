@@ -57,7 +57,7 @@ def read_wav(path: Path) -> tuple[np.ndarray, int]:
             channels, width, sample_rate, _ = _header(wav)
             return _decode(wav.readframes(wav.getnframes()), channels, width), sample_rate
     except wave.Error:
-        stream = _ogg_in_wav(path)
+        stream = _ogg_in_wav(path.read_bytes())
         if stream is None:
             raise
     import soundfile
@@ -66,9 +66,25 @@ def read_wav(path: Path) -> tuple[np.ndarray, int]:
     return samples, sample_rate
 
 
-def _ogg_in_wav(path: Path) -> bytes | None:
+def decode_audio(blob: bytes) -> tuple[np.ndarray, int]:
+    """An audio file's bytes as float frames (channels last) and its sample rate.
+
+    Whatever libsndfile reads (WAV of any sample format, FLAC, Ogg, AIFF, MP3), and FL's
+    Ogg-in-WAV stock samples. Raises ValueError for anything else or for no frames."""
+    import soundfile
+
+    stream = _ogg_in_wav(blob) or blob
+    try:
+        samples, sample_rate = soundfile.read(io.BytesIO(stream), dtype="float32", always_2d=True)
+    except (RuntimeError, TypeError):  # libsndfile's errors are RuntimeErrors
+        raise ValueError("not an audio file (WAV, FLAC, Ogg, AIFF or MP3)") from None
+    if not len(samples):
+        raise ValueError("the audio file has no frames")
+    return samples, sample_rate
+
+
+def _ogg_in_wav(blob: bytes) -> bytes | None:
     """The data chunk of a RIFF WAV when it holds an Ogg stream, else None."""
-    blob = path.read_bytes()
     if blob[:4] != b"RIFF" or blob[8:12] != b"WAVE":
         return None
     offset = 12

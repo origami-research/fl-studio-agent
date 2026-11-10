@@ -43,6 +43,7 @@ from fl_mcp.platform import Platform, platform_for
 from fl_mcp.plugin_models import load_bundled_param_models
 from fl_mcp.profile import profile_gate
 from fl_mcp.schemas import (
+    AudioBytes,
     AutomationPoint,
     AutomationTake,
     Channel,
@@ -515,6 +516,17 @@ class FLSession:
         with self._write_guard("set_plugin_param"):
             return controls.set_plugin_param(self, channel, param, value)
 
+    def effect_params(
+        self, mixer_track: int, slot: int, *, query: str | None = None, limit: int = controls.PLUGIN_PARAMS_DEFAULT_LIMIT
+    ) -> list[PluginParam]:
+        routing.require_effect(self, "fl.effect", mixer_track, slot)
+        return controls.plugin_params(self, mixer_track, slot=slot, query=query, limit=limit)
+
+    def set_effect_param(self, mixer_track: int, slot: int, param: int | str, value: float | str) -> PluginParam:
+        with self._write_guard("set_effect_param"):
+            routing.require_effect(self, "fl.effect", mixer_track, slot)
+            return controls.set_plugin_param(self, mixer_track, param, value, slot=slot)
+
     # -- routing, presets and stock sounds --------------------------------------
 
     def route_channel(self, channel: int, mixer_track: int) -> ChannelRoute:
@@ -585,6 +597,11 @@ class FLSession:
     def load_sound(self, channel: int, sound: str, kind: SoundKind) -> ChannelSound:
         with self._write_guard("load_sound"):
             return loading.load_sound(self, channel, sound, kind)
+
+    def load_audio(self, channel: int, name: str, audio: AudioBytes) -> ChannelSound:
+        """Load an audio file's bytes (``name`` is its file name) into a sampler channel."""
+        with self._write_guard("load_sound"):
+            return loading.load_audio(self, channel, name, audio)
 
     def sounds(
         self, query: str = "", *, kind: SoundKind | None = None, plugin: str | None = None, limit: int = 20

@@ -719,15 +719,15 @@ def set_channel_levels(
 # vendor blob). So this surface is live-or-error, never a file fallback.
 
 
-def _plugin_param_count(session: FLSession, channel: int) -> int:
-    return int(_live_read(session, "plugins.getParamCount", [channel, GENERATOR_SLOT]) or 0)
+def _plugin_param_count(session: FLSession, index: int, slot: int) -> int:
+    return int(_live_read(session, "plugins.getParamCount", [index, slot]) or 0)
 
 
-def _plugin_model(session: FLSession, channel: int) -> PluginParamModel | None:
+def _plugin_model(session: FLSession, index: int, slot: int) -> PluginParamModel | None:
     """Select static semantics only when the session was explicitly given them."""
     if not session.plugin_param_models:
         return None
-    plugin = str(_live_read(session, "plugins.getPluginName", [channel, GENERATOR_SLOT, False]))
+    plugin = str(_live_read(session, "plugins.getPluginName", [index, slot, False]))
     return next((model for model in session.plugin_param_models if model.plugin == plugin), None)
 
 
@@ -758,12 +758,25 @@ def _display(value: float, spec: PluginParamSpec | None) -> str:
     return f"{value:g}"
 
 
-def _param(index: int, name: str, value: float, spec: PluginParamSpec | None) -> PluginParam:
+def _shown(session: FLSession, index: int, channel: int, slot: int) -> str | None:
+    """FL's own text for a parameter's value ("-35.4dB", "20.0:1", "14.92ms"), or None
+    where the plugin gives none: FL documents getParamValueString for some plugins only."""
+    try:
+        shown = _live_read(session, "plugins.getParamValueString", [index, channel, slot])
+    except errors.ToolError:
+        return None
+    return shown if isinstance(shown, str) and shown else None
+
+
+def _param(
+    index: int, name: str, value: float, spec: PluginParamSpec | None, shown: str | None = None
+) -> PluginParam:
+    """A captured model's display wins; FL's own text is next; the number last."""
     return PluginParam(
         index=index,
         name=name,
         value=min(max(value, 0.0), 1.0),
-        display=_display(value, spec),
+        display=_display(value, spec) if spec is not None or shown is None else shown,
         kind=spec.kind if spec is not None else "continuous",
         options=list(spec.options) if spec is not None and spec.options is not None else None,
         minimum=spec.minimum if spec is not None else None,
@@ -815,74 +828,83 @@ def plugin_params(
     session: FLSession,
     channel: int,
     *,
+    slot: int = GENERATOR_SLOT,
     query: str | None = None,
     limit: int = PLUGIN_PARAMS_DEFAULT_LIMIT,
 ) -> list[PluginParam]:
-    """The channel generator's parameters (name + normalized value).
+    """A plugin's parameters (name + normalized value): the channel's generator, or
+    with ``slot`` the effect in that slot of mixer track ``channel``.
 
     ``query`` filters by case-insensitive substring; ``limit`` bounds the
     result because big synths are BIG (Sytrus: 597 params) and every name
     is a wire round trip."""
-    count = _plugin_param_count(session, channel)
-    model = _plugin_model(session, channel)
+    count = _plugin_param_count(session, channel, slot)
+    model = _plugin_model(session, channel, slot)
     out: list[PluginParam] = []
     for index in range(count):
         if len(out) >= limit:
             break
-        name = str(_live_read(session, "plugins.getParamName", [index, channel, GENERATOR_SLOT]))
+        name = str(_live_read(session, "plugins.getParamName", [index, channel, slot]))
         if query is not None and query.lower() not in name.lower():
             continue
-        value = float(_live_read(session, "plugins.getParamValue", [index, channel, GENERATOR_SLOT]))
-        out.append(_param(index, name, value, _spec(model, index, name)))
+        value = float(_live_read(session, "plugins.getParamValue", [index, channel, slot]))
+        spec = _spec(model, index, name)
+        out.append(_param(index, name, value, spec, None if spec else _shown(session, index, channel, slot)))
     return out
 
 
-def set_plugin_param(session: FLSession, channel: int, param: int | str, value: float | str) -> PluginParam:
+def set_plugin_param(
+    session: FLSession, channel: int, param: int | str, value: float | str, *, slot: int = GENERATOR_SLOT
+) -> PluginParam:
     """Set one parameter (by index, or by unique name/substring) and return
     the READBACK. FL quantizes to the plugin's own step grid, so the
     confirmed value may differ slightly from the request - beyond
-    PLUGIN_PARAM_TOLERANCE it raises instead of pretending."""
-    model = _plugin_model(session, channel)
+    PLUGIN_PARAM_TOLERANCE it raises instead of pretending. ``slot`` as for
+    plugin_params."""
+    where = f"channel {channel}" if slot == GENERATOR_SLOT else f"mixer track {channel} slot {slot}"
+    listing = "track.params()" if slot == GENERATOR_SLOT else "effect.params()"
+    model = _plugin_model(session, channel, slot)
     if isinstance(param, str):
-        matches = plugin_params(session, channel, query=param, limit=8)
+        matches = plugin_params(session, channel, slot=slot, query=param, limit=8)
         exact = [p for p in matches if p.name.lower() == param.lower()]
         chosen = exact or matches
         if len(chosen) != 1:
             names = ", ".join(p.name for p in matches) or "(no matches)"
             raise errors.fl_api_error(
                 "plugins.setParamValue",
-                f"param {param!r} is {'ambiguous' if matches else 'unknown'} on channel {channel}: {names}",
+                f"param {param!r} is {'ambiguous' if matches else 'unknown'} on {where}: {names}",
             )
         index = chosen[0].index
     else:
         if isinstance(param, bool) or not isinstance(param, int):
             raise TypeError(
-                f"plugin param index must be a non-negative integer returned by track.params(), got {param!r}"
+                f"plugin param index must be a non-negative integer returned by {listing}, got {param!r}"
             )
         index = param
-        count = _plugin_param_count(session, channel)
+        count = _plugin_param_count(session, channel, slot)
         if not 0 <= index < count:
             raise ValueError(
-                f"plugin param index {index} is outside this generator's 0..{count - 1} range; "
-                "get a fresh index from track.params()"
+                f"plugin param index {index} is outside this plugin's 0..{count - 1} range; "
+                f"get a fresh index from {listing}"
             )
 
-    name = str(_live_read(session, "plugins.getParamName", [index, channel, GENERATOR_SLOT]))
+    name = str(_live_read(session, "plugins.getParamName", [index, channel, slot]))
     requested = _resolve_value(value, _spec(model, index, name))
 
     # FL's generic plugin API is positional: value first, then the index
     # advertised by getParamCount/getParamName/getParamValue.
     session.link.call(
         "plugins.setParamValue",
-        [requested, index, channel, GENERATOR_SLOT, PICKUP_NONE],
+        [requested, index, channel, slot, PICKUP_NONE],
         timeout=LIVE_SET_TIMEOUT_SECONDS,
     )
 
-    confirmed = float(_live_read(session, "plugins.getParamValue", [index, channel, GENERATOR_SLOT]))
+    confirmed = float(_live_read(session, "plugins.getParamValue", [index, channel, slot]))
     if abs(confirmed - requested) > PLUGIN_PARAM_TOLERANCE:
         raise WriteRejected(
             f"param {name!r} readback {confirmed} is not the requested {requested}",
             fix="The plugin may quantize this control coarsely; read plugin_params "
             "and pick a supported value.",
         )
-    return _param(index, name, confirmed, _spec(model, index, name))
+    spec = _spec(model, index, name)
+    return _param(index, name, confirmed, spec, None if spec else _shown(session, index, channel, slot))

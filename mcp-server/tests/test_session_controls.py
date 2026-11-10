@@ -653,6 +653,48 @@ def test_set_plugin_param_uses_the_index_advertised_by_params_on_the_generic_wir
     assert ("plugins.setParamValue", [0.5, 2, 0, -1, 0, 1]) in control.calls
 
 
+def _effect_control() -> FakeControl:
+    """The same plugin as an effect in slot 0 of mixer track 17, the only effect in the mixer."""
+    control = _param_control()
+    control.handlers.update({
+        "mixer.trackCount": lambda args: 127,
+        "mixer.isTrackPluginValid": lambda args: int(tuple(args) == (17, 0)),
+        # FL's own text for a value, which some plugins give (live: Fruity Limiter "-35.4dB")
+        "plugins.getParamValueString": lambda args: "-35.4dB" if args[0] == 2 else "",
+    })
+    return control
+
+
+def test_an_effects_parameters_read_and_set_through_its_mixer_slot():
+    """A sidechain limiter is tuned through FL's documented plugin calls with the mixer
+    track and slot in place of the channel and -1 (live: Fruity Limiter, 18 params)."""
+    control = _effect_control()
+    session, _ = make_session(control=control)
+
+    assert [p.name for p in session.effect_params(17, 0, query="lfo")] == ["Main - Master LFO level"]
+    confirmed = session.set_effect_param(17, 0, "pitch", 0.5)
+
+    assert (confirmed.index, confirmed.value, confirmed.display) == (2, 0.5, "-35.4dB")
+    assert [p.display for p in session.effect_params(17, 0)] == ["0.8", "1", "-35.4dB"], "FL's text, else the number"
+    assert ("plugins.setParamValue", [0.5, 2, 17, 0, 0, 1]) in control.calls
+    assert ("plugins.getParamValue", [2, 17, 0, 1]) in control.calls, "read back from the effect, not a channel"
+
+
+@pytest.mark.parametrize(
+    ("track", "slot", "words"),
+    [(17, 3, "mixer track 17 has no effect in slot 3"), (200, 0, "does not exist"), (17, 10, "slots are 0 to 9")],
+)
+def test_a_slot_without_an_effect_is_refused_before_fl_is_asked_for_its_parameters(track, slot, words):
+    control = _effect_control()
+    session, _ = make_session(control=control)
+
+    for call in (lambda: session.effect_params(track, slot), lambda: session.set_effect_param(track, slot, 0, 0.5)):
+        with pytest.raises(errors.ToolError, match=words) as raised:
+            call()
+        assert raised.value.category == "invalid_argument"
+    assert not [op for op, _ in control.calls if op.startswith("plugins.")]
+
+
 @pytest.mark.parametrize("index", [-1, 3, True, 1.5])
 def test_set_plugin_param_rejects_indexes_not_advertised_by_params(index):
     control = _param_control()

@@ -111,7 +111,7 @@ GLOBAL_INDEX_FLAG_AT = {
     "plugins.getParamName": 3,
     "plugins.getParamValue": 3,
     "plugins.setParamValue": 5,
-    "plugins.getParamValueString": 4,
+    "plugins.getParamValueString": 3,
     "plugins.getName": 4,
     "plugins.getPresetCount": 2,
     "plugins.nextPreset": 2,

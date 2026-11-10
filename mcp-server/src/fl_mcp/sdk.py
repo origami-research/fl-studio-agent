@@ -15,7 +15,7 @@ from __future__ import annotations
 import itertools
 from collections.abc import Sequence
 from contextlib import AbstractContextManager
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Annotated, Literal
 
 import numpy as np
@@ -25,6 +25,7 @@ from fl_mcp import errors
 from fl_mcp.audio import read_wav
 from fl_mcp.contract import SceneNotesResult, SceneSummary
 
+from .kernel.wire import MAX_AUDIO_BYTES
 from .schemas import (
     AutomationPoint,
     AutomationTake,
@@ -51,7 +52,7 @@ from .schemas import (
     WriteResult,
 )
 from .session import FLSession, create_session
-from .sounds import SEARCH_LIMIT_MAX
+from .sounds import SAMPLES_DIR, SEARCH_LIMIT_MAX
 
 SdkChannel = Annotated[int, Field(strict=True, ge=0)]
 SdkPattern = Annotated[int, Field(strict=True, ge=1)]
@@ -92,6 +93,11 @@ class _ChannelLevelsArgs(BaseModel):
 
 class _RouteArgs(BaseModel):
     mixer_track: SdkChannel
+
+
+class _EffectArgs(BaseModel):
+    mixer_track: SdkChannel
+    slot: Annotated[int, Field(strict=True, ge=0, le=9)]
 
 
 class _SendArgs(BaseModel):
@@ -432,6 +438,24 @@ class FL:
             args.points, args.bar, args.param, index, args.mixer_track, args.slot, args.pattern
         )
 
+    def effect(self, mixer_track: int, slot: int) -> Effect:
+        """The effect in ``slot`` (0..9) of mixer track ``mixer_track`` (0 is the master),
+        as fl.mixer and fl.load_preset(...).effect list them: ``params()`` and
+        ``set_param()`` as for a track's instrument, with FL's own text for each value
+        ("-35.4dB", "20.0:1") in ``display``::
+
+            fx = fl.load_preset("Pad", "Plugin presets/Effects/Fruity Reeverb 2/Default.fst").effect
+            fl.effect(fx.mixer_track, fx.slot).set_param("Decay time", 0.3)
+
+        A compressor's sidechain input is not among its parameters: FL sets it only in the
+        plugin's window, so code cannot key one effect from another track.
+        """
+        try:
+            args = _EffectArgs(mixer_track=mixer_track, slot=slot)
+        except ValidationError as exc:
+            raise errors.invalid_argument("fl.effect", str(exc)) from None
+        return Effect(self, args.mixer_track, args.slot)
+
     def presets(self, channel: str | int) -> list[str]:
         """The names of a plugin channel's presets, in FL's order: a preset's index is
         its place in this list. A sampler channel has none and raises."""
@@ -463,17 +487,47 @@ class FL:
             raise errors.invalid_argument("fl.sounds", str(exc)) from None
         return self._session.sounds(args.query, kind=args.kind, plugin=args.plugin, limit=args.limit)
 
-    def load_sample(self, channel: str | int, sample: Sound | str) -> ChannelSound:
-        """Load a stock sample into a sampler channel: a Sound from
-        ``fl.sounds(kind="sample")``, or its path. FL renames the channel to the
-        sample; returns the channel's name as FL now reports it. A plugin channel
-        is refused (give it an instrument preset instead).
+    def load_sample(self, channel: str | int, sample: Sound | str | Path) -> ChannelSound:
+        """Load a sample into a sampler channel: a Sound from ``fl.sounds(kind="sample")``
+        or its path, or an audio file you wrote (WAV, FLAC, Ogg, AIFF), such as a chop
+        or a stretched loop made with numpy or librosa. FL renames the channel after the
+        file; returns the channel's name as FL now reports it. A plugin channel is
+        refused (give it an instrument preset instead).
+
+        A note plays the sample from its start, at its own pitch on C4 (MIDI 60) and
+        resampled on other keys; some channels stop it when the note ends, so write the
+        note as long as the sample. Chop, stretch, reverse or re-pitch in Python first::
+
+            x, sr = fl.read_wav(fl.stock_folder / fl.sounds("vocal", kind="sample")[0].path)
+            step = int(sr * 30 / fl.tempo)  # an eighth note
+            chops = [x[i * step:(i + 1) * step] for i in range(len(x) // step)]
+            bar = np.concatenate([chops[i % len(chops)] for i in (0, 0, 3, 1, 2, 2, 5, 1)])
+            soundfile.write("chop.wav", bar, sr)  # bar[::-1] reverses it
+            fl.load_sample("Sampler 1", "chop.wav")
+            fl.track("Sampler 1").write([Note(60, b, 4) for b in range(0, 16, 4)])
+
+        librosa.effects.time_stretch and pitch_shift change one without the other.
         """
-        try:
-            args = _LoadArgs(kind="sample", sound=sample)
-        except ValidationError as exc:
-            raise errors.invalid_argument("fl.load_sample", str(exc)) from None
-        return self._session.load_sound(self.track(channel).channel, args.path, "sample")
+        if not isinstance(sample, Sound | str | Path):
+            raise errors.invalid_argument(
+                "fl.load_sample", f"pass a Sound from fl.sounds(), its path, or an audio file's path, not {sample!r}"
+            )
+        if isinstance(sample, Sound) or PurePosixPath(str(sample).replace("\\", "/")).parts[:1] == (SAMPLES_DIR,):
+            try:
+                args = _LoadArgs(kind="sample", sound=sample if isinstance(sample, Sound) else str(sample))
+            except ValidationError as exc:
+                raise errors.invalid_argument("fl.load_sample", str(exc)) from None
+            return self._session.load_sound(self.track(channel).channel, args.path, "sample")
+        path = Path(sample)
+        if not path.is_file():
+            raise errors.invalid_argument(
+                "fl.load_sample", f"no file at {str(sample)!r}; pass a Sound from fl.sounds() or an audio file you wrote"
+            )
+        if path.stat().st_size > MAX_AUDIO_BYTES:
+            raise errors.invalid_argument(
+                "fl.load_sample", f"{path.name} is over {MAX_AUDIO_BYTES >> 20} MB; load a shorter or smaller file"
+            )
+        return self._session.load_audio(self.track(channel).channel, path.name, path.read_bytes())
 
     def load_preset(self, channel: str | int, preset: Sound | str) -> ChannelSound:
         """Load a stock preset into a channel: a Sound from ``fl.sounds(kind="preset")``,
@@ -657,3 +711,33 @@ class Track:
         except ValidationError as exc:
             raise errors.invalid_argument("Track.set_param", str(exc)) from None
         return self._fl._session.set_plugin_param(self.channel, args.param, args.value)
+
+
+class Effect:
+    """One mixer effect's parameters, live."""
+
+    def __init__(self, fl: FL, mixer_track: int, slot: int) -> None:
+        self.mixer_track = mixer_track
+        self.slot = slot
+        self._fl = fl
+
+    def __repr__(self) -> str:
+        return f"Effect(mixer_track={self.mixer_track}, slot={self.slot})"
+
+    def params(self, query: str | None = None, limit: int = 40) -> list[PluginParam]:
+        """The effect's parameters with their current values (normalized 0..1).
+        ``query`` filters by name substring; ``limit`` caps how many are listed."""
+        try:
+            args = _ParamsArgs(query=query, limit=limit)
+        except ValidationError as exc:
+            raise errors.invalid_argument("Effect.params", str(exc)) from None
+        return self._fl._session.effect_params(self.mixer_track, self.slot, query=args.query, limit=args.limit)
+
+    def set_param(self, param: int | str, value: float | str) -> PluginParam:
+        """Set a parameter by index or name to a normalized value (0..1). Returns FL's
+        value, which may snap to the control's own steps."""
+        try:
+            args = _ParamSetArgs(param=param, value=value)
+        except ValidationError as exc:
+            raise errors.invalid_argument("Effect.set_param", str(exc)) from None
+        return self._fl._session.set_effect_param(self.mixer_track, self.slot, args.param, args.value)

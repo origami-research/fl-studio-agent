@@ -182,6 +182,14 @@ def _param_kind(track: str) -> _Kind:
     )
 
 
+def _effect_param_kind(effect: str) -> _Kind:
+    return _Kind(
+        one=lambda t, v: f"Set {t} to {v} on {effect}",
+        many=f"Set {{n}} parameters on {effect}",
+        item=lambda t, v: f"{t} {v}",
+    )
+
+
 class ActionLog:
     """The actions of one tool call, in the order FL confirmed them."""
 
@@ -304,6 +312,12 @@ class ActionLog:
         kind = _param_kind(track)
         return [_Entry(kind.one(result.name, value), kind, ("param", channel), (result.index,), result.name, value, channel)]
 
+    def _effect_param(self, kwargs: Mapping[str, Any], result: PluginParam) -> list[_Entry]:
+        track, slot = kwargs["mixer_track"], kwargs["slot"]
+        value = _level(result.value) if result.kind == "continuous" or not result.display else result.display
+        kind = _effect_param_kind(f"the effect in slot {slot} of {_where(track)}")
+        return [_Entry(kind.one(result.name, value), kind, ("effect param", track, slot), (result.index,), result.name, value)]
+
     def _tempo(self, kwargs: Mapping[str, Any], bpm: float) -> list[_Entry]:
         return [_Entry(_TEMPO.one("tempo", _bpm(bpm)), _TEMPO, ("tempo",), ("tempo",), "tempo", _bpm(bpm))]
 
@@ -399,6 +413,7 @@ _CALLS: dict[str, Callable[[ActionLog, Mapping[str, Any], Any], list[_Entry]]] =
     "clear_notes": ActionLog._clear,
     "set_channel_levels": ActionLog._levels,
     "set_plugin_param": ActionLog._param,
+    "set_effect_param": ActionLog._effect_param,
     "set_tempo": ActionLog._tempo,
     "route_channel": ActionLog._route,
     "set_send": ActionLog._send,
@@ -408,6 +423,7 @@ _CALLS: dict[str, Callable[[ActionLog, Mapping[str, Any], Any], list[_Entry]]] =
     "rename_pattern": ActionLog._rename_pattern,
     "place": ActionLog._place,
     "automate": ActionLog._automate,
+    "load_audio": ActionLog._load,
     "check": ActionLog._check,
     "render_wav": ActionLog._render,
     "render_stems": ActionLog._stems,

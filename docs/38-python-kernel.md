@@ -107,6 +107,9 @@ The server, not the kernel, writes there, and the kernel cannot write there, so 
 `fl.read_wav(path)` returns `(samples: numpy.ndarray, sample_rate: int)` and runs inside the kernel.
 `fl.render` returns the WAV's path with what played (`.span`), so model code marks bars itself; `bars=`/`start_bar=`, `solo=`/`mute=` and `stems=` choose what it records ([sdk-reference](sdk-reference.md)).
 
+A sample the code made (`fl.load_sample(ch, "chop.wav")`) reaches FL as the file's bytes over the wire, at most `wire.MAX_AUDIO_BYTES`, never as a path: the server does not open files in `work`.
+It decodes them and writes its own WAV under the engine's data folder (`samples/<content hash>/<name>.wav`), outside the kernel's reach, and FL loads that.
+
 FL's stock content is readable so the model can load a sample and listen to it before choosing it: `fl.sounds` searches the index on the server, and the kernel reads the file.
 It is read only, never run, and nothing else of FL's install is granted: on macOS the profile reads that one folder by its real path and only looks up its parents; on Windows see "Files" below.
 

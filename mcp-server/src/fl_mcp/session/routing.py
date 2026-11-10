@@ -19,6 +19,9 @@ from fl_mcp.schemas import ChannelRoute, MixerSend
 
 from .controls import _live_int, _live_read, _live_write
 
+# Effect slots on one mixer track (FL's slots 0..9).
+MIXER_SLOTS = 10
+
 if TYPE_CHECKING:
     from .facade import FLSession
 
@@ -36,6 +39,17 @@ def _require_mixer_track(session: FLSession, call: str, track: int) -> None:
     if not 0 <= track < count:
         raise errors.invalid_argument(
             call, f"mixer track {track} does not exist; FL has mixer tracks 0 (the master) to {count - 1}"
+        )
+
+
+def require_effect(session: FLSession, call: str, track: int, slot: int) -> None:
+    """Refuse a mixer slot that holds no effect before its parameters are read or set."""
+    _require_mixer_track(session, call, track)
+    if not 0 <= slot < MIXER_SLOTS:
+        raise errors.invalid_argument(call, f"effect slots are 0 to {MIXER_SLOTS - 1}, not {slot}")
+    if not _live_read(session, "mixer.isTrackPluginValid", [track, slot]):
+        raise errors.invalid_argument(
+            call, f"{_where(track)} has no effect in slot {slot}; fl.mixer lists each track's effects"
         )
 
 

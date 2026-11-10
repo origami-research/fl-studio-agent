@@ -1,4 +1,4 @@
-"""Load a stock sample or preset into a channel, through the Bridge.
+"""Load a stock sample or preset, or audio the model made, into a channel, through the Bridge.
 
 FL's documented host call ``FHD_LoadInChannel`` (plugin SDK id 43) sends a file
 to the selected channels; the Bridge's ``load_in_channel`` command makes it with
@@ -19,24 +19,34 @@ What FL does with the file, live on FL 2026 (docs/research/load-sample-preset-li
 
 Each is confirmed by FL's readback: the channel's type, name and plugin, and
 for an effect the mixer track's slots before and after.
+
+Audio the model made (a chop, a stretched loop) arrives as the file's bytes, never
+as a path: the server does not open files in the kernel's workspace, where a planted
+link could point anywhere. The server decodes the bytes and writes a WAV of its own
+under the engine's data folder, named after the model's file so FL names the channel
+after it, and loads that file like a stock sample.
 """
 
 from __future__ import annotations
 
+import hashlib
 import logging
+import os
 import re
 from pathlib import Path, PurePosixPath
 from typing import TYPE_CHECKING, Literal
 
 from fl_mcp import errors
 from fl_mcp import sounds as stock_sounds
+from fl_mcp.audio import decode_audio
 from fl_mcp.errors import WriteRejected
-from fl_mcp.fl.paths import fl_patches_dir
+from fl_mcp.fl.paths import app_data_root, fl_patches_dir
 from fl_mcp.fl.process import fl_process_running
 from fl_mcp.schemas import ChannelSound, MixerEffect, SoundKind
 
 from .controls import GENERATOR_SLOT, _live_int, _live_read
 from .notes import select_only
+from .routing import MIXER_SLOTS
 
 if TYPE_CHECKING:
     from .facade import FLSession
@@ -46,12 +56,17 @@ log = logging.getLogger(__name__)
 NOTHING_LOADED = "Nothing was loaded."
 # channels.getChannelType's answer for a sampler (FL's CT_Sampler).
 CT_SAMPLER = 0
-# Effect slots on one mixer track (FL's slots 0..9).
-MIXER_SLOTS = 10
 # FL acknowledges after it loaded the file; a plugin took up to 3.2 s live.
 LOAD_RESPONSE_TIMEOUT_SECONDS = 30.0
 # What a Bridge built before load_in_channel answers it with (bridge_core.cpp, the unknown-op refusal).
 OUTDATED_PLUGIN = "unknown op: load_in_channel"
+
+# A file name FL can name a channel after, on any OS: no folders, drive or stream
+# separators, wildcards or control characters, and not a Windows device name.
+_SAMPLE_NAME = re.compile(r"[^\\/:*?\"<>|\x00-\x1f]{1,100}")
+_WINDOWS_DEVICES = frozenset(
+    {"CON", "PRN", "AUX", "NUL", *(f"COM{n}" for n in range(10)), *(f"LPT{n}" for n in range(10))}
+)
 
 Role = Literal["sample", "instrument", "effect"]
 
@@ -208,6 +223,41 @@ def _confirm(
 def load_sound(session: FLSession, channel: int, sound: str, kind: SoundKind) -> ChannelSound:
     """Load the stock ``sound`` (a path from fl.sounds()) into ``channel``; return what FL now has."""
     path, role, plugin = _stock_file(sound, kind)
+    return _load(session, channel, path, sound, kind, role, plugin)
+
+
+def load_audio(session: FLSession, channel: int, name: str, audio: bytes) -> ChannelSound:
+    """Load ``audio``, an audio file's bytes named ``name``, into the sampler ``channel``."""
+    path = _imported_sample(name, audio)
+    return _load(session, channel, path, name, "sample", "sample", None)
+
+
+def _imported_sample(name: str, audio: bytes) -> Path:
+    """The engine's own WAV of ``audio``: decoded, checked and written once per content,
+    in a folder of its own so the file keeps the model's name."""
+    stem = PurePosixPath(name).stem
+    if not _SAMPLE_NAME.fullmatch(name) or stem.rstrip(" .") != stem or not stem or stem.upper() in _WINDOWS_DEVICES:
+        raise errors.invalid_argument("fl.load_sample", f"{name!r} is not a file name FL can name a channel after")
+    try:
+        samples, rate = decode_audio(audio)
+    except ValueError as exc:
+        raise errors.invalid_argument("fl.load_sample", f"{name}: {exc}") from None
+    folder = app_data_root() / "samples" / hashlib.sha256(audio).hexdigest()[:24]
+    path = folder / f"{stem}.wav"
+    if not path.is_file():
+        import soundfile
+
+        folder.mkdir(parents=True, exist_ok=True)
+        partial = folder / f".{stem}.{os.getpid()}.partial"
+        # Float keeps whatever level the model wrote; FL reads 32-bit float WAVs.
+        soundfile.write(partial, samples, rate, subtype="FLOAT", format="WAV")
+        partial.replace(path)
+    return path
+
+
+def _load(
+    session: FLSession, channel: int, path: Path, sound: str, kind: SoundKind, role: Role, plugin: str | None
+) -> ChannelSound:
     _require_bridge(session)
     effect_track = _ready(session, channel, role)
     select_only(session, channel, unchanged=NOTHING_LOADED)

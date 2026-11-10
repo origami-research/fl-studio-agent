@@ -7,11 +7,13 @@ This file is IMPLEMENTED, not a stub - it is the contract the lanes share.
 
 from __future__ import annotations
 
+import base64
+import binascii
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, PlainSerializer, PlainValidator, field_validator
 
 from fl_mcp.clock import now
 from fl_mcp.pitch import parse_key
@@ -22,6 +24,25 @@ NoteWriteMode = Literal["merge", "replace"]  # THE mode type - validated once, a
 
 Backend = Literal["live", "project-write", "bridge"]
 
+
+
+def _audio_bytes(value: object) -> bytes:
+    if isinstance(value, bytes):
+        return value
+    if isinstance(value, str):
+        try:
+            return base64.b64decode(value, validate=True)
+        except binascii.Error as exc:
+            raise ValueError("audio must be base64") from exc
+    raise ValueError("audio must be bytes")
+
+
+# An audio file's bytes, carried as base64 in JSON (the run kernel's wire) and as bytes in Python.
+AudioBytes = Annotated[
+    bytes,
+    PlainValidator(_audio_bytes),
+    PlainSerializer(lambda value: base64.b64encode(value).decode("ascii"), when_used="json"),
+]
 
 class Note(BaseModel):
     """One note, in musical units. C4 = MIDI 60 = middle C.

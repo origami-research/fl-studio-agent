@@ -48,9 +48,6 @@ _STDERR_LINE_BYTES = 4096
 # Kernel stderr reaches the server log only up to this many lines per kernel,
 # so a print loop to fd 2 cannot fill the disk; the tail is always kept.
 _STDERR_LOG_LINES = 200
-# The server reads kernel output into memory; a line past this is an attack or
-# a runaway print, never a legitimate SDK call or cell result.
-_MAX_MESSAGE_BYTES = 64 << 20
 # A dead kernel's stderr pipe closes at once unless a grandchild still holds it.
 _STDERR_DRAIN_SECONDS = 2.0
 # Session calls whose ``output`` path the server writes: confined to renders.
@@ -78,9 +75,9 @@ class _Kernel:
         self._stderr_reader.start()
 
     def _read_wire(self, stream: IO[bytes]) -> None:
-        while line := stream.readline(_MAX_MESSAGE_BYTES + 1):
-            if len(line) > _MAX_MESSAGE_BYTES:
-                self.messages.put(_Garbled(f"sent a message over {_MAX_MESSAGE_BYTES >> 20} MiB"))
+        while line := stream.readline(wire.MAX_MESSAGE_BYTES + 1):
+            if len(line) > wire.MAX_MESSAGE_BYTES:
+                self.messages.put(_Garbled(f"sent a message over {wire.MAX_MESSAGE_BYTES >> 20} MiB"))
                 return
             try:
                 self.messages.put(wire.parse_from_kernel(line))
