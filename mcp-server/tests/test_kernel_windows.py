@@ -251,7 +251,9 @@ def test_job_limits_protect_fl_from_the_kernel_tree():
     assert basic.LimitFlags & 0x2000 and basic.LimitFlags & 0x400  # kill on close, no WER dialog
     assert basic.LimitFlags & 0x200 and limits.JobMemoryLimit == KERNEL_JOB.memory_bytes == 4 << 30
     assert basic.LimitFlags & 0x8 and basic.ActiveProcessLimit == KERNEL_JOB.processes == 32
-    assert basic.LimitFlags & 0x20 and basic.PriorityClass == 0x4000  # below normal: FL's audio wins
+    # Normal, fixed: below normal starved the kernel while FL's web view was busy (#324), and
+    # model code cannot raise it above FL's own threads.
+    assert basic.LimitFlags & 0x20 and basic.PriorityClass == 0x20
 
 
 def test_the_kernel_launch_asks_for_the_kernel_job(workspace):

@@ -66,6 +66,8 @@ A cell that loses the kernel loses its captured output too.
 A kernel that died between cells (for example a background thread's `os._exit`) is replaced before the next cell, whose `stdout` starts with a note saying the previous kernel's state is gone.
 A `with fl.file_edit():` block a cell leaves open is closed by the server when the cell ends; if closing fails, the cell's result says so.
 
+The server starts the first kernel when it starts, in the background, and the first `run` waits for it.
+A start is kernel time like a cell's and gets the same 300 s instead of the 60 s it once had ([#324](https://github.com/origami-research/fl-studio-mcp/issues/324)): on a freshly reset 2-vCPU box with FL's web view keeping both CPUs busy, a start at below-normal priority missed even 300 s, and at normal priority took 5 s. Granting the runtime to a new environment comes first and is not part of the start (90 s on that box, where the server itself ran below normal).
 A kernel that cannot start makes `run` fail with the `kernel_unavailable` tool error; no model code runs.
 
 ### Images
@@ -140,7 +142,7 @@ The kernel runs in the AppContainer `FLMCP.Kernel` with one capability, `interne
   In the kernel, and through a `sitecustomize` on `PYTHONPATH` in every Python it starts, such a directory inherits the workspace ACL instead (`kernel/private_dirs.py`).
   The server is not patched, so it never makes a folder inside `renders`: until 2026-10-19 the `render` tool wrote into a `tempfile.mkdtemp` folder there, which the kernel could not open, so `fl.analyze` on the tool's path failed on boxes.
 - Process: the kernel starts suspended, joins a job object, then resumes.
-  The job kills the whole tree on kill or when the server exits, runs it below normal priority so FL's audio wins the CPU, and caps it at 4 GiB and 32 processes.
+  The job kills the whole tree on kill or when the server exits, runs it at normal priority, which code in it cannot raise (FL's audio threads run above normal; below normal, a kernel start starved while FL's web view was busy, [#324](https://github.com/origami-research/fl-studio-mcp/issues/324)), and caps it at 4 GiB and 32 processes.
 - Sessions: every kernel on a box shares the one SID, so the server revokes the SID's grants on a workspace when its session closes.
   A workspace is granted once, on first use, because `icacls` rewrites the ACL of every file below a folder it grants; once revoked it is never granted again.
   A box runs one session at a time; two concurrent sessions on one box could read each other's workspaces while both are live.

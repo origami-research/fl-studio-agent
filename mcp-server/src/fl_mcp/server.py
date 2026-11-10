@@ -72,6 +72,7 @@ async def lifespan(server: Any, *, with_fl: bool = True) -> Any:
             launcher = platform_for(sys.platform).kernel_launcher()
         kernel = KernelHost(session, workspace, launcher, os.environ)
         cleanup.callback(kernel.close)
+        kernel.start()  # ahead of the first run: a cold machine is slowest to start one (#324)
         yield {"kernel": kernel}
 
 
@@ -150,14 +151,20 @@ def run(code: str, ctx: Context) -> RunResult:
            param="volume"|"pan"|plugin param) or mixer_track=n (+ slot=s for an
            effect's param): FL records it into a new pattern placed at bar; it
            plays twice in real time. Pattern 1 already starts the song.
+           Pumping (the kick ducking a pad or bass; no code can key a compressor):
+           one automate dips the part's mixer track on every kick. FL keeps the
+           moves about 0.1 s late, so each dip starts that much early (e):
+             t = next(c.mixer_track for c in fl.channels if c.name == "Pad")
+             top = next(m.volume for m in fl.mixer if m.index == t); e = 0.1 * fl.tempo / 60
+             dip = [{"position": 0, "value": 0.25}, {"position": 0.35 - e, "value": top}]
+             for b in range(1, 64): dip += [{"position": b - e - 0.02, "value": top},
+                 {"position": b - e, "value": 0.25}, {"position": b - e + 0.35, "value": top}]
+             fl.automate(dip, bar=1, mixer_track=t)  # about 14 dB down, back in 0.35 beats
     Sounds: fl.sounds("808 kick", kind="sample"|"preset") -> stock sounds (path
            relative to fl.stock_folder, readable); fl.load_sample(ch, sound) also
            takes a WAV you wrote: chop, stretch, reverse or re-pitch in Python, and
            write a note as long as the sample; fl.load_preset(ch, sound) (an effect
            preset adds the effect: .effect); fl.presets(ch); fl.set_preset(ch, name).
-           Sidechain pumping: code cannot set a compressor's sidechain input, so
-           render the part alone, dip its gain after each kick in numpy, load that
-           WAV into a spare sampler and clear the part's own notes.
     Hear:  fl.render("mix.wav", bars=, start_bar=1, solo=[ch], mute=[ch],
            stems="channels"|"mixer"|[ch]) -> the WAV's Path with .span (start_bar,
            beats, tempo_bpm, seconds); it plays in real time. Stems are one play

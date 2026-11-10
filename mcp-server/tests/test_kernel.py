@@ -252,6 +252,71 @@ def test_kernel_that_cannot_start_reports_why(session, workspace):
     assert "boom on import" in caught.value.message
 
 
+class _Counting(PosixLauncher):
+    """Counts launches; ``script`` replaces the kernel when given."""
+
+    def __init__(self, script: str | None = None) -> None:
+        super().__init__()
+        self.launches = 0
+        self.script = script
+
+    def __call__(self, argv, *, workspace, env):
+        self.launches += 1
+        if self.script is not None:
+            argv = [sys.executable, "-c", self.script]
+        return super().__call__(argv, workspace=workspace, env=env)
+
+
+def _wait_for(condition, seconds: float = 30.0) -> None:
+    deadline = time.monotonic() + seconds
+    while not condition():
+        assert time.monotonic() < deadline, "timed out"
+        time.sleep(0.01)
+
+
+def test_a_kernel_started_ahead_runs_the_first_cell(session, workspace):
+    """#324: a cold box took longer than the start limit, so the server starts the kernel
+    when it starts; the first run uses that kernel instead of starting another."""
+    launcher = _Counting()
+    kernel = KernelHost(session, workspace, launcher, os.environ)
+    try:
+        kernel.start()
+        assert kernel.run("1 + 1").result == "2"  # waits for the start under way, if it is first
+        _wait_for(lambda: kernel._lock.acquire(blocking=False))  # the start ahead has finished either way
+        kernel._lock.release()
+        assert launcher.launches == 1
+    finally:
+        kernel.close()
+
+
+def test_a_failed_start_ahead_is_the_first_runs_error_and_the_next_run_starts_again(session, workspace):
+    """The first run reports why the kernel could not start ahead, without a second wait."""
+    launcher = _Counting("import sys; sys.stderr.write('boom on import\\n'); sys.exit(2)")
+    kernel = KernelHost(session, workspace, launcher, os.environ)
+    kernel.start()
+    _wait_for(lambda: kernel._start_failure is not None)
+    with pytest.raises(ToolError) as first:
+        kernel.run("1")
+    assert "exited with code 2" in first.value.message and "boom on import" in first.value.message
+    assert launcher.launches == 1
+    with pytest.raises(ToolError):
+        kernel.run("1")
+    assert launcher.launches == 2
+
+
+def test_close_kills_a_kernel_that_is_still_starting(session, workspace):
+    """Shutdown must not wait for a start, nor leave its process behind."""
+    launcher = _Counting("import time; time.sleep(60)")
+    kernel = KernelHost(session, workspace, launcher, os.environ)
+    kernel.start()
+    _wait_for(lambda: kernel._starting is not None)
+    starting = kernel._starting
+    kernel.close()
+    _wait_for(lambda: starting.process.poll() is not None, seconds=10)
+    _wait_for(lambda: kernel._start_failure is not None, seconds=10)
+    assert kernel._kernel is None
+
+
 def test_an_unreadable_message_loses_the_kernel(session, workspace):
     """The server parses kernel output as untrusted data; a call to a non-SDK method is garbage."""
 

@@ -305,18 +305,6 @@ fl.load_sample("Sampler 1", "chop.wav")
 fl.track("chop").write([Note(60, b, 4) for b in range(0, 16, 4)])
 ```
 
-Sidechain pumping is done the same way, because code cannot set a compressor's sidechain input (it is not a plugin parameter; [note](research/sidechain-samples-live-2026-11-09.md)): render the part alone, dip its gain after each kick, load the result into a spare sampler, and clear the part's notes.
-
-```python
-pad = fl.render("pad.wav", bars=8, solo=["Pad"]); x, sr = fl.read_wav(pad)
-beat = 60 / pad.span.tempo_bpm
-since_kick = (np.arange(len(x)) / sr) % beat        # kicks on every beat
-gain = 1 - 0.7 * np.exp(-since_kick / 0.12)         # duck 70 %, back in about a quarter second
-soundfile.write("pad pumped.wav", x * gain[:, None], sr)
-fl.load_sample("Sampler 2", "pad pumped.wav")
-fl.track("pad pumped").write([Note(60, 0, 32)]); fl.track("Pad").clear()
-```
-
 ### `fl.load_preset(channel: str | int, preset: Sound | str) -> ChannelSound`
 
 **Availability:** live-only, through the FL MCP Bridge. Loads a stock preset (a `Sound` from `fl.sounds(kind="preset")`, or its `path`) into a channel.
@@ -370,7 +358,8 @@ Moves a control over time from `bar`: `points` are `AutomationPoint(position, va
 The control is a channel's `"volume"`, `"pan"` or instrument parameter (index or name), a mixer track's `"volume"` or `"pan"`, or with `slot` a parameter of that track's effect.
 FL records the moves (`general.processRECEvent`, one value per controller idle tick, while recording in song mode) into a new pattern named after the control, which FL places at `bar`; FL keeps recorded automation in the pattern, not as an automation clip.
 Automating again with `pattern=` at the same bar replaces the moves over the beats given (live: a shorter take replaced only its own span).
-The engine then plays the span back and reads the control (`device.getLinkedValue`) at each idle tick, and raises if FL plays it more than 0.03 from the line asked for.
+The engine then plays the span back and reads the control (`device.getLinkedValue`) at up to 64 idle ticks, and raises if FL plays it more than 0.03 from the line asked for anywhere within one recording step of where it was read.
+FL plays a recorded value until the next tick's, so where the line is steep (a dip on each kick) playback trails it by up to that step; read at the exact position, a dip was 0.55 off (fl-mcp-03, 2026-11-10).
 It plays in real time twice, so it takes about twice the automation's length.
 Returns `AutomationTake(target, pattern, bar, beats, points, max_error)`, where `points` are FL's playback.
 
@@ -382,6 +371,24 @@ fl.automate([{"position": 0, "value": 0.15}, {"position": 16, "value": 0.95}],
             bar=9, channel="Lead", param="cutoff")
 fl.render("song.wav")
 ```
+
+Pumping, the kick ducking a pad or bass, is one automation per ducked mixer track, because code cannot key a compressor (below).
+Each dip falls on the kick and recovers over the release; FL keeps recorded moves about 0.1 s late (live, 2026-11-10: the dip's bottom landed 125 ms after the kick), so each dip starts that much early:
+
+```python
+t = next(c.mixer_track for c in fl.channels if c.name == "Pad")
+top = next(m.volume for m in fl.mixer if m.index == t)
+e = 0.1 * fl.tempo / 60                              # 0.1 s in beats
+dip = [{"position": 0, "value": 0.25}, {"position": 0.35 - e, "value": top}]
+for b in range(1, 64):                               # 16 bars of kicks on the beat
+    dip += [{"position": b - e - 0.02, "value": top},
+            {"position": b - e, "value": 0.25},      # down on the kick
+            {"position": b - e + 0.35, "value": top}]  # back by 0.35 beats (the release)
+fl.automate(dip, bar=1, mixer_track=t)
+```
+
+Measured on the pad over 16 bars at 120 BPM against the same render without the automation: 0.25 of 0.8 dipped 14 dB a beat (median; 53 of 64 beats at least 10 dB), deepest within 35 ms of the kick, the same from the first bar to the last ([note](research/live-pumping-2026-11-10.md)).
+One take of 16 bars plays twice, about 65 s.
 
 ### `fl.effect(mixer_track: int, slot: int) -> Effect`
 
@@ -398,6 +405,7 @@ reverb.set_param("Decay time", 0.3)
 ```
 
 A compressor's sidechain input is not among its parameters (Fruity Limiter lists 18, Fruity Compressor 6): FL sets it only in the plugin's window, so code cannot key one track's compressor from another.
+Draw the pumping with `fl.automate` instead (above).
 
 ### `fl.undo() -> None`
 

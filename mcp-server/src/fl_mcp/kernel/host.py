@@ -38,8 +38,11 @@ log = logging.getLogger(__name__)
 RUN_CELL_TIMEOUT_SECONDS = 300.0
 # How long an interrupted cell gets to unwind before the kernel is killed.
 INTERRUPT_GRACE_SECONDS = 5.0
-# Interpreter start plus the SDK import; generous for a cold Windows box.
-KERNEL_BOOT_TIMEOUT_SECONDS = 60.0
+# A kernel's start (interpreter, SDK import, boundary probe) is kernel time like a
+# cell's, so it gets a cell's budget rather than the 60 s it once had (#324). On a
+# freshly reset 2-vCPU box with FL's web view keeping both CPUs busy, a start at below
+# normal priority missed even 300 s; at normal priority it took 5 s.
+KERNEL_BOOT_TIMEOUT_SECONDS = RUN_CELL_TIMEOUT_SECONDS
 # A kernel that stops reading its input must not block the server: a write to
 # it that cannot finish in this long loses the kernel.
 WIRE_WRITE_TIMEOUT_SECONDS = 10.0
@@ -73,6 +76,8 @@ class _Kernel:
         threading.Thread(target=self._read_wire, args=(process.stdout,), daemon=True).start()
         self._stderr_reader = threading.Thread(target=self._read_stderr, args=(process.stderr,), daemon=True)
         self._stderr_reader.start()
+        self._kill_lock = threading.Lock()
+        self._exit_code: int | None = None
 
     def _read_wire(self, stream: IO[bytes]) -> None:
         while line := stream.readline(wire.MAX_MESSAGE_BYTES + 1):
@@ -123,11 +128,15 @@ class _Kernel:
         return finished.wait(timeout)
 
     def kill(self) -> int:
-        """Kill and reap; the stderr tail is complete once this returns."""
-        self.process.kill()
-        code = self.process.wait()
-        self._stderr_reader.join(timeout=_STDERR_DRAIN_SECONDS)
-        return code
+        """Kill and reap, once: close() and a start finishing at shutdown may both kill the
+        same kernel, and two waits on one Windows process race its handle. The stderr tail
+        is complete once this returns."""
+        with self._kill_lock:
+            if self._exit_code is None:
+                self.process.kill()
+                self._exit_code = self.process.wait()
+                self._stderr_reader.join(timeout=_STDERR_DRAIN_SECONDS)
+            return self._exit_code
 
     def stderr_note(self) -> str:
         return "\nKernel stderr (last lines):\n" + "\n".join(self.stderr_tail) if self.stderr_tail else ""
@@ -208,7 +217,29 @@ class KernelHost:
         self._boot_timeout = boot_timeout
         self._write_timeout = write_timeout
         self._kernel: _Kernel | None = None
+        self._starting: _Kernel | None = None  # a start in progress, which close() kills
+        self._start_failure: ToolError | None = None  # why start() could not, for the first run
+        self._closed = False
         self._lock = threading.Lock()  # MCP runs sync tools on worker threads
+
+    def start(self) -> None:
+        """Start the kernel now, in the background, so its start (slowest right after a
+        machine boots) overlaps the client's setup and the model's first turn instead of
+        delaying the first cell. The first run waits for it, and reports its failure."""
+        threading.Thread(target=self._start_ahead, name="kernel-start", daemon=True).start()
+
+    def _start_ahead(self) -> None:
+        with self._lock:
+            if self._kernel is not None or self._closed:
+                return
+            try:
+                self._kernel = self._boot()
+            except ToolError as exc:
+                log.warning("the kernel did not start ahead of the first run: %s", exc.message)
+                self._start_failure = exc
+                return
+            if self._closed:  # close() ran while it started and may not have seen it
+                self._kernel.kill()
 
     def run(self, code: str) -> RunResult:
         """Run one cell. Raises kernel_unavailable if no kernel can start.
@@ -220,6 +251,9 @@ class KernelHost:
         with self._lock:
             note = self._drop_dead_kernel()
             if self._kernel is None:
+                failure, self._start_failure = self._start_failure, None
+                if failure is not None:  # start() already tried; the next run tries again
+                    raise failure
                 self._kernel = self._boot()
             kernel = self._kernel
             cell = _Cell(self._session)
@@ -237,9 +271,11 @@ class KernelHost:
 
     def close(self) -> None:
         """Kill the kernel without waiting for a running cell: shutdown must not hang on one."""
-        kernel, self._kernel = self._kernel, None
-        if kernel is not None:
-            kernel.kill()
+        self._closed = True
+        for kernel in (self._starting, self._kernel):
+            if kernel is not None:
+                kernel.kill()
+        self._kernel = None
         self._launcher.release(self.workspace)
 
     # -- lifecycle ----------------------------------------------------------------
@@ -270,12 +306,18 @@ class KernelHost:
 
     def _start(self, argv: list[str]) -> _Kernel:
         env = self.workspace.kernel_env(self._environ, python=Path(sys.executable))
+        started = time.monotonic()
         try:
             kernel = _Kernel(self._launcher(argv, workspace=self.workspace, env=env))
         except (OSError, subprocess.SubprocessError) as exc:
             log.exception("kernel launch failed")
             raise errors.kernel_unavailable(f"launch failed: {exc}") from exc
-        message = kernel.next(self._boot_timeout)
+        launched = time.monotonic()
+        self._starting = kernel
+        try:
+            message = kernel.next(self._boot_timeout)
+        finally:
+            self._starting = None
         if not isinstance(message, wire.Ready):
             code = kernel.kill()
             reason = "did not start in time" if message is None else f"exited with code {code}"
@@ -286,7 +328,10 @@ class KernelHost:
             raise errors.kernel_unavailable(
                 f"its OS boundary is not in place ({message.probe}); refusing to run model code unconfined."
             )
-        log.info("kernel %d ready in %s", message.pid, self.workspace.work)
+        log.info(
+            "kernel %d ready in %s: launched in %.1f s, started in %.1f s",
+            message.pid, self.workspace.work, launched - started, time.monotonic() - launched,
+        )  # fmt: skip
         return kernel
 
     def _run_cell(self, kernel: _Kernel, code: str, cell: _Cell) -> RunResult:

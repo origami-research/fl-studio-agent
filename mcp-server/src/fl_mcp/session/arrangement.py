@@ -47,9 +47,11 @@ JOB_OVERHEAD_SECONDS = 30.0
 JOB_CANCEL_SECONDS = 12.0
 # Polled twice a second: the status is small, and FL answers it while it plays.
 JOB_POLL_SECONDS = 0.5
-# FL keeps automation at its own resolution and records once per OnIdle tick, so a played
-# back value sits this close to the straight line asked for (live: within 0.005 on a 2-bar
-# ramp); the first sample of a span can still hold the value recorded there before.
+# FL records once per OnIdle tick and plays a recorded value until the next one, so a played
+# back value is the line asked for somewhere within one recording step of where it is read,
+# to this much (live: within 0.005 on a 2-bar ramp). Read against the exact position, a dip
+# on each kick was 0.55 off where the line falls steeply (fl-mcp-03, 2026-11-10). The first
+# sample of a span can still hold the value recorded there before.
 AUTOMATION_TOLERANCE = 0.03
 SKIP_FIRST_TICKS = 1
 # The automation a take reports: FL's played-back values, thinned to this many points.
@@ -255,12 +257,37 @@ def place(session: FLSession, number: int, bars: list[int]) -> list[PlacedClip]:
     return sorted(placed, key=lambda c: c.bar)
 
 
-def _sampled_error(rows: list[list[float]], start: int, ppq: int, points: list[AutomationPoint]) -> float:
+def _sampled_error(
+    rows: list[list[float]], start: int, length: int, ppq: int, points: list[AutomationPoint], gaps: list[int]
+) -> float:
+    """How far FL's playback is from the line: each value against the line's range within one
+    recording step of where it was read. ``gaps`` are the widest steps (ticks) the recording
+    took in each of equal spans of the take; a read uses its span's and its neighbours'."""
     worst = 0.0
     for tick, value in rows[SKIP_FIRST_TICKS:]:
         beat = (tick - start) / ppq
-        worst = max(worst, abs(value - _value_at(points, beat)))
+        step = _local_gap(gaps, tick - start, length) / ppq
+        low, high = _line_range(points, beat - step, beat + step)
+        worst = max(worst, low - value, value - high)
     return worst
+
+
+def _local_gap(gaps: list[int], offset: int, length: int) -> int:
+    """The recording step around ``offset``: its span's and its neighbours'. A span no tick
+    ended in (spans shorter than a step) holds the step that ended next, after it."""
+    if not gaps:
+        return 0
+    span = min(len(gaps) - 1, max(0, offset * len(gaps) // max(1, length)))
+    after = next((g for g in gaps[span + 1 :] if g), 0)
+    before = next((g for g in reversed(gaps[:span]) if g), 0)
+    return max(gaps[span], after, before)
+
+
+def _line_range(points: list[AutomationPoint], first: float, last: float) -> tuple[float, float]:
+    """The lowest and highest value of the line between two beats."""
+    values = [_value_at(points, first), _value_at(points, last)]
+    values += [p.value for p in points if first < p.position < last]
+    return min(values), max(values)
 
 
 def _value_at(points: list[AutomationPoint], beat: float) -> float:
@@ -330,7 +357,8 @@ def automate(
     rows = [list(r) for r in played.get("rows") or []]
     if len(rows) <= SKIP_FIRST_TICKS:
         raise WriteRejected(f"FL Studio played none of the automation of {label} back.", fix="Automate it again.")
-    worst = _sampled_error(rows, start, ppq, points)
+    gaps = [int(g) for g in recorded.get("gaps") or []]
+    worst = _sampled_error(rows, start, round(beats * ppq), ppq, points, gaps)
     if worst > AUTOMATION_TOLERANCE:
         raise WriteRejected(
             f"FL Studio plays the automation of {label} back up to {worst:.2f} away from the values asked for.",

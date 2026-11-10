@@ -38,6 +38,9 @@ class FakeSong:
         self.active: dict[int, list[int]] = {}  # start tick -> tracks FL reports playing there
         self.events = 3
         self.playback_offset = 0.0
+        self.playback_lag = 0  # ticks: FL plays the value it recorded this much earlier
+        self.gaps: list[int] = []  # the recording's widest step per span of the take, as the controller reports
+        self.flat: float | None = None  # FL plays this value back, whatever was recorded
         self.fail: str | None = None
 
     def default(self, n: int) -> bool:
@@ -49,6 +52,7 @@ class FakeSong:
         status = {"id": len(self.jobs), "phase": "failed" if self.fail else "done", "error": self.fail}
         if spec["mode"] == "record":
             status["events"] = self.events
+            status["gaps"] = list(self.gaps)
             return status
         status["tracks"] = list(self.active.get(spec["start"] - 2, []))
         record = next((j for j in reversed(self.jobs) if j["mode"] == "record" and j["start"] == spec["start"]), None)
@@ -56,7 +60,9 @@ class FakeSong:
         if record and spec.get("target"):
             points = record["points"]
             for tick in range(spec["start"], spec["start"] + spec["length"], 24):
-                rows.append([tick, _line(points, tick - spec["start"]) + self.playback_offset])
+                at = max(0, tick - spec["start"] - self.playback_lag)
+                value = _line(points, at) if self.flat is None else self.flat
+                rows.append([tick, value + self.playback_offset])
         status["rows"] = rows
         return status
 
@@ -266,6 +272,57 @@ def test_automation_fl_plays_back_away_from_the_line_raises(song):
 
     with pytest.raises(WriteRejected, match=r"up to 0\.10 away"):
         session.automate(SWEEP, bar=13, param="volume", channel=1)
+
+
+PUMP = [
+    AutomationPoint(position=b + x, value=v) for b in range(4) for x, v in ((0, 0.25), (0.35, 0.8), (0.98, 0.8))
+]
+
+
+def test_a_dip_on_each_kick_passes_within_one_recording_step(song):
+    """FL plays a recorded value until the next tick's, so where a pumping dip falls or
+    recovers steeply its playback trails the line by up to one recording step: live, 0.55
+    off at the exact position (fl-mcp-03, 2026-11-10). Within the step it matches."""
+    fake, session, _ = song
+    fake.playback_lag = 4  # ticks, about one OnIdle tick at 120 BPM
+    fake.gaps = [4] * 64
+
+    take = session.automate(PUMP, bar=1, param="volume", mixer_track=3)
+
+    assert take.max_error < 0.01  # the points reach FL in whole ticks
+
+
+def test_a_dip_played_back_later_than_the_recording_step_raises(song):
+    fake, session, _ = song
+    fake.gaps, fake.playback_lag = [4] * 64, 12
+
+    with pytest.raises(WriteRejected, match="away from the values asked for"):
+        session.automate(PUMP, bar=1, param="volume", mixer_track=3)
+
+
+def test_spans_shorter_than_a_step_use_the_step_that_ended_after_them(song):
+    """A short take has spans shorter than one idle tick, so most spans hold no step; each read
+    still allows the step that covers it."""
+    fake, session, _ = song
+    fake.playback_lag = 4
+    fake.gaps = [4 if i % 3 == 2 else 0 for i in range(64)]
+
+    take = session.automate(PUMP, bar=1, param="volume", mixer_track=3)
+
+    assert take.max_error < 0.01
+
+
+def test_one_slow_tick_widens_the_check_only_where_it_happened(song):
+    """A playback that never moved (nothing recorded) must fail even when one idle tick of the
+    recording was slow: a step as wide as the dip's release, allowed everywhere, would let a
+    flat line pass (review of #325)."""
+    fake, session, _ = song
+    fake.gaps = [4] * 64
+    fake.gaps[0] = 2 * PPQ
+    fake.flat = 0.8
+
+    with pytest.raises(WriteRejected, match="away from the values asked for"):
+        session.automate(PUMP, bar=1, param="volume", mixer_track=3)
 
 
 def test_an_effect_parameter_is_found_on_its_mixer_slot(song):

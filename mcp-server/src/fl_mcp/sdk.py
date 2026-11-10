@@ -448,7 +448,8 @@ class FL:
             fl.effect(fx.mixer_track, fx.slot).set_param("Decay time", 0.3)
 
         A compressor's sidechain input is not among its parameters: FL sets it only in the
-        plugin's window, so code cannot key one effect from another track.
+        plugin's window, so code cannot key one effect from another track; draw pumping as a
+        dip on each kick with fl.automate on the part's mixer track volume.
         """
         try:
             args = _EffectArgs(mixer_track=mixer_track, slot=slot)

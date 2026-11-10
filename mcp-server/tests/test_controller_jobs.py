@@ -35,8 +35,9 @@ MIDI = SimpleNamespace(
 class FakeFL:
     """FL's transport, song and controls as the controller sees them."""
 
-    def __init__(self, song_ticks: int = 4 * BAR, *, arms: bool = True, step: int = 12) -> None:
+    def __init__(self, song_ticks: int = 4 * BAR, *, arms: bool = True, step: int = 12, loops: bool = False) -> None:
         self.song_ticks = song_ticks
+        self.loops = loops  # playing past the song's end goes back to its start, as FL's song mode does
         self.loop_mode = 0
         self.pos = 0
         self.playing = False
@@ -59,6 +60,8 @@ class FakeFL:
                 self.armed = not self.armed
         if self.playing:
             self.pos += self.step
+            if self.loops and self.pos >= self.song_ticks:
+                self.pos -= self.song_ticks
         flmcp._job_tick()
 
     def set_song_pos(self, pos, mode):
@@ -125,6 +128,24 @@ def ramp(start_bar: int, bars: int) -> dict:
         "target": {"kind": "channel", "channel": 3, "param": "volume"}, "points": [[0, 0.0], [bars * BAR, 1.0]],
         "marker": "Sweep",
     }
+
+
+def test_a_playback_from_bar_1_to_the_songs_end_stops_when_fl_goes_back_to_the_start(monkeypatch):
+    """From bar 1, FL going back to the song's start is not a position before the start,
+    so a take over the whole song played on until its window ran out and failed
+    (fl-mcp-03, 2026-11-10). Any step backwards ends the take."""
+    fl = FakeFL(song_ticks=4 * BAR, loops=True, step=10)
+    fl.install(monkeypatch)
+    spec = {
+        "mode": "play", "start": 0, "length": 4 * BAR, "seconds": 8.0,
+        "target": {"kind": "mixer", "track": 1, "param": "volume"},
+    }
+
+    status = run(fl, spec)
+
+    assert status["phase"] == "done" and status["error"] is None
+    assert status["rows"] and all(0 <= tick < 4 * BAR for tick, _ in status["rows"])
+    assert not fl.playing
 
 
 def test_a_recording_lands_only_inside_its_window_with_the_straight_line_asked_for(monkeypatch):
@@ -316,3 +337,25 @@ def test_a_cancelled_job_leaves_fl_stopped_and_not_recording(monkeypatch):
     assert flmcp._job_status([], {})["error"] == "the engine stopped waiting for it"
     assert not fl.playing and not fl.armed
     assert flmcp._cancel_job([], {}) is None, "nothing left to cancel"
+
+
+def test_the_controller_does_not_answer_fls_per_change_callbacks():
+    """FL calls OnRefresh and OnDirtyMixerTrack for every change it shows, every few
+    milliseconds while automation plays a mixer volume; a SysEx event for each, which the
+    engine never read, went out until FL stopped answering for good (fl-mcp-03, 2026-11-10)."""
+    for callback in ("OnRefresh", "OnDirtyChannel", "OnDirtyMixerTrack"):
+        assert not hasattr(flmcp, callback), callback
+
+
+def test_a_recording_reports_its_widest_step_between_ticks_per_span(monkeypatch):
+    """The engine reads playback within one recording step of the line (a recorded value
+    holds until the next tick's), so the job reports how wide that step was in each of 64
+    spans of the take: one slow tick widens only its own span."""
+    fl = FakeFL(song_ticks=16 * BAR, step=12)
+    fl.install(monkeypatch)
+
+    status = run(fl, ramp(9, 2))
+
+    assert len(status["gaps"]) == flmcp.SAMPLE_ROWS_MAX
+    # a span the ticks skipped holds 0; the engine also uses each span's neighbours
+    assert set(status["gaps"]) <= {0, 12} and status["gaps"].count(12) >= flmcp.SAMPLE_ROWS_MAX // 2

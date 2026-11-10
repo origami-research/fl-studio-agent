@@ -41,7 +41,7 @@ except ImportError:
     arrangement = channels = device = general = midi = None
     mixer = patterns = playlist = plugins = transport = ui = None
 
-SCRIPT_VER = "0.2.7"
+SCRIPT_VER = "0.2.8"
 
 # ---------------------------------------------------------------------------
 # Wire codec (framing, chunking/reassembly) - flmcp_codec.py beside this file is the single
@@ -458,7 +458,8 @@ def _start_job(args, kwargs):
     _jobs["seq"] += 1
     _jobs["current"] = {
         "id": _jobs["seq"], "spec": spec, "event": event, "points": points, "phase": "prepare",
-        "since": _now(), "events": 0, "first": None, "last": None, "rows": [], "tracks": None, "ticks": 0,
+        "since": _now(), "events": 0, "first": None, "last": None, "gaps": [0] * SAMPLE_ROWS_MAX, "rows": [],
+        "tracks": None, "ticks": 0,
     }
     return {"job": _jobs["seq"]}
 
@@ -471,6 +472,7 @@ def _job_status(args, kwargs):
     status = {key: job.get(key) for key in keys}
     if job["phase"] in ("done", "failed"):
         status["rows"] = job["rows"]
+        status["gaps"] = job["gaps"]
     return status
 
 
@@ -589,9 +591,16 @@ def _job_step(job):
     elif phase == "running":
         # getSongPos stops at the song's end; currentTime is where FL is playing.
         pos = arrangement.currentTime(0)
-        looped = job["last"] is not None and pos < start  # FL went back to the song's start
+        # FL went back to the song's start: from bar 1 that is not before the start, so
+        # any step backwards counts (a take from bar 1 to the song's end played on).
+        looped = job["last"] is not None and pos < job["last"]
         if start <= pos < end and not looped:
             job["first"] = pos if job["first"] is None else job["first"]
+            # The widest step between ticks in each of SAMPLE_ROWS_MAX spans of the take: a
+            # recorded value holds that long on playback, and one slow tick widens only its span.
+            if job["last"] is not None:
+                span = min(SAMPLE_ROWS_MAX - 1, int((pos - start) * SAMPLE_ROWS_MAX // max(1, spec["length"])))
+                job["gaps"][span] = max(job["gaps"][span], pos - job["last"])
             job["last"] = pos
             job["ticks"] += 1
             if spec["mode"] == "record":
@@ -837,19 +846,8 @@ def OnProjectLoad(status):
         _send_event("hello", _hello_fields())
 
 
-def OnDirtyChannel(index, *flags):
-    """Freshness layer 1 (docs/11): structure changed, not note content.
-
-    FL 2026 passes (index, updateType) - live-verified 2026-08-26 via a
-    TypeError in the Script output window - while older docs show one arg,
-    so accept both shapes.
-    """
-    _send_event("dirty_channel", {"index": index, "flags": list(flags)})
-
-
-def OnDirtyMixerTrack(index, *flags):
-    _send_event("dirty_mixer_track", {"index": index, "flags": list(flags)})
-
-
-def OnRefresh(flags):
-    _send_event("refresh", {"flags": flags})
+# No OnRefresh, OnDirtyChannel or OnDirtyMixerTrack: FL calls them for every change it
+# shows, which while automation plays a mixer track's volume is every few milliseconds,
+# and a SysEx event for each (which the engine never read) went out while FL played.
+# After the first 16-bar take of a mixer-volume automation FL stopped answering for good
+# (fl-mcp-03, 2026-11-10; docs/research/live-pumping-2026-11-10.md).

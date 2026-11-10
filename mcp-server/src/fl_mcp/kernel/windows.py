@@ -77,7 +77,7 @@ _LIMIT_PRIORITY_CLASS = 0x00000020
 _LIMIT_JOB_MEMORY = 0x00000200
 _LIMIT_DIE_ON_UNHANDLED_EXCEPTION = 0x00000400
 _LIMIT_KILL_ON_JOB_CLOSE = 0x00002000
-_BELOW_NORMAL_PRIORITY_CLASS = 0x00004000
+_NORMAL_PRIORITY_CLASS = 0x00000020
 _SE_FILE_OBJECT = 1
 _DACL_SECURITY_INFORMATION = 0x00000004
 _ACCESS_ALLOWED_ACE_TYPE = 0
@@ -86,10 +86,12 @@ _FILE_READ_EXECUTE = 0x001200A9
 _GENERIC_ALL = 0x10000000
 _GENERIC_EXECUTE = 0x20000000
 _GENERIC_READ = 0x80000000
-# Every launched tree shares the box with FL's real-time audio: it runs below
-# normal priority, is capped by its JobLimits, dies when the job handle closes,
-# and a crash never parks it behind an error-reporting dialog on the
-# interactive FL desktop.
+# Every launched tree shares the box with FL: it runs at normal priority and cannot
+# raise it (FL's audio threads run above normal), is capped by its JobLimits, dies
+# when the job handle closes, and a crash never parks it behind an error-reporting
+# dialog on the interactive FL desktop. Below normal, it ran only on Windows'
+# starvation boost while FL's web view kept a 2-vCPU box busy: a kernel start used
+# 0.56 s of CPU in 5 minutes and missed its limit (#324).
 
 
 class Win32(Protocol):
@@ -368,7 +370,7 @@ def job_limits(job: JobLimits) -> _ExtendedLimitInformation:
         | _LIMIT_PRIORITY_CLASS
     )
     basic.ActiveProcessLimit = job.processes
-    basic.PriorityClass = _BELOW_NORMAL_PRIORITY_CLASS
+    basic.PriorityClass = _NORMAL_PRIORITY_CLASS
     limits.JobMemoryLimit = job.memory_bytes
     return limits
 
