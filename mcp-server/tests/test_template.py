@@ -15,7 +15,7 @@ from flpkit.formats.playlist import EVENT_PLAYLIST, PlaylistFormat
 from fl_mcp import flp, make_agent_project
 from fl_mcp.template import template_path
 
-TEMPLATE_SHA256 = "ff981e71a355e68f3b88a126d63107633e41fa3183ab5778951baa60c92d8751"
+TEMPLATE_SHA256 = "e1a5789d3c1781fae8af3b1d416bd5b8db3b4c8017fd9644a5fef25fe440592f"
 
 # Record bytes 24-31 (the cut window) as FL itself saves a pattern clip that was never
 # resized: FL sizes such a clip from its pattern and regrows it whenever the pattern grows.
@@ -69,6 +69,37 @@ def test_every_palette_channel_says_what_it_is_for():
     assert "Notes: 36 Kick Drum" in guide.about["Drums 808"]
     assert "MIDI 60" in guide.about["Cowbell"]
     assert "Pattern 1" in guide.notes and "Maximus" in guide.notes
+
+
+# FL 2026 event ids: a channel starts at 64; it names its insert in 22 (byte) and, for a
+# Sampler, again in 104 (word), which is the one FL plays it into; an insert's name (204)
+# comes before its flags (236); the arrangements (99) follow the channels.
+CHAN_NEW, CHAN_INSERT, CHAN_INSERT_WORD, INSERT_NAME, INSERT_FLAGS, ARRANGEMENT_NEW = 64, 22, 104, 204, 236, 99
+
+
+def test_every_palette_channel_plays_into_the_mixer_track_named_like_it():
+    """fl.channels showed Cowbell and Sampler 1-3 on mixer track 19 (Choir) while the
+    mixer named tracks 10 and 20-22 after them: the Sampler shell's own insert word was
+    left in (#328). Each insert record must name the channel's own track."""
+    _, raw = codec.chunks(template_path().read_bytes())
+    stream = codec.Stream(raw)
+    events = [(event, bytes(stream[off : off + size])) for event, off, size in stream]
+    opens = [i for i, (event, _) in enumerate(events) if event == INSERT_FLAGS]
+    names, previous = {}, next(i for i, (event, _) in enumerate(events) if event == ARRANGEMENT_NEW)
+    for insert, at in enumerate(opens):
+        found = [p for event, p in events[previous + 1 : at] if event == INSERT_NAME]
+        if found:
+            names[found[-1].decode("utf-16-le").rstrip("\0")] = insert
+        previous = at
+    starts = [i for i, (event, _) in enumerate(events[: opens[0]]) if event == CHAN_NEW]
+    channel_end = next(i for i, (event, _) in enumerate(events) if event == ARRANGEMENT_NEW and i > starts[-1])
+    routed = {}
+    for name, start, end in zip(PALETTE, starts, [*starts[1:], channel_end], strict=True):
+        span = events[start:end]
+        routed[name] = {p[0] for event, p in span if event == CHAN_INSERT}
+        routed[name] |= {int.from_bytes(p, "little") for event, p in span if event == CHAN_INSERT_WORD}
+
+    assert routed == {name: {names[name]} for name in PALETTE}
 
 
 def test_the_bridge_is_the_last_master_effect():
