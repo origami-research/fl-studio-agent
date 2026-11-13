@@ -34,7 +34,7 @@ from typing import TYPE_CHECKING
 
 from fl_mcp import errors
 
-from .link import LIVE_SET_TIMEOUT_SECONDS
+from .link import LIVE_ANSWER_SECONDS
 from .playback import again_once_answering
 
 if TYPE_CHECKING:
@@ -132,7 +132,7 @@ def unrestored(
 def set_mutes(session: FLSession, wanted: Mapping[int, bool]) -> None:
     """Set these channels' mutes in one controller op and confirm FL has every one."""
     pairs = [[index, int(muted)] for index, muted in sorted(wanted.items())]
-    answer = session.link.call("ctl.set_mutes", [pairs], timeout=LIVE_SET_TIMEOUT_SECONDS)
+    answer = session.link.call("ctl.set_mutes", [pairs], timeout=LIVE_ANSWER_SECONDS)
     try:
         now = {int(index): bool(muted) for index, muted in answer}
     except (TypeError, ValueError) as exc:

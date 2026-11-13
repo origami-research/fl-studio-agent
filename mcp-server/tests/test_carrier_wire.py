@@ -245,6 +245,7 @@ def test_plugin_parameter_request_preserves_fl_generic_argument_order(rig):
         "args": [0.5, 41, 3, -1],
         "kwargs": {},
         "pid": None,  # untagged = broadcast; a session-scoped carrier sets this
+        "wait": None,
     }
 
 
@@ -256,6 +257,7 @@ def test_send_request_round_trips_and_validates(rig):
 
     sent = _last_sent_request(midi_out)
     assert sent["op"] == "state.snapshot"
+    assert sent["wait"] == 2.0  # the controller drops a request still queued after this (#328)
     _deliver_response(midi_in, sent["id"], ret={"ppq": 96})
     t.join(timeout=1.0)
     resp = box["result"]

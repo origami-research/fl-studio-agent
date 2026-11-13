@@ -170,7 +170,11 @@ def _run_job(session: FLSession, spec: dict[str, object], seconds: float, what: 
     deadline = session._monotonic() + seconds + JOB_OVERHEAD_SECONDS
     status: object = None
     while session._monotonic() < deadline:
-        status = _live_read(session, "ctl.job", [])
+        try:
+            status = _live_read(session, "ctl.job", [])
+        except errors.ToolError as exc:
+            _cancel(session)  # a job the engine stops following must not keep recording
+            raise WriteRejected(f"FL Studio stopped answering during {what}: {exc.message}", fix=exc.fix) from exc
         if isinstance(status, dict) and status.get("id") == job and status.get("phase") in ("done", "failed"):
             if status["phase"] == "failed":
                 raise WriteRejected(

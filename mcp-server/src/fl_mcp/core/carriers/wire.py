@@ -198,7 +198,9 @@ class MidiControl:
         if not self._call_lock.acquire(timeout=timeout):
             raise control_plane_busy(op, timeout)
         try:
-            cmd = ControlRequest(id=next(self._ids), op=op, args=args or [], kwargs=kwargs or {}, pid=pid)
+            cmd = ControlRequest(
+                id=next(self._ids), op=op, args=args or [], kwargs=kwargs or {}, pid=pid, wait=timeout
+            )
             self.send(cmd)
             return self.await_response(cmd.id, timeout)
         finally:

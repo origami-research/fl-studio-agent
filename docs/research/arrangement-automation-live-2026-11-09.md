@@ -45,6 +45,7 @@ So the controller records only from its idle callback, and on Windows the engine
 - `device.getLinkedValue(event)` read the normalized value of every control tried: channel volume (0.78), a FLEX parameter (0.5, as `plugins.getParamValue`), a Maximus parameter on the master (0.302, as `plugins.getParamValue`) and a mixer track's volume (0.8).
   An automation take plays its span back and compares these readings with the line asked for.
 - In the first proof take, FL's controller stopped answering for good right after the first automation's playback check, while the screen was being recorded: its status then carried every tick's sample (about 400) and was asked for five times a second as FL played. The same calls passed without the recording. The playback now keeps at most 64 evenly spaced samples and sends them once, at its end, and the engine asks twice a second.
+  Later found (#328): the cause was the controller answering from FL's MIDI thread, which can deadlock with FL's main thread; more frames made it likelier ([note](controller-deadlock-2026-11-12.md)).
 
 ## Event ids
 

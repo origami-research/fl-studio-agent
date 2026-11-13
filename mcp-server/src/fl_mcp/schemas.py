@@ -483,6 +483,9 @@ class ControlRequest(BaseModel):
     # each controller executes only the request whose pid matches its own
     # os.getpid(). None = broadcast to all (single-session dev).
     pid: int | None = None
+    # How long the sender waits for the answer, in seconds: the controller drops a request
+    # that waited longer for FL's main thread, so a change reported as failed never lands late.
+    wait: float | None = None
 
 
 class ControlResponse(BaseModel):

@@ -207,10 +207,13 @@ def test_dispatch_never_echoes_a_non_int_id():
 
 def test_onsysex_reports_unknown_id_for_a_frame_error(monkeypatch):
     sent = []
+    monkeypatch.setattr(flmcp, "_inbox", [])
     monkeypatch.setattr(flmcp, "device", SimpleNamespace(midiOutSysex=lambda frame: sent.append(frame)))
     frame = bytearray(flmcp.encode_frame(flmcp.TYPE_REQUEST, {"id": 1, "op": "ping"}))
     frame[4] = 0x99  # corrupt version byte -> unrecoverable id
     flmcp.OnSysEx(SimpleNamespace(sysex=bytes(frame)))
+    assert sent == []  # answered from OnIdle, never from FL's MIDI input thread
+    flmcp.OnIdle()
     assert len(sent) == 1
     frame_type, response = flmcp.decode_frame(sent[0])
     assert frame_type == flmcp.TYPE_RESPONSE
@@ -218,7 +221,95 @@ def test_onsysex_reports_unknown_id_for_a_frame_error(monkeypatch):
     assert isinstance(response["id"], int)
 
 
+# --- requests run and answer on FL's main thread (OnIdle), never in OnSysEx --------
+# FL calls OnSysEx on its MIDI input thread. A response sent from there waited for FL's
+# main thread while the main thread waited on the MIDI thread, and FL never answered again
+# (#328, py-spy on a frozen FL). OnSysEx must neither send nor call FL; OnIdle does both.
+
+
+def _request_frames(message):
+    return [SimpleNamespace(sysex=bytes(f)) for f in flmcp.encode_message(flmcp.TYPE_REQUEST, message)]
+
+
+def _responses(sent):
+    reassembler, out = flmcp.Reassembler(), []
+    for frame in sent:
+        frame_type, payload = flmcp.decode_frame(frame)
+        message = reassembler.feed(frame_type, payload)
+        if message is not None:
+            out.append(message)
+    return out
+
+
+def test_onsysex_queues_requests_without_calling_fl_or_sending(monkeypatch):
+    calls, sent = [], []
+    monkeypatch.setattr(flmcp, "_inbox", [])
+    monkeypatch.setattr(flmcp, "device", SimpleNamespace(midiOutSysex=lambda frame: sent.append(frame)))
+    monkeypatch.setitem(flmcp.ALLOWED, "mixer", SimpleNamespace(setTrackVolume=lambda *a: calls.append(a)))
+
+    for event in _request_frames({"id": 7, "op": "ping"}) + _request_frames(
+        {"id": 8, "op": "mixer.setTrackVolume", "args": [4, 0.85]}
+    ):
+        flmcp.OnSysEx(event)
+
+    assert calls == [] and sent == []
+    flmcp.OnIdle()
+    assert calls == [(4, 0.85)]
+    assert _responses(sent) == [{"id": 7, "ok": True, "ret": "pong"}, {"id": 8, "ok": True, "ret": None}]
+
+
+def test_a_chunked_request_runs_on_the_idle_after_its_last_chunk(monkeypatch):
+    sent = []
+    monkeypatch.setattr(flmcp, "_inbox", [])
+    monkeypatch.setattr(flmcp, "device", SimpleNamespace(midiOutSysex=lambda frame: sent.append(frame)))
+    events = _request_frames({"id": 9, "op": "ping", "args": ["x" * 2000]})
+    assert len(events) > 1
+
+    for event in events[:-1]:
+        flmcp.OnSysEx(event)
+    flmcp.OnIdle()
+    assert sent == []
+    flmcp.OnSysEx(events[-1])
+    assert sent == []
+    flmcp.OnIdle()
+    assert _responses(sent) == [{"id": 9, "ok": True, "ret": "pong"}]
+
+
 # --- OnIdle deferral for FL's "unsafe at current time" guard ----------------
+
+
+def test_a_request_the_engine_stopped_waiting_for_is_dropped(monkeypatch):
+    """FL skips OnIdle under a modal dialog; a change the engine already reported as
+    failed must not land when OnIdle resumes (or twice, on the engine's retry)."""
+    calls, sent, clock = [], [], {"now": 100.0}
+    monkeypatch.setattr(flmcp, "_inbox", [])
+    monkeypatch.setattr(flmcp, "_now", lambda: clock["now"])
+    monkeypatch.setattr(flmcp, "device", SimpleNamespace(midiOutSysex=lambda frame: sent.append(frame)))
+    monkeypatch.setitem(flmcp.ALLOWED, "mixer", SimpleNamespace(setTrackVolume=lambda *a: calls.append(a)))
+
+    for event in _request_frames({"id": 10, "op": "mixer.setTrackVolume", "args": [4, 0.5], "wait": 8.0}):
+        flmcp.OnSysEx(event)
+    clock["now"] = 108.5
+    for event in _request_frames({"id": 11, "op": "mixer.setTrackVolume", "args": [4, 0.6], "wait": 8.0}):
+        flmcp.OnSysEx(event)
+    flmcp.OnIdle()
+
+    assert calls == [(4, 0.6)]
+    assert _responses(sent) == [{"id": 11, "ok": True, "ret": None}]
+
+
+def test_one_bad_request_does_not_stop_the_rest_of_the_idle(monkeypatch):
+    sent, ticked = [], []
+    monkeypatch.setattr(flmcp, "_inbox", [("run", {"id": 12, "op": "ping"}, flmcp._now())])
+    monkeypatch.setattr(flmcp, "_job_tick", lambda: ticked.append(True))
+    monkeypatch.setattr(flmcp, "device", SimpleNamespace(midiOutSysex=lambda frame: sent.append(frame)))
+    monkeypatch.setattr(flmcp, "_dispatch", lambda message: {"id": 12, "ok": True, "ret": object()})  # not JSON
+    flmcp._inbox.append(("answer", {"id": 13, "ok": True, "ret": "pong"}, flmcp._now()))
+
+    flmcp.OnIdle()
+
+    assert _responses(sent) == [{"id": 13, "ok": True, "ret": "pong"}]
+    assert ticked == [True]
 
 
 def test_dispatch_defers_unsafe_at_current_time_and_returns_no_response(monkeypatch):
@@ -311,8 +402,9 @@ def test_dispatch_does_not_defer_unrelated_runtime_errors(monkeypatch):
     assert flmcp._deferred_ops == []
 
 
-def test_onsysex_sends_no_response_when_op_is_deferred(monkeypatch):
+def test_a_deferred_op_sends_no_response_until_it_lands(monkeypatch):
     monkeypatch.setattr(flmcp, "_deferred_ops", [])
+    monkeypatch.setattr(flmcp, "_inbox", [])
 
     def flaky(*a, **kw):
         raise RuntimeError("Operation unsafe at current time")
@@ -324,6 +416,7 @@ def test_onsysex_sends_no_response_when_op_is_deferred(monkeypatch):
         flmcp.TYPE_REQUEST, {"id": 54, "op": "mixer.setCurrentTempo", "args": [128.0], "kwargs": {}}
     )
     flmcp.OnSysEx(SimpleNamespace(sysex=frame))
+    flmcp.OnIdle()
     assert sent == []
     assert len(flmcp._deferred_ops) == 1
     assert flmcp._deferred_ops[0]["req_id"] == 54

@@ -231,6 +231,23 @@ def test_a_job_fl_stops_raises_its_reason(song):
         session.place("Chorus", [5])
 
 
+def test_a_job_whose_status_fl_stops_answering_is_cancelled(song):
+    """The engine gives up on a job it can no longer follow and asks the controller to stop
+    it, so FL is not left recording after the call failed (#328 review)."""
+    fake, session, control = song
+    fake.names[2], fake.lengths[2] = "Chorus", 32
+
+    def silent(args):
+        raise errors.ToolError("control_plane_unavailable", "FL Studio is busy and did not answer in time.", "Retry.")
+
+    control.handlers["ctl.job"] = silent
+    control.handlers["ctl.cancel"] = lambda args: None
+
+    with pytest.raises(WriteRejected, match="stopped answering during"):
+        session.place("Chorus", [5])
+    assert [op for op, _ in control.calls].count("ctl.cancel") == 1
+
+
 def test_placing_refuses_while_fl_would_ask_what_to_record(monkeypatch):
     # The question is modal: a recording started under it waits for a person.
     monkeypatch.setattr(arrangement_mod.sys, "platform", "win32")

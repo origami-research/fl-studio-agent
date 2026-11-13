@@ -40,7 +40,7 @@ from fl_mcp.schemas import (
 
 from . import playback
 from .audition import Rack, audition
-from .link import LIVE_READ_TIMEOUT_SECONDS, LIVE_SET_TIMEOUT_SECONDS
+from .link import LIVE_ANSWER_SECONDS
 
 if TYPE_CHECKING:
     from .facade import FLSession
@@ -95,7 +95,7 @@ def save_project(session: FLSession) -> None:
         # budget.  In session mode that probe crosses the broker first; using
         # 0 here made the resulting ctl.save error claim an expired request
         # even though no save request had received a zero-second timeout.
-        raise session.not_answering("ctl.save", LIVE_SET_TIMEOUT_SECONDS, "nothing was saved")
+        raise session.not_answering("ctl.save", LIVE_ANSWER_SECONDS, "nothing was saved")
     session.link.command("ctl.save")
 
 
@@ -143,16 +143,16 @@ def _render_env() -> dict[str, str]:
 def _live_read(session: FLSession, op: str, args: list) -> object:
     """One live controller read: FL's answer, or a typed error naming why not."""
     if session._ensure_hello() is None or session.control is None:
-        raise session.not_answering(op, LIVE_READ_TIMEOUT_SECONDS, "nothing could be read")
-    return session.link.call(op, args, timeout=LIVE_READ_TIMEOUT_SECONDS)
+        raise session.not_answering(op, LIVE_ANSWER_SECONDS, "nothing could be read")
+    return session.link.call(op, args, timeout=LIVE_ANSWER_SECONDS)
 
 
 def _live_write(session: FLSession, op: str, args: list) -> object:
     """One live controller write: FL's answer, or a typed error naming why not.
     Never a file fallback: the caller reads the change back from FL."""
     if session._ensure_hello() is None or session.control is None:
-        raise session.not_answering(op, LIVE_SET_TIMEOUT_SECONDS, "nothing was changed")
-    return session.link.call(op, args, timeout=LIVE_SET_TIMEOUT_SECONDS)
+        raise session.not_answering(op, LIVE_ANSWER_SECONDS, "nothing was changed")
+    return session.link.call(op, args, timeout=LIVE_ANSWER_SECONDS)
 
 
 def _live_int(session: FLSession, op: str, args: list | None = None) -> int:
@@ -347,7 +347,7 @@ def _live_render(
         # The song's start in FL's default mode (a fraction of the song), as every render
         # until 2026-11-03; any other bar in absolute ticks, as fl.check positions.
         position = [0] if start_tick == 0 else [start_tick, FL_SONGLENGTH_ABSTICKS]
-        positioned = session.link.request("transport.setSongPos", position, timeout=LIVE_SET_TIMEOUT_SECONDS)
+        positioned = session.link.request("transport.setSongPos", position, timeout=LIVE_ANSWER_SECONDS)
         if not positioned.ok:
             raise errors.ToolError(
                 "render_failed",
@@ -615,7 +615,7 @@ def set_tempo(session: FLSession, bpm: float) -> float:
     """Live-first (confirmed via getCurrentTempo readback, BPM x 1000);
     else the project file (flp.set_tempo) + reload. Returns the readback."""
     if session._ensure_hello() is not None and session.control is not None:
-        resp = session.link.request("mixer.setCurrentTempo", [bpm, 1], timeout=LIVE_SET_TIMEOUT_SECONDS)
+        resp = session.link.request("mixer.setCurrentTempo", [bpm, 1], timeout=LIVE_ANSWER_SECONDS)
         if not resp.ok:
             # Unsafe-at-current-time means busy (warm-up window after a
             # load, addendum A6) - retryable, and NEVER a fallthrough.
@@ -625,7 +625,7 @@ def set_tempo(session: FLSession, bpm: float) -> float:
                 f"mixer.setCurrentTempo({bpm}) failed inside FL: {resp.err}",
                 fix="Check the value (10-999 BPM) and retry.",
             )
-        readback = session.link.request("mixer.getCurrentTempo", timeout=LIVE_READ_TIMEOUT_SECONDS)
+        readback = session.link.request("mixer.getCurrentTempo", timeout=LIVE_ANSWER_SECONDS)
         if not readback.ok or readback.ret is None:
             raise WriteRejected(
                 f"FL Studio took the tempo but did not report it back ({readback.err}).",
@@ -669,7 +669,7 @@ def set_channel_levels(
         for field_name, op, args in requested:
             if args[1] is None:
                 continue
-            resp = session.link.request(op, args, timeout=LIVE_SET_TIMEOUT_SECONDS)
+            resp = session.link.request(op, args, timeout=LIVE_ANSWER_SECONDS)
             if not resp.ok:
                 if errors.is_operation_unsafe(resp.err or ""):
                     raise errors.operation_unsafe(op)  # busy, not broken (A6)
@@ -686,7 +686,7 @@ def set_channel_levels(
             ("pan", "channels.getChannelPan", [channel]),
             ("pitch_semitones", "channels.getChannelPitch", [channel, PITCH_SEMITONES]),
         ):
-            resp = session.link.request(op, args, timeout=LIVE_READ_TIMEOUT_SECONDS)
+            resp = session.link.request(op, args, timeout=LIVE_ANSWER_SECONDS)
             if not resp.ok or resp.ret is None:
                 raise WriteRejected(
                     f"FL Studio took the levels but did not report {op} back ({resp.err}).",
@@ -896,7 +896,7 @@ def set_plugin_param(
     session.link.call(
         "plugins.setParamValue",
         [requested, index, channel, slot, PICKUP_NONE],
-        timeout=LIVE_SET_TIMEOUT_SECONDS,
+        timeout=LIVE_ANSWER_SECONDS,
     )
 
     confirmed = float(_live_read(session, "plugins.getParamValue", [index, channel, slot]))

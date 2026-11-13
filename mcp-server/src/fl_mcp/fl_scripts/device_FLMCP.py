@@ -41,7 +41,7 @@ except ImportError:
     arrangement = channels = device = general = midi = None
     mixer = patterns = playlist = plugins = transport = ui = None
 
-SCRIPT_VER = "0.2.8"
+SCRIPT_VER = "0.2.9"
 
 # ---------------------------------------------------------------------------
 # Wire codec (framing, chunking/reassembly) - flmcp_codec.py beside this file is the single
@@ -663,10 +663,11 @@ COMPOSITE_NAMESPACES = ("state.", "ctl.")
 
 # ---------------------------------------------------------------------------
 # OnIdle deferral for FL's "unsafe at current time" guard (docs/15 fix item
-# 1). FL sometimes refuses a mutating engine call (`mixer.setCurrentTempo`
-# observed, docs/14) when it's dispatched from the OnSysEx callback
-# mid-engine-cycle, but the same call succeeds moments later from OnIdle.
-# Rather than fail the request, park it and retry on each OnIdle tick until
+# 1). FL sometimes refused a mutating engine call (`mixer.setCurrentTempo`
+# observed, docs/14) when it was dispatched from the OnSysEx callback
+# mid-engine-cycle, and the same call succeeded moments later from OnIdle.
+# Requests now run from OnIdle (_serve_inbox); should FL still refuse one,
+# rather than fail the request, park it and retry on each OnIdle tick until
 # it lands or a bounded number of ticks pass, then report the original error.
 # This is scoped to the direct ALLOWED-module passthrough below (where every
 # mutating op lives); composite/read ops are unaffected.
@@ -812,11 +813,22 @@ def OnInit():
     _send_event("hello", _hello_fields())
 
 
+# FL calls OnSysEx on its MIDI input thread and OnIdle on its main thread. A response sent
+# from OnSysEx (device.midiOutSysex) waits for FL's main thread, and the main thread can
+# itself be waiting on that MIDI input thread: FL then never answers again while its window
+# stays responsive. A frozen FL showed exactly that (py-spy, fl-mcp-03, 2026-11-12, #328):
+# the MIDI thread in OnSysEx -> midiOutSysex, waiting; the main thread in winmm's MIDI input,
+# waiting on a lock. It struck automation takes, renders and meters alike, more often the
+# more frames a request or a response took. So OnSysEx only queues what arrived, and OnIdle
+# runs every request and sends every response, all on FL's main thread.
+_inbox = []  # [("run", request, arrived) | ("answer", response, arrived), ...], in arrival order
+
+
 def OnSysEx(event):
     try:
         decoded = decode_frame(event.sysex)
     except FrameError as exc:
-        _send_response({"id": UNKNOWN_ID, "ok": False, "err": str(exc)})
+        _inbox.append(("answer", {"id": UNKNOWN_ID, "ok": False, "err": str(exc)}, _now()))
         return
     if decoded is None:
         return  # not our traffic
@@ -824,16 +836,38 @@ def OnSysEx(event):
     if frame_type not in (TYPE_REQUEST, TYPE_CHUNK):
         return  # we only expect requests (and chunks of them) on our input port
     message = _reassembler.feed(frame_type, payload)
-    if message is None:
-        return  # chunk buffered, awaiting the rest of this message
-    response = _dispatch(message)
-    if response is None:
-        return  # op deferred to OnIdle (unsafe-at-current-time guard); it replies when it lands or gives up
-    _send_response(response)
+    if message is not None:  # None: a chunk buffered, awaiting the rest of this message
+        _inbox.append(("run", message, _now()))
+
+
+def _expired(message, arrived):
+    """The engine stopped waiting: a request says how long it waits ("wait", seconds), and
+    one that waited longer in the queue (FL skips OnIdle under a modal dialog) is dropped,
+    so a change the engine already reported as failed cannot land late, or twice on a retry."""
+    wait = message.get("wait")
+    return isinstance(wait, (int, float)) and _now() - arrived > wait
+
+
+def _serve_inbox():
+    """Run the requests OnSysEx queued and send their responses, on FL's main thread."""
+    while _inbox:
+        kind, item, arrived = _inbox.pop(0)
+        try:
+            if kind == "run":
+                if not isinstance(item, dict) or _expired(item, arrived):
+                    continue
+                response = _dispatch(item)
+            else:
+                response = item
+            if response is not None:  # None: deferred (unsafe at current time); it replies when it lands
+                _send_response(response)
+        except Exception:  # one bad request must not stop the rest, the deferred ops or the job
+            traceback.print_exc()
 
 
 def OnIdle():
-    """Retry operations deferred by FL's unsafe-at-current-time guard; step a recording job."""
+    """Serve the queued requests, retry deferred operations, step a recording job."""
+    _serve_inbox()
     _retry_deferred_ops()
     _job_tick()
 

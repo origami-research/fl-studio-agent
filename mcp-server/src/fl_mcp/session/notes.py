@@ -51,7 +51,7 @@ from .detect import (
     _selected_channel,
     read_heartbeat,
 )
-from .link import LIVE_SET_TIMEOUT_SECONDS
+from .link import LIVE_ANSWER_SECONDS
 
 if TYPE_CHECKING:
     from .facade import FLSession
@@ -178,7 +178,7 @@ def select_only(session: FLSession, channel: int, *, unchanged: str) -> None:
     command is never sent unless FL reports the requested channel.
     ``unchanged`` tells the caller's user what did not happen on a refusal.
     """
-    response = session.link.request("select_channels", args=[[channel]], timeout=LIVE_SET_TIMEOUT_SECONDS)
+    response = session.link.request("select_channels", args=[[channel]], timeout=LIVE_ANSWER_SECONDS)
     if not response.ok:
         detail = response.err or "no detail"
         if errors.is_operation_unsafe(detail):

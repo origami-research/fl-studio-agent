@@ -50,7 +50,7 @@ F0 7D 4D 43 <ver> <type> <payload: base64 bytes as 7-bit ASCII> F7
 
 Request:
 ```json
-{ "id": 421, "op": "mixer.setTrackVolume", "args": [4, 0.85], "kwargs": {} }
+{ "id": 421, "op": "mixer.setTrackVolume", "args": [4, 0.85], "kwargs": {}, "pid": null, "wait": 8.0 }
 ```
 
 Response:
@@ -60,6 +60,7 @@ Response:
 ```
 
 - `id` - monotonically increasing per session; correlates request/response.
+- `wait` - how long the server waits for the answer, in seconds; the controller drops a request still queued after that (docs/05).
   Responses may arrive out of order (some ops complete on a later `OnIdle`).
 - `op` - namespaced as `<module>.<function>` mirroring the FL Python API 1:1
   (`transport.start`, `plugins.setParamValue`, …) plus a small set of composite ops

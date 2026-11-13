@@ -378,7 +378,7 @@ def test_save_project_uses_the_control_lane():
 
     assert session.save_project() is None
     assert ("ctl.save", []) in control.calls
-    assert seen_timeouts[-1] == controls.LIVE_SET_TIMEOUT_SECONDS
+    assert seen_timeouts[-1] == controls.LIVE_ANSWER_SECONDS
 
 
 def test_save_project_retries_a_busy_control_wire():

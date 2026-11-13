@@ -10,8 +10,20 @@ encode the result. All intelligence lives in the MCP server.
   Python library folder [VERIFIED - manual], but v1 targets **zero dependencies
   beyond stdlib**, and treats even stdlib availability (`json`, `base64`) as
   [ASSUMED - Spike 3 verifies; both are pure-Python-representable if absent].
-- **Cooperative scheduling**: `OnSysEx`/`OnIdle` run on FL's event loop. Slow handlers
-  delay MIDI for the whole app. Budget: <1 ms typical, hard-decompose anything larger.
+- **Threads**: FL calls `OnSysEx` on its MIDI input thread and `OnIdle` (about every 20 ms) on
+  its main thread. So `OnSysEx` only queues the request it reassembled, and `OnIdle` runs every
+  queued request and sends every response.
+  A response sent from `OnSysEx` (`device.midiOutSysex`) waited for the main thread while the
+  main thread waited on the MIDI thread, and FL never answered again while its window stayed
+  responsive (py-spy on a frozen FL, #328).
+  It struck automation takes, renders and meters, more often the more frames a request or
+  response took; the traffic cuts of #311, #318 and #325 made it rarer, not impossible.
+  A request is answered within one idle tick, and not while FL shows a modal dialog (FL does
+  not call `OnIdle` then).
+  Each request says how long the engine waits for it (`wait`, seconds); one still queued after
+  that is dropped, so a change the engine already reported as failed cannot land late, or
+  twice when the engine retries.
+  Slow handlers delay the whole app. Budget: <1 ms typical, hard-decompose anything larger.
 - **No note read/write** - by design this plane never touches note data (see 01).
 - The script survives project switches (`OnProjectLoad`) - it re-announces `hello` so
   the server can invalidate its live-state cache.
@@ -40,11 +52,19 @@ def OnInit():
                  "fl_ver": ui.getVersion(),
                  "ppq": general.getRecPPQ()})   # [ASSUMED name - Spike 3]
 
-def OnSysEx(event):
+def OnSysEx(event):                      # FL's MIDI input thread: queue only
     frame = _decode(event.sysex)          # validate magic+version, reassemble chunks
-    if frame is None: return
-    result = _dispatch(frame)             # table lookup, execute, capture errors
-    _send_response(result)                # chunked if >512B
+    if frame is not None:
+        _inbox.append((frame, time.time()))
+
+def OnIdle():                             # FL's main thread: run and answer
+    while _inbox:
+        frame, arrived = _inbox.pop(0)
+        if time.time() - arrived > frame.get("wait", inf):
+            continue                      # the engine stopped waiting: never run it late
+        result = _dispatch(frame)         # table lookup, execute, capture errors
+        if result is not None:            # None: deferred, answered when it lands
+            _send_response(result)        # chunked if >512B
 ```
 
 ### The dispatch table

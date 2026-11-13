@@ -32,8 +32,6 @@ log = logging.getLogger(__name__)
 
 # A fast "is the controller there right now" probe - not a startup wait.
 HELLO_PROBE_SECONDS = 0.2
-# Confirming a sticky hello is a millisecond round trip when FL is alive.
-PING_CONFIRM_SECONDS = 1.0
 
 # Hot-plug self-heal (live-measured 2026-08-29: FL binds appearing ports in
 # ~2s): how long to wait for hello after recycling, and how often a silent,
@@ -52,10 +50,13 @@ PID_RECHECK_SECONDS = 30.0
 # How the controller refuses a composite op it does not have (device_FLMCP._dispatch):
 # an older install than this server.
 UNKNOWN_COMPOSITE = "unknown composite op"
-# FL can stay "unsafe at current time" for a few seconds after a load; give the
-# controller's OnIdle deferral time to land a mutating call (v1-measured).
-LIVE_SET_TIMEOUT_SECONDS = 8.0
-LIVE_READ_TIMEOUT_SECONDS = 2.0
+# How long any live request (a read, a write, the ping that confirms a sticky hello) waits
+# for FL. The controller answers on FL's main thread (0.2.9, #328), which a loaded 2-vCPU
+# machine stalls for seconds: on fl-mcp-03 (m6i.large, an automation take playing, the
+# screen recorded) 25 of 614 pings took over 1 s and the slowest 3.7 s, so the 1 s ping and
+# 2 s reads failed takes. FL can also stay "unsafe at current time" for a few seconds after
+# a load, and the controller's OnIdle deferral needs time to land a write (v1-measured).
+LIVE_ANSWER_SECONDS = 8.0
 
 # E7 (2026-08-29, 3/3 PASS): FL parks "unsafe at current time" ops for OnIdle
 # retry during boot, and a parked op can land LATE, undoing a newer one
@@ -193,9 +194,9 @@ class ControlLink:
             hello = self.control.await_hello(timeout=HELLO_PROBE_SECONDS)
             # The stored hello is STICKY across an FL death (dogfood A12): a
             # stale "connected" routes live ops into a void. A ping (answered
-            # from the SysEx callback, milliseconds when alive) confirms the
+            # on the controller's next OnIdle: tens of ms, seconds when FL is loaded) confirms the
             # wire is current before anything trusts it.
-            if self.control.send_request("ping", timeout=PING_CONFIRM_SECONDS).ok:
+            if self.control.send_request("ping", timeout=LIVE_ANSWER_SECONDS).ok:
                 self._answered(self._clock())
                 return self._check_controller_protocol(hello)
         except errors.ToolError as exc:
@@ -344,7 +345,7 @@ class ControlLink:
     def _may_retry(self, delays: list[float], deadline: float) -> bool:
         return bool(delays) and self._clock() + delays[0] <= deadline
 
-    def call(self, op: str, args: list[Any] | None = None, *, timeout: float = LIVE_READ_TIMEOUT_SECONDS) -> Any:
+    def call(self, op: str, args: list[Any] | None = None, *, timeout: float = LIVE_ANSWER_SECONDS) -> Any:
         """One controller call, converted to policy once (addendum A11): FL's
         answer, or a typed error. A refusal that outlived the retries ->
         operation_unsafe; a composite the installed controller lacks -> controller_outdated;
@@ -361,7 +362,7 @@ class ControlLink:
 
     def command(self, op: str, args: list[Any] | None = None) -> None:
         """A mutating call with no answer to read (transport, undo)."""
-        self.call(op, args, timeout=LIVE_SET_TIMEOUT_SECONDS)
+        self.call(op, args, timeout=LIVE_ANSWER_SECONDS)
 
     def settle(self) -> None:
         """Block until FL answers a composite read, so no live op lands in the

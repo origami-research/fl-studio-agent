@@ -58,3 +58,4 @@ Also seen: a first read of the box's disk is slow (its blocks come from the imag
 - The 0.1 s lag on other audio drivers or buffer sizes.
 - Automating channel volume instead of a mixer track for pumping.
 - The freeze with FL's web view busy: its cause inside FL was not isolated.
+  Later found (#328): the controller answered from FL's MIDI thread and deadlocked with FL's main thread; a busy CPU only made it likelier ([note](controller-deadlock-2026-11-12.md)).
