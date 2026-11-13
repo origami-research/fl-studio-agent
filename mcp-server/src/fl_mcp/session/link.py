@@ -52,7 +52,7 @@ PID_RECHECK_SECONDS = 30.0
 UNKNOWN_COMPOSITE = "unknown composite op"
 # How long any live request (a read, a write, the ping that confirms a sticky hello) waits
 # for FL. The controller answers on FL's main thread (0.2.9, #328), which a loaded 2-vCPU
-# machine stalls for seconds: on fl-mcp-03 (m6i.large, an automation take playing, the
+# machine stalls for seconds: on fl-mcp-03 (2 vCPUs, an automation take playing, the
 # screen recorded) 25 of 614 pings took over 1 s and the slowest 3.7 s, so the 1 s ping and
 # 2 s reads failed takes. FL can also stay "unsafe at current time" for a few seconds after
 # a load, and the controller's OnIdle deferral needs time to land a write (v1-measured).

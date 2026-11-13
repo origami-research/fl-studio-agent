@@ -2,6 +2,7 @@
 
 **Scope.** `fl.automate` froze FL five times in the Strudel experiment (engine 0.1.9), including the pumping recipe from the `run` tool's own docstring.
 This note records how the freeze was reproduced, what a frozen FL was doing, and the fix (controller 0.2.9).
+Runs used the dev box fl-mcp-03 restored from the arena image (FL's web view off), with 4 vCPUs as in the experiment, FL Studio 26.1.6 (trial) for Windows, and the listening runner replaying the frozen takes' `run` cells on the packaged agent project with the screen recorded.
 Logs, diagnostics and replays are kept outside the repository (`~/.cache/issue328` on the operator's Mac).
 
 ## What a frozen FL was doing
@@ -41,8 +42,9 @@ The earlier attribution to FL's web view (live-pumping note, 2026-11-10) was a l
 
 ## After the fix
 
+The same replays, each started on a fresh FL, with controller 0.2.9, first with 4 vCPUs as in the experiment, then the final code with 2 vCPUs:
 
-| Replay | Automation takes (xlarge / large) | Renders (xlarge / large) | FL stopped answering |
+| Replay | Automation takes (4 / 2 vCPUs) | Renders (4 / 2 vCPUs) | FL stopped answering |
 | --- | --- | --- | --- |
 | A take (pumping), with three more pumping takes | 4 / 4 (16 bars, 190 points each) | 2 / 2 (one of stems) | never |
 | C take (house, filter sweeps) | 15 / 15 | 9 / 9 | never |
@@ -52,8 +54,10 @@ The earlier attribution to FL's web view (live-pumping note, 2026-11-10) was a l
 
 96 of 96 automation takes passed the playback check (largest `max_error` 0.0005; the check allows 0.03) and 44 of 44 renders succeeded; no server log of the final code has an "FL is busy" line.
 
+**Answer time on FL's main thread.** The first build with 2 vCPUs failed 3 of 15 automation takes with "did not answer in time", though FL recovered each time.
 A second client pinged the controller every 0.2 s during a take:
 
+| Build, 2 vCPUs, a take playing | Pings | Median | 99th percentile | Slowest | Over 1 s |
 | --- | --- | --- | --- | --- | --- |
 | 1 s ping, 2 s reads | 614 | 0.10 s | 1.8 s | 3.7 s | 25 |
 | final (8 s) | 740 | 0.09 s | 1.1 s | 3.1 s | 16 |
