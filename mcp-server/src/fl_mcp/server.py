@@ -188,8 +188,19 @@ def run(code: str, ctx: Context) -> RunResult:
       spec = lambda w: abs(np.fft.rfft(fl.read_wav(w)[0].mean(axis=1)))
       bass, kick = (spec(fl.render(f"{c}.wav", bars=4, solo=[c])) for c in ("Bass", "Kick"))
       plt.figure(); plt.loglog(bass, label="bass"); plt.loglog(kick, label="kick"); plt.legend()
+
+    Make one musical change per call, then check it (a render or fl.meters)
+    before the next. To revise: after a render, measure loudness (pyloudnorm),
+    true peak (4x oversampled), spectral balance and energy per section; fix the
+    single biggest gap from the target, then render again. Target: a reference
+    file the brief or user gives (measure it the same way), else streaming
+    norms, about -14 LUFS integrated with true peak below -1 dBTP.
     """
     # Engineering notes (not part of the model-facing description above): the
+    # last paragraph is research-backed: agents fail mostly on long chains of
+    # edits (RIME 2026, DAWZY), and retrieving a reference then revising raised
+    # pass rates (Libretto 2026); -14 LUFS / -1 dBTP is Spotify's guidance.
+    # It is a recipe, not an SDK method: there is no canned analysis. The
     # kernel is a separate process (fl_mcp.kernel, docs/38) and the OS, not
     # Python filtering, confines it to its workspace. A test keeps the
     # docstring's "300 s" in step with kernel.host.RUN_CELL_TIMEOUT_SECONDS.

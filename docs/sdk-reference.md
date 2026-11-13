@@ -187,6 +187,10 @@ roughly `[-1, 1]`; `sample_rate` is Hz.
 This is how the model listens: there is no canned analysis.
 It reads the samples and computes or plots what it wants with numpy, scipy or matplotlib, and shows a figure by ending the cell with it ([38](38-python-kernel.md#images)).
 Until 2026-11-03 the SDK also had `fl.analyze` (tempo, key, LUFS, true peak, spectral balance) and `fl.spectrogram` (a fixed picture), and the `analyze` tool returned both; the owner removed them so the model builds the analysis it needs.
+Since 2026-11-13 the `run` description also gives the model a working rule and a recipe, not a method.
+One musical change per call, checked with a render or `fl.meters` before the next, because agents fail mostly on long chains of edits (RIME 2026, DAWZY).
+To revise, it measures a render (loudness with pyloudnorm, true peak 4x oversampled, spectral balance, energy per section), fixes the single biggest gap from a target, and renders again; retrieving a reference and revising raised pass rates in Libretto 2026.
+The target is a reference file the brief or user gives, else streaming norms: about -14 LUFS integrated with true peak below -1 dBTP (Spotify's guidance).
 
 ```python
 import matplotlib.pyplot as plt
