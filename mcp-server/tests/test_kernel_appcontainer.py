@@ -12,6 +12,7 @@ import os
 from collections.abc import Iterator
 
 import pytest
+from sdk_fakes import started_ahead
 
 from fl_mcp.kernel.host import KernelHost
 from fl_mcp.kernel.launch import Workspace
@@ -31,7 +32,7 @@ def sandbox(test):
 def host(tmp_path) -> Iterator[KernelHost]:
     workspace = Workspace.create(tmp_path / "kernel")
     launcher = AppContainerLauncher(CtypesWin32(icacls_path(os.environ)), stock=())
-    kernel = KernelHost(None, workspace, launcher, os.environ, cell_timeout=120.0)
+    kernel = started_ahead(KernelHost(None, workspace, launcher, os.environ, run_budget=120.0), seconds=300.0)
     yield kernel
     kernel.close()
 

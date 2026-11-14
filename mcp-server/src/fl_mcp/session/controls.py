@@ -20,7 +20,7 @@ from numbers import Real
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal
 
-from fl_mcp import audio, errors, flp
+from fl_mcp import audio, budget, errors, flp
 from fl_mcp.contract import ENV_AGENT_PROJECT, ENV_SPOOL_ROOT, FLLicense
 from fl_mcp.core.carriers import CarrierUnavailable
 from fl_mcp.errors import NotePlaneUnavailable, WriteRejected
@@ -53,6 +53,10 @@ RENDER_TIMEOUT_SECONDS = 300.0
 # A render's capture, this decay tail included, stops at CAPTURE_MAX_SECONDS
 # because it holds the tool call for its whole length.
 RENDER_TAIL_SECONDS = 0.5
+# A render waits this long past its capture before asking for the WAV.
+RENDER_SETTLE_SECONDS = 1.0
+# What a render or a set of stems can leave out to fit the run's budget.
+RENDER_SPLIT = "render fewer bars (bars=, start_bar=)"
 
 # FL's MIDI-scripting vocabulary for the live span (IL FL-Studio-API-Stubs).
 # Live-measured on FL 2026: getSongLength(ABSTICKS) is the
@@ -287,6 +291,11 @@ def overlaps_looped(note: Note, start: float, end: float, length: float) -> bool
     )
 
 
+def _play_seconds(span: RenderSpan) -> float:
+    """How long one render of ``span`` holds FL: the span, its decay tail, and the settle."""
+    return span.seconds + RENDER_TAIL_SECONDS + RENDER_SETTLE_SECONDS
+
+
 def _check_capture_length(span: RenderSpan) -> None:
     if span.seconds + RENDER_TAIL_SECONDS > CAPTURE_MAX_SECONDS:
         raise errors.ToolError(
@@ -358,7 +367,7 @@ def _live_render(
         session.link.command("transport.start")
         # The Bridge ends recording at its requested frame count. This is only
         # the bounded transport wait before we ask it to finalize the WAV.
-        time.sleep(seconds + 1.0)
+        time.sleep(seconds + RENDER_SETTLE_SECONDS)
     finally:
         try:
             stop_error = playback.stop(session)
@@ -485,6 +494,7 @@ def render_wav(
     """
     whole, span, start_tick = _prepare_render(session, start_bar, bars)
     _check_capture_length(span)
+    budget.require(_play_seconds(span), "This render", RENDER_SPLIT)
     everything = span.beats == whole.beats and not solo and not mute
     with audition(session, solo, mute):
         path = _live_render(
@@ -564,6 +574,11 @@ def render_stems(
             f"one call records at most {CAPTURE_MAX_SECONDS:g} s.",
             "Render fewer bars (bars=, start_bar=), or name fewer channels (stems=[...]).",
         )
+    budget.require(
+        len(groups) * _play_seconds(span),
+        f"Recording {len(groups)} stems",
+        f"{RENDER_SPLIT}, or name fewer channels (stems=[...])",
+    )
     receipts = []
     with Rack(session) as mutes:
         for label, solo in groups:
@@ -594,6 +609,8 @@ def export_offline(session: FLSession, output: Path) -> Path:
             "This session has no saved song to export.",
             "Use render to record the song instead.",
         )
+    # How long the export takes is known only once it ends, so it needs its whole bound.
+    budget.require(RENDER_TIMEOUT_SECONDS, "An offline export", "record the song with fl.render instead")
     output = output.expanduser().resolve()
     project = session.project.expanduser().resolve()
     save_project(session)

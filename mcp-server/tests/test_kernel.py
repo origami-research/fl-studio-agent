@@ -13,6 +13,8 @@ import inspect
 import os
 import subprocess
 import sys
+import textwrap
+import threading
 import time
 import zipfile
 from collections.abc import Iterator
@@ -21,9 +23,9 @@ from types import SimpleNamespace
 
 import pytest
 from pydantic import ValidationError
-from sdk_fakes import DEFAULT_CHANNELS, FakeSession
+from sdk_fakes import DEFAULT_CHANNELS, FakeSession, started_ahead
 
-from fl_mcp import errors
+from fl_mcp import budget, errors
 from fl_mcp.errors import ToolError
 from fl_mcp.kernel import wire
 from fl_mcp.kernel.cell import expand_magics
@@ -40,15 +42,23 @@ SDK_SOURCE = Path(__file__).resolve().parents[1] / "src" / "fl_mcp" / "sdk.py"
 class _Session(FakeSession):
     """The sdk_fakes session plus the seams these tests observe."""
 
-    def __init__(self, *args, render_seconds: float = 0.0, **kwargs) -> None:
+    def __init__(self, *args, render_seconds: float = 0.0, tempo_seconds: float = 0.0, **kwargs) -> None:
         super().__init__(*args, **kwargs)
         self.render_seconds = render_seconds
+        self.tempo_seconds = tempo_seconds
         self.file_edit_log: list[str] = []
         self.file_edit_exit_failures = 0
 
     def render_wav(self, output: Path, *args, **kwargs) -> RenderReceipt:
+        # As the real render: it knows how long it plays, and asks the run first.
+        budget.require(self.render_seconds, "This render", "render fewer bars")
         time.sleep(self.render_seconds)
         return super().render_wav(output, *args, **kwargs)
+
+    def set_tempo(self, bpm: float) -> float:
+        # A call that does not play in real time but can still be slow (a preset load).
+        time.sleep(self.tempo_seconds)
+        return super().set_tempo(bpm)
 
     @contextlib.contextmanager
     def file_edit(self) -> Iterator[None]:
@@ -73,14 +83,14 @@ def workspace(tmp_path) -> Workspace:
 
 
 def _host(session, workspace, environ=None, **budgets) -> KernelHost:
-    return KernelHost(
-        session, workspace, PosixLauncher(), os.environ if environ is None else environ, **budgets
-    )
+    environ = os.environ if environ is None else environ
+    return started_ahead(KernelHost(session, workspace, PosixLauncher(), environ, **budgets))
 
 
 @pytest.fixture
 def host(session, workspace) -> Iterator[KernelHost]:
-    kernel = _host(session, workspace, cell_timeout=2.0, interrupt_grace=1.0)
+    # Room for a fresh kernel's start inside a run, after a test loses the first one.
+    kernel = _host(session, workspace, run_budget=30.0, interrupt_grace=1.0)
     yield kernel
     kernel.close()
 
@@ -171,7 +181,7 @@ def test_pip_magic_installs_into_the_workspace_and_imports_next_cell(host, works
 
 @pytest.mark.skipif(os.environ.get("FLMCP_NETWORK_TESTS") != "1", reason="set FLMCP_NETWORK_TESTS=1")
 def test_pip_magic_installs_from_pypi(session, workspace):
-    kernel = _host(session, workspace, cell_timeout=120.0)
+    kernel = _host(session, workspace, run_budget=120.0)
     try:
         assert kernel.run("%pip install six==1.17.0").outcome == "ok"
         assert kernel.run("import six\nsix.__version__").result == "'1.17.0'"
@@ -201,7 +211,7 @@ def test_os_exit_loses_the_kernel_and_the_next_run_starts_fresh(host):
 
 
 def test_a_runaway_loop_is_interrupted_and_state_survives(session, workspace):
-    kernel = _host(session, workspace, cell_timeout=0.5, interrupt_grace=2.0)
+    kernel = _host(session, workspace, run_budget=0.5, interrupt_grace=2.0)
     try:
         kernel.run("kept = 'yes'")
         result = kernel.run("while True:\n    pass")
@@ -214,24 +224,160 @@ def test_a_runaway_loop_is_interrupted_and_state_survives(session, workspace):
 
 def test_a_cell_that_ignores_the_interrupt_is_killed_and_replaced(session, workspace):
     """A blocking C call never sees the interrupt; the kill is the guarantee."""
-    kernel = _host(session, workspace, cell_timeout=0.3, interrupt_grace=0.3)
+    kernel = _host(session, workspace, run_budget=0.3, interrupt_grace=0.3)
     try:
         kernel.run("kept = 'yes'")
         lost = kernel.run("import time\ntime.sleep(30)")
         assert lost.outcome == "kernel_lost"
         assert "did not stop" in lost.traceback
+        started_ahead(kernel)  # the next start, outside the 0.3 s budget
         assert "NameError" in kernel.run("kept").traceback
         assert kernel.run("1 + 1").result == "2"
     finally:
         kernel.close()
 
 
-def test_time_inside_fl_calls_is_not_charged_to_the_cell(tmp_path, workspace):
-    """A render plays the whole arrangement; it must not count as runaway compute."""
-    slow = _Session(store=Store("k", root=tmp_path / "s"), channels=DEFAULT_CHANNELS, render_seconds=1.0)
-    kernel = _host(slow, workspace, cell_timeout=0.5, interrupt_grace=0.5)
+# -- the run budget counts fl calls (#333) ---------------------------------------------
+
+
+def test_time_inside_fl_calls_counts_and_the_cell_stops_between_them(tmp_path, workspace):
+    """#333: a cell of slow fl calls outlasted the harness's 900 s because only kernel
+    compute was budgeted. Without the fix this loop never ends."""
+    slow = _Session(store=Store("k", root=tmp_path / "s"), channels=DEFAULT_CHANNELS, tempo_seconds=0.3)
+    kernel = _host(slow, workspace, run_budget=1.0, interrupt_grace=2.0)
     try:
-        assert kernel.run("fl.render('mix.wav').name").result == "'mix.wav'"
+        kernel.run("kept = 'yes'")
+        started = time.monotonic()
+        result = kernel.run("while True:\n    fl.set_tempo(100)")
+        took = time.monotonic() - started
+        assert result.outcome == "interrupted", result
+        assert "1 s budget (time in fl calls included)" in result.traceback
+        assert result.actions and result.actions[0].startswith("Set tempo to 100 BPM")
+        assert took < 1.0 + 0.3 + 1.0  # the budget, the call in flight, and slack
+        assert kernel.run("kept").result == "'yes'"
+    finally:
+        kernel.close()
+
+
+def test_no_fl_call_is_served_once_the_budget_is_spent(tmp_path, workspace):
+    """The call in flight finishes; the next one never reaches FL, whether the interrupt
+    stops the cell before it is sent or the server refuses it."""
+    slow = _Session(store=Store("k", root=tmp_path / "s"), channels=DEFAULT_CHANNELS, tempo_seconds=2.0)
+    kernel = _host(slow, workspace, run_budget=1.0, interrupt_grace=3.0)
+    try:
+        result = kernel.run("try:\n    fl.set_tempo(100)\nfinally:\n    fl.set_tempo(90)")
+        assert result.outcome == "interrupted", result
+        assert result.actions == ["Set tempo to 100 BPM"]
+        assert slow.tempo() == 100
+    finally:
+        kernel.close()
+
+
+def test_closing_a_file_edit_block_past_the_budget_does_not_swallow_the_interrupt(tmp_path, workspace):
+    """A refused close would raise from the block's exit in place of the KeyboardInterrupt,
+    and `except Exception` would catch it and carry on; the server closes the block itself."""
+    slow = _Session(store=Store("k", root=tmp_path / "s"), channels=DEFAULT_CHANNELS, tempo_seconds=2.0)
+    kernel = _host(slow, workspace, run_budget=1.0, interrupt_grace=3.0)
+    code = (
+        "caught = []\n"
+        "try:\n"
+        "    with fl.file_edit():\n"
+        "        fl.set_tempo(100)\n"
+        "        while True:\n"
+        "            pass\n"
+        "except Exception as exc:\n"
+        "    caught.append(exc)\n"
+    )
+    try:
+        result = kernel.run(code)
+        assert result.outcome == "interrupted", result
+        assert slow.file_edit_log == ["enter", "exit"]
+        assert kernel.run("caught").result == "[]"
+    finally:
+        kernel.close()
+
+
+def test_an_interrupt_sent_before_its_cell_starts_stops_that_cell_and_no_other():
+    """Once a run's budget is gone the server interrupts right after sending the cell, and
+    the interrupt can reach the kernel before the cell starts. It used to be dropped, so
+    the cell ran unbounded; an interrupt for a cell that already finished still must not
+    touch the next one. Run in its own process: Channel takes over SIGINT and the wire."""
+    script = textwrap.dedent(
+        """
+        import os, time
+        from fl_mcp.kernel import wire
+        from fl_mcp.kernel.child import Channel
+
+        inbound, feed = os.pipe()
+        _, outbound = os.pipe()
+        channel = Channel(os.fdopen(inbound, "rb"), os.fdopen(outbound, "wb"))
+        feed = os.fdopen(feed, "wb")
+
+        def send(message):
+            feed.write(wire.encode(message))
+            feed.flush()
+
+        namespace = {}
+        send(wire.Exec(code="ran = 1"))
+        send(wire.Interrupt())
+        end = time.monotonic() + 10
+        while channel._interrupted != 1 and time.monotonic() < end:
+            time.sleep(0.01)
+        time.sleep(0.2)  # the handler runs now, with no cell running, and does nothing
+        first = channel.run(*channel._execs.get(), namespace)
+        send(wire.Interrupt())  # for the cell that just finished
+        send(wire.Exec(code="ran = 2"))
+        number, cell = channel._execs.get()
+        time.sleep(0.2)
+        second = channel.run(number, cell, namespace)
+        print(first.traceback.strip(), second.outcome, namespace.get("ran"), flush=True)
+        os._exit(0)
+        """
+    )
+    done = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True, timeout=60, check=False)
+    assert done.stdout.split() == ["KeyboardInterrupt", "ok", "2"], done.stderr
+
+
+def test_a_render_that_would_not_fit_is_refused_before_it_starts(tmp_path, workspace):
+    """The server tells the session how long the run has left while it serves a call."""
+    slow = _Session(store=Store("k", root=tmp_path / "s"), channels=DEFAULT_CHANNELS, render_seconds=30.0)
+    kernel = _host(slow, workspace, run_budget=5.0, interrupt_grace=1.0)
+    try:
+        started = time.monotonic()
+        result = kernel.run("fl.render('mix.wav')")
+        assert time.monotonic() - started < 5.0
+        assert result.outcome == "error" and result.actions == []
+        assert "takes about 30 s, but this run has" in result.traceback
+        assert "left of its 5 s budget" in result.traceback
+        assert slow.renders == []
+    finally:
+        kernel.close()
+
+
+def test_a_run_that_cannot_get_the_kernel_within_its_budget_is_refused(session, workspace):
+    """A run waiting behind another must not outlast its own budget either."""
+    kernel = _host(session, workspace, run_budget=1.0, interrupt_grace=3.0)
+    slow = (
+        "import time\n"
+        "try:\n"
+        "    while True:\n"
+        "        pass\n"
+        "except KeyboardInterrupt:\n"
+        "    end = time.monotonic() + 1.5\n"
+        "    while time.monotonic() < end:\n"
+        "        pass\n"
+    )
+    try:
+        assert kernel.run("0").result == "0"  # the start ahead no longer holds the lock
+        first = threading.Thread(target=kernel.run, args=(slow,))
+        first.start()
+        _wait_for(kernel._lock.locked)
+        with pytest.raises(ToolError) as refused:
+            kernel.run("1")
+        assert refused.value.category == "run_budget_exceeded"
+        assert refused.value.message.startswith("This code did not run")
+        first.join(10)
+        assert kernel.run("1 + 1").result == "2"
     finally:
         kernel.close()
 
@@ -629,7 +775,7 @@ def test_a_kernel_without_an_fl_session_runs_python_and_refuses_fl(workspace):
     It crashed every cell ("'NoneType' object has no attribute 'track_name'")
     once tool results started listing actions, so the lockdown could not be
     verified on a box (2026-10-20 dev rehearsal)."""
-    kernel = _host(None, workspace, cell_timeout=5.0, interrupt_grace=1.0)
+    kernel = _host(None, workspace, run_budget=5.0, interrupt_grace=1.0)
     try:
         plain = kernel.run("1 + 1")
         assert plain.outcome == "ok" and plain.actions == []

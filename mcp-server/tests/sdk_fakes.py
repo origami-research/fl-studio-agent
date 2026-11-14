@@ -8,10 +8,15 @@ the action log - is the shipped code, not a mock of it.
 from __future__ import annotations
 
 import contextlib
+import time
 from collections.abc import Iterator
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from session_fakes import RENDER_SPAN
+
+if TYPE_CHECKING:
+    from fl_mcp.kernel.host import KernelHost
 
 from fl_mcp.schemas import (
     Channel,
@@ -199,3 +204,14 @@ DEFAULT_CHANNELS = (
     Channel(index=1, name="Bass"),
     Channel(index=2, name="Lead"),
 )
+
+
+def started_ahead(host: KernelHost, seconds: float = 60.0) -> KernelHost:
+    """``host`` with its kernel already started, so a test's run budget times the cell
+    rather than the start (a start inside a run counts against the run's budget)."""
+    host.start()
+    deadline = time.monotonic() + seconds
+    while host._kernel is None:
+        assert time.monotonic() < deadline, "the kernel did not start"
+        time.sleep(0.01)
+    return host

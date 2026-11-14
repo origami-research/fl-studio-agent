@@ -21,6 +21,8 @@ ENV_AGENT_PROJECT = "FLMCP_AGENT_PROJECT"
 ENV_FL_LICENSE = "FLMCP_FL_LICENSE"
 # Where the run kernel's per-session workspace lives (docs/38). Unset: a fresh temp dir.
 ENV_KERNEL_ROOT = "FLMCP_KERNEL_ROOT"
+# Seconds one run call may take in all, fl calls included (docs/38). Unset: 600.
+ENV_RUN_BUDGET = "FLMCP_RUN_BUDGET_SECONDS"
 # The server mode that serves run with no FL session behind it (computer-use runs).
 WORKSPACE_ONLY_FLAG = "--workspace-only"
 BRIDGE_PORT_FILE = "bridge_udp.json"
@@ -93,8 +95,8 @@ ShownImages = Annotated[
 ]
 
 
-# ok: the cell finished. error: it raised (traceback). interrupted: it ran past its
-# time budget and was stopped, the kernel kept its state. kernel_lost: the kernel
+# ok: the cell finished. error: it raised (traceback). interrupted: the run reached its
+# budget (fl calls included) and the cell was stopped between fl calls, the kernel kept its state. kernel_lost: the kernel
 # process died or was killed, its state is gone and the next run starts fresh.
 RunOutcome = Literal["ok", "error", "interrupted", "kernel_lost"]
 
@@ -203,6 +205,7 @@ def build_contract() -> dict[str, Any]:
             ENV_AGENT_PROJECT: ENV_AGENT_PROJECT,
             ENV_FL_LICENSE: [member.value for member in FLLicense],
             ENV_KERNEL_ROOT: ENV_KERNEL_ROOT,
+            ENV_RUN_BUDGET: ENV_RUN_BUDGET,
             "BRIDGE_PORT_FILE": BRIDGE_PORT_FILE,
             "bridge_port_file_schema": BridgePortFile.model_json_schema(),
         },

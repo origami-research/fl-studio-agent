@@ -49,19 +49,25 @@ class Channel:
 
     A reader thread routes each reply to the one call waiting on its id (any
     thread may call fl), queues cells separately, and forwards interrupts.
-    An interrupt counts only while a cell runs: ``_on_interrupt`` is the SIGINT
-    handler, so one that lands after its cell finished is dropped instead of
-    killing the next cell or the kernel's own loop.
+    An interrupt belongs to the cell the reader last received and counts only
+    for that cell: one sent before its cell started (the run's budget was spent
+    as the cell was sent) stops it as it starts, and one that lands after its
+    cell finished is dropped instead of killing the next cell or the kernel's
+    own loop. ``_on_interrupt`` is the SIGINT handler, and Python may run it
+    late, once the main thread is already in the next cell, so it checks whose
+    interrupt it is.
     """
 
     def __init__(self, inbound: IO[bytes], outbound: IO[bytes]) -> None:
         self._outbound = outbound
         self._send_lock = threading.Lock()
-        self._execs: queue.SimpleQueue[wire.Exec] = queue.SimpleQueue()
+        self._execs: queue.SimpleQueue[tuple[int, wire.Exec]] = queue.SimpleQueue()
         self._pending: dict[int, queue.SimpleQueue[wire.Reply]] = {}
         self._pending_lock = threading.Lock()
         self._call_ids = itertools.count(1)
-        self._cell_running = False
+        # Cells by number: the last one received, the last one finished, the one running
+        # (0 when none), and the one the last interrupt was for.
+        self._received = self._finished = self._running = self._interrupted = 0
         signal.signal(signal.SIGINT, self._on_interrupt)
         threading.Thread(target=self._read, args=(inbound,), name="kernel-wire", daemon=True).start()
 
@@ -73,9 +79,12 @@ class Channel:
                 traceback.print_exc()
                 os._exit(EXIT_WIRE_ERROR)
             if isinstance(message, wire.Interrupt):
-                _thread.interrupt_main()
+                if self._received > self._finished:  # else its cell already finished
+                    self._interrupted = self._received
+                    _thread.interrupt_main()
             elif isinstance(message, wire.Exec):
-                self._execs.put(message)
+                self._received += 1
+                self._execs.put((self._received, message))
             else:
                 with self._pending_lock:
                     waiter = self._pending.get(message.id)
@@ -84,27 +93,30 @@ class Channel:
         os._exit(0)  # the server closed the wire; nobody is left to answer
 
     def _on_interrupt(self, signum: int, frame: object) -> None:
-        if self._cell_running:
+        if self._running and self._running == self._interrupted:
             raise KeyboardInterrupt
 
     def send(self, message: wire.Ready | wire.Call | wire.Done) -> None:
         with self._send_lock:
             wire.send(self._outbound, message)
 
-    def run(self, cell: wire.Exec, namespace: dict[str, Any]) -> RunResult:
-        importlib.invalidate_caches()  # packages installed since the last cell import
-        self._cell_running = True
+    def run(self, number: int, cell: wire.Exec, namespace: dict[str, Any]) -> RunResult:
         try:
-            return run_cell(cell.code, namespace)
-        except KeyboardInterrupt:  # landed in run_cell's own frame, after the user code
-            return RunResult(outcome="error", stdout="", traceback="KeyboardInterrupt\n", actions=[])
+            self._running = number
+            if self._interrupted != number:  # else it came before the cell started
+                importlib.invalidate_caches()  # packages installed since the last cell import
+                return run_cell(cell.code, namespace)
+        except KeyboardInterrupt:  # before the user code, or in run_cell's own frame after it
+            pass
         finally:
-            self._cell_running = False
+            self._running = 0
+            self._finished = number
+        return RunResult(outcome="error", stdout="", traceback="KeyboardInterrupt\n", actions=[])
 
     def serve(self, namespace: dict[str, Any]) -> None:
         while True:
-            cell = self._execs.get()
-            self.send(wire.Done.of(self.run(cell, namespace)))
+            number, cell = self._execs.get()
+            self.send(wire.Done.of(self.run(number, cell, namespace)))
 
     def call(self, call: wire.Call) -> Any:
         call = call.model_copy(update={"id": next(self._call_ids)})

@@ -14,7 +14,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-from sdk_fakes import DEFAULT_CHANNELS, FakeSession
+from sdk_fakes import DEFAULT_CHANNELS, FakeSession, started_ahead
 from session_fakes import RENDER_SPAN
 
 from fl_mcp import errors, server
@@ -453,8 +453,10 @@ def test_a_lost_kernel_still_reports_what_fl_already_has(host):
 
 
 def test_an_interrupted_cell_still_reports_what_fl_already_has(session, tmp_path):
-    kernel = KernelHost(
-        session, Workspace.create(tmp_path / "slow"), PosixLauncher(), os.environ, cell_timeout=1.0, interrupt_grace=2.0
+    kernel = started_ahead(
+        KernelHost(
+            session, Workspace.create(tmp_path / "slow"), PosixLauncher(), os.environ, run_budget=1.0, interrupt_grace=2.0
+        )
     )
     try:
         result = run(kernel, "fl.set_tempo(100)\nfl.track('Kick').write([Note(36, 0, 1)])\nwhile True:\n    pass")

@@ -43,7 +43,7 @@ A program that opens `NUL` itself is still refused: cmd's `> NUL` fails with "Ac
 The server never lets the kernel stall it.
 Each line it reads from the kernel is bounded (64 MiB), each write to the kernel has a 10 s deadline, and kernel stderr reaches the server log for at most 200 lines per kernel.
 A kernel that breaks any of these is killed and the cell ends `kernel_lost`.
-Inside the kernel, any thread may call `fl`: each reply is routed to the call waiting on its id, and an interrupt counts only while a cell is running.
+Inside the kernel, any thread may call `fl`: each reply is routed to the call waiting on its id, and an interrupt counts only for the cell it was sent for, even one that reaches the kernel before that cell has started.
 Each text field of a result is cut at 1,000,000 characters with a note, so a huge print does not cost the namespace.
 
 ### Outcomes
@@ -56,10 +56,9 @@ Each text field of a result is cut at 1,000,000 characters with a note, so a hug
 | --- | --- | --- |
 | `ok` | The cell finished; `result` is the trailing expression's repr. | kept |
 | `error` | The cell raised, `SystemExit` included; read `traceback`. | kept |
-| `interrupted` | The cell used more than 300 s of kernel time and stopped on interrupt. | kept |
+| `interrupted` | The run reached its 600 s budget and the cell was stopped between `fl` calls. | kept |
 | `kernel_lost` | The process exited (`os._exit`, a crash) or ignored the interrupt for 5 s and was killed. | gone; the next run boots a fresh kernel |
 
-Time the server spends serving the cell's `fl` calls is not charged to the 300 s, so a long render never counts as a runaway cell.
 An interrupt cannot break a blocking C call such as `time.sleep` or a subprocess wait, so those end in a kill and `kernel_lost`.
 A cell that loses the kernel loses its captured output too.
 
@@ -67,8 +66,27 @@ A kernel that died between cells (for example a background thread's `os._exit`) 
 A `with fl.file_edit():` block a cell leaves open is closed by the server when the cell ends; if closing fails, the cell's result says so.
 
 The server starts the first kernel when it starts, in the background, and the first `run` waits for it.
-A start is kernel time like a cell's and gets the same 300 s instead of the 60 s it once had ([#324](https://github.com/origami-research/fl-studio-mcp/issues/324)): on a freshly reset 2-vCPU box with FL's web view keeping both CPUs busy, a start at below-normal priority missed even 300 s, and at normal priority took 5 s. Granting the runtime to a new environment comes first and is not part of the start (90 s on that box, where the server itself ran below normal).
+A start gets 300 s instead of the 60 s it once had ([#324](https://github.com/origami-research/fl-studio-mcp/issues/324)), and a start inside a run also stays within the run's budget.
+On a freshly reset 2-vCPU box with FL's web view keeping both CPUs busy, a start at below-normal priority missed even 300 s, and at normal priority took 5 s.
+Granting the runtime to a new environment comes first and is not part of the start (90 s on that box, where the server itself ran below normal).
 A kernel that cannot start makes `run` fail with the `kernel_unavailable` tool error; no model code runs.
+
+### The run budget
+
+Since 2026-11-13 one budget bounds a `run` call's whole wall time: waiting for the kernel, starting it, the cell's own compute, and every `fl` call it makes ([#333](https://github.com/origami-research/fl-studio-mcp/issues/333)).
+Before, time inside `fl` calls was not counted, so a cell of slow renders outlasted the arena harness's 900 s per call and the run got no answer at all.
+The budget is 600 s; a host whose client waits less per tool call sets `FLMCP_RUN_BUDGET_SECONDS` (see [Box contract](#box-contract)).
+It stays well under the client's limit because a run can still take a while past it: the `fl` call in flight finishes, the interrupt gets 5 s, and a `fl.file_edit()` block the cell left open is closed, which reopens the song in FL.
+
+- An `fl` call is never cut off partway.
+  The server sends the interrupt only while no call is being served, so it lands between calls.
+- Once the budget is spent, the server refuses every further `fl` call with `run_budget_exceeded`, so FL does nothing more for the cell, including for a call the cell sent just as the interrupt went out.
+  The one exception is closing a `fl.file_edit()` block: the server answers it without closing and closes the block when the cell ends, because an error there would replace the interrupt, and `except Exception` in the cell would catch it.
+- A call that plays in real time knows how long it will play before it starts.
+  When that is more than the run has left, it is refused with `run_budget_exceeded` before FL changes anything: a render or a set of stems (per play: the span, its tail and a second to settle), `fl.automate` (it plays twice), `fl.meters`, and an offline export (its whole 300 s bound, since its length is known only at the end).
+  The error says how long the call takes, how much time is left, and how to split the work: start the next run with it, or play fewer bars.
+- The interrupted result keeps the kernel and its variables, and `actions` lists what FL did before the budget ran out.
+- A run whose budget runs out before its cell can start, because it waited for another call or for the kernel to start, fails with `run_budget_exceeded`, and none of its code runs.
 
 ### Images
 
@@ -248,6 +266,7 @@ What a production box must provide for the kernel.
 | Variable | Required | Value |
 | --- | --- | --- |
 | `FLMCP_KERNEL_ROOT` | yes on boxes | An absolute, per-job directory the FL user can create and write, for example `C:\FLMCP\kernels\<job_id>`. It must not sit inside a directory holding job inputs, secrets, or harness state. The harness collects `renders` from it after the job and then deletes it. |
+| `FLMCP_RUN_BUDGET_SECONDS` | no | Seconds one `run` call may take in all, `fl` calls included ([The run budget](#the-run-budget)). Unset: 600, for a client that waits 900 s per call. Keep it about 300 s under the client's own limit. |
 
 There is no launch-mode setting: on Windows the kernel is always an AppContainer and a failed probe always refuses.
 

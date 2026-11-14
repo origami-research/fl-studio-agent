@@ -20,7 +20,7 @@ from mcp.types import CallToolResult
 
 from fl_mcp import __version__, server
 from fl_mcp.contract import build_version
-from fl_mcp.kernel.host import RUN_CELL_TIMEOUT_SECONDS, KernelHost
+from fl_mcp.kernel.host import RUN_BUDGET_SECONDS, KernelHost
 from fl_mcp.kernel.launch import PosixLauncher, Workspace
 from fl_mcp.platform import MacPlatform
 from fl_mcp.schemas import Target
@@ -130,8 +130,8 @@ def test_run_is_full_python(kernel):
     assert result.result == "('FL', True, True)", result
 
 
-def test_run_docstring_states_the_real_cell_budget():
-    assert f"{RUN_CELL_TIMEOUT_SECONDS:g} s budget" in server.run.__doc__
+def test_run_docstring_states_the_real_run_budget():
+    assert f"{RUN_BUDGET_SECONDS:g} s budget, fl calls included" in " ".join(server.run.__doc__.split())
 
 
 def test_run_without_a_kernel_is_a_structured_error(tmp_path):

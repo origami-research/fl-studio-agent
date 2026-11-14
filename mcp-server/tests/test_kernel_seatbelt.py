@@ -19,7 +19,7 @@ from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
-from sdk_fakes import DEFAULT_CHANNELS, FakeSession
+from sdk_fakes import DEFAULT_CHANNELS, FakeSession, started_ahead
 from test_kernel import _wheel
 
 from fl_mcp.kernel import seatbelt
@@ -161,7 +161,7 @@ def session(tmp_path) -> FakeSession:
 
 @pytest.fixture
 def host(session, workspace) -> Iterator[KernelHost]:
-    kernel = KernelHost(session, workspace, SeatbeltLauncher(), os.environ, cell_timeout=60.0)
+    kernel = started_ahead(KernelHost(session, workspace, SeatbeltLauncher(), os.environ, run_budget=60.0))
     yield kernel
     kernel.close()
 
@@ -247,7 +247,7 @@ def test_the_kernel_cannot_read_the_users_home_or_its_secrets(host, workspace):
 def test_the_kernel_reads_fls_stock_samples_and_nothing_else_of_fl(session, workspace, tmp_path, monkeypatch):
     patches = _fake_fl(tmp_path)
     monkeypatch.setattr(seatbelt, "stock_dirs", lambda: (patches,))
-    host = KernelHost(session, workspace, SeatbeltLauncher(), os.environ, cell_timeout=60.0)
+    host = started_ahead(KernelHost(session, workspace, SeatbeltLauncher(), os.environ, run_budget=60.0))
     try:
         kick = patches / "Packs" / "Drums" / "Kick.wav"
         assert host.run(f"open({str(kick)!r}, 'rb').read()[:4]").result == "b'RIFF'"
@@ -355,7 +355,9 @@ def test_pip_from_pypi_and_public_https_work_under_the_sandbox(host):
 
 @sandbox
 def test_a_killed_cell_takes_its_subprocesses_with_it(session, workspace):
-    kernel = KernelHost(session, workspace, SeatbeltLauncher(), os.environ, cell_timeout=1.0, interrupt_grace=1.0)
+    kernel = started_ahead(
+        KernelHost(session, workspace, SeatbeltLauncher(), os.environ, run_budget=1.0, interrupt_grace=1.0)
+    )
     try:
         code = (
             "import subprocess, time\n"

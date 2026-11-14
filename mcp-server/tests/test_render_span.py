@@ -16,7 +16,7 @@ from session_fakes import (
     snapshot_answer,
 )
 
-from fl_mcp import errors
+from fl_mcp import budget, errors
 from fl_mcp.schemas import Note, SpoolResponse
 from fl_mcp.session import FLSession, controls
 from fl_mcp.session.playback import ANSWER_BEFORE_PLAY_SECONDS
@@ -441,6 +441,46 @@ def test_stems_past_the_recording_cap_are_refused_before_any_play(monkeypatch, t
 
     assert excinfo.value.category == "render_failed"
     assert transport.sent == []
+
+
+# -- a render must fit in what is left of its run (#333) ----------------------------------
+
+
+def test_a_render_longer_than_its_run_has_left_is_refused_before_anything_changes(monkeypatch, tmp_path):
+    rack = _Rack({0: False, 1: False})
+    handlers = arrangement(loop_mode=1, tempo_bpm=60.0, song_last_tick=60 * 96 - 1)  # 60 s
+    session, _, transport = _rig(monkeypatch, tmp_path, {**handlers, **rack.handlers()})
+
+    with budget.serving(budget.RunBudget.starting_now(30.0)), pytest.raises(errors.ToolError) as excinfo:
+        session.render_wav(tmp_path / "mix.wav", solo=(1,))
+
+    assert excinfo.value.category == "run_budget_exceeded"
+    assert "This render takes about 62 s" in excinfo.value.message
+    assert rack.ops == [] and transport.sent == []  # no solo mutes, no capture
+
+
+def test_a_render_that_fits_its_run_plays(monkeypatch, tmp_path):
+    handlers = arrangement(loop_mode=1, tempo_bpm=60.0, song_last_tick=60 * 96 - 1)
+    session, _, transport = _rig(monkeypatch, tmp_path, handlers)
+
+    with budget.serving(budget.RunBudget.starting_now(90.0)):
+        session.render_wav(tmp_path / "mix.wav")
+
+    assert _captured_seconds(transport) == [pytest.approx(60.5)]
+
+
+def test_stems_count_every_play_against_the_run_and_refuse_before_the_first(monkeypatch, tmp_path):
+    rack = _Rack({0: False, 1: False, 2: False})
+    session, _, transport = _rig(monkeypatch, tmp_path, {**arrangement(tempo_bpm=120.0, steps=64), **rack.handlers()})
+
+    # Three plays of one bar (2 s, its tail and the settle): 10.5 s, more than the 8 s left.
+    with budget.serving(budget.RunBudget.starting_now(8.0)), pytest.raises(errors.ToolError) as excinfo:
+        session.render_stems(tmp_path / "take.wav", "channels", bars=1)
+
+    assert excinfo.value.category == "run_budget_exceeded"
+    assert "Recording 3 stems takes about" in excinfo.value.message
+    assert "name fewer channels" in excinfo.value.fix
+    assert rack.toggles == [] and transport.sent == []
 
 
 # -- stems skip the channels with no notes in the bars (box run 2026-11-03) ----------------

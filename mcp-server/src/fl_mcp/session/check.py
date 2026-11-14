@@ -23,7 +23,7 @@ import math
 from collections.abc import Callable, Sequence
 from typing import TYPE_CHECKING
 
-from fl_mcp import errors
+from fl_mcp import budget, errors
 from fl_mcp.controller_version import controller_protocol_matches
 from fl_mcp.schemas import CHECK_MAX_BARS, Channel, ChannelCheck, CheckResult, MixerTrack, SessionState
 
@@ -80,6 +80,7 @@ def check(
     end_beat = start_beat + bars * BEATS_PER_BAR
     playing = controls.playing_notes(session, state, start_beat, end_beat, "check")
     seconds = (end_beat - start_beat) * 60.0 / state.tempo_bpm
+    budget.require(METER_DECAY_SECONDS + seconds, "This meter check", "check fewer bars")
     tracks = sorted({MASTER} | {c.mixer_track for c in state.channels if c.mixer_track is not None})
 
     if state.playing:

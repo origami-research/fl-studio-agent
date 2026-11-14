@@ -32,6 +32,7 @@ ErrorCategory = Literal[
     "unknown_target",
     "fl_api_error",
     "kernel_unavailable",
+    "run_budget_exceeded",
     "unsupported_in_live_session",
     "render_failed",
     "stale_handle",

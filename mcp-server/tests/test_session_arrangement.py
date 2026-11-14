@@ -16,7 +16,7 @@ from typing import Any
 import pytest
 from session_fakes import HELLO, FakeControl, make_session, snapshot_answer
 
-from fl_mcp import errors, sdk
+from fl_mcp import budget, errors, sdk
 from fl_mcp.actions import ActionLog
 from fl_mcp.schemas import AutomationPoint, PatternInfo, PlacedClip
 from fl_mcp.session import WriteRejected
@@ -289,6 +289,18 @@ def test_automation_fl_plays_back_away_from_the_line_raises(song):
 
     with pytest.raises(WriteRejected, match=r"up to 0\.10 away"):
         session.automate(SWEEP, bar=13, param="volume", channel=1)
+
+
+def test_automation_that_would_not_fit_in_the_run_is_refused_before_a_pattern_is_made(song):
+    """#333: it plays twice in real time, so 16 beats at 120 BPM hold FL for 16 s."""
+    fake, session, _ = song
+
+    with budget.serving(budget.RunBudget.starting_now(10.0)), pytest.raises(errors.ToolError) as refused:
+        session.automate(SWEEP, bar=13, param="cutoff", channel=2)
+
+    assert refused.value.category == "run_budget_exceeded"
+    assert "takes about 16 s" in refused.value.message
+    assert fake.jobs == [] and fake.names == {1: "Pattern 1"}
 
 
 PUMP = [

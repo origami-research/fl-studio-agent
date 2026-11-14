@@ -1,7 +1,7 @@
 """The server side of the run kernel: boot it, run cells, serve its fl calls.
 
 The MCP server owns the FL session; the kernel only ever reaches it through
-``KernelHost._serve_call``. A cell that hangs is interrupted, a kernel that
+``KernelHost._serve_call``. A run past its budget is interrupted, a kernel that
 ignores the interrupt or dies is killed and replaced on the next run, and
 every one of those endings is a distinct RunResult outcome.
 """
@@ -22,9 +22,10 @@ from typing import IO, Any
 
 from pydantic import ValidationError
 
-from fl_mcp import errors
+from fl_mcp import budget, errors
 from fl_mcp.actions import ActionLog
-from fl_mcp.contract import RunResult
+from fl_mcp.budget import RunBudget
+from fl_mcp.contract import ENV_RUN_BUDGET, RunResult
 from fl_mcp.errors import ToolError
 from fl_mcp.kernel import wire
 from fl_mcp.kernel.launch import KernelProcess, Launcher, Workspace
@@ -33,16 +34,21 @@ from fl_mcp.session import FLSession
 
 log = logging.getLogger(__name__)
 
-# Kernel compute per cell. Time the server spends serving the cell's fl calls
-# (a render plays the whole arrangement) is not charged against it.
-RUN_CELL_TIMEOUT_SECONDS = 300.0
+# A run's whole wall time: waiting for the kernel, starting it, the cell's own
+# compute and every fl call it makes (#333). A client stops waiting for a tool call
+# at its own limit (the arena harness at 900 s) and the run then gets no answer at
+# all, so the budget stays well under that limit: past it a run still finishes the
+# fl call in flight (one that plays in real time is refused up front if it would
+# not fit), the interrupt grace, and closing a file_edit block the cell left open,
+# which reopens the song in FL. A host whose client waits less sets ENV_RUN_BUDGET.
+RUN_BUDGET_SECONDS = 600.0
 # How long an interrupted cell gets to unwind before the kernel is killed.
 INTERRUPT_GRACE_SECONDS = 5.0
-# A kernel's start (interpreter, SDK import, boundary probe) is kernel time like a
-# cell's, so it gets a cell's budget rather than the 60 s it once had (#324). On a
-# freshly reset 2-vCPU box with FL's web view keeping both CPUs busy, a start at below
-# normal priority missed even 300 s; at normal priority it took 5 s.
-KERNEL_BOOT_TIMEOUT_SECONDS = RUN_CELL_TIMEOUT_SECONDS
+# A kernel's start (interpreter, SDK import, boundary probe) gets 300 s rather than
+# the 60 s it once had (#324). On a freshly reset 2-vCPU box with FL's web view
+# keeping both CPUs busy, a start at below normal priority missed even 300 s; at
+# normal priority it took 5 s. A start inside a run also stays within the run's budget.
+KERNEL_BOOT_TIMEOUT_SECONDS = 300.0
 # A kernel that stops reading its input must not block the server: a write to
 # it that cannot finish in this long loses the kernel.
 WIRE_WRITE_TIMEOUT_SECONDS = 10.0
@@ -55,6 +61,20 @@ _STDERR_LOG_LINES = 200
 _STDERR_DRAIN_SECONDS = 2.0
 # Session calls whose ``output`` path the server writes: confined to renders.
 _SERVER_WRITES = frozenset({"render_wav", "render_stems", "export_offline"})
+
+
+def run_budget_from_env(environ: Mapping[str, str]) -> float:
+    """The run budget a host set in ENV_RUN_BUDGET, else RUN_BUDGET_SECONDS; a bad value is a setup error."""
+    value = environ.get(ENV_RUN_BUDGET)
+    if value is None:
+        return RUN_BUDGET_SECONDS
+    try:
+        seconds = float(value)
+    except ValueError:
+        seconds = 0.0
+    if not 0 < seconds < float("inf"):
+        raise ValueError(f"{ENV_RUN_BUDGET} must be a positive number of seconds; got {value!r}")
+    return seconds
 
 
 class _Exited:
@@ -186,9 +206,11 @@ class _FileEdits:
 
 
 class _Cell:
-    """What one cell's fl calls leave behind: open file_edit blocks and what FL did."""
+    """What one cell's fl calls leave behind (open file_edit blocks, what FL did) and the
+    budget of the run it belongs to."""
 
-    def __init__(self, session: FLSession | None) -> None:
+    def __init__(self, session: FLSession | None, run_budget: RunBudget) -> None:
+        self.budget = run_budget
         self.actions = ActionLog(session.track_name if session is not None else None)
         self.edits = _FileEdits(session, self.actions)
 
@@ -203,7 +225,7 @@ class KernelHost:
         launcher: Launcher,
         environ: Mapping[str, str],
         *,
-        cell_timeout: float = RUN_CELL_TIMEOUT_SECONDS,
+        run_budget: float = RUN_BUDGET_SECONDS,
         interrupt_grace: float = INTERRUPT_GRACE_SECONDS,
         boot_timeout: float = KERNEL_BOOT_TIMEOUT_SECONDS,
         write_timeout: float = WIRE_WRITE_TIMEOUT_SECONDS,
@@ -212,7 +234,7 @@ class KernelHost:
         self._session = session
         self._launcher = launcher
         self._environ = environ
-        self._cell_timeout = cell_timeout
+        self._run_budget = run_budget
         self._interrupt_grace = interrupt_grace
         self._boot_timeout = boot_timeout
         self._write_timeout = write_timeout
@@ -233,7 +255,7 @@ class KernelHost:
             if self._kernel is not None or self._closed:
                 return
             try:
-                self._kernel = self._boot()
+                self._kernel = self._boot(self._boot_timeout)
             except ToolError as exc:
                 log.warning("the kernel did not start ahead of the first run: %s", exc.message)
                 self._start_failure = exc
@@ -242,21 +264,28 @@ class KernelHost:
                 self._kernel.kill()
 
     def run(self, code: str) -> RunResult:
-        """Run one cell. Raises kernel_unavailable if no kernel can start.
+        """Run one cell within the run budget. Raises kernel_unavailable if no kernel can start.
 
         Whatever the outcome, the result's actions are the fl calls FL confirmed
         while the cell ran, recorded here as the server served them: the kernel
         runs model code, so nothing it reports about FL is taken on its word.
         """
-        with self._lock:
+        run_budget = RunBudget.starting_now(self._run_budget)
+        waited = "waiting for the kernel (another call, or its start) used"
+        if not self._lock.acquire(timeout=self._run_budget):
+            raise budget.did_not_run(run_budget, waited)
+        try:
             note = self._drop_dead_kernel()
             if self._kernel is None:
                 failure, self._start_failure = self._start_failure, None
                 if failure is not None:  # start() already tried; the next run tries again
                     raise failure
-                self._kernel = self._boot()
+                if run_budget.left() > 0:
+                    self._kernel = self._boot(min(self._boot_timeout, run_budget.left()))
+            if self._kernel is None or run_budget.left() <= 0:  # a cell sent now would be interrupted at once
+                raise budget.did_not_run(run_budget, waited)
             kernel = self._kernel
-            cell = _Cell(self._session)
+            cell = _Cell(self._session, run_budget)
             try:
                 result = self._run_cell(kernel, code, cell)
             except BaseException:
@@ -268,6 +297,8 @@ class KernelHost:
             return result.model_copy(
                 update={"stdout": note + result.stdout, "actions": cell.actions.sentences()}
             )
+        finally:
+            self._lock.release()
 
     def close(self) -> None:
         """Kill the kernel without waiting for a running cell: shutdown must not hang on one."""
@@ -291,9 +322,9 @@ class KernelHost:
             "This cell ran in a fresh kernel.]\n"
         )
 
-    def _boot(self) -> _Kernel:
+    def _boot(self, timeout: float) -> _Kernel:
         if not self._launcher.confined:
-            return self._start([sys.executable, "-I", "-m", "fl_mcp.kernel.child"])
+            return self._start([sys.executable, "-I", "-m", "fl_mcp.kernel.child"], timeout)
         with loopback_listener() as port:
             return self._start(
                 [
@@ -301,10 +332,11 @@ class KernelHost:
                     "--probe", str(self.workspace.canary),
                     "--probe-home", str(Path.home()),
                     "--probe-port", str(port),
-                ]
+                ],
+                timeout,
             )  # fmt: skip
 
-    def _start(self, argv: list[str]) -> _Kernel:
+    def _start(self, argv: list[str], timeout: float) -> _Kernel:
         env = self.workspace.kernel_env(self._environ, python=Path(sys.executable))
         started = time.monotonic()
         try:
@@ -315,7 +347,7 @@ class KernelHost:
         launched = time.monotonic()
         self._starting = kernel
         try:
-            message = kernel.next(self._boot_timeout)
+            message = kernel.next(timeout)
         finally:
             self._starting = None
         if not isinstance(message, wire.Ready):
@@ -349,16 +381,18 @@ class KernelHost:
     def _cell_outcome(self, kernel: _Kernel, code: str, cell: _Cell) -> RunResult:
         if not kernel.send(wire.Exec(code=code), self._write_timeout):
             return self._stalled(kernel)
-        result = self._await_done(kernel, cell, self._cell_timeout)
+        # The interrupt is sent only while no fl call is being served, so it lands
+        # between fl calls; past the budget the server refuses every further call.
+        result = self._await_done(kernel, cell, cell.budget.deadline)
         if result is not None:
             return result
         if not kernel.send(wire.Interrupt(), self._write_timeout):
             return self._stalled(kernel)
-        result = self._await_done(kernel, cell, self._interrupt_grace)
+        result = self._await_done(kernel, cell, time.monotonic() + self._interrupt_grace)
         if result is None:
             return self._lost(
                 kernel,
-                f"ran past the {self._cell_timeout:g} s cell budget and did not stop within "
+                f"ran past the run's {cell.budget.seconds:g} s budget and did not stop within "
                 f"{self._interrupt_grace:g} s of an interrupt, so it was killed",
             )
         if result.outcome != "error":
@@ -366,18 +400,18 @@ class KernelHost:
         return result.model_copy(
             update={
                 "outcome": "interrupted",
-                "traceback": f"The cell ran past the {self._cell_timeout:g} s budget and was "
-                "interrupted; the kernel and its variables are intact.\n" + (result.traceback or ""),
+                "traceback": f"The run reached its {cell.budget.seconds:g} s budget (time in fl calls "
+                "included), so the cell was interrupted between fl calls; the kernel and its variables "
+                "are intact, and actions lists what FL did. Continue in the next run.\n"
+                + (result.traceback or ""),
             }
         )
 
-    def _await_done(self, kernel: _Kernel, cell: _Cell, budget: float) -> RunResult | None:
-        """Serve the cell's calls until it finishes; None when ``budget`` runs out."""
-        remaining = budget
-        while True:
-            started = time.monotonic()
-            message = kernel.next(remaining)
-            remaining -= time.monotonic() - started
+    def _await_done(self, kernel: _Kernel, cell: _Cell, until: float) -> RunResult | None:
+        """Serve the cell's calls until it finishes; None at ``until`` (time.monotonic), checked
+        before each message, so a call that ends past it is the last one served."""
+        while (left := until - time.monotonic()) > 0:
+            message = kernel.next(left)
             if message is None:
                 return None
             if isinstance(message, wire.Done):
@@ -390,6 +424,7 @@ class KernelHost:
             else:
                 code = kernel.kill()
                 return self._lost(kernel, f"exited with code {code}")
+        return None
 
     def _stalled(self, kernel: _Kernel) -> RunResult:
         return self._lost(
@@ -427,6 +462,12 @@ class KernelHost:
         return wire.Reply(id=call.id, value=value)
 
     def _dispatch(self, call: wire.Call, cell: _Cell) -> Any:
+        if cell.budget.left() <= 0:  # the cell is being interrupted: FL does nothing more for it
+            if call.method == wire.FILE_EDIT_EXIT:
+                # Not refused: an error here would replace the cell's KeyboardInterrupt, which
+                # model code could catch. The block closes with the cell (_run_cell).
+                return None
+            raise budget.spent(cell.budget)
         if self._session is None:
             # A kernel without FL (the box lockdown's boundary probe): plain Python works, fl does not.
             raise errors.ToolError(
@@ -441,7 +482,8 @@ class KernelHost:
         kwargs = wire.decode_call(call)
         if call.method in _SERVER_WRITES:
             kwargs["output"] = self.workspace.output_path(kwargs["output"])
-        value = getattr(self._session, call.method)(**kwargs)
+        with budget.serving(cell.budget):  # a call that plays in real time refuses what would not fit
+            value = getattr(self._session, call.method)(**kwargs)
         # Recorded the moment FL confirmed it, so it counts even if the cell
         # never reads the reply (an interrupt, a later error, a lost kernel).
         cell.actions.called(call.method, kwargs, value)

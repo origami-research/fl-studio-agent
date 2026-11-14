@@ -21,7 +21,7 @@ import logging
 import sys
 from typing import TYPE_CHECKING
 
-from fl_mcp import errors
+from fl_mcp import budget, errors
 from fl_mcp.errors import WriteRejected
 from fl_mcp.schemas import AutomationPoint, AutomationTake, PatternInfo, PlacedClip
 
@@ -327,6 +327,9 @@ def automate(
     pattern replaces them there (live). The take reads FL's own playback of the control."""
     _require_record_question_off(session)
     beats = points[-1].position
+    seconds = _seconds(beats, session)
+    # It plays twice (recording, then playing back to check); refused before it adds a pattern.
+    budget.require(2 * seconds, f"Automating {label}", "automate fewer beats at a time")
     ppq = _live_int(session, "general.getRecPPQ")
     start = round(_bar_beats(bar) * ppq)
     if pattern is None:
@@ -340,7 +343,6 @@ def automate(
                 f"Pattern {number} starts at bar {_bar_of(first)}, not bar {bar}.",
                 "Automate it where its first clip starts, or leave out pattern to record into a new one.",
             )
-    seconds = _seconds(beats, session)
     spec = {
         "mode": "record", "pattern": number, "start": start, "length": round(beats * ppq), "seconds": seconds,
         "target": target, "points": [[round(p.position * ppq), p.value] for p in points],

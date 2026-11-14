@@ -40,7 +40,7 @@ from fl_mcp.contract import (
 )
 from fl_mcp.errors import ToolError
 from fl_mcp.kernel.display import ShownImage
-from fl_mcp.kernel.host import KernelHost
+from fl_mcp.kernel.host import KernelHost, run_budget_from_env
 from fl_mcp.kernel.launch import Workspace
 from fl_mcp.platform import PlatformUnsupportedError, platform_for
 
@@ -58,6 +58,7 @@ async def lifespan(server: Any, *, with_fl: bool = True) -> Any:
     hot-plug into the running host, and the run kernel host bound to it; close
     both on shutdown. ``with_fl=False`` (--workspace-only) starts no session: the
     kernel runs plain Python and its fl calls are refused."""
+    run_budget = run_budget_from_env(os.environ)  # a bad setting fails before FL starts
     # Each close is its own callback, run in reverse order, so one that fails
     # (a revoke icacls refuses) cannot skip the rest.
     with contextlib.ExitStack() as cleanup:
@@ -70,7 +71,7 @@ async def lifespan(server: Any, *, with_fl: bool = True) -> Any:
         else:
             session = None
             launcher = platform_for(sys.platform).kernel_launcher()
-        kernel = KernelHost(session, workspace, launcher, os.environ)
+        kernel = KernelHost(session, workspace, launcher, os.environ, run_budget=run_budget)
         cleanup.callback(kernel.close)
         kernel.start()  # ahead of the first run: a cold machine is slowest to start one (#324)
         yield {"kernel": kernel}
@@ -121,9 +122,11 @@ def run(code: str, ctx: Context) -> RunResult:
 
     Returns {"outcome", "stdout", "result" | "traceback", "actions", "images"}:
     actions is what FL did, one sentence per change, even if the cell failed
-    partway. outcome is "ok", "error", "interrupted" (past the 300 s budget;
-    time inside fl calls does not count; variables kept) or "kernel_lost"
-    (process died; variables gone, files kept). Images show like a notebook's:
+    partway. outcome is "ok", "error", "interrupted" (the run took its 600 s
+    budget, fl calls included: stopped between fl calls, variables kept; an fl
+    call that would not fit, such as a long render, is refused before it starts,
+    so split long work across runs) or "kernel_lost" (process died; variables
+    gone, files kept). Images show like a notebook's:
     end with a matplotlib figure or PIL image, call display(...), or leave
     figures open; at most 4 per run, about width x height / 750 tokens each.
 
@@ -203,7 +206,7 @@ def run(code: str, ctx: Context) -> RunResult:
     # It is a recipe, not an SDK method: there is no canned analysis. The
     # kernel is a separate process (fl_mcp.kernel, docs/38) and the OS, not
     # Python filtering, confines it to its workspace. A test keeps the
-    # docstring's "300 s" in step with kernel.host.RUN_CELL_TIMEOUT_SECONDS.
+    # docstring's "600 s" in step with kernel.host.RUN_BUDGET_SECONDS.
     ran = ctx.request_context.lifespan_context["kernel"].run(code)
     return _with_images(ran, ran.shown)
 
