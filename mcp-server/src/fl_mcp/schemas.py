@@ -513,6 +513,11 @@ class HelloEvent(BaseModel):
 # -- observations (FL state rendered to the model) ----------------------------
 
 
+def rounded(value: float) -> str:
+    """A level to two places, as a printout shows it: FL reads 0.8 back as 0.7999999998137355."""
+    return f"{round(value, 2):g}"
+
+
 class Channel(BaseModel):
     index: int
     name: str
@@ -523,6 +528,16 @@ class Channel(BaseModel):
     mixer_track: int | None = None
     # What the project's notes say this channel is for (flp.project_guide), if they say.
     about: str | None = None
+
+    def __repr__(self) -> str:
+        return f"Channel({self._text()})"
+
+    def _text(self) -> str:
+        """One line, levels rounded; ``about`` is left out (fl.scene() prints it, .about holds it)."""
+        track = "" if self.mixer_track is None else f" -> {self.mixer_track}"
+        pan = f", pan {rounded(self.pan)}" if round(self.pan, 2) else ""
+        muted = ", muted" if self.muted else ""
+        return f"{self.index} {self.name!r}{track}, vol {rounded(self.volume)}{pan}{muted}"
 
 
 # What a channel can be loaded with; the library's two kinds of sound (fl_mcp.sounds).
@@ -597,6 +612,28 @@ class MixerTrack(BaseModel):
     effects: list[MixerEffect] = Field(default_factory=list)
     sends: list[MixerSend] = Field(default_factory=list)
 
+    def __repr__(self) -> str:
+        return f"MixerTrack({self._text()})"
+
+    def _text(self) -> str:
+        """One line, levels rounded: effects by slot, then the sends that are on, as
+        "→ track N at level" (tracks sent to at one level share it)."""
+        flags = "".join(f", {flag}" for flag in ("muted", "solo") if getattr(self, flag))
+        pan = f", pan {rounded(self.pan)}" if round(self.pan, 2) else ""
+        parts = [f"{self.index} {self.name!r}, vol {rounded(self.volume)}{pan}{flags}"]
+        if self.effects:
+            parts.append("effects " + ", ".join(f"{e.slot}:{e.plugin}" for e in self.effects))
+        levels: dict[str | None, list[int]] = {}
+        for send in self.sends:
+            if send.on:
+                levels.setdefault(None if send.level is None else rounded(send.level), []).append(send.target)
+        parts += [
+            f"→ track{'s' if len(targets) > 1 else ''} {', '.join(map(str, targets))}"
+            + ("" if level is None else f" at {level}")
+            for level, targets in levels.items()
+        ]
+        return "; ".join(parts)
+
 
 class PatternInfo(BaseModel):
     """One of FL's patterns: its number, name and length in beats."""
@@ -604,6 +641,9 @@ class PatternInfo(BaseModel):
     number: int = Field(ge=1)
     name: str
     beats: float = Field(ge=0)
+
+    def __repr__(self) -> str:
+        return f"PatternInfo({self.number} {self.name!r}, {self.beats:g} beats)"
 
 
 class PlaylistClip(BaseModel):

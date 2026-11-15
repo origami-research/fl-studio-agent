@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import inspect
 import re
-from typing import Any
+from typing import Any, get_args
 
 from pydantic import BaseModel
 
@@ -194,6 +194,8 @@ def _shapes() -> list[type]:
                 found.append(shape)
                 if issubclass(shape, BaseModel):
                     pending += [_type_name(f.annotation) for f in shape.model_fields.values()]
+                # A list of the SDK's own (Channels is a list[Channel]) documents its items too.
+                pending += [_type_name(a) for base in getattr(shape, "__orig_bases__", ()) for a in get_args(base)]
     return found
 
 

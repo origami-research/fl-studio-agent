@@ -102,7 +102,7 @@ def test_summary_groups_by_channel_and_names_them():
     assert out.note_count == 3
     assert [c["name"] for c in out.channels] == ["Bass", "Lead"]
     assert "tempo 128, key " in str(out)
-    assert "  2 Lead -> 4: vol 0.78; 2 notes in patterns 1, beats 0-2, C4-E4, pitches C E" in str(out)
+    assert "  2 Lead -> 4: vol 0.78; 2 notes, beats 0-2, C4-E4, pitches C E" in str(out)
 
 
 def test_bass_register_gets_root_motion_and_lead_does_not():
@@ -138,7 +138,7 @@ def test_a_channel_fl_did_not_list_is_shown_without_made_up_levels():
 
     assert [(c["name"], c["notes"], c["volume"]) for c in out.channels] == [("Channel 7", 1, None), ("Channel 9", 0, None)]
     text = str(out)
-    assert "  7 Channel 7: not in FL's channel list, levels unknown; 1 note in patterns 1" in text
+    assert "  7 Channel 7: not in FL's channel list, levels unknown; 1 note, beats 0-1, C4" in text
     assert "  9 Channel 9: not in FL's channel list, levels unknown; no notes, playlist clips at 0" in text
 
 
@@ -240,11 +240,10 @@ def test_summary_reports_empty_playlist_honestly():
     assert "playlist: empty" in str(out)
 
 
-def test_runs_of_channels_and_patterns_print_as_ranges():
+def test_runs_of_channels_print_as_ranges():
     rows = [Row(midi=60, channel=c, pattern=p) for c in (0, 2, 3, 4, 5) for p in range(1, 9)]
-    text = str(digest(rows))
-    assert "5 notes on 0 2-5" in text
-    assert "8 notes in patterns 1-8" in text
+    assert "5 notes on 0 2-5" in str(digest(rows))
+    assert "3 notes on 0-2" in str(digest([Row(midi=60, channel=c) for c in range(3)]))
 
 
 # --- mixer -------------------------------------------------------------------
@@ -290,7 +289,7 @@ def test_the_scene_leaves_out_what_fl_did_not_answer_and_says_so():
     text = str(out)
     assert "left out the patterns and the mixer: FL Studio did not answer in time." in text
     assert "patterns (" not in text and "mixer tracks" not in text
-    assert "  0 Lead: vol 0.78; 1 note in patterns 1" in text
+    assert "  0 Lead: vol 0.78; 1 note, beats 0-1, C4" in text
 
 
 def test_the_scene_reads_the_saved_song_while_fl_is_not_connected():
@@ -332,28 +331,56 @@ def test_printing_the_scene_or_showing_it_bare_is_the_digest():
 # of a tool result, counted on its JSON. The scene leaves room for the rest of a cell's
 # output and for that escaping, on any project a model is likely to build.
 SCENE_BUDGET = 12_000
+# Models print fl.scene(), fl.channels, fl.patterns and fl.mixer together in their first
+# call (arena runs, 2026-11), so the four together stay well under the cap too. The busy
+# project prints the template's mixer twice (in the scene and in fl.mixer), hence more.
+FOUR_BUDGET_START = 12_000
+FOUR_BUDGET_BUSY = 15_000
+MINOR = (0, 2, 3, 5, 7, 8, 10)
+
+
+def part(channel: int, pattern: int) -> list[Note]:
+    """What a busy song puts on a channel of the agent project: the drums hit at their own
+    pitch, the basses play a root per bar, and the rest run a minor scale over two octaves."""
+    if channel <= 6:
+        return [Note(key=60, start=i * 0.5, length=0.25) for i in range(64)]
+    if channel in (8, 9, 10):
+        roots = (36, 32, 39, 34)
+        return [Note(key=roots[i // 8 % 4] + 12 * (channel == 9), start=i * 0.5, length=0.5) for i in range(64)]
+    return [
+        Note(key=60 + MINOR[(i * 3 + channel + pattern) % 7] + 12 * (i % 2), start=i * 0.25, length=0.25)
+        for i in range(128)
+    ]
+
+
+def four(fl: sdk.FL) -> str:
+    """The first call of most arena runs."""
+    return "\n".join([str(fl.scene()), repr(fl.channels), repr(fl.patterns), repr(fl.mixer)])
 
 
 def test_the_whole_project_prints_well_under_runs_output_cap(tmp_path):
     """Arena runs of 2026-11: the first call printed the scene with fl.channels,
     fl.patterns and fl.mixer, 23,558 characters on the starting project, and the
-    harness kept the first 20,000. The scene is now the whole project, a line per pattern, channel
-    and mixer track: here every channel of the agent project holds notes in each of
-    16 patterns, each placed six times, over the template's mixer."""
+    harness kept the first 20,000. The scene is now the whole project, a line per
+    pattern, channel and mixer track, and the other three print a line per object: here
+    on the agent project as it starts, then with every channel holding notes in each of
+    16 patterns, each placed six times, over the template's mixer and its effects."""
     fake = StudioFake(store=Store("busy", root=tmp_path / "store"), library=tmp_path / "library")
     fl = sdk.connect(fake)
-    start = str(fl.scene())
+    start, start_four = str(fl.scene()), four(fl)
     for number in range(2, 17):
         fl.new_pattern(f"Section {number}")
     for number in range(1, 17):
         for channel in fl.channels:
-            notes = [Note(key=30 + (channel.index * 5 + i * 7) % 60, start=i * 0.25, length=0.25) for i in range(128)]
-            fl.track(channel.index, pattern=number).write(notes, mode="replace")
+            fl.track(channel.index, pattern=number).write(part(channel.index, number), mode="replace")
         fl.place(number, [1 + 2 * (number - 1) + 32 * k for k in range(6)])
-    busy = str(fl.scene())
+    busy, busy_four = str(fl.scene()), four(fl)
 
     assert "project notes: FLMCP agent project" in start and "no notes yet" in start
     assert all(f"  {c.index} {c.name} -> {c.mixer_track}: " in busy for c in fl.channels)
     assert "  16 'Section 16': " in busy and "  125 Sub Bus: " in busy
+    assert "  125 'Sub Bus', vol 0.8; effects 8:Fruity Limiter, 9:Fruity PanOMatic; → tracks 2, 3 at 0.8" in busy_four
     assert len(start) < SCENE_BUDGET / 1.5, len(start)
     assert len(busy) < SCENE_BUDGET, len(busy)
+    assert len(start_four) < FOUR_BUDGET_START, len(start_four)
+    assert len(busy_four) < FOUR_BUDGET_BUSY, len(busy_four)

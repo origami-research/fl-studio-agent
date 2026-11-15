@@ -34,6 +34,7 @@ SessionMethod = Literal[
     "live_channels",
     "load_audio",
     "load_sound",
+    "mixer_track_count",
     "mixer_tracks",
     "new_pattern",
     "patterns",

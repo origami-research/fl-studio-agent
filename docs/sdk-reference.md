@@ -23,16 +23,17 @@ note FL has (by channel and pattern), optionally of one channel and one pattern.
 
 FL's tempo now, in BPM.
 
-### `fl.channels: list[Channel]`
+### `fl.channels: Channels`
 
-The channels in FL now, each with what the project's notes say it is for (``about``).
+The channels in FL now, each with what the project's notes say it is for (``about``;
+print(fl.scene()) shows it, a channel's printout leaves it out).
 
-### `fl.mixer: list[MixerTrack]`
+### `fl.mixer: MixerTracks`
 
 FL's mixer tracks in use now (0 is the master): index, name, volume, pan, muted,
 solo, effects (each an Effect: slot, plugin, params() and set_param()) and sends
 (target and level). A track is in use when a channel plays into it, it holds an
-effect, it was renamed, or a track in use sends to it.
+effect, it was renamed, or a track in use sends to it; ``empty`` counts the others.
 
 ### `fl.playlist: list[PlaylistClip]`
 
@@ -373,13 +374,14 @@ Fields: tempo: float | None, key: str | None, key_confidence: str | None, note_c
 
 Fields: notes: list[SceneNote].
 
-### `Channel`
+### `Channels`
 
-Fields: index: int, name: str, volume: float, pan: float, muted: bool, mixer_track: int | None, about: str | None.
+fl.channels: a list of Channel, printed one per line.
 
-### `MixerTrack`
+### `MixerTracks`
 
-Fields: index: int, name: str, volume: float, pan: float, muted: bool, solo: bool, effects: list[MixerEffect], sends: list[MixerSend].
+fl.mixer: the mixer tracks in use, printed one per line, and ``empty``: how many
+of FL's other mixer tracks are empty (no channel, effect, send or name of their own).
 
 ### `PlaylistClip`
 
@@ -523,6 +525,14 @@ left out because they have no notes in the bars it played.
 ### `SceneNote`
 
 Fields: channel: int, pattern: int, key: str, midi: int, start: float, length: float, velocity: float.
+
+### `Channel`
+
+Fields: index: int, name: str, volume: float, pan: float, muted: bool, mixer_track: int | None, about: str | None.
+
+### `MixerTrack`
+
+Fields: index: int, name: str, volume: float, pan: float, muted: bool, solo: bool, effects: list[MixerEffect], sends: list[MixerSend].
 
 ### `MixerEffect`
 

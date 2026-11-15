@@ -248,6 +248,29 @@ class Stems(list[Render]):
         return f"Stems({list.__repr__(self)}, skipped={getattr(self, 'skipped', ())!r})"
 
 
+class Channels(list[Channel]):
+    """fl.channels: a list of Channel, printed one per line."""
+
+    def __repr__(self) -> str:
+        lines = [f"  {c._text()}" for c in self]
+        return "\n".join(["Channels (index 'name' -> mixer track, volume):", *lines])
+
+
+class MixerTracks(list[MixerTrack]):
+    """fl.mixer: the mixer tracks in use, printed one per line, and ``empty``: how many
+    of FL's other mixer tracks are empty (no channel, effect, send or name of their own)."""
+
+    empty: int = 0
+
+    def __repr__(self) -> str:
+        lines = [f"  {t._text()}" for t in self]
+        return "\n".join([
+            "MixerTracks in use (index 'name', volume; effects slot:plugin; sends):",
+            *lines,
+            f"  (+ {self.empty} empty mixer tracks)",
+        ])
+
+
 class ChannelNotFound(ValueError):
     """Raised with the real channel names so the caller can pick one."""
 
@@ -267,20 +290,23 @@ class FL:
         self._session = session
 
     @property
-    def channels(self) -> list[Channel]:
-        """The channels in FL now, each with what the project's notes say it is for (``about``)."""
-        return self._session.live_channels()
+    def channels(self) -> Channels:
+        """The channels in FL now, each with what the project's notes say it is for (``about``;
+        print(fl.scene()) shows it, a channel's printout leaves it out)."""
+        return Channels(self._session.live_channels())
 
     @property
-    def mixer(self) -> list[MixerTrack]:
+    def mixer(self) -> MixerTracks:
         """FL's mixer tracks in use now (0 is the master): index, name, volume, pan, muted,
         solo, effects (each an Effect: slot, plugin, params() and set_param()) and sends
         (target and level). A track is in use when a channel plays into it, it holds an
-        effect, it was renamed, or a track in use sends to it."""
-        return [
+        effect, it was renamed, or a track in use sends to it; ``empty`` counts the others."""
+        tracks = MixerTracks(
             track.model_copy(update={"effects": [Effect._bound(self, e) for e in track.effects]})
             for track in self._session.mixer_tracks()
-        ]
+        )
+        tracks.empty = self._session.mixer_track_count() - len(tracks)
+        return tracks
 
     @property
     def playlist(self) -> list[PlaylistClip]:

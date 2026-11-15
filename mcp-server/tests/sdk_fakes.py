@@ -19,6 +19,7 @@ from session_fakes import RENDER_SPAN
 if TYPE_CHECKING:
     from fl_mcp.kernel.host import KernelHost
 
+from fl_mcp import flp
 from fl_mcp.schemas import (
     Channel,
     ChannelCheck,
@@ -61,6 +62,10 @@ class FakeControl:
         return ControlResponse(id=len(self.ops), ok=True)
 
 
+# A full mixer as mixer.trackCount reports it, the master included (test_session_routing_presets).
+MIXER_TRACK_COUNT = 127
+
+
 class FakeSession(FLSession):
     """Duck-typed FLSession whose backend is the in-memory store itself.
 
@@ -85,6 +90,9 @@ class FakeSession(FLSession):
 
     def mixer_tracks(self) -> list[MixerTrack]:
         return [MixerTrack(index=i, name=f"Insert {i}", effects=list(fx)) for i, fx in sorted(self._effects.items())]
+
+    def mixer_track_count(self) -> int:
+        return MIXER_TRACK_COUNT
 
     def write_notes(self, target: Target, notes: list[Note], mode: NoteWriteMode) -> WriteResult:
         if self.fail_next_write is not None:
@@ -236,10 +244,13 @@ STUDIO_CHANNELS = (
 )
 # The template's send returns (scripts/build_session_template.py), which the mixing guide finds by name.
 STUDIO_SENDS = {113: "Reverb Send", 114: "Delay Send", 116: "Drum Bus"}
-# The template's other tracks in use: the pre-master and the base template's buses.
+# The template's other tracks in use: the pre-master, the base template's buses, and its
+# spare tracks that hold effects (names as fl.mixer read them on a box, run 4b035941; 124's
+# was not read, so it keeps FL's default name).
 STUDIO_BUSES = {
-    1: "PreMaster MS", 2: "PreMaster M", 3: "PreMaster S", 117: "Kick Bus", 118: "Snare Bus", 119: "Overhead Bus",
-    120: "Instrument Bus", 121: "Background Bus", 122: "Vocal Bus", 123: "Sidechained Bus", 125: "Sub Bus",
+    1: "PreMaster MS", 2: "PreMaster M", 3: "PreMaster S", 13: "Bass 2", 18: "Vocals 1", 117: "Kick Bus",
+    118: "Snare Bus", 119: "Overhead Bus", 120: "Instrument Bus", 121: "Background Bus", 122: "Vocal Bus",
+    123: "Sidechained Bus", 124: "Insert 124", 125: "Sub Bus",
 }
 # The template's routing, by mixer track: the drums into their buses, the rest into the
 # Instrument Bus, the melodic tracks to the Reverb Send (Lead and Pluck to the Delay Send
@@ -252,14 +263,6 @@ STUDIO_ROUTES = {
     **{bus: (116,) for bus in (117, 118, 119)},
     **{bus: (2, 3) for bus in (113, 114, 116, 120, 121, 122, 123, 125)},
     2: (1,), 3: (1,), 1: (0,),
-}
-# The effects the template puts on its mixer tracks (build_session_template.py EFFECTS), by slot.
-STUDIO_EFFECTS = {
-    11: ("Fruity Fast Dist", "Fruity Soft Clipper"),
-    25: ("Fruity Parametric EQ 2",),
-    113: ("Fruity Reeverb 2",),
-    114: ("Fruity Delay Bank",),
-    116: ("Fruity Parametric EQ 2", "Fruity Limiter"),
 }
 STUDIO_RATE = 44_100
 
@@ -300,10 +303,13 @@ class StudioFake(FakeSession):
         library.parent.mkdir(parents=True, exist_ok=True)
         self.project = Path(shutil.copy2(template_path(), library.parent / "FLMCP Agent.flp"))
         self._volumes = {0: 0.8, **{c.mixer_track: 0.8 for c in channels}, **dict.fromkeys(STUDIO_SENDS, 0.8)}
-        self._effects: dict[int, list] = {
-            track: [MixerEffect(mixer_track=track, slot=slot, plugin=plugin) for slot, plugin in enumerate(plugins)]
-            for track, plugins in STUDIO_EFFECTS.items()
-        }
+        # The effects the template's mixer holds, by track and slot, read from the template itself.
+        self._effects: dict[int, list] = {}
+        for effect in flp.read(self.project).mixer:
+            plugin = effect.plugin.name or effect.plugin.internal_name
+            self._effects.setdefault(effect.insert, []).append(
+                MixerEffect(mixer_track=effect.insert, slot=effect.slot, plugin=plugin)
+            )
         self._sends: dict[tuple[int, int], MixerSend] = {
             (src, dst): MixerSend(source=src, target=dst, on=True, level=0.8)
             for src, targets in STUDIO_ROUTES.items()

@@ -15,6 +15,7 @@ from pydantic import BaseModel, Field, PrivateAttr, model_validator
 
 from fl_mcp import __version__
 from fl_mcp.kernel.display import ShownImage, describe
+from fl_mcp.schemas import rounded
 
 ENV_SPOOL_ROOT = "FLMCP_SPOOL_ROOT"
 ENV_AGENT_PROJECT = "FLMCP_AGENT_PROJECT"
@@ -186,7 +187,7 @@ class SceneSummary(BaseModel):
             lines += [f"  {_pattern_line(p, several)}" for p in self.patterns]
         if self.channels:
             lines.append(
-                "channels (index name -> mixer track: volume; its notes in all its patterns together, "
+                "channels (index name -> mixer track: volume; notes of all its patterns together, "
                 "beats within a pattern; what the project's notes say it is for):"
             )
             lines += [f"  {_channel_line(c, several)}" for c in self.channels]
@@ -201,11 +202,6 @@ class SceneSummary(BaseModel):
         return "\n".join(lines)
 
     __repr__ = __str__
-
-
-def _level(value: float) -> str:
-    """A level as FL shows it to two places: FL reads 0.8 back as 0.7999999998137355."""
-    return f"{round(value, 2):g}"
 
 
 def _beats(values: list[float]) -> str:
@@ -270,17 +266,15 @@ def _channel_line(channel: dict[str, Any], several: bool) -> str:
     if channel["volume"] is None:
         levels = "not in FL's channel list, levels unknown"
     else:
-        levels = f"vol {_level(channel['volume'])}"
+        levels = f"vol {rounded(channel['volume'])}"
         if round(channel["pan"], 2):
-            levels += f", pan {_level(channel['pan'])}"
+            levels += f", pan {rounded(channel['pan'])}"
         if channel["muted"]:
             levels += ", muted"
     if channel["notes"]:
-        notes = (
-            f"{_count(channel['notes'], 'note')} in patterns {_runs(channel['patterns'])}, "
-            f"beats {channel['beats'][0]:g}-{channel['beats'][1]:g}, {'-'.join(channel['range'])}, "
-            f"pitches {' '.join(channel['pitch_classes'])}"
-        )
+        low, high = channel["range"]
+        pitches = low if low == high else f"{low}-{high}, pitches {' '.join(channel['pitch_classes'])}"
+        notes = f"{_count(channel['notes'], 'note')}, beats {channel['beats'][0]:g}-{channel['beats'][1]:g}, {pitches}"
         if channel.get("root_motion"):
             notes += f", root motion {' '.join(channel['root_motion'])}"
     else:
@@ -292,16 +286,16 @@ def _channel_line(channel: dict[str, Any], several: bool) -> str:
 
 
 def _mixer_line(track: dict[str, Any]) -> str:
-    parts = [f"vol {_level(track['volume'])}"]
+    parts = [f"vol {rounded(track['volume'])}"]
     if round(track["pan"], 2):
-        parts[0] += f", pan {_level(track['pan'])}"
+        parts[0] += f", pan {rounded(track['pan'])}"
     parts[0] += "".join(f", {flag}" for flag in ("muted", "solo") if track[flag])
     if track["effects"]:
         parts.append("effects " + ", ".join(f"{e['slot']}:{e['plugin']}" for e in track["effects"]))
     if track["sends"]:
         parts.append(
             "sends " + ", ".join(
-                f"{s['target']}" if s["level"] is None else f"{s['target']}:{_level(s['level'])}" for s in track["sends"]
+                f"{s['target']}" if s["level"] is None else f"{s['target']}:{rounded(s['level'])}" for s in track["sends"]
             )
         )
     return f"{track['index']} {track['name']}: {'; '.join(parts)}"

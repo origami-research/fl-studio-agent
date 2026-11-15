@@ -105,6 +105,11 @@ def mixer_tracks(session: FLSession) -> list[MixerTrack]:
         raise errors.fl_api_error("state.mixer", f"malformed mixer payload ({exc!r})") from exc
 
 
+def mixer_track_count(session: FLSession) -> int:
+    """How many tracks FL's mixer has, the master included: fl.mixer counts the empty ones."""
+    return controls._live_int(session, "mixer.trackCount")
+
+
 def patterns(session: FLSession) -> list[PatternInfo]:
     """FL's patterns that hold something, plus the selected one: number, name, and length
     (16th steps, four to a beat). patternCount counts only patterns that are not empty

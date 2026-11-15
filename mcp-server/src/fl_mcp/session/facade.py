@@ -701,6 +701,10 @@ class FLSession:
         """The mixer tracks in use, with effects and sends: one controller round trip."""
         return state.mixer_tracks(self)
 
+    def mixer_track_count(self) -> int:
+        """How many tracks FL's mixer has, the master included."""
+        return state.mixer_track_count(self)
+
     def playlist(self) -> list[PlaylistClip]:
         """The playlist's clips in the song FL opened, then the clips added this session
         (FL has no clip getter; an added clip's track is None when FL did not report it)."""

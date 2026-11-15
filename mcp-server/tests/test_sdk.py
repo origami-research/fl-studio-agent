@@ -23,11 +23,21 @@ from pathlib import Path
 
 import numpy as np
 import pytest
-from sdk_fakes import DEFAULT_CHANNELS, FakeSession, StudioFake
+from sdk_fakes import DEFAULT_CHANNELS, MIXER_TRACK_COUNT, FakeSession, StudioFake
 from session_fakes import RENDER_SPAN
 
 from fl_mcp import errors, sdk, theory
-from fl_mcp.schemas import ChannelLevels, MixerTrack, Note, Target, WriteResult
+from fl_mcp.schemas import (
+    Channel,
+    ChannelLevels,
+    MixerEffect,
+    MixerSend,
+    MixerTrack,
+    Note,
+    PatternInfo,
+    Target,
+    WriteResult,
+)
 from fl_mcp.sdk import ChannelNotFound, connect
 from fl_mcp.session.link import TRANSIENT_RETRY_DELAYS
 from fl_mcp.store import Store
@@ -340,6 +350,45 @@ def test_the_scene_mixer_and_tempo_are_plain_objects_in_run(fl, fake_session):
         fl.scene()
     with pytest.raises(errors.ToolError, match='detail must be "summary" or "notes"'):
         fl.scene(detail="all")
+
+
+def test_the_channels_and_the_mixer_print_a_line_each_and_keep_their_data(fl, fake_session):
+    """Models print fl.scene(), fl.channels, fl.patterns and fl.mixer together (arena,
+    2026-11): fl.mixer alone was about 12,600 characters on the starting project, with FL's
+    float noise and a whole MixerSend per route. The printouts are a line per object with
+    levels rounded; the objects still hold FL's exact values and every field."""
+    fake_session.live_channels = lambda: [
+        Channel(index=0, name="Kick", volume=0.7799999999999999, mixer_track=4, about="the kick"),
+        Channel(index=1, name="Pad", pan=-0.41953125037252903, muted=True),
+    ]
+    fake_session.mixer_tracks = lambda: [
+        MixerTrack(index=0, name="Master", volume=0.7999999998137355,
+                   effects=[MixerEffect(mixer_track=0, slot=7, plugin="Maximus")]),
+        MixerTrack(index=14, name="Lead", solo=True, sends=[
+            MixerSend(source=14, target=113, on=True, level=0.8), MixerSend(source=14, target=120, on=True, level=0.8),
+            MixerSend(source=14, target=114, on=True, level=0.25), MixerSend(source=14, target=2, on=False),
+        ]),
+    ]
+
+    channels, mixer = fl.channels, fl.mixer
+
+    assert repr(channels) == (
+        "Channels (index 'name' -> mixer track, volume):\n"
+        "  0 'Kick' -> 4, vol 0.78\n"
+        "  1 'Pad', vol 0.78, pan -0.42, muted"
+    )
+    assert channels[0].about == "the kick" and channels[0].volume == 0.7799999999999999
+    assert repr(channels[0]) == "Channel(0 'Kick' -> 4, vol 0.78)"
+    assert mixer.empty == MIXER_TRACK_COUNT - 2
+    assert repr(mixer) == (
+        "MixerTracks in use (index 'name', volume; effects slot:plugin; sends):\n"
+        "  0 'Master', vol 0.8; effects 7:Maximus\n"
+        "  14 'Lead', vol 0.8, solo; → tracks 113, 120 at 0.8; → track 114 at 0.25\n"
+        f"  (+ {MIXER_TRACK_COUNT - 2} empty mixer tracks)"
+    )
+    assert mixer[0].volume == 0.7999999998137355 and isinstance(mixer[0].effects[0], sdk.Effect)
+    assert [s.target for s in mixer[1].sends] == [113, 120, 114, 2], "a send that is off stays in the data"
+    assert repr(PatternInfo(number=2, name="Drop", beats=32.0)) == "PatternInfo(2 'Drop', 32 beats)"
 
 
 @pytest.mark.parametrize("kwargs", [{"bars": True}, {"bars": 2.5}, {"start_bar": "3"}, {"start_bar": 0}, {"stems": "tracks"}])

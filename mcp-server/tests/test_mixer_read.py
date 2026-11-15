@@ -78,6 +78,12 @@ def test_the_session_reads_the_mixer_into_tracks_with_effects_and_sends():
     assert tracks[1].solo and tracks[1].sends == [MixerSend(source=4, target=0, on=True, level=0.8)]
 
 
+def test_the_mixer_track_count_is_fls_own():
+    """fl.mixer counts the empty tracks from FL's own count, the master included."""
+    session, _ = make_session(control=FakeControl(hello=HELLO, handlers={"mixer.trackCount": lambda args: 127}))
+    assert session.mixer_track_count() == 127
+
+
 def test_the_patterns_are_the_ones_holding_something_plus_the_selected_one():
     """patternCount counts only patterns that are not empty (box, 2026-11-03), and they need
     not be numbered from 1: here 3 and 5 hold notes, 1 is selected and still empty."""
