@@ -608,14 +608,17 @@ class PatternInfo(BaseModel):
 
 class PlaylistClip(BaseModel):
     """One playlist clip: on ``track``, from ``start`` for ``length`` beats, playing
-    ``pattern`` or, for an audio clip, ``channel``. A clip added this session has track
-    None when FL did not report it."""
+    ``pattern`` or, for an audio or automation clip, ``channel``, in FL's arrangement
+    number ``arrangement``. A clip added this session has track None when FL did not
+    report it, and arrangement None: FL adds it to the arrangement it shows and does
+    not say which."""
 
     track: int | None
     start: float
     length: float
     pattern: int | None = None
     channel: int | None = None
+    arrangement: int | None = 0
 
 
 class PlacedClip(BaseModel):

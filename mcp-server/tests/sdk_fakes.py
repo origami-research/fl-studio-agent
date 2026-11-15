@@ -8,6 +8,7 @@ the action log - is the shipped code, not a mock of it.
 from __future__ import annotations
 
 import contextlib
+import shutil
 import time
 from collections.abc import Iterator
 from pathlib import Path
@@ -36,7 +37,7 @@ from fl_mcp.schemas import (
     Target,
     WriteResult,
 )
-from fl_mcp.session import FLSession
+from fl_mcp.session import FLSession, state
 from fl_mcp.session.link import ControlLink
 from fl_mcp.store import Store
 
@@ -235,6 +236,23 @@ STUDIO_CHANNELS = (
 )
 # The template's send returns (scripts/build_session_template.py), which the mixing guide finds by name.
 STUDIO_SENDS = {113: "Reverb Send", 114: "Delay Send", 116: "Drum Bus"}
+# The template's other tracks in use: the pre-master and the base template's buses.
+STUDIO_BUSES = {
+    1: "PreMaster MS", 2: "PreMaster M", 3: "PreMaster S", 117: "Kick Bus", 118: "Snare Bus", 119: "Overhead Bus",
+    120: "Instrument Bus", 121: "Background Bus", 122: "Vocal Bus", 123: "Sidechained Bus", 125: "Sub Bus",
+}
+# The template's routing, by mixer track: the drums into their buses, the rest into the
+# Instrument Bus, the melodic tracks to the Reverb Send (Lead and Pluck to the Delay Send
+# too), and every bus and return into the pre-master.
+STUDIO_ROUTES = {
+    4: (117,), 6: (118,), 7: (118,), 8: (119,), 5: (119,), 24: (119,), 9: (119,),
+    **{track: (113, 120) for track in (10, 26, 27, 16, 17, 19, 28, 29, 30, 31, 32, 33)},
+    14: (113, 114, 120), 15: (113, 114, 120), 11: (125,), 25: (120,), 12: (123,),
+    20: (122,), 21: (122,), 22: (121,), 34: (120,),
+    **{bus: (116,) for bus in (117, 118, 119)},
+    **{bus: (2, 3) for bus in (113, 114, 116, 120, 121, 122, 123, 125)},
+    2: (1,), 3: (1,), 1: (0,),
+}
 # The effects the template puts on its mixer tracks (build_session_template.py EFFECTS), by slot.
 STUDIO_EFFECTS = {
     11: ("Fruity Fast Dist", "Fruity Soft Clipper"),
@@ -267,33 +285,43 @@ class StudioFake(FakeSession):
     """The whole session surface the SDK calls, over the agent template's channels:
     what a guide's worked example runs against in CI (fl_mcp/guides). Writes succeed
     and return what was asked; renders, auditions and library sounds are real WAVs.
-    Like FL, loading a sound or a preset renames the channel after it."""
+    Like FL, loading a sound or a preset renames the channel after it. The project FL
+    opened is a copy of the packaged agent project, so fl.scene() and what each channel
+    is for (``about``) are the real reads of it."""
 
     def __init__(self, *, store: Store, library: Path) -> None:
         from fl_mcp.schemas import PatternInfo, PlaylistClip
+        from fl_mcp.template import template_path
 
         channels = [Channel(index=i, name=name, mixer_track=track) for i, (name, track) in enumerate(STUDIO_CHANNELS)]
         super().__init__(store=store, channels=channels)
         self.library = library
+        # copy2 keeps the template's old mtime, so every note written here postdates the save.
+        library.parent.mkdir(parents=True, exist_ok=True)
+        self.project = Path(shutil.copy2(template_path(), library.parent / "FLMCP Agent.flp"))
         self._volumes = {0: 0.8, **{c.mixer_track: 0.8 for c in channels}, **dict.fromkeys(STUDIO_SENDS, 0.8)}
         self._effects: dict[int, list] = {
             track: [MixerEffect(mixer_track=track, slot=slot, plugin=plugin) for slot, plugin in enumerate(plugins)]
             for track, plugins in STUDIO_EFFECTS.items()
         }
-        self._sends: dict[tuple[int, int], MixerSend] = {}
+        self._sends: dict[tuple[int, int], MixerSend] = {
+            (src, dst): MixerSend(source=src, target=dst, on=True, level=0.8)
+            for src, targets in STUDIO_ROUTES.items()
+            for dst in targets
+        }
         self._patterns = [PatternInfo(number=1, name="Pattern 1", beats=16.0)]
         self._clips = [PlaylistClip(track=1, start=0.0, length=16.0, pattern=1)]
         self._written: dict[tuple[int, int], Target] = {}  # Target is not hashable
 
     # -- reads
     def channel_names(self) -> list[Channel]:
-        return list(self._channels)
+        return state.described(self, list(self._channels))
 
     def live_channels(self) -> list[Channel]:
-        return list(self._channels)
+        return self.channel_names()
 
     def mixer_tracks(self):
-        names = {0: "Master", **{c.mixer_track: c.name for c in self._channels}, **STUDIO_SENDS}
+        names = {0: "Master", **STUDIO_BUSES, **{c.mixer_track: c.name for c in self._channels}, **STUDIO_SENDS}
         return [
             MixerTrack(
                 index=index, name=name, volume=self._volumes.get(index, 0.8),
@@ -308,16 +336,6 @@ class StudioFake(FakeSession):
 
     def playlist(self):
         return list(self._clips)
-
-    def scene_summary(self):
-        from fl_mcp.contract import SceneSummary
-
-        notes = sum(len(self.read_notes(t)) for t in self._written.values())
-        return SceneSummary(
-            tempo=self._tempo, key=None, note_count=notes, playlist={"clips": len(self._clips)},
-            channels=[{"index": c.index, "name": c.name} for c in self._channels],
-            summary=f"{len(self._channels)} channels, {notes} notes.",
-        )
 
     def scene_notes(self, channel=None, pattern=None):
         from fl_mcp.contract import SceneNote, SceneNotesResult

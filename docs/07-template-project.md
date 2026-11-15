@@ -15,7 +15,8 @@ What follows is what ships.
 - **One Bridge, after every other Master effect.**
   Render records the Bridge's own input, so effects after it on Master are not heard; two Bridges sharing one spool ledger misbehave.
   FL stores it as an effect tuple whose internal name (event 201) is `FL MCP Bridge`; FL loads whatever binary sits in `Plugins/Fruity/Effects/FL MCP Bridge/`.
-- **A file the engine can read.** Reads overlay the saved project (`channel_names`, `get_scene`, note state), parsed with flpkit.
+- **A file the engine can read.** Reads overlay the saved project (`channel_names`, `fl.scene()`, note state), parsed with flpkit.
+  `fl.scene()` also reads the patterns and the mixer live from FL, and leaves them out, saying so, when FL does not answer.
 - **Patterns that already exist.** The engine cannot create patterns; note writes target an existing pattern (default 1).
 - **Something on the playlist for a song-mode render** (an empty playlist refuses).
 - **A file FL's trial can open, when the box runs the trial.** A trial FL cannot reopen a project a trial saved ([35-platform-seams.md](35-platform-seams.md) "Trial mode").
@@ -42,7 +43,7 @@ It is now a palette of FL's stock instruments on a mixed bus layout, and it says
   Measured 2026-11-09 on trial FL 2026 for Windows: a kick into the SideChain track left a pad on the Sidechained Bus unducked, so the palette guide's "ducked by the kick" does not hold on this build ([note](research/sidechain-samples-live-2026-11-09.md)). The builder no longer says it (2026-11-10); the guide is part of the built file, so the packaged template drops it at its next build. Pumping is drawn live with `fl.automate` ([note](research/live-pumping-2026-11-10.md)).
   Added: a Drum Bus with Parametric EQ 2 and a Fruity Limiter compressing, a Reverb Send (Fruity Reeverb 2) fed by the melodic tracks, a Delay Send (Fruity Delay Bank) fed by Lead and Pluck, and the FL MCP Bridge in Master slot 10, the last effect.
 - The project's comments (FL's File > Project info) hold the palette guide: one line `<channel name>: <what it is for>` per channel, then how the song and the mixer work.
-  `get_scene` returns each channel's line as its `about` and the rest as `project_notes`, and `fl.channels` carries `about`, for this template or any project written the same way (`flp.project_guide`).
+  `fl.scene()` returns each channel's line as its `about` and the rest as `project_notes`, and `fl.channels` carries `about`, for this template or any project written the same way (`flp.project_guide`).
 
 ### How it is built
 

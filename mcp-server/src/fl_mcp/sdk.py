@@ -298,10 +298,10 @@ class FL:
     def scene(
         self, detail: Literal["summary", "notes"] = "summary", channel: str | int | None = None, pattern: int | None = None
     ) -> SceneSummary | SceneNotesResult:
-        """A digest of the song, as objects: detail="summary" for tempo, key, the
-        playlist and a digest per channel, with the whole digest as text in ``.summary``
-        (print(fl.scene().summary)) and each part in its own field; "notes" for every note
-        FL has (by channel and pattern), optionally of one channel and one pattern."""
+        """The whole project in one digest: print(fl.scene()) shows the project's notes,
+        tempo and key, the playlist, and a line per pattern, channel and mixer track in use
+        (a SceneSummary, whose fields hold the same parts as data). detail="notes" is every
+        note FL has (by channel and pattern), optionally of one channel and one pattern."""
         if detail == "summary":
             return self._session.scene_summary()
         if detail != "notes":

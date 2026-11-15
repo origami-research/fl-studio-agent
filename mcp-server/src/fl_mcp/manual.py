@@ -121,7 +121,7 @@ def sdk_index() -> str:
 # Facts about an FL session that the model cannot guess, and nothing about how to work:
 # the brief and the model own the musical choices and the workflow (owner, 2026-11-15).
 SESSION_FACTS = """Good to know:
-- fl.scene() is the project in one digest.
+- print(fl.scene()) shows the whole project in one digest: patterns, channels, playlist and mixer.
 - You hear by measuring: fl.meters() takes seconds, a render plays in real time."""
 
 NO_SESSION = "This kernel has no FL Studio session: every fl call is refused except fl.guide()."

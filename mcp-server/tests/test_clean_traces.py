@@ -86,6 +86,17 @@ def trial_fl() -> FakeControl:
             "state.snapshot": snapshot,
             "transport.getLoopMode": lambda args: 0,
             "patterns.getPatternLength": lambda args: 64,
+            # fl.scene reads the patterns and the mixer as fl.patterns and fl.mixer do.
+            "patterns.patternCount": lambda args: 1,
+            "patterns.patternMax": lambda args: 999,
+            "patterns.patternNumber": lambda args: 1,
+            "patterns.isPatternDefault": lambda args: args[0] != 1,
+            "patterns.getPatternName": lambda args: f"Pattern {args[0]}",
+            "state.mixer": lambda args: [
+                {"idx": i, "name": name, "vol": 0.8, "pan": 0.0, "muted": False, "solo": False,
+                 "effects": [], "sends": [[0, 0.8]] if i else []}
+                for i, name in enumerate(["Master", *TEMPLATE_CHANNELS])
+            ],
             "transport.setSongPos": lambda args: None,
             "transport.start": lambda args: state.update(playing=True),
             "transport.stop": lambda args: state.update(playing=False),
@@ -161,7 +172,7 @@ def run(box: Any, code: str) -> Any:
 
 def test_write_then_read_on_a_trial_fl_is_definitive_and_plain(box):
     # Run bdea5e90 steps 0-3: look, set the tempo, write the kick.
-    run(box, "print(fl.scene().summary)")
+    run(box, "print(fl.scene())")
     run(box, "print(fl.channels)")
     wrote = run(
         box,

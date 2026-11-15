@@ -147,20 +147,164 @@ class SceneNote(BaseModel):
 
 
 class SceneSummary(BaseModel):
-    """fl.scene()'s digest of the song, as fields: ``summary`` is the whole digest as text
-    to read (print(fl.scene().summary)); the other fields hold its parts as data (the
-    playlist, the automations, a dict per channel). It is an object, not a string: read a
-    part by its field (scene.automations) rather than slicing or splitting printed text."""
+    """fl.scene(): the whole project in one digest. print(fl.scene()) reads it: the
+    project's notes, tempo and key, the playlist, then a line per pattern (length, where
+    the playlist plays it, notes by channel), per channel (mixer track, volume, what its
+    notes span, what the project's notes say it is for) and per mixer track in use
+    (volume, effects, sends), then the automation. When FL does not answer, the patterns
+    and the mixer are None and one line says they were left out. It is an object, not a string: read a
+    part by its field (scene.channels, scene.mixer) rather than slicing printed text. An
+    object's detail is its own read: fl.track(channel).notes(), fl.playlist, fl.mixer."""
 
     tempo: float | None
     key: str | None
     key_confidence: str | None = None
     note_count: int
-    playlist: dict[str, Any]
-    automations: list[dict[str, Any]] = Field(default_factory=list)
     project_notes: str | None = None
+    playlist: dict[str, Any]
+    # None: FL did not answer the read (``unanswered`` says why), so the digest leaves it out.
+    patterns: list[dict[str, Any]] | None
     channels: list[dict[str, Any]]
-    summary: str
+    mixer: list[dict[str, Any]] | None
+    unanswered: str | None = None
+    automations: list[dict[str, Any]] = Field(default_factory=list)
+
+    def __str__(self) -> str:
+        tempo = "tempo unknown" if self.tempo is None else f"tempo {self.tempo:g}"
+        lines = [f"project notes: {self.project_notes}"] if self.project_notes else []
+        if self.note_count:
+            lines.append(f"{tempo}, key {self.key} (confidence: {self.key_confidence}), {self.note_count} notes")
+        else:
+            lines.append(f"{tempo}, no notes yet")
+        lines.append(_playlist_line(self.playlist))
+        left_out = [part for part, read in (("the patterns", self.patterns), ("the mixer", self.mixer)) if read is None]
+        if left_out:
+            lines.append(f"left out {' and '.join(left_out)}: {self.unanswered or 'FL Studio did not answer.'}")
+        several = len(self.playlist.get("arrangements", [])) > 1
+        if self.patterns:
+            lines.append("patterns (number 'name': length; beats the playlist plays it from; notes on channels):")
+            lines += [f"  {_pattern_line(p, several)}" for p in self.patterns]
+        if self.channels:
+            lines.append(
+                "channels (index name -> mixer track: volume; its notes in all its patterns together, "
+                "beats within a pattern; what the project's notes say it is for):"
+            )
+            lines += [f"  {_channel_line(c, several)}" for c in self.channels]
+        if self.mixer:
+            lines.append("mixer tracks in use (index name: volume; effects slot:plugin; sends track:level):")
+            lines += [f"  {_mixer_line(t)}" for t in self.mixer]
+        lines += [
+            f"automation: {a['name']} ({a['points']} pts over {a['span_beats']:g} beats, "
+            f"{a['values'][0]:.2f} -> {a['values'][1]:.2f})"
+            for a in self.automations
+        ]
+        return "\n".join(lines)
+
+    __repr__ = __str__
+
+
+def _level(value: float) -> str:
+    """A level as FL shows it to two places: FL reads 0.8 back as 0.7999999998137355."""
+    return f"{round(value, 2):g}"
+
+
+def _beats(values: list[float]) -> str:
+    return " ".join(f"{v:g}" for v in values)
+
+
+def _arrangement(number: int | None) -> str:
+    return "the clips added this session" if number is None else f"arrangement {number}"
+
+
+def _placed(placements: list[dict[str, Any]], several: bool) -> str:
+    """Start beats, named by arrangement only when the song has several."""
+    if not several:
+        return _beats(placements[0]["beats"])
+    return ", ".join(f"{_beats(p['beats'])} in {_arrangement(p['arrangement'])}" for p in placements)
+
+
+def _runs(numbers: list[int]) -> str:
+    """Sorted numbers with each run of three or more as one range: 1-16, or 0 2 5-9."""
+    runs: list[list[int]] = []
+    for n in numbers:
+        if runs and n == runs[-1][-1] + 1:
+            runs[-1].append(n)
+        else:
+            runs.append([n])
+    return " ".join(f"{r[0]}-{r[-1]}" if len(r) > 2 else " ".join(map(str, r)) for r in runs)
+
+
+def _count(n: int, noun: str) -> str:
+    return f"{n} {noun}" if n == 1 else f"{n} {noun}s"
+
+
+def _playlist_line(playlist: dict[str, Any]) -> str:
+    if not playlist.get("clip_count"):
+        return "playlist: empty (no clips placed on the arrangement)"
+    line = f"playlist: {_count(playlist['clip_count'], 'clip')}"
+    if playlist["tracks_used"]:
+        line += f" on {_count(playlist['tracks_used'], 'track')}"
+    if playlist.get("untracked"):
+        line += f" ({playlist['untracked']} on a track FL did not report)"
+    spans = playlist["arrangements"]
+    if len(spans) == 1:
+        start, end = spans[0]["span_beats"]
+        return f"{line}, beats {start:g}-{end:g}"
+    return f"{line}; " + "; ".join(
+        f"{_arrangement(a['arrangement'])}: {_count(a['clip_count'], 'clip')}, "
+        f"beats {a['span_beats'][0]:g}-{a['span_beats'][1]:g}"
+        for a in spans
+    )
+
+
+def _pattern_line(pattern: dict[str, Any], several: bool) -> str:
+    beats = "length unknown" if pattern["beats"] is None else f"{pattern['beats']:g} beats"
+    at = f"at {_placed(pattern['at'], several)}" if pattern["at"] else "not in the playlist"
+    notes = f"{_count(pattern['notes'], 'note')} on {_runs(pattern['channels'])}" if pattern["notes"] else "no notes"
+    name = "(name unknown)" if pattern["name"] is None else repr(pattern["name"])
+    return f"{pattern['number']} {name}: {beats}; {at}; {notes}"
+
+
+def _channel_line(channel: dict[str, Any], several: bool) -> str:
+    track = "" if channel.get("mixer_track") is None else f" -> {channel['mixer_track']}"
+    if channel["volume"] is None:
+        levels = "not in FL's channel list, levels unknown"
+    else:
+        levels = f"vol {_level(channel['volume'])}"
+        if round(channel["pan"], 2):
+            levels += f", pan {_level(channel['pan'])}"
+        if channel["muted"]:
+            levels += ", muted"
+    if channel["notes"]:
+        notes = (
+            f"{_count(channel['notes'], 'note')} in patterns {_runs(channel['patterns'])}, "
+            f"beats {channel['beats'][0]:g}-{channel['beats'][1]:g}, {'-'.join(channel['range'])}, "
+            f"pitches {' '.join(channel['pitch_classes'])}"
+        )
+        if channel.get("root_motion"):
+            notes += f", root motion {' '.join(channel['root_motion'])}"
+    else:
+        notes = "no notes"
+    if channel.get("clips_at"):
+        notes += f", playlist clips at {_placed(channel['clips_at'], several)}"
+    about = f"; {channel['about']}" if channel.get("about") else ""
+    return f"{channel['index']} {channel['name']}{track}: {levels}; {notes}{about}"
+
+
+def _mixer_line(track: dict[str, Any]) -> str:
+    parts = [f"vol {_level(track['volume'])}"]
+    if round(track["pan"], 2):
+        parts[0] += f", pan {_level(track['pan'])}"
+    parts[0] += "".join(f", {flag}" for flag in ("muted", "solo") if track[flag])
+    if track["effects"]:
+        parts.append("effects " + ", ".join(f"{e['slot']}:{e['plugin']}" for e in track["effects"]))
+    if track["sends"]:
+        parts.append(
+            "sends " + ", ".join(
+                f"{s['target']}" if s["level"] is None else f"{s['target']}:{_level(s['level'])}" for s in track["sends"]
+            )
+        )
+    return f"{track['index']} {track['name']}: {'; '.join(parts)}"
 
 
 class SceneNotesResult(BaseModel):

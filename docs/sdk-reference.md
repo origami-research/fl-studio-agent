@@ -14,10 +14,10 @@ part of its name.
 
 ### `fl.scene(detail: Literal['summary', 'notes'] = 'summary', channel: str | int | None = None, pattern: int | None = None) -> SceneSummary | SceneNotesResult`
 
-A digest of the song, as objects: detail="summary" for tempo, key, the
-playlist and a digest per channel, with the whole digest as text in ``.summary``
-(print(fl.scene().summary)) and each part in its own field; "notes" for every note
-FL has (by channel and pattern), optionally of one channel and one pattern.
+The whole project in one digest: print(fl.scene()) shows the project's notes,
+tempo and key, the playlist, and a line per pattern, channel and mixer track in use
+(a SceneSummary, whose fields hold the same parts as data). detail="notes" is every
+note FL has (by channel and pattern), optionally of one channel and one pattern.
 
 ### `fl.tempo: float`
 
@@ -358,12 +358,16 @@ worked example.
 
 ### `SceneSummary`
 
-fl.scene()'s digest of the song, as fields: ``summary`` is the whole digest as text
-to read (print(fl.scene().summary)); the other fields hold its parts as data (the
-playlist, the automations, a dict per channel). It is an object, not a string: read a
-part by its field (scene.automations) rather than slicing or splitting printed text.
+fl.scene(): the whole project in one digest. print(fl.scene()) reads it: the
+project's notes, tempo and key, the playlist, then a line per pattern (length, where
+the playlist plays it, notes by channel), per channel (mixer track, volume, what its
+notes span, what the project's notes say it is for) and per mixer track in use
+(volume, effects, sends), then the automation. When FL does not answer, the patterns
+and the mixer are None and one line says they were left out. It is an object, not a string: read a
+part by its field (scene.channels, scene.mixer) rather than slicing printed text. An
+object's detail is its own read: fl.track(channel).notes(), fl.playlist, fl.mixer.
 
-Fields: tempo: float | None, key: str | None, key_confidence: str | None, note_count: int, playlist: dict[str, Any], automations: list[dict[str, Any]], project_notes: str | None, channels: list[dict[str, Any]], summary: str.
+Fields: tempo: float | None, key: str | None, key_confidence: str | None, note_count: int, project_notes: str | None, playlist: dict[str, Any], patterns: list[dict[str, Any]] | None, channels: list[dict[str, Any]], mixer: list[dict[str, Any]] | None, unanswered: str | None, automations: list[dict[str, Any]].
 
 ### `SceneNotesResult`
 
@@ -380,10 +384,12 @@ Fields: index: int, name: str, volume: float, pan: float, muted: bool, solo: boo
 ### `PlaylistClip`
 
 One playlist clip: on ``track``, from ``start`` for ``length`` beats, playing
-``pattern`` or, for an audio clip, ``channel``. A clip added this session has track
-None when FL did not report it.
+``pattern`` or, for an audio or automation clip, ``channel``, in FL's arrangement
+number ``arrangement``. A clip added this session has track None when FL did not
+report it, and arrangement None: FL adds it to the arrangement it shows and does
+not say which.
 
-Fields: track: int | None, start: float, length: float, pattern: int | None, channel: int | None.
+Fields: track: int | None, start: float, length: float, pattern: int | None, channel: int | None, arrangement: int | None.
 
 ### `PatternInfo`
 

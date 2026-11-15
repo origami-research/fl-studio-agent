@@ -14,7 +14,9 @@ from flpkit import codec
 from session_fakes import FIVE_CHANNEL_PROJECT
 
 from fl_mcp import flp, scene
+from fl_mcp.contract import SceneSummary
 from fl_mcp.flp import EVENT_COMMENTS
+from fl_mcp.schemas import Channel
 
 NAMES = ["808 Kick", "808 Clap", "808 HiHat", "808 Snare", "FLEX Bass"]
 
@@ -65,15 +67,13 @@ def test_a_project_without_notes_has_an_empty_guide(tmp_path):
     assert flp.project_guide(project, NAMES) == flp.ProjectGuide()
 
 
-def test_get_scene_summary_carries_each_channels_about_and_the_notes():
-    out = scene.summarize(
-        FIVE_CHANNEL_PROJECT, [], {0: "808 Kick", 4: "FLEX Bass"}, tempo=120,
-        about={4: "a synth bass"}, project_notes="Song lives in Pattern 1.",
-    )
+def test_the_scene_carries_each_channels_about_and_the_notes():
+    out = SceneSummary.model_validate(scene.summarize(
+        [], [Channel(index=0, name="808 Kick"), Channel(index=4, name="FLEX Bass", about="a synth bass")],
+        tempo=120, project_notes="Song lives in Pattern 1.",
+    ))
 
-    assert out["project_notes"] == "Song lives in Pattern 1."
-    assert out["channels"] == [
-        {"index": 0, "name": "808 Kick", "notes": 0},
-        {"index": 4, "name": "FLEX Bass", "notes": 0, "about": "a synth bass"},
-    ]
-    assert out["summary"].splitlines()[0] == "project notes: Song lives in Pattern 1."
+    assert out.project_notes == "Song lives in Pattern 1."
+    assert [c.get("about") for c in out.channels] == [None, "a synth bass"]
+    assert str(out).splitlines()[0] == "project notes: Song lives in Pattern 1."
+    assert "  4 FLEX Bass: vol 0.78; no notes; a synth bass" in str(out)

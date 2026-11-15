@@ -19,6 +19,15 @@ already knows music theory; spending tool surface on it is pure overhead. The
 useful thing is *state the model cannot know*: what is actually in this project
 right now. That is the whole scope.
 
+One read of the whole project
+-----------------------------
+fl.scene() is the one way to see the whole project, so it is a line per channel,
+pattern and mixer track, never their contents: in the arena's runs of 2026-11 the
+first call printed the scene, fl.channels, fl.patterns and fl.mixer together,
+23,558 characters on the starting project, and the harness's 20,000-character
+cap on a tool result cut the end off. Each object's own read has the rest. tests/test_scene.py holds the
+printout of a busy project to a budget well under the cap.
+
 Key inference is offered with a confidence, never asserted. Modal, chromatic or
 sparse material fools every method, and a confidently wrong key is worse than
 no key at all.
@@ -27,12 +36,12 @@ no key at all.
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 from . import flp
-from .schemas import Note
+from .schemas import Channel, MixerTrack, Note, PatternInfo, PlaylistClip
 
 
 @dataclass(frozen=True)
@@ -121,7 +130,7 @@ class AutomationRow:
     to_value: float
 
 
-def _read_automations(project: Path) -> list[AutomationRow]:
+def read_automations(project: Path) -> list[AutomationRow]:
     """Load automation channels via the flp reader. The test seam."""
     proj = flp.read(Path(project))
     return [
@@ -151,31 +160,6 @@ BASS_REGISTER_CEILING = 55  # G3
 
 def note_name(midi: int) -> str:
     return f"{NOTE_NAMES[midi % 12]}{midi // 12 - 1}"
-
-
-@dataclass
-class ChannelSummary:
-    index: int
-    name: str
-    note_count: int
-    first_beat: float
-    last_beat: float
-    low: int
-    high: int
-    pitch_classes: list[int]
-    root_motion: list[str] = field(default_factory=list)
-
-    def describe(self) -> str:
-        pcs = " ".join(NOTE_NAMES[p] for p in self.pitch_classes)
-        text = (
-            f"{self.name} (ch{self.index}): {self.note_count} notes, "
-            f"beats {self.first_beat:g}-{self.last_beat:g}, "
-            f"range {note_name(self.low)}-{note_name(self.high)}, "
-            f"pitches {pcs}"
-        )
-        if self.root_motion:
-            text += f", root motion {' '.join(self.root_motion)}"
-        return text
 
 
 def _infer_key(weighted: dict[int, int]) -> tuple[str, str]:
@@ -241,166 +225,196 @@ def _root_motion(rows: list) -> list[str]:
     return roots
 
 
-MAX_PLAYLIST_CLIPS_LISTED = 24
-
-
-def _playlist_digest(clips: list[ClipRow]) -> tuple[dict[str, Any], str]:
-    """The arrangement as (data, summary line): every clip when few, an honest
-    digest when many - a full song holds hundreds of clips, and enumerating
-    them is the note-dump problem all over again."""
-    if not clips:
-        return {"clip_count": 0}, "playlist: empty (no clips placed on the arrangement)"
-    tracks = {c.track for c in clips}
-    start = min(c.start_beat for c in clips)
-    end = max(c.start_beat + c.length_beats for c in clips)
-    digest: dict[str, Any] = {
-        "clip_count": len(clips),
-        "tracks_used": len(tracks),
-        "span_beats": [start, end],
-    }
-    if len(clips) <= MAX_PLAYLIST_CLIPS_LISTED:
-        digest["clips"] = [
-            {
-                ("pattern" if c.pattern is not None else "channel"): (
-                    c.pattern if c.pattern is not None else c.channel
-                ),
-                "track": c.track,
-                "at": c.start_beat,
-                "beats": c.length_beats,
-                **({"arrangement": c.arrangement} if c.arrangement else {}),
-            }
-            for c in sorted(clips, key=lambda c: (c.arrangement, c.start_beat, c.track))
-        ]
-    line = (
-        f"playlist: {len(clips)} clips on {len(tracks)} tracks, "
-        f"beats {start:g}-{end:g}"
-    )
-    return digest, line
-
-
 def summarize(
-    project: Path,
     rows: Sequence[SceneRow],
-    channel_names: dict[int, str] | None = None,
+    channels: Sequence[Channel] = (),
+    *,
+    patterns: Sequence[PatternInfo] | None = (),
+    clips: Sequence[PlaylistClip] = (),
+    mixer: Sequence[MixerTrack] | None = (),
+    automations: Sequence[AutomationRow] = (),
     tempo: float | None = None,
-    about: dict[int, str] | None = None,
     project_notes: str | None = None,
+    unanswered: str | None = None,
 ) -> dict[str, Any]:
-    """Analyse ``rows`` (and ``project``'s playlist and automation) into
-    something a model can reason about directly. Named channels without
-    notes are listed too, so an empty channel reads as empty, not missing.
-    ``about`` and ``project_notes`` are what the project's own notes say
-    (flp.project_guide): what each channel is for, and the rest."""
-    names = channel_names or {}
-    about = about or {}
-
-    def described(index: int) -> dict[str, str]:
-        return {"about": about[index]} if index in about else {}
-
-    notes_section = {"project_notes": project_notes} if project_notes else {}
-    notes_line = [f"project notes: {project_notes}"] if project_notes else []
-    playlist, playlist_line = _playlist_digest(read_clips(project))
-    automations = _read_automations(project)
-    automation_section = (
-        {
-            "automations": [
-                {
-                    "channel": a.channel,
-                    "name": a.name,
-                    "points": a.points,
-                    "span_beats": a.span_beats,
-                    "values": [a.from_value, a.to_value],
-                }
-                for a in automations
-            ]
-        }
-        if automations
-        else {}
-    )
-    automation_lines = [
-        f"automation: {a.name} ({a.points} pts over {a.span_beats:g} beats, "
-        f"{a.from_value:.2f} -> {a.to_value:.2f})"
-        for a in automations
-    ]
-
-    by_channel: dict[int, list] = {}
+    """The whole project as SceneSummary's fields: one digest per channel, pattern and
+    mixer track in use, the playlist's extent and the automation, from what the session
+    read. A channel or pattern with no notes is listed too, so empty reads as empty, not
+    missing. The digest says where things are and what they hold; each object's own
+    read (fl.track(...).notes(), fl.playlist, fl.mixer) has the rest. ``patterns`` or
+    ``mixer`` None: FL did not answer that read (``unanswered`` says why), so the digest
+    leaves it out rather than guessing."""
+    by_channel: dict[int, list[SceneRow]] = {}
+    by_pattern: dict[int, list[SceneRow]] = {}
     for row in rows:
         by_channel.setdefault(row.channel, []).append(row)
-    empty = [
-        {"index": i, "name": name, "notes": 0, **described(i)} for i, name in sorted(names.items()) if i not in by_channel
-    ]
-    empty_line = (
-        ["no notes: " + ", ".join(f"{c['name']} (ch{c['index']})" for c in empty)] if empty else []
-    )
-
-    if not rows:
-        return {
-            "tempo": tempo,
-            "key": None,
-            "channels": empty,
-            "note_count": 0,
-            "playlist": playlist,
-            **automation_section,
-            **notes_section,
-            "summary": "\n".join(
-                [*notes_line, f"tempo {tempo:g}, no notes yet" if tempo else "no notes yet", *empty_line]
-            ),
-        }
+        by_pattern.setdefault(row.pattern, []).append(row)
+    listed = {c.index: c for c in channels}
+    clip_channels = {c.channel for c in clips if c.channel is not None}
+    unlisted = (by_channel.keys() | clip_channels) - listed.keys()
+    arrangements = _arrangements(clips)
 
     weighted: dict[int, int] = {}
     for row in rows:
         weighted[row.midi % 12] = weighted.get(row.midi % 12, 0) + 1
-    key, confidence = _infer_key(weighted)
-
-    summaries: list[ChannelSummary] = []
-    for index in sorted(by_channel):
-        group = by_channel[index]
-        low = min(r.midi for r in group)
-        summary = ChannelSummary(
-            index=index,
-            name=names.get(index, f"Channel {index}"),
-            note_count=len(group),
-            first_beat=min(r.start_beat for r in group),
-            last_beat=max(r.start_beat + r.length_beats for r in group),
-            low=low,
-            high=max(r.midi for r in group),
-            pitch_classes=sorted({r.midi % 12 for r in group}),
-            root_motion=_root_motion(group) if low < BASS_REGISTER_CEILING else [],
-        )
-        summaries.append(summary)
-
-    lines = [*notes_line]
-    if tempo:
-        lines.append(f"tempo {tempo:g}")
-    lines.append(f"key {key} (confidence: {confidence})")
-    lines += [s.describe() for s in summaries]
-    lines += empty_line
-    lines.append(playlist_line)
-    lines += automation_lines
+    key, confidence = _infer_key(weighted) if rows else (None, None)
 
     return {
         "tempo": tempo,
         "key": key,
         "key_confidence": confidence,
         "note_count": len(rows),
-        "playlist": playlist,
-        **automation_section,
-        **notes_section,
+        "project_notes": project_notes or None,
+        "playlist": _playlist(clips, arrangements),
+        "patterns": None if patterns is None else _patterns(patterns, by_pattern, clips, arrangements),
         "channels": [
+            _channel(listed[i], by_channel.get(i, []), clips, arrangements) for i in sorted(listed)
+        ] + [_unlisted_channel(i, by_channel.get(i, []), clips, arrangements) for i in sorted(unlisted)],
+        "mixer": None if mixer is None else [_mixer_track(track) for track in mixer],
+        "unanswered": unanswered if patterns is None or mixer is None else None,
+        "automations": [
             {
-                "index": s.index,
-                "name": s.name,
-                "notes": s.note_count,
-                "beats": [s.first_beat, s.last_beat],
-                "range": [note_name(s.low), note_name(s.high)],
-                "pitch_classes": [NOTE_NAMES[p] for p in s.pitch_classes],
-                **({"root_motion": s.root_motion} if s.root_motion else {}),
-                **described(s.index),
+                "channel": a.channel,
+                "name": a.name,
+                "points": a.points,
+                "span_beats": a.span_beats,
+                "values": [a.from_value, a.to_value],
             }
-            for s in summaries
-        ]
-        + empty,
-        "summary": "\n".join(lines),
+            for a in automations
+        ],
+    }
+
+
+def _arrangements(clips: Sequence[PlaylistClip]) -> list[int | None]:
+    """The song's arrangements: its one (every clip is in it, those added this session
+    too), or each of several, with None for the clips added this session, which FL adds
+    to the arrangement it shows without saying which."""
+    numbers: list[int | None] = sorted({c.arrangement for c in clips if c.arrangement is not None})
+    if len(numbers) <= 1:
+        return numbers or [None]
+    return numbers + ([None] if any(c.arrangement is None for c in clips) else [])
+
+
+def _in(clip: PlaylistClip, arrangement: int | None, arrangements: list[int | None]) -> bool:
+    return len(arrangements) == 1 or clip.arrangement == arrangement
+
+
+def _placements(clips: Sequence[PlaylistClip], arrangements: list[int | None]) -> list[dict[str, Any]]:
+    """Where ``clips`` start, in beats, by arrangement."""
+    placed = []
+    for arrangement in arrangements:
+        beats = sorted({c.start for c in clips if _in(c, arrangement, arrangements)})
+        if beats:
+            placed.append({"arrangement": arrangement, "beats": beats})
+    return placed
+
+
+def _playlist(clips: Sequence[PlaylistClip], arrangements: list[int | None]) -> dict[str, Any]:
+    """The arrangement's extent (each arrangement's, when there are several); where each
+    pattern plays is in its own digest."""
+    if not clips:
+        return {"clip_count": 0}
+    digest: dict[str, Any] = {
+        "clip_count": len(clips),
+        "tracks_used": len({c.track for c in clips if c.track is not None}),
+    }
+    untracked = sum(c.track is None for c in clips)
+    if untracked:
+        digest["untracked"] = untracked
+    digest["arrangements"] = [
+        {
+            "arrangement": arrangement,
+            "clip_count": len(group),
+            "span_beats": [min(c.start for c in group), max(c.start + c.length for c in group)],
+        }
+        for arrangement in arrangements
+        if (group := [c for c in clips if _in(c, arrangement, arrangements)])
+    ]
+    return digest
+
+
+def _patterns(
+    patterns: Sequence[PatternInfo],
+    by_pattern: Mapping[int, list[SceneRow]],
+    clips: Sequence[PlaylistClip],
+    arrangements: list[int | None],
+) -> list[dict[str, Any]]:
+    """Each pattern: its length, where the playlist plays it, and which channels hold how
+    many notes in it. A pattern FL did not list but notes or clips name is kept, unnamed."""
+    known = {p.number: p for p in patterns}
+    numbers = known.keys() | by_pattern.keys() | {c.pattern for c in clips if c.pattern is not None}
+    digests = []
+    for number in sorted(numbers):
+        info = known.get(number)
+        group = by_pattern.get(number, [])
+        digests.append({
+            "number": number,
+            "name": info.name if info else None,
+            "beats": info.beats if info else None,
+            "at": _placements([c for c in clips if c.pattern == number], arrangements),
+            "notes": len(group),
+            "channels": sorted({r.channel for r in group}),
+        })
+    return digests
+
+
+def _channel(
+    channel: Channel, group: list[SceneRow], clips: Sequence[PlaylistClip], arrangements: list[int | None]
+) -> dict[str, Any]:
+    """One channel: where it plays, its levels, and what its notes span (the lowest note
+    per bar too, for a bass-register part), with what the project's notes say it is for."""
+    digest: dict[str, Any] = {
+        "index": channel.index,
+        "name": channel.name,
+        "mixer_track": channel.mixer_track,
+        "volume": channel.volume,
+        "pan": channel.pan,
+        "muted": channel.muted,
+        **_notes(group),
+    }
+    placed = _placements([c for c in clips if c.channel == channel.index], arrangements)
+    if placed:
+        digest["clips_at"] = placed
+    if channel.about:
+        digest["about"] = channel.about
+    return digest
+
+
+def _unlisted_channel(
+    index: int, group: list[SceneRow], clips: Sequence[PlaylistClip], arrangements: list[int | None]
+) -> dict[str, Any]:
+    """A channel that notes or clips name but FL's channel list does not: its levels and
+    mixer track are unknown, so the digest says None rather than a default."""
+    digest = _channel(Channel(index=index, name=f"Channel {index}"), group, clips, arrangements)
+    return digest | {"mixer_track": None, "volume": None, "pan": None, "muted": None}
+
+
+def _notes(group: list[SceneRow]) -> dict[str, Any]:
+    if not group:
+        return {"notes": 0}
+    low = min(r.midi for r in group)
+    digest: dict[str, Any] = {
+        "notes": len(group),
+        "patterns": sorted({r.pattern for r in group}),
+        "beats": [min(r.start_beat for r in group), max(r.start_beat + r.length_beats for r in group)],
+        "range": [note_name(low), note_name(max(r.midi for r in group))],
+        "pitch_classes": [NOTE_NAMES[p] for p in sorted({r.midi % 12 for r in group})],
+    }
+    if low < BASS_REGISTER_CEILING:
+        digest["root_motion"] = _root_motion(group)
+    return digest
+
+
+def _mixer_track(track: MixerTrack) -> dict[str, Any]:
+    return {
+        "index": track.index,
+        "name": track.name,
+        "volume": track.volume,
+        "pan": track.pan,
+        "muted": track.muted,
+        "solo": track.solo,
+        "effects": [{"slot": e.slot, "plugin": e.plugin} for e in track.effects],
+        "sends": [{"target": s.target, "level": s.level} for s in track.sends if s.on],
     }
 
 

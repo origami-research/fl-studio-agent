@@ -17,6 +17,7 @@ import time
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from pathlib import Path
+from typing import Any
 
 from fl_mcp import errors, flp, scene
 from fl_mcp import sounds as stock_sounds
@@ -704,13 +705,17 @@ class FLSession:
         """The playlist's clips in the song FL opened, then the clips added this session
         (FL has no clip getter; an added clip's track is None when FL did not report it)."""
         opened = [
-            PlaylistClip(track=c.track, start=c.start_beat, length=c.length_beats, pattern=c.pattern, channel=c.channel)
+            PlaylistClip(
+                track=c.track, start=c.start_beat, length=c.length_beats, pattern=c.pattern, channel=c.channel,
+                arrangement=c.arrangement,
+            )
             for c in scene.read_clips(self._scene_project())
         ]
         known = {(c.pattern, c.start) for c in opened}
         added = [
             PlaylistClip(
-                track=c.track, start=(c.bar - 1) * controls.BEATS_PER_BAR, length=c.beats, pattern=c.pattern
+                track=c.track, start=(c.bar - 1) * controls.BEATS_PER_BAR, length=c.beats, pattern=c.pattern,
+                arrangement=None,
             )
             for c in self._placed
         ]
@@ -730,15 +735,38 @@ class FLSession:
             return None
 
     def scene_summary(self) -> SceneSummary:
-        """fl.scene()'s summary: tempo, inferred key, playlist and a digest per channel."""
+        """fl.scene(): the whole project in one digest, from the same reads as fl.channels,
+        fl.patterns, fl.playlist and fl.mixer, plus the notes and the automation. The
+        patterns and the mixer are only ever read live: when FL does not answer, the digest
+        leaves them out and says why rather than failing (channels and tempo fall back to
+        the saved song by themselves)."""
         project = self._scene_project()
-        rows = scene.rows_from_notes(self.all_notes())
         channels = self.channel_names()
-        names = {c.index: c.name for c in channels}
-        about = {c.index: c.about for c in channels if c.about}
-        notes = self.project_guide(list(names.values())).notes
+        unanswered: list[str] = []
+
+        def live(read: Callable[[], list[Any]]) -> list[Any] | None:
+            try:
+                return read()
+            except errors.ToolError as exc:
+                if exc.category != "control_plane_unavailable":
+                    raise
+                log.warning("the scene left out a live read FL did not answer: %s", exc.message)
+                unanswered.append(exc.message)
+                return None
+
+        patterns, mixer = live(self.patterns), live(self.mixer_tracks)
         return SceneSummary.model_validate(
-            scene.summarize(project, rows, names, tempo=self.tempo(), about=about, project_notes=notes)
+            scene.summarize(
+                scene.rows_from_notes(self.all_notes()),
+                channels,
+                patterns=patterns,
+                clips=self.playlist(),
+                mixer=mixer,
+                automations=scene.read_automations(project),
+                tempo=self.tempo(),
+                project_notes=self.project_guide([c.name for c in channels]).notes,
+                unanswered=unanswered[0] if unanswered else None,
+            )
         )
 
     def scene_notes(self, channel: int | None = None, pattern: int | None = None) -> SceneNotesResult:
