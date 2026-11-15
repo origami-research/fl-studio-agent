@@ -1,8 +1,49 @@
 name: ci
-on: [push, pull_request]
+# Pull requests, and main after each merge. A branch push alone does not run CI: the
+# pull request run covers it, so one commit is tested once, not twice.
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+# A new push to a pull request cancels its older, now superseded run; main runs every merge.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
+  # Which areas a pull request changed. On main every job runs.
+  changes:
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: read
+    outputs:
+      sandbox: ${{ github.event_name != 'pull_request' || steps.filter.outputs.sandbox == 'true' }}
+    steps:
+      - uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4.0.3
+        if: github.event_name == 'pull_request'
+        id: filter
+        with:
+          filters: |
+            sandbox:
+              - 'mcp-server/**'
+              - 'harness/**'
+              - 'pyproject.toml'
+              - '.github/scripts/**'
+              - '.github/workflows/ci.yml'
+
+  # The suite reads docs, contracts and the generated native header, so it runs on every
+  # change. It runs as interleaved shards in parallel jobs (--shard, tests/conftest.py);
+  # each shard runs its tests one at a time, as the whole suite did, so no timing changes.
   quality:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3]
     defaults:
       run:
         working-directory: mcp-server
@@ -18,15 +59,18 @@ jobs:
       # Lint gate: the code-taste rules in AGENTS.md / docs/19 are enforced here,
       # so a regression fails the PR instead of accumulating. Lint the whole tree
       # (src + tests) - test files are code too, and gating only src let lint rot
-      # accumulate there unseen.
-      - run: .venv/bin/ruff check ..
+      # accumulate there unseen. Once, in the first shard.
+      - if: matrix.shard == 1
+        run: .venv/bin/ruff check ..
       # The fake-FL suite runs anywhere; live e2e (FL_E2E) is local/nightly only.
-      - run: .venv/bin/python -m pytest -q --ignore=tests/e2e
+      - run: .venv/bin/python -m pytest -q --ignore=tests/e2e --shard ${{ matrix.shard }}/3 --durations=10
   # The macOS boundary (docs/38): real cells and shell commands under Seatbelt,
   # on a macOS runner. These tests start sandbox-exec, kernels and network
   # calls, so they run only where FLMCP_SANDBOX_TESTS=1 asks for them; a run
   # that skips any of them fails, so a silent skip cannot pass for evidence.
   macos-sandbox:
+    needs: changes
+    if: needs.changes.outputs.sandbox == 'true'
     runs-on: macos-15
     defaults:
       run:
@@ -50,6 +94,8 @@ jobs:
   # runner set up like a box (the metadata firewall rule from the box contract). Like
   # macos-sandbox, these run only where FLMCP_SANDBOX_TESTS=1 asks, and a skip fails the job.
   windows-sandbox:
+    needs: changes
+    if: needs.changes.outputs.sandbox == 'true'
     runs-on: windows-latest
     defaults:
       run:
@@ -93,3 +139,14 @@ jobs:
           name: fl-studio-agent-mcpb
           path: dist/fl-studio-agent.mcpb
           if-no-files-found: error
+
+  # The one check to require for merging: it passes when every job above passed or was
+  # skipped because its area did not change, and fails when any failed or was cancelled.
+  ci-ok:
+    if: always()
+    needs: [changes, quality, macos-sandbox, windows-sandbox, install-surfaces]
+    runs-on: ubuntu-latest
+    steps:
+      - if: contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')
+        run: exit 1
+      - run: echo "every job passed or did not need to run"

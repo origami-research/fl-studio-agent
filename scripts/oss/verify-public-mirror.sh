@@ -118,8 +118,22 @@ if ((private_terms_failed)); then
   record_failure "a private-content term remains in public HEAD"
 fi
 
+# The suite runs as two interleaved halves at once (--shard, mcp-server/tests/conftest.py):
+# each half runs its tests one at a time, and the two together are the whole suite.
 begin_check  # Python suite
-if ! (cd "$checkout" && uv sync && uv run --directory mcp-server pytest -q); then
+python_suite() {
+  # Sync both environments first, so the two runs below find them ready and never install at once.
+  uv sync && uv sync --directory mcp-server || return 1
+  uv run --directory mcp-server pytest -q --shard 1/2 >"$work_dir/suite-1.log" 2>&1 &
+  local first=$!
+  uv run --directory mcp-server pytest -q --shard 2/2 >"$work_dir/suite-2.log" 2>&1 &
+  local second=$! status=0
+  wait "$first" || status=1
+  wait "$second" || status=1
+  cat "$work_dir/suite-1.log" "$work_dir/suite-2.log"
+  return "$status"
+}
+if ! (cd "$checkout" && python_suite); then
   record_failure "Python sync and test suite failed"
 fi
 begin_check  # ruff

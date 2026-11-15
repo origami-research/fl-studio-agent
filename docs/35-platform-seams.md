@@ -16,7 +16,7 @@ The native Bridge stays one CMake source tree and emits a macOS dylib or Windows
 
 ## Windows build
 
-The `native` GitHub Actions workflow builds the DLL on `windows-latest` (and the universal dylib on `macos-latest`); each release publishes both.
+The `native` GitHub Actions workflow builds the DLL on `windows-2022`, which has Visual Studio 2022, and the universal dylib on `macos-latest`; each release publishes both.
 It fetches the proprietary SDK into ignored `native/sdk` with the same
 `native/scripts/fetch_sdk.sh` used locally, builds with the Visual Studio 2022
 x64 generator, runs the spool/mock-host tests and the Windows FPC-layout ABI

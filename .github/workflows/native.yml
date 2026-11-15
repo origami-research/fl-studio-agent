@@ -29,7 +29,10 @@ permissions:
 jobs:
   bridge:
     name: Build Windows Bridge
-    runs-on: windows-latest
+    # windows-2022 ships Visual Studio 2022 with the C++ tools. windows-latest became
+    # Windows Server 2025 with only Visual Studio 2026 (2026-06), and installing the 2022
+    # Build Tools there took ~3.5 of this job's ~4.5 minutes in every release.
+    runs-on: windows-2022
     steps:
       - uses: actions/checkout@v4
         with:
@@ -37,9 +40,6 @@ jobs:
       - name: Fetch the FL SDK into the ignored checkout directory
         shell: bash
         run: native/scripts/fetch_sdk.sh
-      - name: Install MSVC Build Tools
-        shell: pwsh
-        run: choco install visualstudio2022buildtools --package-parameters '--add Microsoft.VisualStudio.Workload.VCTools --includeRecommended --passive --locale en-US' --yes --no-progress
       - name: Configure MSVC build
         run: cmake -S native -B native/build-windows -G "Visual Studio 17 2022" -A x64
       - name: Build Bridge and mock-host tests

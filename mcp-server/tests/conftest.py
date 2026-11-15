@@ -17,6 +17,14 @@ from fl_mcp.fl import sound_packs, sound_search
 from fl_mcp.store import Store
 
 
+def pytest_addoption(parser):
+    parser.addoption(
+        "--shard",
+        metavar="K/N",
+        help="run only every N-th collected test starting at the K-th; CI runs the N shards as parallel jobs",
+    )
+
+
 def pytest_configure(config):
     config.addinivalue_line("markers", "platform(name): test requires one operating-system contract")
 
@@ -26,6 +34,15 @@ def pytest_collection_modifyitems(config, items):
         marker = item.get_closest_marker("platform")
         if marker and marker.args and marker.args[0] != sys.platform:
             item.add_marker(pytest.mark.skip(reason=f"requires platform {marker.args[0]!r}"))
+    shard = config.getoption("shard")
+    if shard:
+        # Interleaved, not by file: one file's slow kernel tests spread over every shard,
+        # and the N shards together are exactly the collected suite.
+        index, count = (int(part) for part in shard.split("/"))
+        if not 1 <= index <= count:
+            raise pytest.UsageError(f"--shard {shard}: K must be between 1 and N")
+        config.hook.pytest_deselected(items=[item for n, item in enumerate(items) if n % count != index - 1])
+        items[:] = [item for n, item in enumerate(items) if n % count == index - 1]
 
 
 @pytest.fixture(autouse=True)
