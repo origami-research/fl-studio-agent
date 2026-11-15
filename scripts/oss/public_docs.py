@@ -106,11 +106,16 @@ def scan(repo: str, revs: list[str], rules: list[re.Pattern[str]]) -> list[str]:
 
 
 def dead_links(root: pathlib.Path) -> list[str]:
+    """Relative links in the checkout's tracked Markdown that resolve to nothing.
+
+    Tracked files only: the verification syncs a .venv into the checkout, and a package's
+    copied NOTICE.md (dist-info/licenses) is not the public tree (2026-11-15)."""
     link = re.compile(r"\]\(([^)\s]+)(?:\s+\"[^\"]*\")?\)")
+    tracked = subprocess.run(
+        ["git", "-C", str(root), "ls-files", "-z", "--", "*.md"], check=True, capture_output=True
+    ).stdout.decode("utf-8", "surrogateescape").split("\0")
     found = []
-    for md in sorted(root.rglob("*.md")):
-        if ".git" in md.relative_to(root).parts:
-            continue
+    for md in sorted(root / name for name in tracked if name):
         for number, line in enumerate(md.read_text(encoding="utf-8", errors="replace").splitlines(), 1):
             for target in link.findall(line):
                 if re.match(r"^[a-zA-Z][a-zA-Z0-9+.-]*:", target) or target.startswith("#"):
