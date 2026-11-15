@@ -384,14 +384,17 @@ class ActionLog:
         return [_Entry(_checked(result))]
 
     def _render(self, kwargs: Mapping[str, Any], receipt: RenderReceipt) -> list[_Entry]:
-        return [_Entry(f"Rendered {self._rendered(receipt, bars=kwargs.get('bars'))}")]
+        silent = "; it recorded silence" if receipt.silent else ""
+        return [_Entry(f"Rendered {self._rendered(receipt, bars=kwargs.get('bars'))}{silent}")]
 
     def _stems(self, kwargs: Mapping[str, Any], receipt: StemsReceipt) -> list[_Entry]:
         if not receipt.stems:
             return []
         each = self._rendered(receipt.stems[0], bars=kwargs.get("bars"), alone=False)
         skipped = f"; skipped {_count(len(receipt.skipped), 'channel')} with no notes" if receipt.skipped else ""
-        return [_Entry(f"Rendered {_count(len(receipt.stems), 'stem')}, each {each}{skipped}")]
+        quiet = [self._name(c) for stem in receipt.stems if stem.silent for c in stem.solo]
+        silent = f"; silent: {', '.join(quiet)}" if quiet else ""
+        return [_Entry(f"Rendered {_count(len(receipt.stems), 'stem')}, each {each}{skipped}{silent}")]
 
     def _rendered(self, receipt: RenderReceipt, *, bars: int | None = None, alone: bool = True) -> str:
         """What a render played: "0:34", "0:08 of bars 9-10 of pattern 1, solo Bass"."""

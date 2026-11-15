@@ -25,7 +25,7 @@ from fl_mcp import budget, errors
 from fl_mcp.errors import WriteRejected
 from fl_mcp.schemas import AutomationPoint, AutomationTake, PatternInfo, PlacedClip
 
-from .controls import BEATS_PER_BAR, FL_STEPS_PER_BEAT, _live_int, _live_read, _live_write
+from .controls import BEATS_PER_BAR, FL_STEPS_PER_BEAT, _live_int, _live_read, _live_write, plugin_param_count
 
 if TYPE_CHECKING:
     from .facade import FLSession
@@ -420,10 +420,7 @@ def _plugin_param(
     session: FLSession, call: str, index: int, slot: int, param: int | str, owner: str
 ) -> tuple[int, str]:
     """A plugin parameter by index, exact name or unique part of its name (any case)."""
-    try:
-        count = int(_live_read(session, "plugins.getParamCount", [index, slot]) or 0)
-    except errors.ToolError as exc:
-        raise errors.invalid_argument(call, f"{owner} has no plugin parameters ({exc.message})") from exc
+    count = plugin_param_count(session, index, slot)
     if isinstance(param, int):
         if not 0 <= param < count:
             raise errors.invalid_argument(call, f"{owner} has parameters 0 to {count - 1}, not {param}")

@@ -17,6 +17,11 @@ from pathlib import Path
 
 import numpy as np
 
+# A recording with nothing above BS.1770's absolute gate is silence: integrated_lufs reads
+# no block louder than -70 LUFS there (and answers -120). A quiet but audible solo hat
+# measured -63.7 LUFS (showcase run, 2026-11-15); a note outside a sampled instrument's
+# keys records digital zero.
+SILENCE_LUFS = -70.0
 # Frames decoded per read.
 _BLOCK = 1 << 15
 _LOUDNESS_RATE = 48000

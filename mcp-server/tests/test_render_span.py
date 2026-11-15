@@ -235,9 +235,22 @@ def test_silence_is_refused_only_for_the_whole_mix(monkeypatch, tmp_path):
     session, _, _ = _rig(monkeypatch, tmp_path, arrangement(loop_mode=1, song_last_tick=64 * 96 - 1))
     monkeypatch.setattr(controls.audio, "integrated_lufs", lambda path: -120.0)
 
-    assert session.render_wav(tmp_path / "intro.wav", bars=1).span.beats == 4.0
+    intro = session.render_wav(tmp_path / "intro.wav", bars=1)
+    assert (intro.span.beats, intro.silent) == (4.0, True), "returned, saying it is silent"
     with pytest.raises(errors.ToolError, match="recorded silence"):
         session.render_wav(tmp_path / "mix.wav")
+
+
+@pytest.mark.parametrize(("lufs", "silent"), [(-120.0, True), (-70.0, True), (-63.7, False), (-14.0, False)])
+def test_a_render_says_whether_it_recorded_silence(monkeypatch, tmp_path, lufs, silent):
+    """A solo of a note outside a sampled instrument's keys records digital zero (live, the
+    template's Bass on MIDI 33, 2026-11-15), and the models' own analysis then divided by
+    zero (five showcase runs). Nothing above BS.1770's -70 LUFS gate is silence; a quiet
+    but audible solo hat (-63.7 LUFS in a showcase run) is not."""
+    session, _, _ = _rig(monkeypatch, tmp_path, arrangement(loop_mode=1, song_last_tick=64 * 96 - 1))
+    monkeypatch.setattr(controls.audio, "integrated_lufs", lambda path: lufs)
+
+    assert session.render_wav(tmp_path / "bass.wav", bars=1).silent is silent
 
 
 BUSY = errors.ToolError("control_plane_unavailable", "FL Studio is busy and did not answer in time.", "Retry.")

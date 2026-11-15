@@ -27,7 +27,7 @@ Write in phrases of 2 or 4 bars with rests between them, as a singer breathes.
 - Hat: `x.x.x.x.x.x.x.x.` in the chorus, sparser or absent in the verse.
 
 ## Bass
-Roots on the chord changes, its rhythm locked to the kick; Bass or Synth Bass, MIDI 28 to 50.
+Roots on the chord changes, its rhythm locked to the kick; Bass (MIDI 36 to 60, silent below 36) or Synth Bass (MIDI 28 to 50).
 
 ## Bar map (about 4 minutes at 120 BPM)
 - Intro 1-8: the hook's chords or the hook itself, thin.
@@ -59,7 +59,7 @@ fl.set_tempo(118)
 inv = lambda ch: ch[1:] + [ch[0] + 12]                       # first inversion: the top note moves less
 c, g, am, f = theory.chord("C4"), inv(theory.chord("G3")), theory.chord("A3", "minor"), inv(theory.chord("F3"))
 fl.track("Piano").write([Note(k, b * 4, 4, 0.5) for b, ch in enumerate([c, g, am, f]) for k in ch], mode="replace")
-fl.track("Bass").write([Note(r, b * 4 + s, 0.9, 0.75) for b, r in enumerate([36, 31, 33, 29]) for s in (0, 2, 2.5)], mode="replace")  # C G A F
+fl.track("Bass").write([Note(r, b * 4 + s, 0.9, 0.75) for b, r in enumerate([36, 43, 45, 41]) for s in (0, 2, 2.5)], mode="replace")  # C2 G2 A2 F2
 d = lambda steps, v=0.8: theory.drums(steps * 4, key=60, velocity=v)
 fl.track("Kick").write(d("x.......x.x....."), mode="replace")
 fl.track("Clap").write(d("....x.......x..."), mode="replace")

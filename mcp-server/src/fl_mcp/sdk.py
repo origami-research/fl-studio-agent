@@ -19,7 +19,15 @@ from pathlib import Path
 from typing import Annotated, Literal
 
 import numpy as np
-from pydantic import BaseModel, BeforeValidator, Field, TypeAdapter, ValidationError, model_validator
+from pydantic import (
+    BaseModel,
+    BeforeValidator,
+    Field,
+    PrivateAttr,
+    TypeAdapter,
+    ValidationError,
+    model_validator,
+)
 
 from fl_mcp import errors, guides
 from fl_mcp.audio import read_wav
@@ -36,6 +44,7 @@ from .schemas import (
     ChannelSound,
     CheckResult,
     LoadKind,
+    MixerEffect,
     MixerSend,
     MixerTrack,
     Note,
@@ -196,18 +205,22 @@ _WRITE_MODE = TypeAdapter(NoteWriteMode)
 
 
 class Render(type(Path())):
-    """A rendered WAV: its path (open it, read it with fl.read_wav, pass it to soundfile)
-    that also says what played: ``span`` (start_bar, beats, tempo_bpm, seconds) and the
-    channels ``solo``-ed and ``mute``-d for it."""
+    """A rendered WAV, which is itself the WAV's Path (r.name, str(r); open it, read it with
+    fl.read_wav, pass it to soundfile), and also says what played: ``span`` (start_bar,
+    beats, tempo_bpm, seconds), the channels ``solo``-ed and ``mute``-d for it, and
+    ``silent``: True when nothing in it reached -70 LUFS, as a note outside a sampled
+    instrument's keys or a channel with nothing to play records."""
 
     span: RenderSpan
     solo: tuple[int, ...]
     mute: tuple[int, ...]
+    silent: bool
 
     @classmethod
     def of(cls, receipt: RenderReceipt) -> Render:
         render = cls(receipt.path)
         render.span, render.solo, render.mute = receipt.span, tuple(receipt.solo), tuple(receipt.mute)
+        render.silent = receipt.silent
         return render
 
     def __repr__(self) -> str:
@@ -215,7 +228,8 @@ class Render(type(Path())):
         if span is None:  # a path derived from a render (.parent, / "x") is a plain path
             return super().__repr__()
         heard = "".join(f", {k}={v!r}" for k, v in (("solo", self.solo), ("mute", self.mute)) if v)
-        return f"Render({str(self)!r}, span={span!r}{heard})"
+        silent = ", silent=True" if self.silent else ""
+        return f"Render({str(self)!r}, span={span!r}{heard}{silent})"
 
 
 class Stems(list[Render]):
@@ -260,10 +274,13 @@ class FL:
     @property
     def mixer(self) -> list[MixerTrack]:
         """FL's mixer tracks in use now (0 is the master): index, name, volume, pan, muted,
-        solo, effects (slot and plugin) and sends (target and level). A track is in use
-        when a channel plays into it, it holds an effect, it was renamed, or a track in
-        use sends to it."""
-        return self._session.mixer_tracks()
+        solo, effects (each an Effect: slot, plugin, params() and set_param()) and sends
+        (target and level). A track is in use when a channel plays into it, it holds an
+        effect, it was renamed, or a track in use sends to it."""
+        return [
+            track.model_copy(update={"effects": [Effect._bound(self, e) for e in track.effects]})
+            for track in self._session.mixer_tracks()
+        ]
 
     @property
     def playlist(self) -> list[PlaylistClip]:
@@ -282,8 +299,9 @@ class FL:
         self, detail: Literal["summary", "notes"] = "summary", channel: str | int | None = None, pattern: int | None = None
     ) -> SceneSummary | SceneNotesResult:
         """A digest of the song, as objects: detail="summary" for tempo, key, the
-        playlist and a digest per channel; "notes" for every note FL has (by channel and
-        pattern), optionally of one channel and one pattern."""
+        playlist and a digest per channel, with the whole digest as text in ``.summary``
+        (print(fl.scene().summary)) and each part in its own field; "notes" for every note
+        FL has (by channel and pattern), optionally of one channel and one pattern."""
         if detail == "summary":
             return self._session.scene_summary()
         if detail != "notes":
@@ -437,12 +455,13 @@ class FL:
 
     def effect(self, mixer_track: int, slot: int) -> Effect:
         """The effect in ``slot`` (0..9) of mixer track ``mixer_track`` (0 is the master),
-        as fl.mixer and fl.load_preset(...).effect list them: ``params()`` and
+        the same Effect fl.mixer and fl.load_preset(...).effect give: ``params()`` and
         ``set_param()`` as for a track's instrument, with FL's own text for each value
-        ("-35.4dB", "20.0:1") in ``display``::
+        ("-35.4dB", "20.0:1") in ``display``. Raises when the slot holds no effect::
 
             fx = fl.load_preset("Pad", "Plugin presets/Effects/Fruity Reeverb 2/Default.fst").effect
-            fl.effect(fx.mixer_track, fx.slot).set_param("Decay time", 0.3)
+            fx.set_param("Decay time", 0.3)
+            fl.effect(fx.mixer_track, fx.slot).params("decay")
 
         A compressor's sidechain input is not among its parameters: FL sets it only in the
         plugin's window, so code cannot key one effect from another track; draw pumping as a
@@ -452,7 +471,14 @@ class FL:
             args = _EffectArgs(mixer_track=mixer_track, slot=slot)
         except ValidationError as exc:
             raise errors.invalid_argument("fl.effect", str(exc)) from None
-        return Effect(self, args.mixer_track, args.slot)
+        held = (e for t in self._session.mixer_tracks() if t.index == args.mixer_track for e in t.effects)
+        found = next((e for e in held if e.slot == args.slot), None)
+        if found is None:
+            where = "the master" if args.mixer_track == 0 else f"mixer track {args.mixer_track}"
+            raise errors.invalid_argument(
+                "fl.effect", f"{where} has no effect in slot {args.slot}; fl.mixer lists each track's effects"
+            )
+        return Effect._bound(self, found)
 
     def presets(self, channel: str | int) -> list[str]:
         """The names of a plugin channel's presets, in FL's order: a preset's index is
@@ -486,7 +512,9 @@ class FL:
         attack"); ``like`` is a reference to match instead or as well: a Sound, a library
         path, or an audio file you wrote (an fl.audition render, a chop). Each Sound has
         ``kind`` ("preset" or "sample"), ``name``, ``plugin``, ``path``, ``score`` (by
-        sound, higher is closer; None when it matched by name only) and measurements:
+        sound, higher is closer; None when it matched by name only: an effect preset,
+        which makes no sound alone, or a sound the index lacks; those come first, so
+        check for None before rounding or sorting by score) and measurements:
         ``seconds``, ``pitch`` (a sample's MIDI note, None when unpitched), ``decay``
         (seconds to 30 dB down), ``brightness`` (Hz), ``low`` and ``high`` (energy share
         below 150 Hz, above 5 kHz). A preset is measured by its preview, the default
@@ -557,14 +585,18 @@ class FL:
         or its path. An instrument preset puts its plugin on the channel, replacing
         the instrument (a sampler too), and FL names the channel after the preset:
         the way to change a channel's instrument. An effect preset adds its effect to
-        the next free slot of the mixer track the channel plays through (``.effect``).
+        the next free slot of the mixer track the channel plays through: ``.effect``, an
+        Effect whose params() and set_param() shape it.
         Returns the channel's name and instrument as FL now reports them.
         """
         try:
             args = _LoadArgs(kind="preset", sound=preset)
         except ValidationError as exc:
             raise errors.invalid_argument("fl.load_preset", str(exc)) from None
-        return self._session.load_sound(self.track(channel).channel, args.path, "preset")
+        loaded = self._session.load_sound(self.track(channel).channel, args.path, "preset")
+        if loaded.effect is None:
+            return loaded
+        return loaded.model_copy(update={"effect": Effect._bound(self, loaded.effect)})
 
     def audition(
         self, preset: Sound | str, notes: Sequence[NoteInput] | None = None, output: str | Path = "audition.wav"
@@ -601,7 +633,11 @@ class FL:
         the whole song). ``solo`` channels are the only ones heard; ``mute`` channels
         are silenced; channels as for fl.track. FL's channel mutes are put back after.
         Returns a Render: the WAV's Path, so fl.read_wav(r) reads it, with r.span saying
-        what played (start_bar, beats, tempo_bpm, seconds) and r.solo, r.mute.
+        what played (start_bar, beats, tempo_bpm, seconds), r.solo, r.mute, and r.silent
+        when it recorded silence (a solo or a range can: check before dividing by its
+        level). A sampled instrument is silent on keys outside its samples. The WAV is
+        written to the run's renders folder, not the working folder, so keep the Render:
+        fl.read_wav("mix.wav") does not find it.
 
         ``stems="channels"`` records each channel alone, ``stems="mixer"`` the channels
         on each mixer track together, one play each (so it takes that many times as
@@ -661,6 +697,9 @@ class FL:
 
         Returns each channel's name, ``sounded``, ``peak_dbfs`` and the ``reason``
         it was silent when FL shows one, plus ``summary``: one line to read.
+        ``peak_dbfs`` (and the master's) is None when nothing was heard there, and
+        ``sounded`` None for a channel playing straight into the master; check for None
+        before doing arithmetic on a reading.
         """
         return self._session.check(start_bar, bars)
 
@@ -757,7 +796,9 @@ class Track:
 
     def params(self, query: str | None = None, limit: int = 40) -> list[PluginParam]:
         """The instrument's parameters with their current values (normalized 0..1).
-        ``query`` filters by name substring; ``limit`` caps how many are listed."""
+        ``query`` filters by name substring; ``limit`` caps how many are listed. A sampler
+        channel has no instrument plugin, so no parameters, and raises: shape a sample with
+        Track.set_levels or an effect on its mixer track (fl.load_preset, then .effect)."""
         try:
             args = _ParamsArgs(query=query, limit=limit)
         except ValidationError as exc:
@@ -776,16 +817,18 @@ class Track:
         return self._fl._session.set_plugin_param(self.channel, args.param, args.value)
 
 
-class Effect:
-    """One mixer effect's parameters, live."""
+class Effect(MixerEffect):
+    """One mixer effect, live: where it is (``mixer_track``, ``slot``), its ``plugin``, and its
+    parameters through ``params()`` and ``set_param()``. fl.effect, fl.mixer's ``effects`` and
+    fl.load_preset(...).effect all give one."""
 
-    def __init__(self, fl: FL, mixer_track: int, slot: int) -> None:
-        self.mixer_track = mixer_track
-        self.slot = slot
-        self._fl = fl
+    _fl: FL = PrivateAttr()
 
-    def __repr__(self) -> str:
-        return f"Effect(mixer_track={self.mixer_track}, slot={self.slot})"
+    @classmethod
+    def _bound(cls, fl: FL, effect: MixerEffect) -> Effect:
+        bound = cls(mixer_track=effect.mixer_track, slot=effect.slot, plugin=effect.plugin)
+        bound._fl = fl
+        return bound
 
     def params(self, query: str | None = None, limit: int = 40) -> list[PluginParam]:
         """The effect's parameters with their current values (normalized 0..1).

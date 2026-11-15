@@ -50,6 +50,7 @@ from fl_mcp.template import template_path
 
 KICK = "Packs/Drums/Kicks/808 Kick.wav"
 COWBELL = "Packs/Drums/Percussion/808 Cowbell.wav"
+NUMBERED_HAT = "Packs/Drums/Kits/HQ Funk Kit/HH Closed HQ Funk #6.wav"
 SYTRUS = "Plugin presets/Generators/Sytrus/Arp/3o3ish 2.fst"
 OSC = "Plugin presets/Generators/3x Osc/Default.fst"
 REEVERB = "Plugin presets/Effects/Fruity Reeverb 2/Drum Room.fst"
@@ -66,7 +67,7 @@ def _no_real_spool(monkeypatch):
 def patches(tmp_path, monkeypatch):
     """A small copy of FL's Data/Patches layout."""
     root = tmp_path / "Patches"
-    for relative in (KICK, COWBELL, SYTRUS, OSC, REEVERB, VST):
+    for relative in (KICK, COWBELL, NUMBERED_HAT, SYTRUS, OSC, REEVERB, VST):
         (root / relative).parent.mkdir(parents=True, exist_ok=True)
         (root / relative).write_bytes(b"")
     monkeypatch.setattr(sounds_mod, "fl_patches_dir", lambda: root)
@@ -96,13 +97,19 @@ class FakeFL:
         self.ignores_loads = False
 
     def _unique(self, stem: str, channel: int) -> str:
+        """FL's channel name for a file: its stem, or when another channel has that name,
+        the stem without a " #n" it ends in, then " #2", " #3"... (live 2026-11-15:
+        "HH Closed HQ Funk #6.wav" loaded twice named the second "HH Closed HQ Funk")."""
         taken = {c["name"] for i, c in enumerate(self.channels) if i != channel}
         if stem not in taken:
             return stem
+        base = re.sub(r" #\d+$", "", stem)
+        if base not in taken:
+            return base
         number = 2
-        while f"{stem} #{number}" in taken:
+        while f"{base} #{number}" in taken:
             number += 1
-        return f"{stem} #{number}"
+        return f"{base} #{number}"
 
     def load(self, path: str) -> None:
         """FHD_LoadInChannel: the file goes to every selected channel."""
@@ -208,6 +215,19 @@ def test_fl_numbers_a_sample_name_another_channel_already_has(box):
     session, fl, _, _ = box
 
     assert session.load_sound(2, KICK, "sample").name == "808 Kick #2"
+
+
+def test_a_sample_named_with_a_number_reads_back_under_the_name_fl_gives_it(box):
+    """FL treats a " #6" the file name ends in as its own numbering: loaded into a second
+    channel, it shows the name without it. Refusing that as unconfirmed (a showcase run,
+    2026-11-15) reported a load that had landed as failed."""
+    session, fl, _, _ = box
+
+    assert session.load_sound(2, NUMBERED_HAT, "sample").name == "HH Closed HQ Funk #6"
+    assert session.load_sound(1, NUMBERED_HAT, "sample").name == "HH Closed HQ Funk"
+    with pytest.raises(WriteRejected, match="did not confirm the sample"):
+        fl.ignores_loads = True
+        session.load_sound(3, NUMBERED_HAT, "sample")
 
 
 def test_a_sample_into_a_plugin_channel_is_refused_before_fl_is_asked(box):

@@ -33,6 +33,9 @@ Raise it, cut the part covering it in that band, or move it to a register nobody
 ```python
 import numpy as np, pyloudnorm, scipy.signal, matplotlib.pyplot as plt
 
+# a few bars to listen to; in a session, the song you wrote
+fl.track("Kick").write(theory.drums("x...x...x...x..." * 4, key=60), mode="replace")
+fl.track("Bass").write([Note(r, b * 4, 3.5, 0.8) for b, r in enumerate([45, 41, 48, 43])], mode="replace")  # A2 F2 C3 G2
 wav = fl.render("mix.wav", bars=4)
 x, sr = fl.read_wav(wav)
 loudness = pyloudnorm.Meter(sr).integrated_loudness(x)

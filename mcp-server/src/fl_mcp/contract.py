@@ -147,6 +147,11 @@ class SceneNote(BaseModel):
 
 
 class SceneSummary(BaseModel):
+    """fl.scene()'s digest of the song, as fields: ``summary`` is the whole digest as text
+    to read (print(fl.scene().summary)); the other fields hold its parts as data (the
+    playlist, the automations, a dict per channel). It is an object, not a string: read a
+    part by its field (scene.automations) rather than slicing or splitting printed text."""
+
     tempo: float | None
     key: str | None
     key_confidence: str | None = None

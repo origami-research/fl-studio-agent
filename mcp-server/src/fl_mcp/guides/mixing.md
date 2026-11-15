@@ -46,6 +46,10 @@ Volume rides and filter sweeps belong to the arrangement: `fl.guide("arrangement
 
 ```python
 import pyloudnorm as pyln
+# two bars to balance; in a session, the song you wrote
+fl.track("Kick").write(theory.drums("x...x...x...x..." * 2, key=60), mode="replace")
+fl.track("Synth Bass").write([Note(33, b + 0.5, 0.4, 0.8) for b in range(8)], mode="replace")
+fl.track("Pad").write([Note(k, 0, 8, 0.6) for k in theory.chord("A3", "minor")], mode="replace")
 track = {c.name: c.mixer_track for c in fl.channels}
 send = {m.name: m.index for m in fl.mixer}
 for ch, volume in (("Kick", 0.8), ("Synth Bass", 0.62), ("Clap", 0.6), ("Hat", 0.45), ("Pad", 0.42)):

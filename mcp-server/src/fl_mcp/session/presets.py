@@ -20,15 +20,13 @@ from fl_mcp import errors
 from fl_mcp.errors import WriteRejected
 from fl_mcp.schemas import ChannelPreset
 
-from .controls import GENERATOR_SLOT, _live_int, _live_read, _live_write
+from .controls import GENERATOR_SLOT, _live_read, _live_write, plugin_read
 
 if TYPE_CHECKING:
     from .facade import FLSession
 
 # plugins.getName's flag for a preset name (FL's FPN_Preset).
 FPN_PRESET = 6
-# FL's answer to a plugins.* call on a channel that has no plugin (a sampler).
-PLUGIN_NOT_VALID = "plugin not valid"
 # How many presets an unmatched name lists back.
 LISTED_PRESETS = 20
 
@@ -38,12 +36,12 @@ def _channel_name(session: FLSession, channel: int) -> str:
 
 
 def _preset_count(session: FLSession, channel: int) -> int:
-    try:
-        return _live_int(session, "plugins.getPresetCount", [channel, GENERATOR_SLOT])
-    except errors.ToolError as exc:
-        if exc.category == "fl_api_error" and PLUGIN_NOT_VALID in exc.message.lower():
-            raise errors.not_a_plugin(_channel_name(session, channel)) from exc
-        raise
+    count = plugin_read(
+        session, "plugins.getPresetCount", [channel, GENERATOR_SLOT], channel=channel, slot=GENERATOR_SLOT, lacks="presets"
+    )
+    if isinstance(count, bool) or not isinstance(count, int):
+        raise errors.fl_api_error("plugins.getPresetCount", f"returned {count!r}, not an integer")
+    return count
 
 
 def presets(session: FLSession, channel: int) -> list[str]:

@@ -138,6 +138,19 @@ def test_a_render_says_which_bars_and_channels_it_heard():
     ]
 
 
+def test_a_render_that_recorded_silence_says_so():
+    """A silent solo or stem is an answer the model must see before it measures the WAV."""
+    span = RenderSpan(source="song", start_bar=9, beats=8.0, tempo_bpm=120.0, seconds=4.0)
+    actions = log()
+    actions.called("render_wav", {}, RenderReceipt(path=Path("b.wav"), span=span, solo=[4], silent=True))
+    stems = [RenderReceipt(path=Path(f"s{i}.wav"), span=span, solo=[i], silent=i == 1) for i in range(3)]
+    actions.called("render_stems", {}, StemsReceipt(stems=stems))
+    assert actions.sentences() == [
+        "Rendered 0:04 of bars 9-10, solo FLEX Bass; it recorded silence",
+        "Rendered 3 stems, each 0:04 of bars 9-10; silent: 808 Clap",
+    ]
+
+
 def _song_span(seconds: float) -> RenderSpan:
     return RenderSpan(source="song", beats=seconds * 2, tempo_bpm=120.0, seconds=seconds)
 

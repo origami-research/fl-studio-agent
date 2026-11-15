@@ -23,13 +23,14 @@ from pathlib import Path
 
 import numpy as np
 import pytest
-from sdk_fakes import DEFAULT_CHANNELS, FakeSession
+from sdk_fakes import DEFAULT_CHANNELS, FakeSession, StudioFake
 from session_fakes import RENDER_SPAN
 
 from fl_mcp import errors, sdk, theory
 from fl_mcp.schemas import ChannelLevels, MixerTrack, Note, Target, WriteResult
 from fl_mcp.sdk import ChannelNotFound, connect
 from fl_mcp.session.link import TRANSIENT_RETRY_DELAYS
+from fl_mcp.store import Store
 
 
 @pytest.fixture
@@ -405,10 +406,35 @@ def test_an_effect_outside_the_mixers_slots_is_refused_at_the_sdk_boundary(fl, t
 def test_an_effects_params_and_set_param_work_like_a_tracks(fl):
     limiter = fl.effect(17, 0)
 
+    assert (limiter.mixer_track, limiter.slot, limiter.plugin) == (17, 0, "Fruity Limiter")
     assert [param.name for param in limiter.params("res")] == ["Resonance"]
     assert limiter.set_param("Cutoff", 0.2).value == 0.2
     with pytest.raises(errors.ToolError, match=r"Effect\.set_param"):
         limiter.set_param(0, 2.0)
+
+
+def test_an_empty_effect_slot_is_refused_where_it_is_asked_for(fl):
+    with pytest.raises(errors.ToolError, match="mixer track 17 has no effect in slot 1") as raised:
+        fl.effect(17, 1)
+    assert raised.value.category == "invalid_argument"
+
+
+def test_every_effect_the_sdk_hands_out_is_live(tmp_path, monkeypatch):
+    """An effect is one kind of object wherever the model meets it: fl.mixer's effects and
+    fl.load_preset(...).effect have params() like fl.effect's. Four of 28 showcase runs
+    (2026-11-15) called .params() on a loaded effect and met a plain record instead."""
+    monkeypatch.chdir(tmp_path)
+    fl = connect(StudioFake(store=Store("effects", root=tmp_path / "store"), library=tmp_path / "library"))
+
+    loaded = fl.load_preset("Pad", "Plugin presets/Effects/Fruity Free Filter/LowPass 16000.fst")
+    assert isinstance(loaded.effect, sdk.Effect)
+    assert [p.name for p in loaded.effect.params("cut")] == ["Cutoff"]
+    assert loaded.effect.set_param("Cutoff", 0.3).value == 0.3
+
+    bass_eq = next(t for t in fl.mixer if t.index == 25).effects[0]
+    assert isinstance(bass_eq, sdk.Effect) and bass_eq.plugin == "Fruity Parametric EQ 2"
+    assert bass_eq.params(limit=1)
+    assert fl.effect(25, 0) == bass_eq
 
 
 def test_set_param_accepts_index_or_name_and_returns_readback(fl):

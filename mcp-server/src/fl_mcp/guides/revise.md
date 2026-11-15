@@ -27,6 +27,9 @@ def measure(x, sr):
             "low": spectrum[hz < 150].sum() / spectrum.sum(),
             "high": spectrum[hz > 5000].sum() / spectrum.sum()}
 
+# a few bars to listen to; in a session, the song you wrote
+fl.track("Kick").write(theory.drums("x...x...x...x..." * 4, key=60), mode="replace")
+fl.track("Bass").write([Note(r, b * 4, 3.5, 0.8) for b, r in enumerate([45, 41, 48, 43])], mode="replace")  # A2 F2 C3 G2
 # a reference from the user would be read with soundfile.read("uploads/reference.wav")
 target = {"lufs": -14.0, "low": 0.35, "high": 0.08}
 now = measure(*fl.read_wav(fl.render("pass1.wav", bars=4)))

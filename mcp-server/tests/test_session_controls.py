@@ -268,7 +268,7 @@ def test_live_render_resends_an_unacknowledged_stop_once_fl_answers(monkeypatch,
 
     session, control = _verified_live_render(monkeypatch, tmp_path, stop)
 
-    assert controls._live_render(session, tmp_path / "mix.wav", 1.0) == tmp_path / "mix.wav"
+    assert controls._live_render(session, tmp_path / "mix.wav", 1.0) == (tmp_path / "mix.wav", False)
     ops = [op for op, _ in control.calls]
     first = ops.index("transport.stop")
     assert ops.count("transport.stop") == 2 and "ping" in ops[first:ops.index("transport.stop", first + 1)]
@@ -283,7 +283,7 @@ def test_live_render_returns_verified_wav_when_stop_stays_unacknowledged(monkeyp
         lambda args: (_ for _ in ()).throw(errors.control_plane_unavailable("transport.stop", 8.0)),
     )
 
-    assert controls._live_render(session, tmp_path / "mix.wav", 1.0) == tmp_path / "mix.wav"
+    assert controls._live_render(session, tmp_path / "mix.wav", 1.0) == (tmp_path / "mix.wav", False)
     assert [op for op, _ in control.calls].count("transport.stop") == 2
     assert "FL may still be playing; the next transport command re-seats it" in caplog.text
 
@@ -316,7 +316,7 @@ def test_live_render_stops_any_leftover_capture_before_it_starts(monkeypatch, tm
     good_stop = session.transport.responses["capture_stop"]
     session.transport.responses["capture_stop"] = [SpoolResponse(id=1, ok=False, err="no active capture"), good_stop]
 
-    assert controls._live_render(session, tmp_path / "mix.wav", 1.0) == tmp_path / "mix.wav"
+    assert controls._live_render(session, tmp_path / "mix.wav", 1.0) == (tmp_path / "mix.wav", False)
     assert [op for op, _ in session.transport.sent] == ["capture_stop", "capture_start", "capture_stop"]
 
 
@@ -326,7 +326,7 @@ def test_a_clearing_stop_that_fails_does_not_block_the_render(monkeypatch, tmp_p
     session.transport.responses["capture_stop"] = [errors.note_plane_unavailable(1, 2.0), good_stop]
 
     with caplog.at_level("WARNING"):
-        assert controls._live_render(session, tmp_path / "mix.wav", 1.0) == tmp_path / "mix.wav"
+        assert controls._live_render(session, tmp_path / "mix.wav", 1.0) == (tmp_path / "mix.wav", False)
     assert "could not clear the Bridge's capture" in caplog.text
 
 
@@ -693,6 +693,49 @@ def test_a_slot_without_an_effect_is_refused_before_fl_is_asked_for_its_paramete
             call()
         assert raised.value.category == "invalid_argument"
     assert not [op for op, _ in control.calls if op.startswith("plugins.")]
+
+
+@pytest.mark.parametrize(
+    "call",
+    [
+        lambda s: s.plugin_params(3),
+        lambda s: s.set_plugin_param(3, "cutoff", 0.5),
+        lambda s: s.set_plugin_param(3, 0, 0.5),
+    ],
+)
+def test_a_sampler_channel_has_no_parameters_and_says_so(call):
+    """Live: FL answers every plugins.* call on a sampler with "Plugin not valid". Thirteen
+    of 28 showcase runs (2026-11-15) asked a drum sampler for its parameters and got that
+    as an FL failure; it is the channel's kind, so the error names it and what to use."""
+    control = FakeControl(
+        hello=HELLO,
+        handlers={
+            "channels.getChannelName": lambda args: "Hat",
+            "plugins.getParamCount": lambda args: ControlResponse(id=1, ok=False, err="RuntimeError: Plugin not valid"),
+        },
+    )
+    session, _ = make_session(control=control)
+
+    with pytest.raises(errors.ToolError) as raised:
+        call(session)
+    assert raised.value.category == "invalid_argument"
+    assert raised.value.message == "Hat is a sampler channel, not a plugin, so it has no parameters."
+    assert "set_levels" in raised.value.fix and "effect" in raised.value.fix
+    assert not [op for op, _ in control.calls if op == "plugins.setParamValue"]
+
+
+def test_an_effect_answering_plugin_not_valid_is_still_an_fl_failure():
+    """Only a channel's own instrument slot means "a sampler"; a mixer effect slot that
+    FL refuses is not reinterpreted."""
+    control = _effect_control()
+    control.handlers["plugins.getParamCount"] = lambda args: ControlResponse(
+        id=1, ok=False, err="RuntimeError: Plugin not valid"
+    )
+    session, _ = make_session(control=control)
+
+    with pytest.raises(errors.ToolError) as raised:
+        session.effect_params(17, 0)
+    assert raised.value.category == "fl_api_error"
 
 
 @pytest.mark.parametrize("index", [-1, 3, True, 1.5])

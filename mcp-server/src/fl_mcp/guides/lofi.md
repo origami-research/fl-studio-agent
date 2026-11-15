@@ -23,7 +23,7 @@ Voice chords in the middle register (around MIDI 48 to 72) and move each voice a
 
 ## Bass
 Round and simple: roots on the chord changes, a passing note into the next chord.
-Bass (electric bass guitar, MIDI 28 to 55) suits it; a soft sub works for chillhop.
+Bass (electric bass guitar, MIDI 36 to 60; it is silent below 36) suits it; a soft sub works for chillhop.
 No sub-heavy 808 unless the brief asks; lo-fi bass is warm, not booming.
 
 ## Sounds and texture
@@ -64,7 +64,7 @@ fl.track("Hat").write([n.model_copy(update={"velocity": (0.75, 0.45, 0.6, 0.5)[i
 nine = lambda root, q: [*theory.chord(root, q), theory.chord(root, q)[0] + 14]
 prog = [nine("Eb3", "maj7"), nine("C3", "min7"), theory.chord("Ab3", "maj7"), [56, 62, 67]]  # Bb13 as Ab D G, near the Abmaj7
 fl.track("E-Piano").write([Note(k, b * 4, 3.8, 0.55) for b, ch in enumerate(prog) for k in ch], mode="replace")
-fl.track("Bass").write([Note(r, b * 4, 3.5, 0.7) for b, r in enumerate([39, 36, 44, 34])], mode="replace")  # Eb2 C2 Ab2 Bb1
+fl.track("Bass").write([Note(r, b * 4, 3.5, 0.7) for b, r in enumerate([39, 36, 44, 46])], mode="replace")  # Eb2 C2 Ab2 Bb2
 r = fl.render("lofi.wav", bars=4)
 x, sr = fl.read_wav(r)
 print(fl.meters(bars=4).summary, round(pyln.Meter(sr).integrated_loudness(x), 1), "LUFS")

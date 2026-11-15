@@ -16,7 +16,7 @@ from fl_mcp import flp, make_agent_project
 from fl_mcp.session import preview
 from fl_mcp.template import template_path
 
-TEMPLATE_SHA256 = "87e4deb90b0b8f8516c40db6a353fa9c104340bb6621e005264be2e0078927d0"
+TEMPLATE_SHA256 = "8bbe5971574c6fa4c91cff62c0f5aa7614bdec37428d91a3283a18f5134c0307"
 
 # Record bytes 24-31 (the cut window) as FL itself saves a pattern clip that was never
 # resized: FL sizes such a clip from its pattern and regrows it whenever the pattern grows.

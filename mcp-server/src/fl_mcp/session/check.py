@@ -1,4 +1,4 @@
-"""fl.check(): live proof from FL itself that each channel makes sound.
+"""fl.meters(): live proof from FL itself that each channel makes sound.
 
 Plays a short span and polls FL's own mixer meters (``mixer.getTrackPeaks``,
 API v1: the current peak of a mixer track, 1.0 = 0 dBFS), keeping each track's

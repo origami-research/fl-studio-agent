@@ -26,7 +26,9 @@ def test_the_run_description_fits_claude_codes_limit():
 
 
 def _public(owner: object, prefix: str) -> set[str]:
-    return {f"{prefix}.{name}" for name in vars(owner) if not name.startswith("_")}
+    """The members the class defines for the model; pydantic's own (``model_config``, which it
+    writes into a model's class) are its API, not the SDK's."""
+    return {f"{prefix}.{name}" for name in vars(owner) if not name.startswith(("_", "model_"))}
 
 
 def test_with_no_fl_session_run_describes_the_kernel_and_the_guides_only():

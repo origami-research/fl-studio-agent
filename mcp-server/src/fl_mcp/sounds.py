@@ -237,7 +237,13 @@ def resolve(lib: Library, sound: str, kind: LoadKind) -> Path:
     tops, suffixes = ((PRESETS_DIR,), PRESET_SUFFIXES) if kind == "preset" else (SAMPLE_TOPS, SAMPLE_SUFFIXES)
     if not relative.parts or relative.parts[0] not in tops or relative.suffix.lower() not in suffixes:
         mine = " or a file you wrote" if kind == "sample" else ""
-        raise ValueError(f"{sound!r} is not a {kind} in the library{mine}; use one from fl.sounds().{did_you_mean(lib, sound, kind)}")
+        # A render lands in the run's renders folder, not the working folder: a bare "mix.wav"
+        # after fl.render("mix.wav") is not there (two showcase runs, 2026-11-15).
+        render = " A render is read through the Render fl.render returned." if kind == "sample" else ""
+        raise ValueError(
+            f"{sound!r} is not a {kind} in the library{mine}; use one from fl.sounds().{render}"
+            f"{did_you_mean(lib, sound, kind)}"
+        )
     root = lib.root(relative.parts[0])
     path = root.joinpath(*relative.parts)
     # A part like "D:x.wav" makes a Windows path leave the folder; only a path inside it is a library sound.

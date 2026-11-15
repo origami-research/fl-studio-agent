@@ -24,7 +24,7 @@ Two to four chords, one per bar or two, played as held pads or short off-beat st
 
 ## Bass
 Keep the bass off the kick: notes on the off-beats or in the gaps between kicks, short, mostly roots with octave and fifth moves.
-Play it in the sub-and-bass range, roughly MIDI 33 to 48, on Synth Bass (house) or Bass (warmer, deep house).
+Play it in the sub-and-bass range, roughly MIDI 33 to 48, on Synth Bass (house), or on Bass from MIDI 36 up (warmer, deep house; it is silent below 36).
 Duck it and the pad under the kick with `fl.guide("sidechain")`.
 
 ## Sounds to search

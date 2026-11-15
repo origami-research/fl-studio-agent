@@ -151,6 +151,9 @@ class RenderReceipt(BaseModel):
     span: RenderSpan
     solo: list[int] = Field(default_factory=list)
     mute: list[int] = Field(default_factory=list)
+    # Nothing in it reached the -70 LUFS gate (audio.SILENCE_LUFS): what a range, a solo or
+    # a stem may record, and the model should know before measuring it.
+    silent: bool = False
 
 
 class StemsReceipt(BaseModel):
@@ -184,7 +187,7 @@ CHECK_MAX_BARS = 8
 
 
 class ChannelCheck(BaseModel):
-    """Whether one channel made sound during fl.check(), from FL's mixer meters.
+    """Whether one channel made sound during fl.meters(), from FL's mixer meters.
 
     ``sounded`` is None only when the channel plays straight into the master,
     where its sound cannot be told apart from the rest of the mix.
@@ -202,7 +205,7 @@ class ChannelCheck(BaseModel):
 
 
 class CheckResult(BaseModel):
-    """What fl.check() heard: each channel, the master's peak, and a summary line."""
+    """What fl.meters() heard: each channel, the master's peak, and a summary line."""
 
     start_bar: int
     bars: int

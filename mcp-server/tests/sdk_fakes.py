@@ -24,7 +24,9 @@ from fl_mcp.schemas import (
     ChannelLevels,
     CheckResult,
     ControlResponse,
+    MixerEffect,
     MixerSend,
+    MixerTrack,
     Note,
     NoteWriteMode,
     PluginParam,
@@ -77,6 +79,11 @@ class FakeSession(FLSession):
         self._next_id = 0
         self.level_calls: list[tuple[int, float | None, float | None, int | None]] = []
         self.renders: list[dict] = []
+        # One effect on the mixer: a limiter in slot 0 of track 17.
+        self._effects: dict[int, list[MixerEffect]] = {17: [MixerEffect(mixer_track=17, slot=0, plugin="Fruity Limiter")]}
+
+    def mixer_tracks(self) -> list[MixerTrack]:
+        return [MixerTrack(index=i, name=f"Insert {i}", effects=list(fx)) for i, fx in sorted(self._effects.items())]
 
     def write_notes(self, target: Target, notes: list[Note], mode: NoteWriteMode) -> WriteResult:
         if self.fail_next_write is not None:
@@ -227,7 +234,15 @@ STUDIO_CHANNELS = (
     ("Sampler 1", 20), ("Sampler 2", 21), ("Sampler 3", 22), ("Audition", 34),
 )
 # The template's send returns (scripts/build_session_template.py), which the mixing guide finds by name.
-STUDIO_SENDS = {113: "Reverb Send", 114: "Delay Send"}
+STUDIO_SENDS = {113: "Reverb Send", 114: "Delay Send", 116: "Drum Bus"}
+# The effects the template puts on its mixer tracks (build_session_template.py EFFECTS), by slot.
+STUDIO_EFFECTS = {
+    11: ("Fruity Fast Dist", "Fruity Soft Clipper"),
+    25: ("Fruity Parametric EQ 2",),
+    113: ("Fruity Reeverb 2",),
+    114: ("Fruity Delay Bank",),
+    116: ("Fruity Parametric EQ 2", "Fruity Limiter"),
+}
 STUDIO_RATE = 44_100
 
 
@@ -261,7 +276,10 @@ class StudioFake(FakeSession):
         super().__init__(store=store, channels=channels)
         self.library = library
         self._volumes = {0: 0.8, **{c.mixer_track: 0.8 for c in channels}, **dict.fromkeys(STUDIO_SENDS, 0.8)}
-        self._effects: dict[int, list] = {}
+        self._effects: dict[int, list] = {
+            track: [MixerEffect(mixer_track=track, slot=slot, plugin=plugin) for slot, plugin in enumerate(plugins)]
+            for track, plugins in STUDIO_EFFECTS.items()
+        }
         self._sends: dict[tuple[int, int], MixerSend] = {}
         self._patterns = [PatternInfo(number=1, name="Pattern 1", beats=16.0)]
         self._clips = [PlaylistClip(track=1, start=0.0, length=16.0, pattern=1)]
@@ -275,8 +293,6 @@ class StudioFake(FakeSession):
         return list(self._channels)
 
     def mixer_tracks(self):
-        from fl_mcp.schemas import MixerTrack
-
         names = {0: "Master", **{c.mixer_track: c.name for c in self._channels}, **STUDIO_SENDS}
         return [
             MixerTrack(
@@ -417,7 +433,7 @@ class StudioFake(FakeSession):
         )
 
     def load_sound(self, channel, sound, kind):
-        from fl_mcp.schemas import ChannelSound, MixerEffect
+        from fl_mcp.schemas import ChannelSound
 
         name = Path(sound).stem
         if kind == "preset" and "/Effects/" in sound:

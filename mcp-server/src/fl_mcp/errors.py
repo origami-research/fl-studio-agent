@@ -213,13 +213,16 @@ def invalid_argument(call: str, detail: str) -> ToolError:
     )
 
 
-def not_a_plugin(channel: str) -> ToolError:
-    """A sampler channel answers FL's plugin calls with "Plugin not valid" (live, API 45)."""
+def not_a_plugin(channel: str, lacks: str) -> ToolError:
+    """A sampler channel answers FL's plugin calls with "Plugin not valid" (live, API 45).
+    ``lacks`` names what the call wanted: "presets", "parameters"."""
     return ToolError(
         "invalid_argument",
-        f"{channel} is a sampler channel, not a plugin, so it has no presets.",
-        "Change a sampler's sound with fl.load_sample, or make it a plugin channel with fl.load_preset "
-        "and an instrument preset from fl.sounds(kind='preset').",
+        f"{channel} is a sampler channel, not a plugin, so it has no {lacks}.",
+        "A sampler's own controls are Track.set_levels (volume, pan, pitch). Change its sample with "
+        "fl.load_sample; shape it with an effect preset from fl.sounds(kind='preset'), which fl.load_preset "
+        "adds to its mixer track (.effect.params()); or make it a plugin channel with fl.load_preset and an "
+        "instrument preset.",
     )
 
 

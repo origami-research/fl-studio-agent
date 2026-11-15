@@ -149,9 +149,16 @@ def _send_load(session: FLSession, path: Path, channel: int) -> None:
     session.breaker.record_success()
 
 
+# The " #2" FL numbers a channel name with when another channel has that name.
+_NUMBERED = re.compile(r" #\d+$")
+
+
 def _named_after(name: str, stem: str) -> bool:
-    """FL names a channel after what it loaded, numbering it when another channel has that name."""
-    return re.fullmatch(re.escape(stem) + r"( #\d+)?", name) is not None
+    """FL names a channel after what it loaded, numbered " #n" when another channel has
+    that name. FL reads a number the file name already ends in as its own: "HH Closed HQ
+    Funk #6.wav" loaded into a second channel shows "HH Closed HQ Funk" (box run
+    2026-11-15), so the names are compared without it."""
+    return _NUMBERED.sub("", name) == _NUMBERED.sub("", stem)
 
 
 def _same_plugin(fl_name: str | None, folder: str | None) -> bool:

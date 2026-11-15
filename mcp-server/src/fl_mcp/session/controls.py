@@ -76,6 +76,8 @@ log = logging.getLogger(__name__)
 # FL's plugins.* convention for "the channel's own generator, not a mixer
 # effect slot" (the slot argument every call here passes).
 GENERATOR_SLOT = -1
+# FL's answer to a plugins.* call on a channel that has no plugin (a sampler).
+PLUGIN_NOT_VALID = "plugin not valid"
 # FL's PIM_None: a set applies the value at once, with no controller pickup.
 PICKUP_NONE = 0
 # getChannelPitch / setChannelPitch's mode for whole semitones.
@@ -331,12 +333,13 @@ def _capture_start(session: FLSession, seconds: float, timeout: float) -> SpoolR
 
 def _live_render(
     session: FLSession, output: Path, seconds: float, *, start_tick: int = 0, refuse_silence: bool = True
-) -> Path:
-    """Play the live arrangement from ``start_tick`` while the master Bridge records it.
+) -> tuple[Path, bool]:
+    """Play the live arrangement from ``start_tick`` while the master Bridge records it;
+    return the WAV and whether it recorded silence (audio.SILENCE_LUFS).
 
     The Bridge starts recording when FL starts playing, wherever it plays from. A
     silent recording of the whole mix means FL's audio path is broken, so it is
-    refused; a range or a soloed render may be silent and is returned as it is.
+    refused; a range or a soloed render may be silent, and is returned saying so.
     """
     response_timeout = min(10.0, max(2.0, seconds / 2.0 + 2.0))
     playback.confirm_answering(session, "render_failed", "the render")
@@ -354,7 +357,7 @@ def _live_render(
         # Position is a controller operation, so it remains on the control wire
         # rather than reaching from the Bridge into FL on a mixer callback.
         # The song's start in FL's default mode (a fraction of the song), as every render
-        # until 2026-11-03; any other bar in absolute ticks, as fl.check positions.
+        # until 2026-11-03; any other bar in absolute ticks, as fl.meters positions.
         position = [0] if start_tick == 0 else [start_tick, FL_SONGLENGTH_ABSTICKS]
         positioned = session.link.request("transport.setSongPos", position, timeout=LIVE_ANSWER_SECONDS)
         if not positioned.ok:
@@ -455,7 +458,7 @@ def _live_render(
         )
     output.parent.mkdir(parents=True, exist_ok=True)
     shutil.copyfile(captured, output)
-    return output
+    return output, lufs <= audio.SILENCE_LUFS
 
 
 def _prepare_render(session: FLSession, start_bar: int, bars: int | None) -> tuple[RenderSpan, RenderSpan, int]:
@@ -497,14 +500,14 @@ def render_wav(
     budget.require(_play_seconds(span), "This render", RENDER_SPLIT)
     everything = span.beats == whole.beats and not solo and not mute
     with audition(session, solo, mute):
-        path = _live_render(
+        path, silent = _live_render(
             session,
             output.expanduser().resolve(),
             span.seconds + RENDER_TAIL_SECONDS,
             start_tick=start_tick,
             refuse_silence=everything,
         )
-    return RenderReceipt(path=path, span=span, solo=sorted(solo), mute=sorted(mute))
+    return RenderReceipt(path=path, span=span, solo=sorted(solo), mute=sorted(mute), silent=silent)
 
 
 def render_stems(
@@ -583,14 +586,14 @@ def render_stems(
     with Rack(session) as mutes:
         for label, solo in groups:
             mutes.hear(solo)
-            path = _live_render(
+            path, silent = _live_render(
                 session,
                 output.expanduser().resolve().with_name(f"{output.stem}-{_label(label)}.wav"),
                 span.seconds + RENDER_TAIL_SECONDS,
                 start_tick=start_tick,
                 refuse_silence=False,
             )
-            receipts.append(RenderReceipt(path=path, span=span, solo=list(solo)))
+            receipts.append(RenderReceipt(path=path, span=span, solo=list(solo), silent=silent))
     return StemsReceipt(stems=receipts, skipped=skipped)
 
 
@@ -736,8 +739,25 @@ def set_channel_levels(
 # vendor blob). So this surface is live-or-error, never a file fallback.
 
 
-def _plugin_param_count(session: FLSession, index: int, slot: int) -> int:
-    return int(_live_read(session, "plugins.getParamCount", [index, slot]) or 0)
+def plugin_read(session: FLSession, op: str, args: list, *, channel: int, slot: int, lacks: str) -> object:
+    """One plugins.* read of a channel's instrument (``slot`` GENERATOR_SLOT) or of a mixer
+    effect. A sampler channel has no instrument plugin, and FL answers every plugins.* call
+    on it with "Plugin not valid" (live, API 45): that is errors.not_a_plugin, naming what
+    the caller wanted (``lacks``), not an FL failure."""
+    try:
+        return _live_read(session, op, args)
+    except errors.ToolError as exc:
+        if slot == GENERATOR_SLOT and exc.category == "fl_api_error" and PLUGIN_NOT_VALID in exc.message.lower():
+            name = str(_live_read(session, "channels.getChannelName", [channel]))
+            raise errors.not_a_plugin(name, lacks) from exc
+        raise
+
+
+def plugin_param_count(session: FLSession, index: int, slot: int) -> int:
+    """How many parameters the plugin has: a channel's instrument, or with ``slot`` the
+    effect in that slot of mixer track ``index``; a sampler channel raises not_a_plugin."""
+    count = plugin_read(session, "plugins.getParamCount", [index, slot], channel=index, slot=slot, lacks="parameters")
+    return int(count or 0)
 
 
 def _plugin_model(session: FLSession, index: int, slot: int) -> PluginParamModel | None:
@@ -855,7 +875,7 @@ def plugin_params(
     ``query`` filters by case-insensitive substring; ``limit`` bounds the
     result because big synths are BIG (Sytrus: 597 params) and every name
     is a wire round trip."""
-    count = _plugin_param_count(session, channel, slot)
+    count = plugin_param_count(session, channel, slot)
     model = _plugin_model(session, channel, slot)
     out: list[PluginParam] = []
     for index in range(count):
@@ -898,7 +918,7 @@ def set_plugin_param(
                 f"plugin param index must be a non-negative integer returned by {listing}, got {param!r}"
             )
         index = param
-        count = _plugin_param_count(session, channel, slot)
+        count = plugin_param_count(session, channel, slot)
         if not 0 <= index < count:
             raise ValueError(
                 f"plugin param index {index} is outside this plugin's 0..{count - 1} range; "
