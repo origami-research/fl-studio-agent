@@ -194,7 +194,7 @@ def build_version() -> str:
 
 def build_contract() -> dict[str, Any]:
     """Build the one machine-readable engine contract."""
-    from fl_mcp.server import tool_definitions
+    from fl_mcp.server import run_description, server_instructions, tool_definitions
 
     return {
         # The checked-in contract must survive a merge unchanged. Runtime
@@ -213,6 +213,11 @@ def build_contract() -> dict[str, Any]:
         "server": {
             "workspace_only_flag": WORKSPACE_ONLY_FLAG,
             "description": "serverInfo.description ends with '; confined=true' or '; confined=false'",
+            "instructions": server_instructions(with_fl=True),
+            "workspace_only": {
+                "instructions": server_instructions(with_fl=False),
+                "run_description": run_description(with_fl=False),
+            },
         },
         "errors": {
             "categories": list(_error_categories()),

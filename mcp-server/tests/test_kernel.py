@@ -785,3 +785,18 @@ def test_a_kernel_without_an_fl_session_runs_python_and_refuses_fl(workspace):
         assert "not connected to FL Studio" in (refused.traceback or "")
     finally:
         kernel.close()
+
+
+def test_a_kernel_without_an_fl_session_still_opens_the_guides(workspace):
+    """Computer-use runs (--workspace-only) have no FL session, and their description
+    and the harness point to fl.guide() (fl-studio-cua#27): it reads only package files."""
+    kernel = _host(None, workspace, run_budget=10.0, interrupt_grace=1.0)
+    try:
+        listed = kernel.run("fl.guide()")
+        assert listed.outcome == "ok", listed.traceback
+        assert "sidechain" in listed.stdout and "listening" in listed.stdout
+        one = kernel.run('fl.guide("sidechain")')
+        assert one.outcome == "ok", one.traceback
+        assert "fl.automate" in one.stdout
+    finally:
+        kernel.close()

@@ -21,7 +21,7 @@ from typing import Annotated, Literal
 import numpy as np
 from pydantic import BaseModel, BeforeValidator, Field, TypeAdapter, ValidationError, model_validator
 
-from fl_mcp import errors
+from fl_mcp import errors, guides
 from fl_mcp.audio import read_wav
 from fl_mcp.contract import SceneNotesResult, SceneSummary
 
@@ -245,7 +245,9 @@ def connect(session: FLSession | None = None) -> FL:
 
 
 class FL:
-    """The live FL Studio session. Edits apply immediately; reads return what FL has now."""
+    """The live FL Studio session: every call applies to FL at once and returns what FL
+    now has, or raises with the reason. A channel is its index, exact name or a unique
+    part of its name."""
 
     def __init__(self, session: FLSession) -> None:
         self._session = session
@@ -272,7 +274,8 @@ class FL:
 
     @property
     def patterns(self) -> list[PatternInfo]:
-        """FL's patterns now: number, name and length in beats."""
+        """FL's patterns now: number, name and length in beats. In a new project,
+        pattern 1 already starts the song."""
         return self._session.patterns()
 
     def scene(
@@ -528,17 +531,7 @@ class FL:
 
         A note plays the sample from its start, at its own pitch on C4 (MIDI 60) and
         resampled on other keys; some channels stop it when the note ends, so write the
-        note as long as the sample. Chop, stretch, reverse or re-pitch in Python first::
-
-            x, sr = fl.read_wav(fl.sounds("vocal", kind="sample")[0])
-            step = int(sr * 30 / fl.tempo)  # an eighth note
-            chops = [x[i * step:(i + 1) * step] for i in range(len(x) // step)]
-            bar = np.concatenate([chops[i % len(chops)] for i in (0, 0, 3, 1, 2, 2, 5, 1)])
-            soundfile.write("chop.wav", bar, sr)  # bar[::-1] reverses it
-            fl.load_sample("Sampler 1", "chop.wav")
-            fl.track("Sampler 1").write([Note(60, b, 4) for b in range(0, 16, 4)])
-
-        librosa.effects.time_stretch and pitch_shift change one without the other.
+        note as long as the sample. fl.guide("chops") makes one in Python.
         """
         if not isinstance(sample, Sound | str | Path):
             raise errors.invalid_argument(
@@ -673,8 +666,24 @@ class FL:
 
     def undo(self) -> None:
         """Undo FL's last action. Notes this session wrote still read as written:
-        write the track again to set its notes for certain."""
+        write the track again to set its notes for certain. After a render with solo or
+        mute, write the track back instead: FL's undo holds the mute changes."""
         self._session.undo()
+
+    def guide(self, name: str | None = None) -> None:
+        """Recipes and production craft: with no name, print the guides and what each is
+        for; with a name, print that guide. Each ends with a worked example."""
+        found = guides.load()
+        if name is None:
+            print(guides.index(found))
+            return
+        chosen = next((g for g in found if g.name == name), None)
+        if chosen is None:
+            names = [g.name for g in found]
+            raise errors.ToolError(
+                "unknown_target", f"No guide {name!r}.", f"Guides: {', '.join(names)}.", candidates=names
+            )
+        print(chosen.body)
 
     def file_edit(self) -> AbstractContextManager[None]:
         """Batch edits that rewrite the saved song into one FL reopen.

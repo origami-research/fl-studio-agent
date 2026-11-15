@@ -8,7 +8,7 @@ Status tags: **current** describes the shipped system, **research** records evid
 | --- | --- |
 | Install and operate the engine | [SETUP.md](../SETUP.md), then [RUNBOOK_E2E.md](../RUNBOOK_E2E.md) |
 | Check shipped capability and evidence | [24-coverage-map.md](24-coverage-map.md) |
-| Use the Python SDK | the `run` tool docstring, then [sdk-reference.md](sdk-reference.md) |
+| Use the Python SDK | the `run` tool description, `help()` and `fl.guide()` in `run`, or [sdk-reference.md](sdk-reference.md) (generated from the same docstrings) |
 | Add or verify a capability | [33-capability-acquisition-model.md](33-capability-acquisition-model.md), [23-flp-reverse-engineering-playbook.md](23-flp-reverse-engineering-playbook.md) |
 | Integrate the MCP engine | [`../contracts/fl-mcp.json`](../contracts/fl-mcp.json) |
 | Run the local merge gate | [gate.md](gate.md) |
@@ -58,7 +58,7 @@ Status tags: **current** describes the shipped system, **research** records evid
 - [38-python-kernel.md](38-python-kernel.md) - **current** the `run` kernel, its OS boundary (AppContainer on Windows, Seatbelt on macOS), and the Windows box contract.
 - [39-workspace-tools.md](39-workspace-tools.md) - **removed** 2026-11-03: the shell and file tools, replaced by Python in `run`; `--workspace-only` now serves `run` with no FL session.
 - [26-master-plan.md](26-master-plan.md) - **superseded** pointer to the current canon.
-- [sdk-reference.md](sdk-reference.md) - **current** SDK reference.
+- [sdk-reference.md](sdk-reference.md) - **current** SDK reference, generated from the SDK's docstrings ([36](36-engine-contract.md#the-models-manual)).
 - [releases/](releases/) - release notes, one file per tag (the release workflow publishes them).
 - [READING_GUIDE.md](READING_GUIDE.md) - **current** capability navigation.
 

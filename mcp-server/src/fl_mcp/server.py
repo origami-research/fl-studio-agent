@@ -17,6 +17,7 @@ import argparse
 import base64
 import contextlib
 import functools
+import inspect
 import logging
 import os
 import sys
@@ -30,7 +31,7 @@ from mcp.server.mcpserver import Context, MCPServer
 from mcp.types import CallToolResult, ImageContent, TextContent
 from pydantic import BaseModel
 
-from fl_mcp import __version__
+from fl_mcp import __version__, manual
 from fl_mcp.contract import (
     ENV_KERNEL_ROOT,
     WORKSPACE_ONLY_FLAG,
@@ -49,6 +50,16 @@ from .session import create_session
 log = logging.getLogger(__name__)
 
 SERVER_NAME = "fl-studio"
+# What clients that defer tools show before the model opens run's description: Claude
+# Code lists only tool names and server instructions until the model searches for a tool,
+# and "run" alone says nothing about music.
+SERVER_INSTRUCTIONS = (
+    "Make and edit music in a live FL Studio session: use the run tool (Python with the fl SDK); "
+    "its description is the manual."
+)
+WORKSPACE_ONLY_INSTRUCTIONS = (
+    "A Python workspace with no FL Studio session: use the run tool; its description says what it has."
+)
 LOG_LEVEL_ENV = "FL_MCP_LOG"
 
 
@@ -113,111 +124,48 @@ def _tool_boundary(fn: Any) -> Any:
 
 @_tool_boundary
 def run(code: str, ctx: Context) -> RunResult:
-    """Run Python in a persistent kernel bound to the live FL Studio session, like
-    a notebook cell; this is the only tool, so everything is code. Variables and
-    imports persist. The working directory is your workspace, the one place you
-    can write (files last for the session); open(), subprocess and `!cmd` work,
-    and `%pip install pkg` adds any package (the internet is reachable).
-    Pre-bound: fl, Note, theory, display. A trailing expression is repr'd.
+    """Run Python in a persistent kernel, like a notebook cell; this is the only
+    tool, so everything is code. Variables and imports persist. The working
+    directory is your workspace, the one place you can write (files last for the
+    session); open(), subprocess, `!cmd` and `%pip install pkg` work, and the
+    internet is reachable. Pre-bound: fl, Note, theory, display; a trailing
+    expression is repr'd. Installed: numpy, scipy, soundfile, librosa,
+    matplotlib, pyloudnorm, mido, music21, Pillow.
 
-    Returns {"outcome", "stdout", "result" | "traceback", "actions", "images"}:
-    actions is what FL did, one sentence per change, even if the cell failed
-    partway. outcome is "ok", "error", "interrupted" (the run took its 600 s
-    budget, fl calls included: stopped between fl calls, variables kept; an fl
-    call that would not fit, such as a long render, is refused before it starts,
-    so split long work across runs) or "kernel_lost" (process died; variables
-    gone, files kept). Images show like a notebook's:
-    end with a matplotlib figure or PIL image, call display(...), or leave
-    figures open; at most 4 per run, about width x height / 750 tokens each.
-
-    fl applies every call to FL at once and returns what FL now has, or raises.
-    Channels are a name, index or unique part of a name.
-    Read:  fl.tempo; fl.channels (index, name, about: what the project says the
-           channel is for, volume, pan, muted, mixer_track); fl.mixer (tracks in
-           use: volume, pan, muted, solo, effects, sends); fl.playlist (clips);
-           fl.patterns; fl.track(ch, pattern=1).notes(); fl.scene() (a digest:
-           tempo, key, what each channel plays).
-    Write: fl.set_tempo(bpm); t = fl.track(ch); t.write([Note(60, 0.0, 1.0,
-           0.8)], mode="merge"|"replace") (key or "C4", start and length in
-           beats, velocity); t.clear(); t.set_levels(volume=0..1, pan=-1..1,
-           pitch=semitones); t.params("cutoff") / t.set_param("cutoff", 0.55);
-           fl.route(ch, mixer_track); fl.send(src, dst, level=0.8, on=True);
-           fl.effect(mixer_track, slot).params() / .set_param(name, 0..1), with
-           FL's text for each value (display: "-35.4dB").
-    Song:  p = fl.new_pattern("Drop", copy_of=None) (a pattern per section; write
-           it with fl.track(ch, pattern=p.number)); fl.rename_pattern(p, name);
-           fl.place(p, [17, 33]) puts it in the song at those bars (every bar for
-           a pattern in one call: FL adds a pattern's clip only before its first;
-           clips cannot be moved or removed) and leaves FL in song mode, so
-           fl.render plays the arranged song. fl.automate([{"position": 0,
-           "value": 0.1}, {"position": 16, "value": 0.9}], bar=13, channel=ch,
-           param="volume"|"pan"|plugin param) or mixer_track=n (+ slot=s for an
-           effect's param): FL records it into a new pattern placed at bar; it
-           plays twice in real time. Pattern 1 already starts the song.
-           Pumping (the kick ducking a pad or bass; no code can key a compressor):
-           one automate dips the part's mixer track on every kick. FL keeps the
-           moves about 0.1 s late, so each dip starts that much early (e):
-             t = next(c.mixer_track for c in fl.channels if c.name == "Pad")
-             top = next(m.volume for m in fl.mixer if m.index == t); e = 0.1 * fl.tempo / 60
-             dip = [{"position": 0, "value": 0.25}, {"position": 0.35 - e, "value": top}]
-             for b in range(1, 64): dip += [{"position": b - e - 0.02, "value": top},
-                 {"position": b - e, "value": 0.25}, {"position": b - e + 0.35, "value": top}]
-             fl.automate(dip, bar=1, mixer_track=t)  # about 14 dB down, back in 0.35 beats
-    Sounds: choose every sound by how it sounds. fl.sounds("punchy dry house kick")
-           ranks FL's stock samples and instrument presets and the CC0 packs by
-           sound (each Sound: path, score, seconds, pitch, decay, brightness, low,
-           high); like=sound_or_wav ranks by a reference instead or as well;
-           kind="sample"|"preset", plugin=, limit=. Listen to the best few, then load:
-             for s in fl.sounds("warm analog pad slow attack", kind="preset", limit=4):
-                 x, sr = fl.read_wav(fl.audition(s))  # a sample: fl.read_wav(s)
-             fl.load_preset("Pad", best)  # fl.load_sample("Kick", sound) for a sample
-           fl.audition(preset, notes=None) plays it alone on the Audition channel and
-           puts the song back. fl.load_sample(ch, sound) also takes a WAV you wrote:
-           chop, stretch, reverse or re-pitch in Python, and write a note as long as
-           the sample; a sampler plays a sample at its own pitch on MIDI 60.
-           fl.load_preset(ch, sound) (an effect preset adds the effect: .effect);
-           fl.presets(ch); fl.set_preset(ch, name).
-    Hear:  fl.render("mix.wav", bars=, start_bar=1, solo=[ch], mute=[ch],
-           stems="channels"|"mixer"|[ch]) -> the WAV's Path with .span (start_bar,
-           beats, tempo_bpm, seconds); it plays in real time. Stems are one play
-           each, a list: only channels with notes in those bars (.skipped are the
-           rest), or exactly the channels listed.
-           fl.meters(bars=2, start_bar=1) -> which channels sounded, from FL's
-           mixer meters (.summary). fl.read_wav(path) -> (samples, rate), for a
-           render, a file or a library Sound.
-    Project: fl.save() (a trial FL cannot); fl.undo() (after a solo render,
-           write the track back instead: FL's undo holds the mute changes).
-    theory.chord("C", "minor"), theory.scale("E", "minor") -> MIDI ints;
-    theory.drums("x...x...", key="C1", step_beats=0.25) -> [Note].
-
-    Installed: numpy, scipy, soundfile, librosa, matplotlib, pyloudnorm, mido,
-    music21, Pillow. Listening is yours to build. A spectrogram, bar lines:
-      import matplotlib.pyplot as plt, numpy as np
-      wav = fl.render("mix.wav"); x, sr = fl.read_wav(wav)
-      plt.specgram(x.mean(axis=1), Fs=sr, NFFT=4096, cmap="magma")
-      for t in np.arange(0, wav.span.seconds, 240 / wav.span.tempo_bpm): plt.axvline(t, c="w", lw=.5)
-    The bass alone against the kick:
-      spec = lambda w: abs(np.fft.rfft(fl.read_wav(w)[0].mean(axis=1)))
-      bass, kick = (spec(fl.render(f"{c}.wav", bars=4, solo=[c])) for c in ("Bass", "Kick"))
-      plt.figure(); plt.loglog(bass, label="bass"); plt.loglog(kick, label="kick"); plt.legend()
-
-    Make one musical change per call, then check it (a render or fl.meters)
-    before the next. To revise: after a render, measure loudness (pyloudnorm),
-    true peak (4x oversampled), spectral balance and energy per section; fix the
-    single biggest gap from the target, then render again. Target: a reference
-    file the brief or user gives (measure it the same way), else streaming
-    norms, about -14 LUFS integrated with true peak below -1 dBTP.
+    Returns {outcome, stdout, result | traceback, actions, images}; actions says
+    what FL did, one sentence per change, even if the cell failed. outcome is ok,
+    error, interrupted (the run took its 600 s budget, fl calls included: stopped
+    between fl calls, variables kept; an fl call that would not fit, such as a
+    long render, is refused before it starts, so split long work across runs) or
+    kernel_lost (variables gone, files kept). Images show like a notebook's: end
+    with a matplotlib figure or PIL image, call display(...), or leave figures
+    open; at most 4 per run, about width x height / 750 tokens each.
     """
-    # Engineering notes (not part of the model-facing description above): the
-    # last paragraph is research-backed: agents fail mostly on long chains of
-    # edits (RIME 2026, DAWZY), and retrieving a reference then revising raised
-    # pass rates (Libretto 2026); -14 LUFS / -1 dBTP is Spotify's guidance.
-    # It is a recipe, not an SDK method: there is no canned analysis. The
-    # kernel is a separate process (fl_mcp.kernel, docs/38) and the OS, not
-    # Python filtering, confines it to its workspace. A test keeps the
-    # docstring's "600 s" in step with kernel.host.RUN_BUDGET_SECONDS.
+    # Engineering notes (not part of the model-facing description): the docstring
+    # above is the kernel's contract, true with or without an FL session;
+    # manual.tool_description adds the working loop, the SDK index and the guide
+    # index, generated from sdk.py's docstrings and fl_mcp/guides (with an FL
+    # session), or only the guide index (--workspace-only, where fl calls are
+    # refused). run.__doc__ becomes the FL description below, so the contract and
+    # help(run) read the same text. The kernel is a separate process (fl_mcp.kernel, docs/38) and the OS, not Python
+    # filtering, confines it to its workspace. A test keeps the docstring's "600 s"
+    # in step with kernel.host.RUN_BUDGET_SECONDS.
     ran = ctx.request_context.lifespan_context["kernel"].run(code)
     return _with_images(ran, ran.shown)
+
+
+_KERNEL_CONTRACT = inspect.getdoc(run) or ""
+run.__doc__ = manual.tool_description(_KERNEL_CONTRACT, with_fl=True)
+
+
+def run_description(*, with_fl: bool) -> str:
+    """What the model reads about run: with an FL session, the whole manual; without
+    one (--workspace-only), the kernel and the guides, since every other fl call is refused."""
+    return manual.tool_description(_KERNEL_CONTRACT, with_fl=with_fl)
+
+
+def server_instructions(*, with_fl: bool) -> str:
+    return SERVER_INSTRUCTIONS if with_fl else WORKSPACE_ONLY_INSTRUCTIONS
 
 
 def tool_definitions() -> tuple[Any, ...]:
@@ -267,10 +215,11 @@ def create_server(*, workspace_only: bool = False) -> MCPServer:
         SERVER_NAME,
         version=__version__,
         description=server_description(_confined()),
+        instructions=server_instructions(with_fl=not workspace_only),
         lifespan=functools.partial(lifespan, with_fl=not workspace_only),
     )
-    for tool in tool_definitions():
-        server.add_tool(tool)
+    (only,) = tool_definitions()
+    server.add_tool(only, description=run_description(with_fl=not workspace_only))
     return server
 
 

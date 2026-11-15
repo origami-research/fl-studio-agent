@@ -18,8 +18,18 @@ does not match the generated contract.
 `tools` is the whole surface: `run` alone since 2026-11-03, when the owner
 replaced `get_scene`, `check`, `render` and the workspace tools with Python on
 `fl` ([sdk-reference](sdk-reference.md)). `server` names `--workspace-only`
-(`run` with no FL session behind it) and the `; confined=true|false` ending of
-`serverInfo.description`.
+(`run` with no FL session behind it), the `; confined=true|false` ending of
+`serverInfo.description`, and the server's one-line `instructions`.
+
+## The model's manual
+
+Updated 2026-11-15: the SDK's docstrings are the one source of what each `fl` member does.
+`run`'s description is generated from them by `fl_mcp/manual.py`: `run`'s own docstring (the kernel and its results), then the working loop and one line per SDK area naming each member and its required arguments, then the guide index.
+With `--workspace-only` there is no FL session and every `fl` call but `fl.guide()` is refused, so the description there is the kernel and the guide index only, and the instructions say there is no session; the contract publishes both under `server.workspace_only`.
+In `run`, `help(fl.render)` gives a member's full docstring and `fl.guide("listening")` opens a guide (recipes and craft, `fl_mcp/guides/`, format in that package's docstring).
+The description stays under 4,096 characters, because Claude Code cuts server instructions and a tool description loaded upfront at that length ([Claude Code MCP docs](https://code.claude.com/docs/en/mcp#tool-search-for-mcp-server-authors)); a test fails past it.
+The server's `instructions` is one line naming `run`, because a client that defers tools shows the model only tool names and instructions until it searches.
+[sdk-reference.md](sdk-reference.md) is generated from the same docstrings (`uv run python -m fl_mcp.manual > ../docs/sdk-reference.md`); a test fails when it is stale.
 
 Tools publish only their success model as `outputSchema`. Anticipated engine
 failures are `ToolErrorResult` JSON in the text content of MCP `isError` tool

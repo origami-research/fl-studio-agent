@@ -91,7 +91,7 @@ It stays well under the client's limit because a run can still take a while past
 ### Images
 
 Since 2026-11-02 a cell can show images, like a notebook's inline output, so the model can look at what its code drew: a spectrogram of a render it read with `fl.read_wav`, a plot of its notes, any chart.
-This is how the model listens: it computes and plots what it wants itself, and the engine ships no canned analysis ([sdk-reference](sdk-reference.md#flread_wavpath-str--path---tuplenpndarray-int)).
+This is how the model listens: it computes and plots what it wants itself, and the engine ships no canned analysis ([sdk-reference](sdk-reference.md), `fl.guide("listening")`).
 A cell shows an image by ending with it (a PIL image, a matplotlib figure, or any object with `_repr_png_`), by calling `display(...)` (which also takes PNG/JPEG bytes or an image file path), or by leaving matplotlib figures open; `plt.show()` works.
 The kernel sets `MPLBACKEND` to `fl_mcp.kernel.mpl_inline`, so a figure never opens a window on the machine running FL; `!cmd` and `%pip` subprocesses get `Agg` instead, which every matplotlib has.
 Figures are closed once shown, and a figure that fails to draw fails only its own cell.

@@ -148,5 +148,5 @@ Using the FL Studio trial? Set `FLMCP_FL_LICENSE=trial` in the server's `env`, a
 
 ## Tools
 
-One tool, `run`: Python against the live FL session through the `fl` object (read the song, write, read the meters, render and listen), with numpy, scipy, librosa and matplotlib installed. Its description is the whole manual.
+One tool, `run`: Python against the live FL session through the `fl` object (read the song, write, read the meters, render and listen), with numpy, scipy, librosa and matplotlib installed. Its description is the short manual; `help(fl.x)` and `fl.guide()` in `run` give the detail.
 The full description is in the [repository README](https://github.com/origami-research/fl-studio-agent#tools).
