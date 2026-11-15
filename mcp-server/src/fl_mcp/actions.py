@@ -29,6 +29,7 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 
 from fl_mcp.schemas import (
+    Audition,
     AutomationTake,
     ChannelLevels,
     ChannelPreset,
@@ -349,6 +350,16 @@ class ActionLog:
         renamed = "" if result.name == sound else f", now named {result.name}"
         return [_Entry(f"Loaded {what} into channel {result.channel}{renamed}")]
 
+    def _audition(self, kwargs: Mapping[str, Any], result: Audition) -> list[_Entry]:
+        self._names[result.sound.channel] = result.sound.name
+        preset = PurePosixPath(result.sound.sound).stem
+        return [
+            _Entry(
+                f"Auditioned the {result.sound.plugin} preset {preset} on channel {result.sound.channel}: "
+                f"rendered {self._rendered(result.render, alone=False)}; its notes were put back"
+            )
+        ]
+
     def _new_pattern(self, kwargs: Mapping[str, Any], result: PatternInfo) -> list[_Entry]:
         source = kwargs.get("copy_of")
         made = f"pattern {result.number} {result.name}"
@@ -424,6 +435,7 @@ _CALLS: dict[str, Callable[[ActionLog, Mapping[str, Any], Any], list[_Entry]]] =
     "place": ActionLog._place,
     "automate": ActionLog._automate,
     "load_audio": ActionLog._load,
+    "audition": ActionLog._audition,
     "check": ActionLog._check,
     "render_wav": ActionLog._render,
     "render_stems": ActionLog._stems,

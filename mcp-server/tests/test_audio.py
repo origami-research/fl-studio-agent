@@ -128,8 +128,33 @@ def test_read_wav_still_refuses_what_is_not_audio(tmp_path):
     path = tmp_path / "notes.wav"
     path.write_bytes(b"RIFF\x10\x00\x00\x00WAVEjunk\x04\x00\x00\x00abcd")
 
-    with pytest.raises(wave.Error, match="fmt chunk and/or data chunk missing"):  # the stdlib's own error
+    with pytest.raises(ValueError, match=r"notes\.wav is not an audio file this engine reads"):
         read_wav(path)
+
+
+@pytest.mark.parametrize("codec", ["wavpack", "flac"])
+def test_read_wav_reads_wavpack_and_flac_samples(tmp_path, codec):
+    """1,954 of FL 2026's stock samples, most of the kits' drums among them, are WavPack
+    (.wv), which the stdlib and libsndfile cannot read; the CC0 packs may be FLAC. Without
+    this the model could not hear a kit's sample before loading it (fl.read_wav(sound))."""
+    import av
+
+    rate = 44100
+    tone = (0.5 * np.sin(2 * np.pi * 440 * np.arange(rate) / rate)).astype(np.float32)
+    path = tmp_path / ("Kick.wv" if codec == "wavpack" else "Kick.flac")
+    with av.open(str(path), "w") as out:
+        stream = out.add_stream(codec, rate=rate, layout="mono")
+        stream.format = "s16" if codec == "flac" else "fltp"
+        frame = av.AudioFrame.from_ndarray(tone[None, :] if codec == "wavpack" else (tone[None, :] * 32767).astype(np.int16), format=stream.format.name, layout="mono")
+        frame.sample_rate = rate
+        for packet in [*stream.encode(frame), *stream.encode(None)]:
+            out.mux(packet)
+
+    samples, got_rate = read_wav(path)
+
+    assert got_rate == rate and samples.shape == (rate, 1) and samples.dtype == np.float64
+    peak = np.abs(np.fft.rfft(samples[:, 0])).argmax() * rate / len(samples)
+    assert abs(peak - 440) < 5 and 0.45 < np.abs(samples).max() < 0.55
 
 
 def test_decode_audio_reads_what_a_model_writes_and_a_stock_sample_it_passes_on():

@@ -49,9 +49,12 @@ def wav_format(path: Path) -> tuple[int, int]:
 def read_wav(path: Path) -> tuple[np.ndarray, int]:
     """The whole file as float frames (channels last) and its sample rate: the SDK's read_wav.
 
-    PCM WAV, as renders are; and FL's stock samples, which are Ogg Vorbis inside a WAV
+    PCM WAV, as renders are; FL's stock samples, which are Ogg Vorbis inside a WAV
     (format tag 0x674F and its siblings, the data chunk an Ogg stream: box run
-    2026-11-03, where the stdlib, scipy and libsndfile all refused them as WAVs)."""
+    2026-11-03, where the stdlib, scipy and libsndfile all refused them as WAVs) or
+    WavPack (.wv, 1,954 of FL 2026's stock samples and most of the kits' drums, which
+    libsndfile cannot read either); and FLAC, AIFF, Ogg or MP3 (the CC0 packs, files
+    the model wrote)."""
     try:
         with path.open("rb") as file, wave.open(file, "rb") as wav:
             channels, width, sample_rate, _ = _header(wav)
@@ -59,11 +62,32 @@ def read_wav(path: Path) -> tuple[np.ndarray, int]:
     except wave.Error:
         stream = _ogg_in_wav(path.read_bytes())
         if stream is None:
-            raise
+            return _decode_file(path)
     import soundfile
 
     samples, sample_rate = soundfile.read(io.BytesIO(stream), dtype="float64", always_2d=True)
     return samples, sample_rate
+
+
+def _decode_file(path: Path) -> tuple[np.ndarray, int]:
+    """Any audio FFmpeg decodes (PyAV bundles it), as float64 frames and the sample rate.
+    Raises ValueError for a file that is not audio."""
+    import av
+
+    try:
+        with av.open(str(path)) as container:
+            stream = container.streams.audio[0]
+            # Planar float keeps every codec's layout alike: (channels, frames) per chunk.
+            resampler = av.AudioResampler(format="fltp")
+            chunks = [
+                out.to_ndarray() for frame in container.decode(stream) for out in resampler.resample(frame)
+            ]
+            rate = stream.rate
+    except (av.FFmpegError, IndexError):
+        raise ValueError(f"{path.name} is not an audio file this engine reads") from None
+    if not chunks:
+        raise ValueError(f"{path.name} has no audio frames")
+    return np.concatenate(chunks, axis=1).T.astype(np.float64), rate
 
 
 def decode_audio(blob: bytes) -> tuple[np.ndarray, int]:

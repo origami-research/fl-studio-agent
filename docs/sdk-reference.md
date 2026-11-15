@@ -11,13 +11,14 @@ The stable public surface is deliberately small:
 - `fl.set_tempo(...)` for confirmed tempo changes.
 - `fl.meters(...)` to prove in seconds which channels sound (the `check` tool until 2026-11-03).
 - `fl.render(...)` and `fl.read_wav(...)` for render/audio workflows: the model measures and plots the samples itself.
-- `fl.scene(...)`, `fl.mixer`, `fl.playlist`, `fl.patterns` and `fl.stock_folder` for what FL has, as plain objects.
+- `fl.scene(...)`, `fl.mixer`, `fl.playlist` and `fl.patterns` for what FL has, as plain objects.
 - `with fl.file_edit(): ...` to batch file-lane edits into a single FL reload in development mode.
 - `fl.track(...).params(...)` and `set_param(...)` for live generator plugin parameters; `fl.effect(track, slot)` for a mixer effect's.
 - `fl.route(...)` and `fl.send(...)` for live mixer routing and sends.
 - `fl.presets(...)` and `fl.set_preset(...)` for a plugin channel's presets.
-- `fl.sounds(...)` to search the stock presets and samples FL ships.
-- `fl.load_sample(...)` and `fl.load_preset(...)` to load one of them, or a sample made in Python, into a channel.
+- `fl.sounds(...)` to find sounds by how they sound: FL's stock samples and instrument presets, and the CC0 packs, ranked by a description or a reference sound.
+- `fl.audition(...)` to hear a preset before choosing it.
+- `fl.load_sample(...)` and `fl.load_preset(...)` to load a library sound, or a sample made in Python, into a channel.
 - `fl.new_pattern(...)`, `fl.rename_pattern(...)` and `fl.place(...)` to arrange the song live: a pattern per section, its clips in the playlist.
 - `fl.automate(...)` to move a control over time live (filter sweeps, volume rides, risers).
 
@@ -163,7 +164,7 @@ kit = fl.render("kit.wav", stems=["Kick", "Snare"], bars=8)
 From the `run` tool only the file name is used: the WAV lands in the session's
 read-only renders folder and the returned path says where ([38](38-python-kernel.md)).
 
-### `fl.scene(detail="summary", channel=None, pattern=None)`, `fl.mixer`, `fl.playlist`, `fl.patterns`, `fl.stock_folder`
+### `fl.scene(detail="summary", channel=None, pattern=None)`, `fl.mixer`, `fl.playlist`, `fl.patterns`
 
 Plain objects for model code, since 2026-11-03.
 `fl.scene()` is a digest of the song, what the removed `get_scene` tool returned (`SceneSummary`: tempo, inferred key, the playlist and a digest per channel); `fl.scene("notes", channel=, pattern=)` is every note FL has (`SceneNotesResult`), optionally of one channel (a name or index) and one pattern.
@@ -171,16 +172,12 @@ Plain objects for model code, since 2026-11-03.
 A track is in use when it is the master, a channel plays into it, it holds an effect, it was renamed from FL's "Insert N", or a track in use sends to it; the controller reads it all in one round trip (`state.mixer`).
 `fl.playlist` lists the clips of the song FL opened (`PlaylistClip(track, start, length, pattern, channel)`, beats), then the clips `fl.place` and `fl.automate` added this session (FL has no clip getter; an added clip's `track` is `None` when FL did not report it).
 `fl.patterns` reads FL's patterns live (`PatternInfo(number, name, beats)`).
-`fl.stock_folder` is FL's `Data/Patches` folder, which run code may read but not change: a `Sound`'s `path` from `fl.sounds` is relative to it, so a sample can be loaded and listened to before it is chosen.
 
-```python
-kick = fl.sounds("808 kick", kind="sample")[0]
-samples, rate = fl.read_wav(fl.stock_folder / kick.path)
-```
 
-### `fl.read_wav(path: str | Path) -> tuple[np.ndarray, int]`
+### `fl.read_wav(path: str | Path | Sound) -> tuple[np.ndarray, int]`
 
-**Availability:** local file read. Loads a PCM WAV as `(samples, sample_rate)`, and FL's stock samples too: FL 2026 ships them as Ogg Vorbis inside a WAV (format tag `0x674F`), which Python's `wave`, scipy and libsndfile all refuse, so `read_wav` decodes the Ogg stream inside (since 2026-11-03).
+**Availability:** local file read. Loads a render or a file the code wrote as `(samples, sample_rate)`, and a library sample too: a `Sound` from `fl.sounds` or its `path`, which the engine resolves to the file in FL's stock folder or the CC0 packs, both readable from `run` (docs/38), so a sample is heard before it is chosen (since 2026-11-12; until then `fl.read_wav(fl.stock_folder / sound.path)`).
+FL 2026 ships its stock samples as Ogg Vorbis inside a WAV (format tag `0x674F`), which Python's `wave`, scipy and libsndfile all refuse, so `read_wav` decodes the Ogg stream inside (since 2026-11-03); and 1,954 of them, most of the ModeAudio drums among them, as WavPack (`.wv`), which libsndfile cannot read either, so `read_wav` decodes those, and FLAC, AIFF, Ogg and MP3, with FFmpeg through PyAV (since 2026-11-12).
 `samples` is a float64 NumPy array shaped `(frames, channels)`, normalized to
 roughly `[-1, 1]`; `sample_rate` is Hz.
 
@@ -191,6 +188,11 @@ Since 2026-11-13 the `run` description also gives the model a working rule and a
 One musical change per call, checked with a render or `fl.meters` before the next, because agents fail mostly on long chains of edits (RIME 2026, DAWZY).
 To revise, it measures a render (loudness with pyloudnorm, true peak 4x oversampled, spectral balance, energy per section), fixes the single biggest gap from a target, and renders again; retrieving a reference and revising raised pass rates in Libretto 2026.
 The target is a reference file the brief or user gives, else streaming norms: about -14 LUFS integrated with true peak below -1 dBTP (Spotify's guidance).
+
+```python
+kick = fl.sounds("808 kick", kind="sample")[0]
+samples, rate = fl.read_wav(kick)
+```
 
 ```python
 import matplotlib.pyplot as plt
@@ -272,21 +274,63 @@ names = fl.presets("FLEX Bass")
 fl.set_preset("FLEX Bass", "Pure Feather")
 ```
 
-### `fl.sounds(query: str = "", kind: "preset" | "sample" | None = None, plugin: str | None = None, limit: int = 20) -> list[Sound]`
+### `fl.sounds(query: str = "", like: Sound | str | Path | None = None, kind: "preset" | "sample" | None = None, plugin: str | None = None, limit: int = 20) -> list[Sound]`
 
-**Availability:** local file search of this FL install's stock content (`Data/Patches`), read by the engine, not the `run` kernel.
-Returns sounds whose path holds every word of `query` (any case), in FL's folder order, up to `limit` (at most 200).
-`kind` keeps only presets or only samples; `plugin` keeps that plugin's presets.
-A missing stock folder raises `unknown_target` rather than returning an empty list.
-`fl.load_sample` and `fl.load_preset` take a found `Sound` or its `path`.
+**Availability:** local, in the engine, not the `run` kernel (by sound since 2026-11-13; by name before).
+This is the one way to choose a sound: rank candidates by how they sound, listen to the best few in Python, then load one.
 
 ```python
-kicks = fl.sounds("808 kick", kind="sample")
+for s in fl.sounds("punchy dry house kick", kind="sample", limit=5):
+    x, sr = fl.read_wav(s)            # a preset: fl.read_wav(fl.audition(s))
+fl.load_sample("Kick", chosen)
+fl.sounds(like="my-chop.wav", limit=5)   # sounds like a file you wrote, or like=a Sound
+```
+
+The library is two sources, one path form each (`fl_mcp/sounds.py`):
+
+| Source | `path` | What it is |
+| --- | --- | --- |
+| FL's stock content (its `Data/Patches`) | `Plugin presets/...`, `Packs/...` | The presets and samples this FL install ships. |
+| The CC0 packs fl-mcp-install downloads | `CC0/<pack>/<category>/<name>.wav` | VCSL and VSCO 2 Community Edition one-shots ([NOTICE](../NOTICE.md)): percussion, a real drum kit, and melodic one-shots named after the note they sound on MIDI 60 (`Harp Pluck C3`). |
+
+How it ranks (`fl_mcp/sounds.py`, `sound_model.py`, `sound_index.py`):
+
+- The sound index holds, for every stock sample, every stock instrument preset and every pack sample, an embedding from LAION's CLAP music checkpoint (`music_audioset_epoch_15_esc_90.14`, CC0) and a few plain measurements.
+  A preset is described by its preview: `fl.audition`'s default phrase played through it at 120 BPM.
+  The index is built once per FL build on a machine with FL (`scripts/build_sound_index.py`) and downloaded by fl-mcp-install; it holds numbers and paths, none of FL's audio.
+- `query` is embedded with CLAP's text encoder and `like` with its audio encoder (an indexed library sound uses its stored embedding), both in the server on the CPU (onnxruntime); with both, the two similarities add.
+  Each indexed sound's `score` is that cosine similarity, plus up to 0.1 when its path holds the query's words (each word that begins a word of the path counts its share): CLAP does not know "phonk" or "808", FL's folder and file names do. Higher is closer.
+- A library file the index does not hold (an effect preset, or a file newer than the index) matches by name only, when its path holds every word of `query`; those come first, with `score` None.
+- With no `query` and no `like`, the library is listed in folder order.
+- Without the index or the model (not installed yet, or Intel macOS, where onnxruntime has no wheel), `query` matches by name only, every `score` is None, and `like` raises `invalid_argument`.
+  `fl-mcp-doctor` says which in its `sound_search` line (`by sound: ...` or `by name only: <why>`); fl-mcp-install reports a model and index that are not published for download (a draft release) as OK, matching by name.
+
+Each `Sound` has `kind`, `name`, `plugin` (a preset's), `path`, `score`, and the index's measurements, None where it has none: `seconds` (length), `pitch` (a sample's steady pitch as a MIDI note, None when unpitched and for presets), `decay` (seconds from the loudest moment until 30 dB quieter), `brightness` (spectral centroid, Hz), `low` and `high` (the share of the energy below 150 Hz and above 5 kHz).
+`kind` keeps one kind; `plugin` keeps that plugin's presets; `limit` caps the list (at most 200).
+`like` is a `Sound`, a library path, or an audio file you wrote (at most the kernel's audio size limit); a preset that is not in the index cannot be a reference (pass its `fl.audition` render instead).
+A missing stock folder raises `unknown_target` rather than returning an empty list.
+`fl.load_sample` and `fl.load_preset` take a found `Sound` or its `path`; a path or bare name that is not in the library raises `invalid_argument` naming the closest ones ("Did you mean 'Packs/Drums/Kicks/909 Kick.wav'?").
+
+The agent project's drum channels (`Kick`, `Snare`, `Clap`, `Hat`, `Open Hat`, `Perc`, `Crash`) start as one house kit (ModeAudio HouseGen); load any sample into them with `fl.load_sample`.
+
+### `fl.audition(preset: Sound | str, notes=None, output="audition.wav") -> Render`
+
+**Availability:** live-only, with the Master Bridge (2026-11-12).
+Hears an instrument preset before it is chosen: a sample needs no FL (`fl.read_wav(sound)`), but a preset is a plugin's state, so it sounds only when FL plays it.
+The agent project keeps a channel for this, `Audition`, which nothing in the song plays.
+The engine reads that channel's notes in the pattern a render from bar 1 plays (the selected pattern in pattern mode, the pattern whose clip starts the song in song mode), loads the preset there (`fl.load_preset`) and names the channel `Audition` again, writes `notes` (default: a two-bar phrase, C3 then a line to C5 and a held C major chord), renders bar 1 onward with that channel alone (`fl.render(solo=...)`), and writes the channel's notes back as they were, also when the render failed.
+Every other channel, the song's notes and the mutes end as they began; the Audition channel keeps the preset last heard.
+It refuses before anything changes: an effect or VST preset, no notes, more than 8 bars, no `Audition` channel, or no pattern at bar 1.
+Returns the `Render` (read it with `fl.read_wav`); it takes the phrase's length in real time plus the plugin's load (2 to 3 s live).
+
+```python
+for preset in fl.sounds("bass", kind="preset", plugin="Sytrus")[:3]:
+    x, sr = fl.read_wav(fl.audition(preset, notes=[Note(36, 0, 2), Note(43, 2, 2)], output=f"{preset.name}.wav"))
 ```
 
 ### `fl.load_sample(channel: str | int, sample: Sound | str | Path) -> ChannelSound`
 
-**Availability:** live-only, through the FL MCP Bridge. Loads a sample into a sampler channel: a stock sample (a `Sound` from `fl.sounds(kind="sample")`, or its `path`, which starts `Packs/`), or an audio file the code wrote (WAV, FLAC, Ogg, AIFF or MP3; a path relative to the workspace or absolute).
+**Availability:** live-only, through the FL MCP Bridge. Loads a sample into a sampler channel: a library sample (a `Sound` from `fl.sounds(kind="sample")`, or its `path`, which starts `Packs/` or `CC0/`), or an audio file the code wrote (WAV, FLAC, Ogg, AIFF or MP3; a path relative to the workspace or absolute).
 FL renames the channel after the file (`"808 Cowbell"`), numbering it when another channel already has that name (`"808 Kick #2"`).
 Returns `ChannelSound(channel, kind, sound, name, plugin=None)` read back from FL; a channel that does not show the sample raises.
 A plugin channel is refused before anything changes: FL only renames it. Give it an instrument preset with `fl.load_preset` instead.
@@ -300,7 +344,7 @@ FL documents no call for a sampler's reverse, loop or stretch settings; shape th
 
 ```python
 import numpy as np, soundfile
-x, sr = fl.read_wav(fl.stock_folder / fl.sounds("vocal", kind="sample")[0].path)
+x, sr = fl.read_wav(fl.sounds("vocal", kind="sample")[0])
 step = int(sr * 30 / fl.tempo)                     # an eighth note at the song's tempo
 chops = [x[i * step:(i + 1) * step] for i in range(len(x) // step)]
 bar = np.concatenate([chops[i % len(chops)] for i in (0, 0, 3, 1, 2, 2, 5, 1)])

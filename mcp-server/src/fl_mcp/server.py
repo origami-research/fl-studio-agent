@@ -163,11 +163,20 @@ def run(code: str, ctx: Context) -> RunResult:
              for b in range(1, 64): dip += [{"position": b - e - 0.02, "value": top},
                  {"position": b - e, "value": 0.25}, {"position": b - e + 0.35, "value": top}]
              fl.automate(dip, bar=1, mixer_track=t)  # about 14 dB down, back in 0.35 beats
-    Sounds: fl.sounds("808 kick", kind="sample"|"preset") -> stock sounds (path
-           relative to fl.stock_folder, readable); fl.load_sample(ch, sound) also
-           takes a WAV you wrote: chop, stretch, reverse or re-pitch in Python, and
-           write a note as long as the sample; fl.load_preset(ch, sound) (an effect
-           preset adds the effect: .effect); fl.presets(ch); fl.set_preset(ch, name).
+    Sounds: choose every sound by how it sounds. fl.sounds("punchy dry house kick")
+           ranks FL's stock samples and instrument presets and the CC0 packs by
+           sound (each Sound: path, score, seconds, pitch, decay, brightness, low,
+           high); like=sound_or_wav ranks by a reference instead or as well;
+           kind="sample"|"preset", plugin=, limit=. Listen to the best few, then load:
+             for s in fl.sounds("warm analog pad slow attack", kind="preset", limit=4):
+                 x, sr = fl.read_wav(fl.audition(s))  # a sample: fl.read_wav(s)
+             fl.load_preset("Pad", best)  # fl.load_sample("Kick", sound) for a sample
+           fl.audition(preset, notes=None) plays it alone on the Audition channel and
+           puts the song back. fl.load_sample(ch, sound) also takes a WAV you wrote:
+           chop, stretch, reverse or re-pitch in Python, and write a note as long as
+           the sample; a sampler plays a sample at its own pitch on MIDI 60.
+           fl.load_preset(ch, sound) (an effect preset adds the effect: .effect);
+           fl.presets(ch); fl.set_preset(ch, name).
     Hear:  fl.render("mix.wav", bars=, start_bar=1, solo=[ch], mute=[ch],
            stems="channels"|"mixer"|[ch]) -> the WAV's Path with .span (start_bar,
            beats, tempo_bpm, seconds); it plays in real time. Stems are one play
@@ -175,7 +184,7 @@ def run(code: str, ctx: Context) -> RunResult:
            rest), or exactly the channels listed.
            fl.meters(bars=2, start_bar=1) -> which channels sounded, from FL's
            mixer meters (.summary). fl.read_wav(path) -> (samples, rate), for a
-           render or a stock sample.
+           render, a file or a library Sound.
     Project: fl.save() (a trial FL cannot); fl.undo() (after a solo render,
            write the track back instead: FL's undo holds the mute changes).
     theory.chord("C", "minor"), theory.scale("E", "minor") -> MIDI ints;

@@ -18,11 +18,11 @@ import pytest
 from session_fakes import HELLO, FakeControl, make_session, snapshot_answer
 
 from fl_mcp import errors, flp, sdk
+from fl_mcp import sounds as sounds_mod
 from fl_mcp.actions import ActionLog
 from fl_mcp.kernel import wire
 from fl_mcp.schemas import ChannelPreset, ChannelRoute, ControlResponse, MixerSend, Sound
 from fl_mcp.session import WriteRejected
-from fl_mcp.session import facade as facade_mod
 
 MIXER_TRACKS = 127  # a full mixer as mixer.trackCount reports it, the master included
 DEFAULT_SEND_LEVEL = 0.8  # FL's level for a send just turned on (live)
@@ -357,30 +357,39 @@ def test_a_sampler_channel_is_not_a_plugin(call):
     assert "load_sample" in raised.value.fix
 
 
-# -- stock sounds -------------------------------------------------------------------
+# -- the sound library ------------------------------------------------------------------
+
+
+STOCK_CLAP = "Packs/Drums/Claps/909 Clap.wav"
+PACK_CLAP = "CC0/VCSL/Hand Percussion/Clap 2.wav"
 
 
 @pytest.fixture
 def patches(tmp_path, monkeypatch):
-    """A small copy of FL's Data/Patches layout."""
-    root = tmp_path / "Patches"
-    for relative in (
+    """A small copy of FL's Data/Patches layout and of the CC0 packs' folder, with no sound
+    index (so a search matches by name)."""
+    root, packs = tmp_path / "Patches", tmp_path / "sounds"
+    stock = (
         "Plugin presets/Generators/FLEX/Bass/Pure Feather.fst",
         "Plugin presets/Generators/FLEX/Keys/Glass Keys.fst",
         "Plugin presets/Effects/Fruity Reeverb 2/Big Hall.fst",
         "Packs/Drums/Kicks/808 Kick.wav",
         "Packs/Drums/Kicks/readme.txt",
-    ):
-        (root / relative).parent.mkdir(parents=True, exist_ok=True)
-        (root / relative).write_bytes(b"")
-    monkeypatch.setattr(facade_mod, "fl_patches_dir", lambda: root)
+        STOCK_CLAP,
+    )
+    for folder, relative in [(root, r) for r in stock] + [(packs, PACK_CLAP)]:
+        (folder / relative).parent.mkdir(parents=True, exist_ok=True)
+        (folder / relative).write_bytes(b"")
+    monkeypatch.setattr(sounds_mod, "fl_patches_dir", lambda: root)
+    monkeypatch.setattr(sounds_mod, "sound_library_dir", lambda: packs)
+    monkeypatch.setattr(sounds_mod, "sound_search_dir", lambda: tmp_path / "sound-search")
     return root
 
 
 def test_sounds_lists_what_this_fl_install_ships(patches):
     session, _ = make_session()
 
-    assert session.sounds("kick") == [
+    assert session.sounds("808 kick") == [
         Sound(kind="sample", name="808 Kick", plugin=None, path="Packs/Drums/Kicks/808 Kick.wav")
     ]
     flex = session.sounds(kind="preset", plugin="flex")
@@ -388,8 +397,26 @@ def test_sounds_lists_what_this_fl_install_ships(patches):
     assert [s.name for s in session.sounds("hall reeverb")] == ["Big Hall"]
 
 
+def test_the_cc0_packs_are_samples_in_the_same_search(patches):
+    """One search for every sample: the packs are listed beside FL's own, by their library path."""
+    session, _ = make_session()
+
+    assert [s.path for s in session.sounds("clap", kind="sample")] == [STOCK_CLAP, PACK_CLAP]
+
+
+def test_a_guessed_name_says_which_sounds_exist(patches):
+    """The C test guessed stock sounds by name ("909 Kick"); a wrong name or path now raises
+    with the closest real ones, so the next try is a real sound."""
+    lib = sounds_mod.library()
+
+    with pytest.raises(ValueError, match=r"Did you mean 'Packs/Drums/Kicks/808 Kick.wav'"):
+        sounds_mod.resolve(lib, "808 Kick", "sample")
+    with pytest.raises(ValueError, match=r"FL has no sample at .*Did you mean 'Packs/Drums/Kicks/808 Kick.wav'"):
+        sounds_mod.resolve(lib, "Packs/Drums/Kicks/808 Kik.wav", "sample")
+
+
 def test_sounds_without_fls_stock_folder_says_so(tmp_path, monkeypatch):
-    monkeypatch.setattr(facade_mod, "fl_patches_dir", lambda: tmp_path / "missing")
+    monkeypatch.setattr(sounds_mod, "fl_patches_dir", lambda: tmp_path / "missing")
     session, _ = make_session()
 
     with pytest.raises(errors.ToolError, match="stock sounds were not found") as raised:
@@ -397,21 +424,17 @@ def test_sounds_without_fls_stock_folder_says_so(tmp_path, monkeypatch):
     assert raised.value.category == "unknown_target"
 
 
-def test_a_sound_path_is_relative_to_the_stock_folder_the_kernel_reads(patches):
-    """fl.sounds searches here; run code then reads the file itself, read-only (docs/38)."""
+def test_a_sound_file_is_the_library_file_the_kernel_reads(patches):
+    """fl.sounds searches here; run code then reads the file itself, read-only (docs/38),
+    from FL's folder or the packs' alike."""
     session, _ = make_session()
 
-    sample = session.sounds("kick")[0]
-    assert (session.stock_folder() / sample.path).is_file()
-    assert session.stock_folder() == patches.resolve()
-
-
-def test_the_stock_folder_without_fl_says_so(tmp_path, monkeypatch):
-    monkeypatch.setattr(facade_mod, "fl_patches_dir", lambda: tmp_path / "missing")
-    session, _ = make_session()
-
-    with pytest.raises(errors.ToolError, match="stock sounds were not found"):
-        session.stock_folder()
+    assert session.sound_file("Packs/Drums/Kicks/808 Kick.wav") == (patches / "Packs/Drums/Kicks/808 Kick.wav").resolve()
+    assert session.sound_file(PACK_CLAP).parent.name == "Hand Percussion"
+    for outside in ("../secrets.wav", "Packs/../../x.wav", "C:/Windows/win.ini"):
+        with pytest.raises(errors.ToolError) as raised:
+            session.sound_file(outside)
+        assert raised.value.category == "invalid_argument"
 
 
 # -- the SDK surface ------------------------------------------------------------------
@@ -467,6 +490,8 @@ def test_a_channel_goes_by_the_preset_name_fl_gave_it_at_once(live):
         lambda fl: fl.sounds(limit=0),
         lambda fl: fl.sounds(limit=201),
         lambda fl: fl.sounds(kind="loop"),
+        lambda fl: fl.sounds(like=3),
+        lambda fl: fl.audition("Plugin presets/Generators/FLEX/Bass/Pure Feather.fst", notes=[{"key": 999}]),
     ],
 )
 def test_sdk_refuses_bad_arguments_before_fl_is_asked(live, call):
@@ -479,7 +504,7 @@ def test_sdk_refuses_bad_arguments_before_fl_is_asked(live, call):
     assert control.calls[before:] == []
 
 
-def test_sdk_sounds_returns_stock_sounds(live, patches):
+def test_sdk_sounds_returns_library_sounds(live, patches):
     fl, _ = live
 
     assert [s.path for s in fl.sounds("808", kind="sample")] == ["Packs/Drums/Kicks/808 Kick.wav"]

@@ -1,0 +1,47 @@
+{
+ "version": "1",
+ "fl_build": "26.1.6.5639",
+ "model": {
+  "id": "lukewys/laion_clap",
+  "revision": "b3708341862f581175dba5c356a4ebf74a9b6651",
+  "file": "music_audioset_epoch_15_esc_90.14.pt",
+  "sha256": "fae3e9c087f2909c28a09dc31c8dfcdacbc42ba44c70e972b58c1bd1caf6dedd",
+  "licence": "CC0-1.0",
+  "tokenizer": "FacebookAI/roberta-base@e2da8e2f811d1448a5b465c236feacd80ffbac7b tokenizer.json (MIT)",
+  "export": "scripts/export_sound_model.py: text and audio encoders with projections, unit length, ONNX opset 17, per-channel int8 weights (audio log-mel front end kept float)"
+ },
+ "files": [
+  {
+   "name": "clap-text-int8.onnx",
+   "url": "https://github.com/origami-research/fl-studio-agent/releases/download/sound-search-1/clap-text-int8.onnx",
+   "sha256": "45c7a875ba53e493f189c4d1d9869775724c08d1c2fac20177da1efc71472852",
+   "size": 126532890
+  },
+  {
+   "name": "clap-audio-int8.onnx",
+   "url": "https://github.com/origami-research/fl-studio-agent/releases/download/sound-search-1/clap-audio-int8.onnx",
+   "sha256": "95ca8ba89db0c9e7bbc0fc0319540f5304668136ba4905281174f55abb4361d8",
+   "size": 80632013
+  },
+  {
+   "name": "clap-tokenizer.json",
+   "url": "https://github.com/origami-research/fl-studio-agent/releases/download/sound-search-1/clap-tokenizer.json",
+   "sha256": "847bbeab6174d66a88898f729d52fa8d355fafe1bea101cf960dd404581df70e",
+   "size": 1355863
+  },
+  {
+   "name": "sound-index.npz",
+   "url": "https://github.com/origami-research/fl-studio-agent/releases/download/sound-search-1/sound-index-fl26.1.6.5639.npz",
+   "sha256": "5467f612d8b71ba09e9ff2bb0b1b0cac38615489f54bd10bd5b6c3bcf2064131",
+   "size": 10149914
+  }
+ ],
+ "index": {
+  "fl_build": "26.1.6.5639",
+  "sounds": 10546,
+  "samples": 5227,
+  "presets": 5319,
+  "built": "2026-11-14",
+  "builder": "scripts/build_sound_index.py on a trial FL 26.1.6.5639 for Windows"
+ }
+}

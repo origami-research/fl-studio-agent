@@ -13,9 +13,10 @@ from flpkit.formats import ShowInfoFormat
 from flpkit.formats.playlist import EVENT_PLAYLIST, PlaylistFormat
 
 from fl_mcp import flp, make_agent_project
+from fl_mcp.session import preview
 from fl_mcp.template import template_path
 
-TEMPLATE_SHA256 = "e1a5789d3c1781fae8af3b1d416bd5b8db3b4c8017fd9644a5fef25fe440592f"
+TEMPLATE_SHA256 = "87e4deb90b0b8f8516c40db6a353fa9c104340bb6621e005264be2e0078927d0"
 
 # Record bytes 24-31 (the cut window) as FL itself saves a pattern clip that was never
 # resized: FL sizes such a clip from its pattern and regrows it whenever the pattern grows.
@@ -54,9 +55,9 @@ def test_template_clip_follows_pattern_one_length():
 # get_scene and fl.channels show the model: the demo's models put chords on a bass synth when
 # nothing said which channel was which (2026-10-28).
 PALETTE = [
-    "Drums 808", "Drums House", "Drums Acoustic", "Cowbell", "808", "Bass", "Synth Bass", "Piano",
+    "Kick", "Snare", "Clap", "Hat", "Open Hat", "Perc", "Crash", "Cowbell", "808", "Bass", "Synth Bass", "Piano",
     "E-Piano", "Strings", "Pad", "Choir", "Brass", "Woodwinds", "Sax", "Guitar", "Lead", "Pluck",
-    "Synth 1", "Synth 2", "Sampler 1", "Sampler 2", "Sampler 3",
+    "Synth 1", "Synth 2", "Sampler 1", "Sampler 2", "Sampler 3", preview.AUDITION_CHANNEL,
 ]
 
 
@@ -66,8 +67,10 @@ def test_every_palette_channel_says_what_it_is_for():
 
     assert names == PALETTE
     assert set(guide.about) == set(PALETTE)
-    assert "Notes: 36 Kick Drum" in guide.about["Drums 808"]
+    assert "fl.sounds" in guide.about["Kick"] and "MIDI 60" in guide.about["Snare"]
+    assert not any("fl.kit" in about for about in guide.about.values())
     assert "MIDI 60" in guide.about["Cowbell"]
+    assert "fl.audition" in guide.about[preview.AUDITION_CHANNEL]
     assert "Pattern 1" in guide.notes and "Maximus" in guide.notes
 
 

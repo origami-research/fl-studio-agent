@@ -15,7 +15,7 @@ from __future__ import annotations
 import itertools
 from collections.abc import Sequence
 from contextlib import AbstractContextManager
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 from typing import Annotated, Literal
 
 import numpy as np
@@ -35,6 +35,7 @@ from .schemas import (
     ChannelRoute,
     ChannelSound,
     CheckResult,
+    LoadKind,
     MixerSend,
     MixerTrack,
     Note,
@@ -46,13 +47,12 @@ from .schemas import (
     RenderReceipt,
     RenderSpan,
     Sound,
-    SoundKind,
     StemsReceipt,
     Target,
     WriteResult,
 )
 from .session import FLSession, create_session
-from .sounds import SAMPLES_DIR, SEARCH_LIMIT_MAX
+from .sounds import SEARCH_LIMIT_MAX
 
 SdkChannel = Annotated[int, Field(strict=True, ge=0)]
 SdkPattern = Annotated[int, Field(strict=True, ge=1)]
@@ -158,7 +158,7 @@ class _SetPresetArgs(BaseModel):
 
 class _SoundsArgs(BaseModel):
     query: Annotated[str, Field(strict=True)] = ""
-    kind: SoundKind | None = None
+    kind: LoadKind | None = None
     plugin: Annotated[str, Field(strict=True)] | None = None
     limit: Annotated[int, Field(strict=True, ge=1, le=SEARCH_LIMIT_MAX)] = 20
 
@@ -176,7 +176,7 @@ class _RenderArgs(BaseModel):
 class _LoadArgs(BaseModel):
     """A stock sound to load: a Sound from fl.sounds() of the right kind, or its path."""
 
-    kind: SoundKind
+    kind: LoadKind
     sound: Sound | Annotated[str, Field(strict=True, min_length=1)]
 
     @model_validator(mode="after")
@@ -274,12 +274,6 @@ class FL:
     def patterns(self) -> list[PatternInfo]:
         """FL's patterns now: number, name and length in beats."""
         return self._session.patterns()
-
-    @property
-    def stock_folder(self) -> Path:
-        """FL's stock presets and samples (its Data/Patches folder), which run code may
-        read but not change; a Sound's path from fl.sounds is relative to it."""
-        return self._session.stock_folder()
 
     def scene(
         self, detail: Literal["summary", "notes"] = "summary", channel: str | int | None = None, pattern: int | None = None
@@ -475,18 +469,55 @@ class FL:
         return self._session.set_preset(self.track(channel).channel, args.preset)
 
     def sounds(
-        self, query: str = "", kind: SoundKind | None = None, plugin: str | None = None, limit: int = 20
+        self,
+        query: str = "",
+        like: Sound | str | Path | None = None,
+        kind: LoadKind | None = None,
+        plugin: str | None = None,
+        limit: int = 20,
     ) -> list[Sound]:
-        """FL's stock sounds whose path holds every word of ``query`` (any case):
-        ``Sound(kind, name, plugin, path)``, where kind is "preset" or "sample".
-        ``kind`` keeps one kind; ``plugin`` keeps that plugin's presets (e.g. "FLEX");
-        ``limit`` caps the list (at most 200).
+        """The library's sounds ranked by how they sound: FL's stock samples and instrument
+        presets, and the CC0 packs' samples ("CC0/..."), best match first.
+
+        ``query`` describes the sound ("punchy dry house kick", "warm analog pad slow
+        attack"); ``like`` is a reference to match instead or as well: a Sound, a library
+        path, or an audio file you wrote (an fl.audition render, a chop). Each Sound has
+        ``kind`` ("preset" or "sample"), ``name``, ``plugin``, ``path``, ``score`` (by
+        sound, higher is closer; None when it matched by name only) and measurements:
+        ``seconds``, ``pitch`` (a sample's MIDI note, None when unpitched), ``decay``
+        (seconds to 30 dB down), ``brightness`` (Hz), ``low`` and ``high`` (energy share
+        below 150 Hz, above 5 kHz). A preset is measured by its preview, the default
+        fl.audition phrase. ``kind`` keeps one kind; ``plugin`` that plugin's presets;
+        ``limit`` caps the list (at most 200). No query and no ``like``: the library in
+        folder order.
+
+        Listen before choosing: fl.read_wav(sound) for a sample, fl.audition(sound) for
+        a preset.
         """
         try:
             args = _SoundsArgs(query=query, kind=kind, plugin=plugin, limit=limit)
         except ValidationError as exc:
             raise errors.invalid_argument("fl.sounds", str(exc)) from None
-        return self._session.sounds(args.query, kind=args.kind, plugin=args.plugin, limit=args.limit)
+        like_path, like_audio = self._reference(like)
+        return self._session.sounds(
+            args.query, like_path=like_path, like_audio=like_audio, kind=args.kind, plugin=args.plugin, limit=args.limit
+        )
+
+    @staticmethod
+    def _reference(like: Sound | str | Path | None) -> tuple[str | None, bytes | None]:
+        """fl.sounds' ``like``: a library sound's path, or the bytes of a file you wrote."""
+        if like is None:
+            return None, None
+        if isinstance(like, Sound):
+            return like.path, None
+        if not isinstance(like, str | Path) or not str(like):
+            raise errors.invalid_argument("fl.sounds", f"like= takes a Sound, a library path or an audio file, not {like!r}")
+        path = Path(like)
+        if not path.is_file():
+            return str(like), None
+        if path.stat().st_size > MAX_AUDIO_BYTES:
+            raise errors.invalid_argument("fl.sounds", f"{path.name} is over {MAX_AUDIO_BYTES >> 20} MB; pass a shorter file")
+        return None, path.read_bytes()
 
     def load_sample(self, channel: str | int, sample: Sound | str | Path) -> ChannelSound:
         """Load a sample into a sampler channel: a Sound from ``fl.sounds(kind="sample")``
@@ -499,7 +530,7 @@ class FL:
         resampled on other keys; some channels stop it when the note ends, so write the
         note as long as the sample. Chop, stretch, reverse or re-pitch in Python first::
 
-            x, sr = fl.read_wav(fl.stock_folder / fl.sounds("vocal", kind="sample")[0].path)
+            x, sr = fl.read_wav(fl.sounds("vocal", kind="sample")[0])
             step = int(sr * 30 / fl.tempo)  # an eighth note
             chops = [x[i * step:(i + 1) * step] for i in range(len(x) // step)]
             bar = np.concatenate([chops[i % len(chops)] for i in (0, 0, 3, 1, 2, 2, 5, 1)])
@@ -513,17 +544,15 @@ class FL:
             raise errors.invalid_argument(
                 "fl.load_sample", f"pass a Sound from fl.sounds(), its path, or an audio file's path, not {sample!r}"
             )
-        if isinstance(sample, Sound) or PurePosixPath(str(sample).replace("\\", "/")).parts[:1] == (SAMPLES_DIR,):
+        # Anything that is not a file you wrote is a library sound: a guessed name ("909 Kick") is
+        # refused by the engine naming the closest real ones.
+        if isinstance(sample, Sound) or not Path(sample).is_file():
             try:
                 args = _LoadArgs(kind="sample", sound=sample if isinstance(sample, Sound) else str(sample))
             except ValidationError as exc:
                 raise errors.invalid_argument("fl.load_sample", str(exc)) from None
             return self._session.load_sound(self.track(channel).channel, args.path, "sample")
         path = Path(sample)
-        if not path.is_file():
-            raise errors.invalid_argument(
-                "fl.load_sample", f"no file at {str(sample)!r}; pass a Sound from fl.sounds() or an audio file you wrote"
-            )
         if path.stat().st_size > MAX_AUDIO_BYTES:
             raise errors.invalid_argument(
                 "fl.load_sample", f"{path.name} is over {MAX_AUDIO_BYTES >> 20} MB; load a shorter or smaller file"
@@ -543,6 +572,24 @@ class FL:
         except ValidationError as exc:
             raise errors.invalid_argument("fl.load_preset", str(exc)) from None
         return self._session.load_sound(self.track(channel).channel, args.path, "preset")
+
+    def audition(
+        self, preset: Sound | str, notes: Sequence[NoteInput] | None = None, output: str | Path = "audition.wav"
+    ) -> Render:
+        """Hear an instrument preset before using it: load it on the Audition channel, play
+        ``notes`` (default: a two-bar phrase from C3 to a C major chord) on that channel
+        alone, and record it to ``output``; the Audition channel's notes are put back.
+        Returns the Render (read it with fl.read_wav). Takes about the phrase's length in
+        real time, plus loading the plugin. A sample needs no audition: fl.read_wav(sound).
+        Do not fl.undo() after it: FL's undo would take back writing the notes back.
+        """
+        try:
+            args = _LoadArgs(kind="preset", sound=preset)
+            phrase = None if notes is None else _NOTES.validate_python(list(notes))
+        except ValidationError as exc:
+            raise errors.invalid_argument("fl.audition", str(exc)) from None
+        audition = self._session.audition(args.path, Path(output), notes=phrase)
+        return Render.of(audition.render)
 
     def render(
         self,
@@ -602,9 +649,15 @@ class FL:
         they are live in FL immediately. A trial FL Studio cannot save."""
         self._session.save_project()
 
-    def read_wav(self, path: str | Path) -> tuple[np.ndarray, int]:
-        """A WAV's samples, float (frames, channels), and its sample rate: a render, or one of
-        FL's stock samples (fl.stock_folder / sound.path), which are Ogg Vorbis inside a WAV."""
+    def read_wav(self, path: str | Path | Sound) -> tuple[np.ndarray, int]:
+        """Audio's samples, float (frames, channels), and its sample rate: a render, a file
+        you wrote, or a library sample (a Sound from fl.sounds, or its path), so a sample
+        can be heard before it is loaded. Reads FL's Ogg-in-WAV and WavPack stock samples."""
+        if isinstance(path, Sound):
+            return read_wav(self._session.sound_file(path.path))
+        # As fl.load_sample tells them apart: a library path unless a file you wrote is there.
+        if not Path(path).is_file():
+            return read_wav(self._session.sound_file(str(path)))
         return read_wav(Path(path))
 
     def meters(self, bars: int = 2, start_bar: int = 1) -> CheckResult:

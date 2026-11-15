@@ -20,6 +20,7 @@ from pathlib import Path
 
 from fl_mcp import errors, flp, scene
 from fl_mcp import sounds as stock_sounds
+from fl_mcp.audio import decode_audio
 from fl_mcp.audio_stream import AudioChunk, AudioEndpoint
 from fl_mcp.contract import (
     ENV_AGENT_PROJECT,
@@ -35,7 +36,7 @@ from fl_mcp.core.carriers.spool import SpoolCarrier
 from fl_mcp.core.carriers.udp import UdpCarrier
 from fl_mcp.core.carriers.wire import ControlUnavailable
 from fl_mcp.core.transport import Transport
-from fl_mcp.fl.paths import fl_patches_dir, primary_settings_dir
+from fl_mcp.fl.paths import primary_settings_dir
 from fl_mcp.fl.process import bridge_pid
 from fl_mcp.observer import Observer
 from fl_mcp.ops import notes as ops_notes
@@ -44,6 +45,7 @@ from fl_mcp.plugin_models import load_bundled_param_models
 from fl_mcp.profile import profile_gate
 from fl_mcp.schemas import (
     AudioBytes,
+    Audition,
     AutomationPoint,
     AutomationTake,
     Channel,
@@ -54,6 +56,7 @@ from fl_mcp.schemas import (
     CheckResult,
     DoctorReport,
     HelloEvent,
+    LoadKind,
     MixerSend,
     MixerTrack,
     Note,
@@ -66,14 +69,13 @@ from fl_mcp.schemas import (
     RenderReceipt,
     SessionState,
     Sound,
-    SoundKind,
     StemsReceipt,
     Target,
     WriteResult,
 )
 from fl_mcp.store import Store
 
-from . import arrangement, controls, lifecycle, loading, routing, state
+from . import arrangement, controls, lifecycle, loading, preview, routing, state
 from . import check as check_mod
 from . import notes as note_ops
 from . import presets as preset_ops
@@ -594,7 +596,7 @@ class FLSession:
         with self._write_guard("set_preset"):
             return preset_ops.set_preset(self, channel, preset)
 
-    def load_sound(self, channel: int, sound: str, kind: SoundKind) -> ChannelSound:
+    def load_sound(self, channel: int, sound: str, kind: LoadKind) -> ChannelSound:
         with self._write_guard("load_sound"):
             return loading.load_sound(self, channel, sound, kind)
 
@@ -603,20 +605,54 @@ class FLSession:
         with self._write_guard("load_sound"):
             return loading.load_audio(self, channel, name, audio)
 
-    def sounds(
-        self, query: str = "", *, kind: SoundKind | None = None, plugin: str | None = None, limit: int = 20
-    ) -> list[Sound]:
-        """Search the stock sounds this FL install ships (fl_mcp.sounds). The search runs
-        here, where the index is; the kernel reads the files themselves (stock_folder)."""
-        return stock_sounds.search(self.stock_folder(), query, kind=kind, plugin=plugin, limit=limit)
+    def audition(self, preset: str, output: Path, notes: list[Note] | None = None) -> Audition:
+        """Play an instrument preset alone on the Audition channel and record it (preview.py)."""
+        with self._write_guard("audition"):
+            return preview.audition(self, preset, notes, output)
 
-    def stock_folder(self) -> Path:
-        """FL's stock content folder (Data/Patches: plugin presets, sample packs). The run
-        kernel may read it and nothing else of FL's install (docs/38)."""
-        folder = fl_patches_dir()
-        if not folder.is_dir():
-            raise errors.stock_sounds_missing(folder)
-        return folder.resolve()
+    def sounds(
+        self,
+        query: str = "",
+        *,
+        like_path: str | None = None,
+        like_audio: AudioBytes | None = None,
+        kind: LoadKind | None = None,
+        plugin: str | None = None,
+        limit: int = 20,
+    ) -> list[Sound]:
+        """Search the sound library by sound (fl_mcp.sounds): by words, and/or like a library
+        sound (``like_path``) or an audio file the kernel read (``like_audio``). The search
+        and the sound model run here, where the index is; the kernel reads the files
+        themselves (sound_file)."""
+        lib = self._library()
+        try:
+            like = None
+            if like_path is not None or like_audio is not None:
+                audio = None if like_audio is None else decode_audio(like_audio)
+                like = stock_sounds.reference_embedding(lib, like_path, audio)
+            return stock_sounds.search(
+                lib, query, like=like, kind=kind, plugin=plugin, limit=limit, exclude=like_path
+            )
+        except ValueError as exc:
+            raise errors.invalid_argument("fl.sounds", str(exc)) from None
+
+    def sound_file(self, sound: str) -> Path:
+        """The file of a library sample or preset (a path from fl.sounds), for the run kernel
+        to read: FL's stock folder and the CC0 packs are readable to it and nothing else of
+        FL's install or the engine's data (docs/38)."""
+        lib = self._library()
+        kind = "preset" if sound.replace("\\", "/").startswith(stock_sounds.PRESETS_DIR + "/") else "sample"
+        try:
+            return stock_sounds.resolve(lib, sound, kind).resolve()
+        except ValueError as exc:
+            raise errors.invalid_argument("fl.read_wav", str(exc)) from None
+
+    @staticmethod
+    def _library() -> stock_sounds.Library:
+        lib = stock_sounds.library()
+        if not lib.stock.is_dir():
+            raise errors.stock_sounds_missing(lib.stock)
+        return lib
 
     # -- transport ------------------------------------------------------------
 

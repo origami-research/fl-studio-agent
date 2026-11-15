@@ -239,7 +239,18 @@ def doctor(session: FLSession, *, clock: Callable[[], float] = time.time) -> Doc
         note_plane=note_plane,
         project_file=project_file,
         bridge=bridge,
+        sound_search=_sound_search(),
     )
+
+
+def _sound_search() -> str:
+    """How fl.sounds ranks on this machine; a failed probe is reported, not raised."""
+    from fl_mcp import sounds
+
+    try:
+        return sounds.search_mode(sounds.library())
+    except Exception as exc:  # noqa: BLE001 - doctor must report failed probes
+        return f"sound search probe failed: {exc}"
 
 
 def _bridge_install() -> BridgeInstall:

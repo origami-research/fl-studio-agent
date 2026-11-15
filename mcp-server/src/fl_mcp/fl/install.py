@@ -16,6 +16,12 @@ for a stale controller. Done with FL closed:
      (fl/bridge.py); ``--bridge PATH`` installs your own build instead.
      ``--no-bridge`` is for hosts that install their own Bridge build (the
      arena boxes pin theirs by SHA-256 in provision.ps1); it is not a user choice
+  7. the CC0 sample packs (VCSL, VSCO 2 CE; NOTICE.md) into the engine's sound
+     folder, each file from a pinned upstream commit and checked against its
+     SHA-256 (fl/sound_packs.py); fl.sounds lists them
+  8. the sound model and the sound index fl.sounds ranks by (LAION's CLAP music
+     checkpoint as ONNX, CC0; numbers per FL stock sound, none of FL's audio), each
+     file pinned by SHA-256 (fl/sound_search.py)
 
 FL only loads these from fixed locations under the user's Image-Line data
 folder (and the Bridge from inside FL's own install), so they are copied there
@@ -39,7 +45,7 @@ from typing import Protocol
 
 from fl_mcp.controller_version import controller_script_bytes
 
-from . import bridge
+from . import bridge, sound_packs, sound_search
 from .paths import bridge_binary_name, fl_settings_dirs, piano_roll_scripts_dir
 from .process import fl_process_running
 from .steps import InstallStep
@@ -406,6 +412,8 @@ def install_all(bridge_library: Path | None = None, *, with_bridge: bool = True)
         results["bridge"] = bridge.install_built(bridge_library)
     elif with_bridge:
         results["bridge"] = bridge.install_release()
+    results["sound_packs"] = sound_packs.install()
+    results["sound_search"] = sound_search.install()
     return results
 
 

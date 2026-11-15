@@ -236,7 +236,7 @@ def test_the_download_is_verified_by_the_os_trust_store(monkeypatch):
         return Response()
 
     monkeypatch.setattr(bridge.urllib.request, "urlopen", urlopen)
-    assert bridge._fetch("https://example.invalid/SHA256SUMS") == b"sums"
+    assert bridge.fetch("https://example.invalid/SHA256SUMS") == b"sums"
     assert isinstance(seen["context"], truststore.SSLContext)
     assert seen["timeout"] == bridge.DOWNLOAD_TIMEOUT_SECONDS
 

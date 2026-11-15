@@ -40,11 +40,11 @@ from fl_mcp import errors
 from fl_mcp import sounds as stock_sounds
 from fl_mcp.audio import decode_audio
 from fl_mcp.errors import WriteRejected
-from fl_mcp.fl.paths import app_data_root, fl_patches_dir
+from fl_mcp.fl.paths import app_data_root
 from fl_mcp.fl.process import fl_process_running
-from fl_mcp.schemas import ChannelSound, MixerEffect, SoundKind
+from fl_mcp.schemas import ChannelSound, LoadKind, MixerEffect
 
-from .controls import GENERATOR_SLOT, _live_int, _live_read
+from .controls import GENERATOR_SLOT, _live_int, _live_read, _live_write
 from .notes import select_only
 from .routing import MIXER_SLOTS
 
@@ -71,13 +71,13 @@ _WINDOWS_DEVICES = frozenset(
 Role = Literal["sample", "instrument", "effect"]
 
 
-def _stock_file(sound: str, kind: SoundKind) -> tuple[Path, Role, str | None]:
-    """The stock file, what loading it does, and its plugin; checked before FL is touched."""
-    folder = fl_patches_dir()
-    if not folder.is_dir():
-        raise errors.stock_sounds_missing(folder)
+def _library_file(sound: str, kind: LoadKind) -> tuple[Path, Role, str | None]:
+    """The library file, what loading it does, and its plugin; checked before FL is touched."""
+    lib = stock_sounds.library()
+    if not lib.stock.is_dir():
+        raise errors.stock_sounds_missing(lib.stock)
     try:
-        path = stock_sounds.resolve(folder, sound, kind)
+        path = stock_sounds.resolve(lib, sound, kind)
         if kind == "sample":
             return path, "sample", None
         role, plugin = stock_sounds.preset_role(sound)
@@ -154,9 +154,14 @@ def _named_after(name: str, stem: str) -> bool:
     return re.fullmatch(re.escape(stem) + r"( #\d+)?", name) is not None
 
 
-def _same_plugin(a: str | None, b: str | None) -> bool:
-    # FL's own names differ from its preset folders in case ("Fruity parametric EQ 2").
-    return a is not None and b is not None and a.casefold() == b.casefold()
+def _same_plugin(fl_name: str | None, folder: str | None) -> bool:
+    """Whether FL's name for a channel's plugin is the plugin of a preset folder. FL's names differ
+    from its folders in case ("Fruity parametric EQ 2") and may add a word: SimSynth's presets
+    load as "SimSynth Live" (FL 26.1.6.5639, all 73 refused before this)."""
+    if fl_name is None or folder is None:
+        return False
+    fl_name, folder = fl_name.casefold(), folder.casefold()
+    return fl_name == folder or fl_name.startswith(folder + " ")
 
 
 def _ready(session: FLSession, channel: int, role: Role) -> tuple[int, list[str | None]] | None:
@@ -220,9 +225,9 @@ def _confirm(
     return loaded.model_copy(update={"effect": MixerEffect(mixer_track=track, slot=slot, plugin=str(effect))})
 
 
-def load_sound(session: FLSession, channel: int, sound: str, kind: SoundKind) -> ChannelSound:
-    """Load the stock ``sound`` (a path from fl.sounds()) into ``channel``; return what FL now has."""
-    path, role, plugin = _stock_file(sound, kind)
+def load_sound(session: FLSession, channel: int, sound: str, kind: LoadKind) -> ChannelSound:
+    """Load the library ``sound`` (a path from fl.sounds()) into ``channel``; return what FL now has."""
+    path, role, plugin = _library_file(sound, kind)
     return _load(session, channel, path, sound, kind, role, plugin)
 
 
@@ -256,7 +261,7 @@ def _imported_sample(name: str, audio: bytes) -> Path:
 
 
 def _load(
-    session: FLSession, channel: int, path: Path, sound: str, kind: SoundKind, role: Role, plugin: str | None
+    session: FLSession, channel: int, path: Path, sound: str, kind: LoadKind, role: Role, plugin: str | None
 ) -> ChannelSound:
     _require_bridge(session)
     effect_track = _ready(session, channel, role)
@@ -267,3 +272,32 @@ def _load(
     loaded = _confirm(session, loaded, path, role, plugin, effect_track, sampler)
     log.info("loaded %s into channel %d: %s", PurePosixPath(sound).name, channel, loaded)
     return loaded
+
+
+def name_channel(session: FLSession, channel: int, name: str) -> str:
+    """Name ``channel`` (``channels.setChannelName``) and return FL's readback, which must match.
+
+    Loading renames a channel after its file; the audition channel is found by name, so
+    it is named back after each load."""
+    _live_write(session, "channels.setChannelName", [channel, name])
+    now = str(_live_read(session, "channels.getChannelName", [channel]))
+    if now != name:
+        raise WriteRejected(
+            f"Channel {channel} is named {now!r} after naming it {name!r}, so FL did not confirm the name.",
+            fix="Read fl.channels and retry.",
+        )
+    return now
+
+
+def channels_named(session: FLSession, names: tuple[str, ...], call: str) -> dict[str, int]:
+    """Each of ``names``' channel index, by FL's live channel names (any case); raises
+    naming every one this project lacks, before anything changes."""
+    live = {c.name.casefold(): c.index for c in session.snapshot().channels}
+    missing = [name for name in names if name.casefold() not in live]
+    if missing:
+        raise errors.invalid_argument(
+            call,
+            f"this project has no channel named {', '.join(missing)}: {call} needs the agent project's "
+            f"{', '.join(names)} channel{'s' if len(names) > 1 else ''}",
+        )
+    return {name: live[name.casefold()] for name in names}

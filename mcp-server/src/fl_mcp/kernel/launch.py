@@ -20,7 +20,7 @@ from pathlib import Path
 from typing import IO, ClassVar, Protocol
 
 from fl_mcp import errors
-from fl_mcp.fl.paths import fl_patches_dir
+from fl_mcp.fl.paths import fl_patches_dir, sound_library_dir
 
 # Server environment the kernel needs to run programs and reach the network;
 # everything else (credentials, FLMCP_* session wiring) stays with the server.
@@ -50,10 +50,11 @@ _WINDOWS_DEVICES = frozenset(
 
 
 def stock_dirs() -> tuple[Path, ...]:
-    """FL's stock content folder (Data/Patches) when this machine has one: the kernel may
-    read the presets and samples there to choose one, and nothing else of FL (docs/38)."""
-    folder = fl_patches_dir()
-    return (folder,) if folder.is_dir() else ()
+    """The sound library's folders that exist on this machine: FL's stock content
+    (Data/Patches) and the CC0 packs fl-mcp-install downloads. The kernel may read the
+    presets and samples there to choose one (fl.read_wav), and nothing else of FL or of
+    the engine's data (docs/38)."""
+    return tuple(folder for folder in (fl_patches_dir(), sound_library_dir()) if folder.is_dir())
 
 
 @dataclass(frozen=True)

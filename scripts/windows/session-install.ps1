@@ -60,7 +60,8 @@ try {
     # --no-bridge: provision.ps1 owns the Bridge DLL (pinned by sha256), so the release download stays out.
     $install = Invoke-Native (Join-Path $scripts 'fl-mcp-install.exe') @('--json', '--no-bridge')
     $report = $install.Output | ConvertFrom-Json
-    foreach ($name in 'note_script', 'controller_script') {
+    # sound_packs: the CC0 packs the kits use, checked file by file, so every box plays the same kits.
+    foreach ($name in 'note_script', 'controller_script', 'sound_packs') {
         $step = $report.$name
         Add-Step $name $(if ($step.status -eq 'OK') { 'ok' } else { 'failed' }) $step.detail
     }

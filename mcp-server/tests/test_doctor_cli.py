@@ -27,7 +27,8 @@ class _Session:
 def _report(status: str) -> DoctorReport:
     plane = PlaneStatus(connected=status == "ok", detail="probe")
     bridge = BridgeInstall(installed=False, path='/FL/Plugins/Fruity/Effects/FL MCP Bridge')
-    return DoctorReport(status=status, control_plane=plane, note_plane=plane, project_file=plane, bridge=bridge)
+    return DoctorReport(status=status, control_plane=plane, note_plane=plane, project_file=plane, bridge=bridge,
+                        sound_search="by name only: the sound index is not installed")
 
 
 @pytest.mark.parametrize(("status", "code"), [("ok", 0), ("not_ready", 1)])

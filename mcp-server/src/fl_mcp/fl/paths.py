@@ -17,6 +17,7 @@ Two distinct trees, easy to conflate:
       +-- spool/<session>/...        SpoolSession dirs - GC'd on start
       +-- projects/<project-key>/    shadow.json, actions.jsonl, manifest.json,
                                      params/<plugin>.json
+      +-- sounds/CC0/<pack>/...      the CC0 sample packs (sound_packs.py)
 
   The Bridge plugin and the store are native/host code with no sandbox
   restriction, so their data lives in the conventional location.
@@ -138,6 +139,18 @@ def app_data_root() -> Path:
 
 def spool_dir() -> Path:
     return app_data_root() / "spool"
+
+
+def sound_library_dir() -> Path:
+    """The CC0 sample packs fl-mcp-install downloads (sound_packs.py): ``CC0/<pack>/...``.
+    The run kernel may read it, like FL's stock folder (docs/38)."""
+    return app_data_root() / "sounds"
+
+
+def sound_search_dir() -> Path:
+    """The sound model and the sound index fl-mcp-install downloads (fl/sound_search.py),
+    which fl.sounds ranks by. Read by the server only, never the run kernel."""
+    return app_data_root() / "sound-search"
 
 
 def projects_dir() -> Path:

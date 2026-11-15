@@ -32,6 +32,7 @@ from session_fakes import (
 )
 
 from fl_mcp import errors, sdk
+from fl_mcp import sounds as sounds_mod
 from fl_mcp.actions import ActionLog
 from fl_mcp.kernel import wire
 from fl_mcp.schemas import (
@@ -68,7 +69,9 @@ def patches(tmp_path, monkeypatch):
     for relative in (KICK, COWBELL, SYTRUS, OSC, REEVERB, VST):
         (root / relative).parent.mkdir(parents=True, exist_ok=True)
         (root / relative).write_bytes(b"")
-    monkeypatch.setattr(loading_mod, "fl_patches_dir", lambda: root)
+    monkeypatch.setattr(sounds_mod, "fl_patches_dir", lambda: root)
+    monkeypatch.setattr(sounds_mod, "sound_library_dir", lambda: tmp_path / "sounds")
+    monkeypatch.setattr(sounds_mod, "sound_search_dir", lambda: tmp_path / "sound-search")
     return root
 
 
@@ -144,6 +147,7 @@ class FakeFL:
             "plugins.getPluginName": plugin_name,
             "mixer.isTrackPluginValid": lambda args: int(self.slots[args[0]][args[1]] is not None),
             "state.snapshot": lambda args: snapshot_answer([c["name"] for c in self.channels]),
+            "channels.setChannelName": lambda args: self.channels[args[0]].update(name=args[1]),
         }
 
 
@@ -452,7 +456,7 @@ def test_the_sdk_refuses_a_missing_or_oversized_file_before_fl_is_asked(live, tm
     Path("big.wav").write_bytes(wav_bytes())
     monkeypatch.setattr(sdk, "MAX_AUDIO_BYTES", 1000)
 
-    for sample, words in (("nothing.wav", "no file at"), ("big.wav", "is over")):
+    for sample, words in (("nothing.wav", "not a sample in the library or a file you wrote"), ("big.wav", "is over")):
         with pytest.raises(errors.ToolError, match=words):
             fl.load_sample(1, sample)
     assert not touched_fl(control, spool)
@@ -545,3 +549,22 @@ def test_each_load_reads_as_one_sentence_from_fls_readback():
         "Loaded the sample My Chop into channel 3",
     ]
     assert not any(re.search("stale", s) for s in actions.sentences())
+
+
+def test_a_guessed_sample_name_is_refused_with_the_real_ones(live):
+    """Live 2026-11-13: fl.load_sample("Sampler 1", "909 Kick") said only "no file at"; a name
+    that is no file is looked up in the library, which names the closest real sounds."""
+    fl, control, spool = live
+
+    with pytest.raises(errors.ToolError, match=r"Did you mean 'Packs/Drums/Kicks/808 Kick\.wav'"):
+        fl.load_sample(1, "808 Kick")
+    assert not touched_fl(control, spool)
+
+
+def test_a_plugin_fl_names_with_an_extra_word_is_the_folders_plugin():
+    """SimSynth's stock presets load as "SimSynth Live": a word FL adds is the same plugin, another plugin is not."""
+    assert loading_mod._same_plugin("SimSynth Live", "SimSynth")
+    assert loading_mod._same_plugin("Fruity parametric EQ 2", "Fruity Parametric EQ 2")
+    assert not loading_mod._same_plugin("SimSynth", "SimSynth Live")
+    assert not loading_mod._same_plugin("Sytrus", "Sy")
+    assert not loading_mod._same_plugin(None, "Sytrus")

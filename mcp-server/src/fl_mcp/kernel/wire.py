@@ -24,6 +24,7 @@ from fl_mcp.session import FLSession
 
 # The FLSession surface that sdk.FL and sdk.Track call; a test pins it to sdk.py.
 SessionMethod = Literal[
+    "audition",
     "automate",
     "channel_names",
     "check",
@@ -54,8 +55,8 @@ SessionMethod = Literal[
     "set_preset",
     "set_send",
     "set_tempo",
+    "sound_file",
     "sounds",
-    "stock_folder",
     "tempo",
     "undo",
     "write_notes",

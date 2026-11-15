@@ -333,6 +333,9 @@ class DoctorReport(BaseModel):
     note_plane: PlaneStatus
     project_file: PlaneStatus
     bridge: BridgeInstall
+    # How fl.sounds ranks here: "by sound: ..." or "by name only: <why>". Not a plane: name
+    # matching works without the sound model and index, so it never makes the engine not ready.
+    sound_search: str
 
 
 # -- spool wire (server <-> code inside FL) ----------------------------------
@@ -519,16 +522,32 @@ class Channel(BaseModel):
     about: str | None = None
 
 
-SoundKind = Literal["preset", "sample"]
+# What a channel can be loaded with; the library's two kinds of sound (fl_mcp.sounds).
+LoadKind = Literal["preset", "sample"]
 
 
 class Sound(BaseModel):
-    """One stock sound FL ships: a plugin preset or a sample."""
+    """One sound of the library (fl_mcp.sounds): a stock plugin preset, or a stock or
+    CC0 pack sample, with what it sounds like from the sound index (sound_index.py).
 
-    kind: SoundKind
+    ``score`` is how well it matches the search, by sound (higher is closer; None when
+    it matched by name only: an effect preset, or no sound index here). The
+    measurements are None where the index has none; a preset's are of its preview
+    (fl.audition's default phrase)."""
+
+    kind: LoadKind
     name: str
     plugin: str | None = None  # the plugin a preset is for; None for samples
-    path: str  # relative to FL's Data/Patches folder, "/"-separated; what the loaders take
+    # "/"-separated: "Packs/..." and "Plugin presets/..." in FL's Data/Patches folder,
+    # "CC0/..." in the engine's sound folder; what the loaders and read_wav take.
+    path: str
+    score: float | None = None
+    seconds: float | None = None  # length
+    pitch: float | None = None  # a sample's steady pitch as a MIDI note (60 = C4), None when unpitched
+    decay: float | None = None  # seconds from its loudest moment until 30 dB quieter
+    brightness: float | None = None  # spectral centroid, Hz
+    low: float | None = None  # share of its energy below 150 Hz
+    high: float | None = None  # share of its energy above 5 kHz
 
 
 class MixerEffect(BaseModel):
@@ -549,11 +568,19 @@ class ChannelSound(BaseModel):
     """
 
     channel: int = Field(ge=0)
-    kind: SoundKind
+    kind: LoadKind
     sound: str
     name: str
     plugin: str | None = None
     effect: MixerEffect | None = None
+
+
+class Audition(BaseModel):
+    """fl.audition's result: the preset FL loaded on the Audition channel, and the render
+    of that channel alone playing the audition's notes."""
+
+    sound: ChannelSound
+    render: RenderReceipt
 
 
 class MixerTrack(BaseModel):

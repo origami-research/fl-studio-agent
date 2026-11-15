@@ -119,7 +119,7 @@ The server creates:
 | `<root>/work` | read and write; cwd and `HOME` | model files, `.packages` (pip target), `.tmp`, caches |
 | `<root>/renders` | read only | WAVs written by the server for `fl.render(...)` and the `render` tool |
 | `<root>/boundary-canary` | none | the probe file described below |
-| FL's `Data/Patches` | read only (since 2026-11-03) | FL's stock presets and sample packs, `fl.stock_folder`; a `Sound`'s `path` from `fl.sounds` is relative to it |
+| FL's `Data/Patches` and the engine's `sounds` folder | read only (since 2026-11-03; the CC0 packs since 2026-11-12) | the sound library: FL's stock presets and sample packs and the CC0 packs fl-mcp-install downloads; `fl.read_wav(sound)` reads a `Sound` from `fl.sounds` there (`fl.stock_folder` until 2026-11-12) |
 
 `fl.render(name)` uses only the file name and writes `<root>/renders/<name>`; the `render` tool writes `<root>/renders/render-<id>.wav`.
 Every render lands directly in `renders`, never in a folder made inside it, because on Windows the kernel can read a render only through the grant it inherits from `renders` (see "Private directories" below).

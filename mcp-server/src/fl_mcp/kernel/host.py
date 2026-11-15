@@ -60,7 +60,7 @@ _STDERR_LOG_LINES = 200
 # A dead kernel's stderr pipe closes at once unless a grandchild still holds it.
 _STDERR_DRAIN_SECONDS = 2.0
 # Session calls whose ``output`` path the server writes: confined to renders.
-_SERVER_WRITES = frozenset({"render_wav", "render_stems", "export_offline"})
+_SERVER_WRITES = frozenset({"audition", "render_wav", "render_stems", "export_offline"})
 
 
 def run_budget_from_env(environ: Mapping[str, str]) -> float:

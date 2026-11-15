@@ -56,7 +56,7 @@ def release_tag() -> str:
     return "v" + __version__.split("+", 1)[0]
 
 
-def _fetch(url: str) -> bytes:
+def fetch(url: str) -> bytes:
     """Download over HTTPS verified by the OS, as a browser does. Python's own check sees
     only the roots already in Windows' store, which Windows fills on demand: a machine
     that never opened github.com in Edge (Chrome keeps its own roots) lacks GitHub's
@@ -159,7 +159,7 @@ def install_built(built: Path) -> InstallStep:
     return _place(built.read_bytes(), f"local build {built}", explicit=True)
 
 
-def install_release(fetch: Fetch = _fetch) -> InstallStep:
+def install_release(fetch: Fetch = fetch) -> InstallStep:
     """Download this version's prebuilt Bridge, verify it against the release's SHA256SUMS, install it."""
     asset = RELEASE_ASSETS.get(sys.platform)
     if asset is None:
