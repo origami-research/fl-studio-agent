@@ -160,7 +160,7 @@ def test_the_model_sees_one_tool():
     listening, files and shell are all Python on fl inside it; setup diagnostics
     stay the operator's fl-mcp-doctor."""
     assert [fn.__name__ for fn in server.tool_definitions()] == ["run"]
-    for word in ("fl.scene()", "meters(", "render(", "read_wav(", "help(fl.", "fl.guide(", "librosa", "notes.md"):
+    for word in ("fl.scene()", "meters(", "render(", "read_wav(", "help(fl.", "fl.guide(", "librosa"):
         assert word in server.run.__doc__, word
 
 

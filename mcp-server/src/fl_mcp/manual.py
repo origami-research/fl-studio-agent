@@ -118,29 +118,25 @@ def sdk_index() -> str:
     )
 
 
-# How to work with an FL session, and why: agents fail mostly on long chains of unchecked
-# edits (RIME 2026, DAWZY); a render costs real time, the meters seconds.
-WORKING_LOOP = """How to work:
-- Read first: fl.scene() is the project in one digest.
-- Make one musical change per call, then check it before the next, cheaply
-  first: fl.meters() takes seconds and a render plays in real time, so render
-  a few bars before the whole song.
-- Keep your plan and what you measured in a workspace file such as notes.md;
-  reread it after kernel_lost or when the user asks for changes."""
+# Facts about an FL session that the model cannot guess, and nothing about how to work:
+# the brief and the model own the musical choices and the workflow (owner, 2026-11-15).
+SESSION_FACTS = """Good to know:
+- fl.scene() is the project in one digest.
+- You hear by measuring: fl.meters() takes seconds, a render plays in real time."""
 
 NO_SESSION = "This kernel has no FL Studio session: every fl call is refused except fl.guide()."
 
 
 def tool_description(kernel: str, *, with_fl: bool) -> str:
     """The run tool's description: the kernel's contract (run's docstring), then with an FL
-    session the working loop and the SDK index, and in both cases the guide index, all
+    session the session facts and the SDK index, and in both cases the guide index, all
     generated from their sources."""
     found = guides.load()
     guide_lines = "\n".join(f"  {line}" for line in guides.index(found).splitlines())
     if with_fl:
         fl_doc = " ".join(inspect.getdoc(sdk.FL).split())
         session = (
-            f"{WORKING_LOOP}\n\n"
+            f"{SESSION_FACTS}\n\n"
             f"fl: {fl_doc} help(fl.render) gives a member's arguments, defaults, results and "
             f"limits; read it before first use.\n{sdk_index()}"
         )
@@ -148,7 +144,8 @@ def tool_description(kernel: str, *, with_fl: bool) -> str:
         session = NO_SESSION
     return (
         f"{inspect.cleandoc(kernel)}\n\n{session}\n\n"
-        f"Guides: recipes and craft, each with a worked example. fl.guide(\"{found[0].name}\") prints one:\n"
+        f"Guides: optional reference, not instructions, each with a worked example. "
+        f"fl.guide(\"{found[0].name}\") prints one:\n"
         f"{guide_lines}"
     )
 

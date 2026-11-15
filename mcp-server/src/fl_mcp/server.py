@@ -143,7 +143,7 @@ def run(code: str, ctx: Context) -> RunResult:
     """
     # Engineering notes (not part of the model-facing description): the docstring
     # above is the kernel's contract, true with or without an FL session;
-    # manual.tool_description adds the working loop, the SDK index and the guide
+    # manual.tool_description adds the session facts, the SDK index and the guide
     # index, generated from sdk.py's docstrings and fl_mcp/guides (with an FL
     # session), or only the guide index (--workspace-only, where fl calls are
     # refused). run.__doc__ becomes the FL description below, so the contract and

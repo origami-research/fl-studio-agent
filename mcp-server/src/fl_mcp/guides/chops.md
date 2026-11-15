@@ -1,18 +1,18 @@
 ---
 name: chops
-description: Chop, stretch, reverse or re-pitch a sample in Python and play it.
+description: Optional reference on editing a sample in Python and playing it.
 ---
 
 A sampler plays whatever WAV you give it, so any sample edit is a few lines of numpy or librosa and a `fl.load_sample` of the file you wrote.
 
-How it plays, and why it matters:
+How a sampler plays it:
 
 - A note plays the sample from its start, at its own pitch on C4 (MIDI 60), resampled on other keys.
-- Some channels stop the sample when the note ends, so write each note as long as the sample.
-- Cut on the beat grid: one step is `60 / fl.tempo` seconds per beat, so chops line up with the song.
-- `librosa.effects.time_stretch` changes length without pitch and `librosa.effects.pitch_shift` pitch without length; a reversed slice (`x[::-1]`) makes a riser or a swell.
+- Some channels stop the sample when the note ends, so a note as long as the sample plays all of it.
+- One beat is `60 / fl.tempo` seconds, so cuts on that grid line up with the song.
+- `librosa.effects.time_stretch` changes length without pitch and `librosa.effects.pitch_shift` pitch without length; `x[::-1]` reverses a slice.
 
-Render a bar of the result and listen before building on it (see `fl.guide("listening")`).
+A short render lets you hear the result (see `fl.guide("listening")`).
 
 ```python
 import numpy as np, soundfile

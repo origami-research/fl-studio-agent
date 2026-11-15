@@ -1,34 +1,26 @@
 ---
 name: listening
-description: Measure a render for loudness, true peak, spectrum and kick against bass.
+description: Optional reference on measuring a render, since you cannot hear playback.
 ---
 
 You cannot hear playback, so you listen by rendering and measuring in code.
-The engine ships no canned analysis on purpose: compute what answers your question.
+The engine ships no canned analysis on purpose: compute whatever answers your question.
 
-What to measure, and why:
+Some measurements and what they show:
 
-- Loudness, integrated over the render with `pyloudnorm`, says whether the track sits where listeners expect; compare it with the target in `fl.guide("revise")`.
-- True peak, the sample peak after 4x oversampling, catches the clipping a plain peak misses between samples.
-- Spectral balance, the share of energy in low, mid and high bands, shows a muddy or thin mix before you look at single instruments.
-- Energy per section, loudness per bar range, shows whether a drop actually lands harder than the verse.
+- Integrated loudness (`pyloudnorm`): how loud the render sits overall.
+- True peak, the sample peak after 4x oversampling: clipping that a plain peak misses between samples.
+- Spectral balance, the share of energy in low, mid and high bands.
+- Loudness per bar range: how the energy moves through the song.
 
-Render only what answers the question: a render plays in real time, so a few bars or one soloed channel is cheaper than the whole song.
-Render a channel alone (`solo=`) to compare two parts, such as the bass against the kick: if both peak in the same low band they mask each other, so move one in pitch or duck one.
-A spectrogram with a line at every bar shows where sections change and where a part drops out.
-Look at the numbers first; a picture costs tokens and is easier to misread.
+A render plays in real time, so a few bars or one channel alone (`solo=`) costs less than the whole song; `fl.meters` takes seconds and says which channels sound.
+To hear what one part adds, render the same bars with it muted (`mute=[part]`) and compare.
+To compare with a reference track the user gives (in your workspace, such as `uploads/`), measure it the same way.
+Numbers are cheap to read; a picture costs tokens, but a spectrogram shows a lot at once.
 
 Reading a spectrogram: time runs left to right, pitch bottom to top, brightness is energy.
-A kick shows as short vertical stripes low down, one per hit.
-Hats show as specks high up.
-Pads and other held notes show as horizontal bands.
-Silence where a part should be playing means something is wrong: the part is muted, has no notes there, or never loaded.
-Sections should look different at their bar lines: a breakdown thins at the bottom and a drop fills it back in.
-The same picture repeating for the whole song is a loop, which `fl.guide("arrangement")` fixes; little energy above 5 kHz reads as dull, a bright smear with no gaps as harsh.
-
-Finding a buried part: first check whether it sounded at all (`fl.meters` takes seconds; on screen, watch its mixer meter).
-If it did, render the same bars twice, once with the part muted (`mute=[part]`), and compare loudness and bands: when the mix barely changes, the part is buried.
-Raise it, cut the part covering it in that band, or move it to a register nobody else uses.
+A kick shows as short vertical stripes low down, hats as specks high up, held notes as horizontal bands.
+Silence where a part should be playing means it is muted, has no notes there, or never loaded.
 
 ```python
 import numpy as np, pyloudnorm, scipy.signal, matplotlib.pyplot as plt

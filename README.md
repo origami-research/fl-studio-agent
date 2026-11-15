@@ -151,7 +151,7 @@ The server exposes one tool, `run`: Python in a persistent kernel bound to the l
 Everything is code on the `fl` object: read the song (`fl.channels`, `fl.mixer`, `fl.playlist`, `fl.patterns`, notes, `fl.scene()`), write notes, tempo, levels, parameters, routing and sounds, read FL's meters (`fl.meters()`), and render the mix, a few bars, single instruments or stems (`fl.render(...)`) to listen with numpy, scipy, librosa and matplotlib, which come installed.
 Files and shell are plain Python in the same sandbox.
 The tool's description is the short manual: the kernel, how to work, one line per SDK area and the guides.
-In `run`, `help(fl.render)` gives any method's detail and `fl.guide("listening")` opens a guide (recipes such as measuring a render, sidechain pumping and choosing sounds by ear); [docs/sdk-reference.md](docs/sdk-reference.md) is the same docstrings as one page.
+In `run`, `help(fl.render)` gives any method's detail and `fl.guide("listening")` opens a guide (optional reference on techniques such as measuring a render, ducking under the kick and finding sounds); [docs/sdk-reference.md](docs/sdk-reference.md) is the same docstrings as one page.
 
 The working rhythm is write, check the meters at milestones, render and listen at the end.
 Every result is what FL now has, so nothing needs waiting for, saving, or re-reading.

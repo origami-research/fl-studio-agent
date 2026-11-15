@@ -1,6 +1,6 @@
-"""Guides (fl_mcp/guides): the recipes and craft the model opens with fl.guide(name).
+"""Guides (fl_mcp/guides): the optional reference notes the model may open with fl.guide(name).
 
-The recipes used to be hand-written into the run description, checked against nothing.
+The notes used to be hand-written into the run description, checked against nothing.
 Here every guide's worked example runs as a run cell on the SDK fakes and every fl name
 it mentions must exist, so a guide fails CI the day the SDK changes under it.
 """
@@ -19,8 +19,8 @@ from fl_mcp.store import Store
 GUIDES = guides.load()
 
 
-def test_the_recipes_that_left_the_description_are_guides():
-    assert {"listening", "revise", "sidechain", "sounds", "chops"} <= {g.name for g in GUIDES}
+def test_the_techniques_that_left_the_description_are_guides():
+    assert {"listening", "sidechain", "sounds", "chops"} <= {g.name for g in GUIDES}
 
 
 @pytest.mark.parametrize("guide", GUIDES, ids=lambda g: g.name)

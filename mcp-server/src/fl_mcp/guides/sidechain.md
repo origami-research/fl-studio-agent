@@ -1,18 +1,18 @@
 ---
 name: sidechain
-description: Make a pad or bass pump with the kick.
+description: Optional reference on ducking a part under the kick from code.
 ---
 
-Pumping is a part ducking each time the kick hits, so the kick cuts through and the groove breathes.
-Code cannot key a compressor from the kick (FL sets a sidechain input only in the plugin's window), so draw the ducking instead: one `fl.automate` on the part's mixer track volume, a dip on every kick.
+Code cannot key a compressor from the kick: FL sets a sidechain input only in the plugin's window.
+To make a part duck when the kick hits, draw the ducking instead, with one `fl.automate` on the part's mixer track volume.
 
-How the dip is shaped, and why:
+Facts that shape the curve:
 
-- Duck to 0.25 on the fader (about 14 dB down) and come back over about 0.35 beats; a shorter release clicks, a longer one smears the groove.
-- FL plays recorded moves about 0.1 s late, so start each dip that much early.
-- Pump the parts that fight the kick for the low end or the space (pad, bass, chords), not the drums.
+- FL plays recorded moves about 0.1 s late, so a dip meant for a beat starts that much early.
+- A very fast return to full level can click.
+- How deep, how long, and which parts duck are yours to choose.
 
-Check it with `fl.render` of a few bars: the part's level should drop on every beat (see `fl.guide("listening")`).
+A short `fl.render` shows whether the level drops where you meant (see `fl.guide("listening")`).
 
 ```python
 pad = next(c for c in fl.channels if c.name == "Pad")

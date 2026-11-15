@@ -1,4 +1,4 @@
-"""Guides: recipes and production craft the model opens with ``fl.guide(name)``.
+"""Guides: optional reference notes the model may open with ``fl.guide(name)``.
 
 A guide is one Markdown file in this folder, ``<name>.md``; adding the file is all
 it takes. ``fl.guide()`` prints the index (each guide's name and description) and
@@ -11,9 +11,12 @@ The format, which ``parse`` enforces and CI checks for every guide:
   value stays plain YAML (no ": " inside, no leading quote):
   ``name``, the file's stem in lowercase letters, digits and hyphens; and
   ``description``, one line of at most 80 characters saying what the guide is for
-  (the run description lists it, so keep it short).
-- The body: Markdown, one sentence per line, at most 6,000 characters. It holds the
-  recipe or craft and the reasons for it, and names SDK methods (``fl.automate``)
+  and that it is optional reference (the run description lists it, so keep it short).
+- The body: Markdown, one sentence per line, at most 6,000 characters. It explains a
+  technique or how something works in this environment, and the facts behind it. It
+  is context, not instructions: musical choices (genre recipes, song structure,
+  lengths, loudness targets, workflow steps) are the brief's and the model's, so a
+  guide does not make them (owner, 2026-11-15). It names SDK methods (``fl.automate``)
   without restating their arguments or limits: ``help(fl.automate)`` owns those.
   It points to another guide instead of copying it.
 - Exactly one fenced block (``` or ~~~), tagged ``python``: the worked example. CI runs it as a run cell against the SDK fakes (tests/sdk_fakes.py,

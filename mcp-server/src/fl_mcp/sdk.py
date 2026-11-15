@@ -710,8 +710,9 @@ class FL:
         self._session.undo()
 
     def guide(self, name: str | None = None) -> None:
-        """Recipes and production craft: with no name, print the guides and what each is
-        for; with a name, print that guide. Each ends with a worked example."""
+        """Optional reference notes on techniques and this environment: with no name, print
+        the guides and what each is for; with a name, print that guide. Each ends with a
+        worked example."""
         found = guides.load()
         if name is None:
             print(guides.index(found))
