@@ -7,7 +7,7 @@ This file records third-party content the engine downloads or refers to, its lic
 
 The agent project and `fl.sounds` refer to samples and presets that FL Studio installs in its own `Data/Patches` folder, by path.
 None of that content is copied into this repository or downloaded by the engine; it stays in the user's FL Studio install under Image-Line's licence.
-The sound index fl-mcp-install downloads holds, per stock sample and instrument preset, its path, a CLAP embedding (512 numbers) and six measurements, computed from that content on a machine with FL; it holds no audio, and neither the sounds nor any part of them can be rebuilt from it ([note](docs/research/sound-search-2026-11-13.md)).
+The sound index fl-mcp-install downloads holds, per stock sample and instrument preset, its path, a CLAP embedding (512 numbers) and six measurements, computed from that content on a machine with FL; it holds no audio, and neither the sounds nor any part of them can be rebuilt from it ([note](docs/research/sound-search.md)).
 
 ## The sound model
 

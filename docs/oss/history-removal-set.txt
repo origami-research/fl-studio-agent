@@ -20,3 +20,6 @@ docs/oss/message-replacements.txt
 docs/oss/private-terms.txt
 docs/private/
 docs/oss/private/
+# 2026-11-14: the first sound-search note held the Image-Line terms analysis, an open owner decision
+# (now docs/private/sound-search-index-terms.md); the public note is docs/research/sound-search.md.
+docs/research/sound-search-2026-11-13.md

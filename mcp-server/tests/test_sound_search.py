@@ -3,7 +3,7 @@ the ranking (sounds.search), its install (fl/sound_search) and the SDK's ``like`
 
 The real model is 200 MB and is not in the test environment, so the encoders are faked
 here; what the model computes was checked against the reference implementation when it
-was exported (docs/research/sound-search-2026-11-13.md). These tests pin everything
+was exported (docs/research/sound-search.md). These tests pin everything
 around it: the model's input, the tokenizer's algorithm, the index file, the order.
 """
 
