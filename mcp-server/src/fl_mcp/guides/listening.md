@@ -18,6 +18,18 @@ Render a channel alone (`solo=`) to compare two parts, such as the bass against 
 A spectrogram with a line at every bar shows where sections change and where a part drops out.
 Look at the numbers first; a picture costs tokens and is easier to misread.
 
+Reading a spectrogram: time runs left to right, pitch bottom to top, brightness is energy.
+A kick shows as short vertical stripes low down, one per hit.
+Hats show as specks high up.
+Pads and other held notes show as horizontal bands.
+Silence where a part should be playing means something is wrong: the part is muted, has no notes there, or never loaded.
+Sections should look different at their bar lines: a breakdown thins at the bottom and a drop fills it back in.
+The same picture repeating for the whole song is a loop, which `fl.guide("arrangement")` fixes; little energy above 5 kHz reads as dull, a bright smear with no gaps as harsh.
+
+Finding a buried part: first check whether it sounded at all (`fl.meters` takes seconds; on screen, watch its mixer meter).
+If it did, render the same bars twice, once with the part muted (`mute=[part]`), and compare loudness and bands: when the mix barely changes, the part is buried.
+Raise it, cut the part covering it in that band, or move it to a register nobody else uses.
+
 ```python
 import numpy as np, pyloudnorm, scipy.signal, matplotlib.pyplot as plt
 

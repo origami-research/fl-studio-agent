@@ -520,8 +520,17 @@ Fields: channel: int, name: str, sounded: bool | None, peak_dbfs: float | None, 
 
 `fl.guide(name)` prints one in `run`.
 
+- [`arrangement`](../mcp-server/src/fl_mcp/guides/arrangement.md): Turn a loop into a song with sections, builds and drops.
 - [`chops`](../mcp-server/src/fl_mcp/guides/chops.md): Chop, stretch, reverse or re-pitch a sample in Python and play it.
+- [`cinematic`](../mcp-server/src/fl_mcp/guides/cinematic.md): Orchestral cues with strings, brass, choir and CC0 drums.
+- [`dnb`](../mcp-server/src/fl_mcp/guides/dnb.md): Drum and bass two-step at 174, sub and reese bass, bar map.
+- [`house`](../mcp-server/src/fl_mcp/guides/house.md): House and deep house tempo, drums, bass, chords and bar map.
 - [`listening`](../mcp-server/src/fl_mcp/guides/listening.md): Measure a render for loudness, true peak, spectrum and kick against bass.
+- [`lofi`](../mcp-server/src/fl_mcp/guides/lofi.md): Lo-fi hip hop swung drums, jazz chords, dusty texture.
+- [`mixing`](../mcp-server/src/fl_mcp/guides/mixing.md): Balance a mix with levels, EQ, reverb and delay sends, panning.
+- [`phonk`](../mcp-server/src/fl_mcp/guides/phonk.md): Drift phonk cowbell riffs, distorted 808s, drums and bar map.
+- [`pop`](../mcp-server/src/fl_mcp/guides/pop.md): Pop song form, four-chord harmony and a lead that sings the hook.
 - [`revise`](../mcp-server/src/fl_mcp/guides/revise.md): Revise in a loop against a reference track or a loudness target.
 - [`sidechain`](../mcp-server/src/fl_mcp/guides/sidechain.md): Make a pad or bass pump with the kick.
 - [`sounds`](../mcp-server/src/fl_mcp/guides/sounds.md): Choose sounds by ear with search by description, audition, then load.
+- [`trap`](../mcp-server/src/fl_mcp/guides/trap.md): Trap half-time drums, hat rolls, long 808s and bar map.

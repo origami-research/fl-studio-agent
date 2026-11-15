@@ -16,6 +16,16 @@ So choose every sound by how it sounds:
 
 Pick sounds that suit each other and the genre before writing many notes on them; changing a sound late changes the whole mix.
 
+Kick and bass are one decision, not two.
+The kick owns the attack and the bass or 808 owns the held low notes, so match their lengths: a long, boomy kick wants a short or off-beat bass, and a long 808 wants a short, punchy kick (compare their `decay`).
+Play pitched samples in key: a sample's `pitch` is its MIDI note and a sampler plays it at that pitch on MIDI 60, so write `60 + wanted - pitch`; to change the sample itself, see `fl.guide("chops")`.
+Check the pair with the kick-against-bass render in `fl.guide("listening")`.
+
+Give each register one owner at a time.
+Two pads, or a pad and a Rhodes in the same octave, blur into mud: keep one, voice the other an octave away, or let them take turns by section.
+A Sound's `low`, `high` and `brightness` show where it lives; two sounds that read alike will compete for the same space.
+Layer only sounds that add something different, such as a bright pluck an octave above a warm pad, and check a layer by rendering with and without it.
+
 ```python
 import numpy as np
 

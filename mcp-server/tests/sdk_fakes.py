@@ -226,6 +226,8 @@ STUDIO_CHANNELS = (
     ("Guitar", 31), ("Lead", 14), ("Pluck", 15), ("Synth 1", 32), ("Synth 2", 33),
     ("Sampler 1", 20), ("Sampler 2", 21), ("Sampler 3", 22), ("Audition", 34),
 )
+# The template's send returns (scripts/build_session_template.py), which the mixing guide finds by name.
+STUDIO_SENDS = {113: "Reverb Send", 114: "Delay Send"}
 STUDIO_RATE = 44_100
 
 
@@ -258,7 +260,7 @@ class StudioFake(FakeSession):
         channels = [Channel(index=i, name=name, mixer_track=track) for i, (name, track) in enumerate(STUDIO_CHANNELS)]
         super().__init__(store=store, channels=channels)
         self.library = library
-        self._volumes = {0: 0.8, **{c.mixer_track: 0.8 for c in channels}}
+        self._volumes = {0: 0.8, **{c.mixer_track: 0.8 for c in channels}, **dict.fromkeys(STUDIO_SENDS, 0.8)}
         self._effects: dict[int, list] = {}
         self._sends: dict[tuple[int, int], MixerSend] = {}
         self._patterns = [PatternInfo(number=1, name="Pattern 1", beats=16.0)]
@@ -275,7 +277,7 @@ class StudioFake(FakeSession):
     def mixer_tracks(self):
         from fl_mcp.schemas import MixerTrack
 
-        names = {0: "Master", **{c.mixer_track: c.name for c in self._channels}}
+        names = {0: "Master", **{c.mixer_track: c.name for c in self._channels}, **STUDIO_SENDS}
         return [
             MixerTrack(
                 index=index, name=name, volume=self._volumes.get(index, 0.8),
