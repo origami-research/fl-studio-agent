@@ -15,6 +15,7 @@ native/bridge/
 native/CMakeLists.txt
 native/generated/
 native/scripts/
+NOTICE.md
 pyproject.toml
 README.md
 RUNBOOK_E2E.md
