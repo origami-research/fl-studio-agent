@@ -1,9 +1,9 @@
 ---
 name: sidechain
-description: Optional reference on ducking a part under the kick from code.
+description: Ducking one part under another, such as the kick, with drawn automation.
 ---
 
-Code cannot key a compressor from the kick: FL sets a sidechain input only in the plugin's window.
+Code cannot key a compressor from another track (`help(fl.effect)` says why).
 To make a part duck when the kick hits, draw the ducking instead, with one `fl.automate` on the part's mixer track volume.
 
 Facts that shape the curve:
@@ -18,7 +18,7 @@ A short `fl.render` shows whether the level drops where you meant (see `fl.guide
 pad = next(c for c in fl.channels if c.name == "Pad")
 top = next(m.volume for m in fl.mixer if m.index == pad.mixer_track)
 early = 0.1 * fl.tempo / 60  # FL's lag, in beats
-low = 0.25  # about 14 dB down
+low = 0.25  # the dip's fader value
 dip = [{"position": 0, "value": low}, {"position": 0.35 - early, "value": top}]
 for beat in range(1, 64):  # one dip per beat, 16 bars
     dip += [{"position": beat - early - 0.02, "value": top},

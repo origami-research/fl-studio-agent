@@ -9,8 +9,8 @@ In `run`, `help(fl.render)` shows the same text as each entry below.
 The live FL Studio session: every call applies to FL at once and returns the result,
 or raises with the reason. Notes, playlist clips, automation clips and the project's
 notes are read from the song FL opened plus the edits made through fl, so changes to
-them in FL's own windows are not seen until FL saves the song; everything else is read
-from FL live. A channel is its index, exact name or a unique part of its name.
+them in FL's own windows are not seen until FL saves the song, which a trial FL cannot
+do; everything else is read from FL live. A channel is its index, exact name or a unique part of its name.
 
 ## Read
 
@@ -19,11 +19,9 @@ from FL live. A channel is its index, exact name or a unique part of its name.
 The whole project in one digest: print(fl.scene()) shows the project's notes,
 tempo and key, the playlist, and a line per pattern, channel and mixer track in use
 (a SceneSummary, whose fields hold the same parts as data). detail="notes" is every
-note (by channel and pattern), optionally of one channel and one pattern. FL cannot
-report the notes, the playlist's clips, the automation clips or the project's notes,
-so those come from the song FL opened with this session's edits (as Track.notes and
-fl.playlist read them); the rest is FL's own answer, and when FL does not answer
-this raises.
+note (by channel and pattern), optionally of one channel and one pattern. The notes,
+clips and project notes are read as fl's own description says; the rest is FL's own
+answer, and when FL does not answer this raises.
 
 ### `fl.tempo: float`
 
@@ -43,10 +41,10 @@ effect, it was renamed, or a track in use sends to it; ``empty`` counts the othe
 
 ### `fl.playlist: list[PlaylistClip]`
 
-The playlist's clips: those in the song FL opened, then those added this session
-with fl.place and fl.automate: track (None when FL did not report it), start and
-length in beats, and the pattern (or audio channel) each plays. FL cannot report
-its clips, so a clip changed in FL's own window is not seen.
+The playlist's clips, read as fl's own description says: those in the song FL
+opened, then those added this session with fl.place and fl.automate: track (None
+when FL did not report it), start and length in beats, and the pattern (or audio
+channel) each plays.
 
 ### `fl.patterns: list[PatternInfo]`
 
@@ -71,9 +69,8 @@ hear them with fl.render(). Raises if FL did not take the edit.
 
 ### `track.notes() -> list[Note]`
 
-The notes on this track's pattern: those in the song FL opened, with this
-session's writes applied. FL cannot report notes, so a note changed in FL's own
-windows is not seen.
+The notes on this track's pattern, read as fl's own description says: those in
+the song FL opened, with this session's writes applied.
 
 ### `track.clear() -> WriteResult`
 
@@ -81,14 +78,12 @@ Remove every note from this track's pattern.
 
 ### `Note(key: int, start: float, length: float, velocity: float = 0.8, pan: float = 0.5, color: int = 0)`
 
-One note, in musical units. C4 = MIDI 60 = middle C.
+One note: ``key`` a MIDI number (C4 = 60 = middle C; a name such as "F#3" is
+accepted), ``start`` and ``length`` in beats from the pattern's start, ``velocity``
+0..1, ``pan`` 0..1 (0.5 is the centre) and ``color`` FL's note color group 0..15.
 
-Arguments go by position or name in this order: key, start, length,
-velocity, pan, color, so ``Note(60, 0, 1, 0.8)`` and
+Arguments go by position or name in that order, so ``Note(60, 0, 1, 0.8)`` and
 ``Note(key="C4", start=0, length=1, velocity=0.8)`` are the same note.
-``key`` is firmly an int after construction: "C4"/"F#3" are accepted as
-input and resolved once by ``pitch.parse_key``. Use ``pitch.key_name`` for
-display. No downstream code ever sees a union.
 
 ### `theory.chord(root: str | int, quality: str = 'major') -> list[int]`
 
@@ -101,11 +96,10 @@ A scale's MIDI notes ascending from root, e.g. scale("C4", "dorian", 2).
 ### `theory.drums(pattern: str, key: str | int = 60, step_beats: float = 0.25, velocity: float = 0.8) -> list[schemas.Note]`
 
 A step string like "x---x---x---x---" into one Note per non-rest step, each on
-``key``: MIDI 60 (C4) by default, the key a sampler plays its sample at its own pitch.
+``key``: MIDI 60 (C4) by default.
 
-Any character other than space, '-', or '.' counts as a hit - so "x" and
-"X" both work, and accents can later be encoded as different hit chars
-without changing this parser.
+Any character other than space, '-' or '.' counts as a hit, so "x" and "X" both
+work; every hit gets ``velocity``.
 
 ### `theory.transpose(notes: list[schemas.Note], semitones: int) -> list[schemas.Note]`
 
@@ -122,7 +116,7 @@ A new list with every note's start snapped to the nearest ``grid`` multiple.
 The library's sounds ranked by how they sound: FL's stock samples and instrument
 presets, and the CC0 packs' samples ("CC0/..."), best match first.
 
-``query`` describes the sound ("punchy dry house kick", "warm analog pad slow
+``query`` describes the sound ("punchy dry kick", "warm pad with a slow
 attack"); ``like`` is a reference to match instead or as well: a Sound, a library
 path, or an audio file you wrote (an fl.audition render, a chop). Each Sound has
 ``kind`` ("preset" or "sample"), ``name``, ``plugin``, ``path``, ``score`` (by
@@ -134,10 +128,8 @@ check for None before rounding or sorting by score) and measurements:
 below 150 Hz, above 5 kHz). A preset is measured by its preview, the default
 fl.audition phrase. ``kind`` keeps one kind; ``plugin`` that plugin's presets;
 ``limit`` caps the list (at most 200). No query and no ``like``: the library in
-folder order.
-
-Listen before choosing: fl.read_wav(sound) for a sample, fl.audition(sound) for
-a preset.
+folder order. fl.read_wav(sound) reads a sample and fl.audition(sound) renders a
+preset, so a candidate can be heard before it is loaded.
 
 ### `fl.audition(preset: Sound | str, notes: Sequence[NoteInput] | None = None, output: str | Path = 'audition.wav') -> Render`
 
@@ -225,8 +217,8 @@ the same Effect fl.mixer and fl.load_preset(...).effect give: ``params()`` and
     fl.effect(fx.mixer_track, fx.slot).params("decay")
 
 A compressor's sidechain input is not among its parameters: FL sets it only in the
-plugin's window, so code cannot key one effect from another track; draw pumping as a
-dip on each kick with fl.automate on the part's mixer track volume.
+plugin's window, so code cannot key one effect from another track (fl.guide("sidechain")
+draws the ducking with fl.automate instead).
 
 ### `effect.params(query: str | None = None, limit: int = 40) -> list[PluginParam]`
 
@@ -262,7 +254,7 @@ Give every bar a pattern plays at in one call: FL adds a pattern's clip only
 before its first clip, so a later bar for a pattern already in the song is
 refused (place a copy from fl.new_pattern(name, copy_of=...) there instead).
 FL plays a moment from each bar to add it, and leaves song mode on so a render
-plays the song. Clips cannot be moved or removed. Returns each clip with the track
+plays the song. fl cannot move or remove a clip. Returns each clip with the track
 FL newly reports playing at that bar; track None means FL reported none, so that
 clip is not confirmed (FL reports only some clips of notes).
 
@@ -332,7 +324,8 @@ can be heard before it is loaded. Reads FL's Ogg-in-WAV and WavPack stock sample
 ### `fl.save() -> None`
 
 Save the song to disk. Never needed for edits to take effect or be heard:
-they are live in FL immediately. A trial FL Studio cannot save.
+they are live in FL immediately. Saving also lets fl read changes made in FL's own
+windows. A trial FL Studio cannot save.
 
 ### `fl.undo() -> None`
 
@@ -397,11 +390,11 @@ One channel's piano roll.
 
 ### `WriteResult`
 
-What one note write left in FL: the model-facing result of Track.write/clear.
+What one note write left in FL: the result of Track.write and Track.clear.
 
-``total`` is the session's confirmed state of that track's pattern after
-the write (docs/27 "Note state"): FL acknowledged the edit, and where FL
-can also save, the saved project was re-read to confirm it. It is None
+``total`` is how many notes the track's pattern holds after the write, as
+confirmed: FL acknowledged the edit, and where FL can also save, the saved
+project was re-read to confirm it. It is None
 only for a merge onto a track whose earlier notes this session never saw
 (no copy of the song to count from). A write that FL refused or did not
 acknowledge raises instead of returning this.
@@ -410,8 +403,8 @@ Fields: wrote: int, track: str, pattern: int, mode: Literal['merge', 'replace'],
 
 ### `Sound`
 
-One sound of the library (fl_mcp.sounds): a stock plugin preset, or a stock or
-CC0 pack sample, with what it sounds like from the sound index (sound_index.py).
+One sound of the library: a stock plugin preset, or a stock or CC0 pack sample,
+with measurements of how it sounds.
 
 ``score`` is how well it matches the search, by sound (higher is closer; None when
 it matched by name only: an effect preset, or no sound index here). The
@@ -450,11 +443,9 @@ Fields: channel: int, index: int, name: str.
 
 ### `PluginParam`
 
-One plugin parameter, with its normalized live value and known semantics.
-
-E2-verified 2026-08-29: a generator exposes its full parameter surface
-over the wire (597 named params on Sytrus), set + readback exact up to
-FL's own quantization.
+One plugin parameter: its index and name, its value now (normalized 0..1) and FL's
+text for it (``display``), and what kind of control it is, with its options or range
+where they are known.
 
 Fields: index: int, name: str, value: float, display: str, kind: Literal['continuous', 'stepped', 'enum', 'bool'], options: list[str] | None, minimum: float | None, maximum: float | None, step: float | None, unit: str | None.
 
@@ -554,9 +545,9 @@ Fields: channel: int, name: str, sounded: bool | None, peak_dbfs: float | None, 
 
 `fl.guide(name)` prints one in `run`.
 
-- [`arrangement`](../mcp-server/src/fl_mcp/guides/arrangement.md): Optional reference on how patterns, the playlist and automation work here.
-- [`chops`](../mcp-server/src/fl_mcp/guides/chops.md): Optional reference on editing a sample in Python and playing it.
-- [`listening`](../mcp-server/src/fl_mcp/guides/listening.md): Optional reference on measuring a render, since you cannot hear playback.
-- [`mixing`](../mcp-server/src/fl_mcp/guides/mixing.md): Optional reference on setting levels, sends, effects and panning from code.
-- [`sidechain`](../mcp-server/src/fl_mcp/guides/sidechain.md): Optional reference on ducking a part under the kick from code.
-- [`sounds`](../mcp-server/src/fl_mcp/guides/sounds.md): Optional reference on searching, auditioning and loading sounds.
+- [`arrangement`](../mcp-server/src/fl_mcp/guides/arrangement.md): How patterns, the playlist and automation work through fl.
+- [`chops`](../mcp-server/src/fl_mcp/guides/chops.md): Editing a sample in Python and playing it on a channel.
+- [`listening`](../mcp-server/src/fl_mcp/guides/listening.md): Measuring a render, since playback cannot be heard.
+- [`mixing`](../mcp-server/src/fl_mcp/guides/mixing.md): How levels, panning, sends and effects are set from code.
+- [`sidechain`](../mcp-server/src/fl_mcp/guides/sidechain.md): Ducking one part under another, such as the kick, with drawn automation.
+- [`sounds`](../mcp-server/src/fl_mcp/guides/sounds.md): Finding sounds by how they sound, hearing them and loading them.

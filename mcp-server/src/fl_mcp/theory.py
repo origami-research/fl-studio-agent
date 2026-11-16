@@ -74,11 +74,10 @@ def drums(
     pattern: str, key: str | int = 60, step_beats: float = 0.25, velocity: float = 0.8
 ) -> list[schemas.Note]:
     """A step string like "x---x---x---x---" into one Note per non-rest step, each on
-    ``key``: MIDI 60 (C4) by default, the key a sampler plays its sample at its own pitch.
+    ``key``: MIDI 60 (C4) by default.
 
-    Any character other than space, '-', or '.' counts as a hit - so "x" and
-    "X" both work, and accents can later be encoded as different hit chars
-    without changing this parser.
+    Any character other than space, '-' or '.' counts as a hit, so "x" and "X" both
+    work; every hit gets ``velocity``.
     """
     if step_beats <= 0:
         raise NoteError(f"drums: step_beats must be > 0, got {step_beats}")

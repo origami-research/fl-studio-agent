@@ -21,6 +21,8 @@ from pydantic import BaseModel
 
 from fl_mcp import contract, guides, schemas, sdk, theory
 from fl_mcp.contract import FLLicense
+from fl_mcp.kernel.cell import new_namespace
+from fl_mcp.kernel.display import MAX_IMAGES
 from fl_mcp.schemas import Note
 
 # Claude Code's limit on a tool description loaded upfront and on server instructions.
@@ -129,40 +131,66 @@ def sdk_index(fl_license: FLLicense) -> str:
     )
 
 
-# Facts about an FL session that the model cannot guess, and nothing about how to work:
-# the brief and the model own the musical choices and the workflow (owner, 2026-11-15).
-SESSION_FACTS = """Good to know:
+# What run is, true with or without an FL session and on every host; the fields are the
+# run's own values (create_server fills them from the host), so no number here can drift.
+KERNEL = """Run Python in a persistent kernel, like a notebook cell; variables and imports persist between calls.
+The working directory is your workspace{confined}; files there last for the session.
+open(), subprocess, `!cmd` and `%pip install` work, and the internet is reachable.
+Pre-bound: {prebound}; a trailing expression is shown.
+Installed: {installed}.
+
+Returns {{outcome, stdout, result | traceback, actions, images}}.
+outcome is ok, error, interrupted (the call reached its {budget:g} s limit and stopped; variables are kept) or kernel_lost (variables gone, files kept).
+Images show as in a notebook: end with a figure or PIL image, call display(...), or leave figures open; at most {images} per call."""
+
+CONFINED = ", the only place your code can write"
+
+# The packages KERNEL names: each is a dependency of the engine (tests/test_model_text.py).
+INSTALLED = ("numpy", "scipy", "soundfile", "librosa", "matplotlib", "pyloudnorm", "mido", "music21", "Pillow")
+
+# With an FL session: what fl adds to a call, and facts about the session the model cannot
+# guess. Nothing about how to work: the brief and the model own the musical choices and the
+# workflow (owner, 2026-11-15).
+SESSION = """actions lists what FL did, one sentence per change, even when the cell failed.
+Time in fl calls counts toward the limit: a cell stops between fl calls, and an fl call that cannot finish in the time left, such as a long render, is refused before it starts, so split long work across calls.
+
+Good to know:
 - print(fl.scene()) shows the whole project in one digest: patterns, channels, playlist and mixer.
 - You hear by measuring: fl.meters() takes seconds, a render plays in real time."""
 
 NO_SESSION = (
-    "This kernel has no FL Studio session: fl.guide() and fl.read_wav() of a file you wrote work, "
-    "and every other fl call is refused."
+    "This kernel has no FL Studio session: fl.guide() and fl.read_wav() of a WAV in your workspace "
+    "work, and every other fl call is refused, so actions stays empty and the guides' examples do "
+    "not run here."
+)
+
+GUIDES = (
+    "Guides: optional reference on techniques and how this environment works, each with a worked "
+    'example; fl.guide("{first}") prints one:'
 )
 
 
-def tool_description(kernel: str, *, fl_license: FLLicense | None) -> str:
-    """The run tool's description: the kernel's contract (run's docstring), then with an FL
-    session (``fl_license`` is that FL's; None: no session) the session facts and the SDK
-    index of what that FL can use, and in both cases the guide index, all generated from
-    their sources."""
+def tool_description(*, fl_license: FLLicense | None, confined: bool, run_budget: float) -> str:
+    """The run tool's description, all of it generated: the kernel (``confined`` and
+    ``run_budget`` are this host's), then with an FL session (``fl_license`` is that FL's;
+    None: no session) the session facts and the index of what that FL can use, and in both
+    cases the guide index."""
     found = guides.load()
-    guide_lines = "\n".join(f"  {line}" for line in guides.index(found).splitlines())
+    kernel = KERNEL.format(
+        confined=CONFINED if confined else "", installed=", ".join(INSTALLED), budget=run_budget,
+        images=MAX_IMAGES, prebound=", ".join(name for name in new_namespace(None) if not name.startswith("_")),
+    )
     if fl_license is not None:
         fl_doc = " ".join(inspect.getdoc(sdk.FL).split())
         session = (
-            f"{SESSION_FACTS}\n\n"
+            f"{SESSION}\n\n"
             f"fl: {fl_doc} help(fl.render) gives a member's arguments, defaults, results and "
             f"limits.\n{sdk_index(fl_license)}"
         )
     else:
-        session = NO_SESSION
-    return (
-        f"{inspect.cleandoc(kernel)}\n\n{session}\n\n"
-        f"Guides: optional reference, not instructions, each with a worked example. "
-        f"fl.guide(\"{found[0].name}\") prints one:\n"
-        f"{guide_lines}"
-    )
+        session = f"\n{NO_SESSION}"
+    guide_lines = "\n".join(f"  {line}" for line in guides.index(found).splitlines())
+    return f"{kernel}\n{session}\n\n{GUIDES.format(first=found[0].name)}\n{guide_lines}"
 
 
 def reference_markdown() -> str:

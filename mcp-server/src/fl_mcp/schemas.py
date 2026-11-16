@@ -46,14 +46,12 @@ AudioBytes = Annotated[
 ]
 
 class Note(BaseModel):
-    """One note, in musical units. C4 = MIDI 60 = middle C.
+    """One note: ``key`` a MIDI number (C4 = 60 = middle C; a name such as "F#3" is
+    accepted), ``start`` and ``length`` in beats from the pattern's start, ``velocity``
+    0..1, ``pan`` 0..1 (0.5 is the centre) and ``color`` FL's note color group 0..15.
 
-    Arguments go by position or name in this order: key, start, length,
-    velocity, pan, color, so ``Note(60, 0, 1, 0.8)`` and
+    Arguments go by position or name in that order, so ``Note(60, 0, 1, 0.8)`` and
     ``Note(key="C4", start=0, length=1, velocity=0.8)`` are the same note.
-    ``key`` is firmly an int after construction: "C4"/"F#3" are accepted as
-    input and resolved once by ``pitch.parse_key``. Use ``pitch.key_name`` for
-    display. No downstream code ever sees a union.
     """
 
     key: int = Field(ge=0, le=127)
@@ -166,11 +164,11 @@ class StemsReceipt(BaseModel):
 
 
 class WriteResult(BaseModel):
-    """What one note write left in FL: the model-facing result of Track.write/clear.
+    """What one note write left in FL: the result of Track.write and Track.clear.
 
-    ``total`` is the session's confirmed state of that track's pattern after
-    the write (docs/27 "Note state"): FL acknowledged the edit, and where FL
-    can also save, the saved project was re-read to confirm it. It is None
+    ``total`` is how many notes the track's pattern holds after the write, as
+    confirmed: FL acknowledged the edit, and where FL can also save, the saved
+    project was re-read to confirm it. It is None
     only for a merge onto a track whose earlier notes this session never saw
     (no copy of the song to count from). A write that FL refused or did not
     acknowledge raises instead of returning this.
@@ -217,11 +215,9 @@ class CheckResult(BaseModel):
 
 
 class PluginParam(BaseModel):
-    """One plugin parameter, with its normalized live value and known semantics.
-
-    E2-verified 2026-08-29: a generator exposes its full parameter surface
-    over the wire (597 named params on Sytrus), set + readback exact up to
-    FL's own quantization.
+    """One plugin parameter: its index and name, its value now (normalized 0..1) and FL's
+    text for it (``display``), and what kind of control it is, with its options or range
+    where they are known.
     """
 
     index: int = Field(ge=0)
@@ -575,8 +571,8 @@ LoadKind = Literal["preset", "sample"]
 
 
 class Sound(BaseModel):
-    """One sound of the library (fl_mcp.sounds): a stock plugin preset, or a stock or
-    CC0 pack sample, with what it sounds like from the sound index (sound_index.py).
+    """One sound of the library: a stock plugin preset, or a stock or CC0 pack sample,
+    with measurements of how it sounds.
 
     ``score`` is how well it matches the search, by sound (higher is closer; None when
     it matched by name only: an effect preset, or no sound index here). The

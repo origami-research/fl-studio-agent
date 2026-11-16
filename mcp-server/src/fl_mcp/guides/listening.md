@@ -1,10 +1,9 @@
 ---
 name: listening
-description: Optional reference on measuring a render, since you cannot hear playback.
+description: Measuring a render, since playback cannot be heard.
 ---
 
-You cannot hear playback, so you listen by rendering and measuring in code.
-The engine ships no canned analysis on purpose: compute whatever answers your question.
+You cannot hear playback, so you listen by rendering and measuring in code, computing whatever answers your question.
 
 Some measurements and what they show:
 
@@ -27,7 +26,7 @@ import numpy as np, pyloudnorm, scipy.signal, matplotlib.pyplot as plt
 
 # a few bars to listen to; in a session, the song you wrote
 fl.track("Kick").write(theory.drums("x...x...x...x..." * 4), mode="replace")
-fl.track("Bass").write([Note(r, b * 4, 3.5, 0.8) for b, r in enumerate([45, 41, 48, 43])], mode="replace")
+fl.track("Bass").write([Note(45, b * 4, 3.5, 0.8) for b in range(4)], mode="replace")
 wav = fl.render("mix.wav", bars=4)
 x, sr = fl.read_wav(wav)
 loudness = pyloudnorm.Meter(sr).integrated_loudness(x)

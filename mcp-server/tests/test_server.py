@@ -20,7 +20,7 @@ from mcp.types import CallToolResult
 
 from fl_mcp import __version__, server
 from fl_mcp.contract import build_version
-from fl_mcp.kernel.host import RUN_BUDGET_SECONDS, KernelHost
+from fl_mcp.kernel.host import ENV_RUN_BUDGET, RUN_BUDGET_SECONDS, KernelHost
 from fl_mcp.kernel.launch import PosixLauncher, Workspace
 from fl_mcp.platform import MacPlatform
 from fl_mcp.schemas import Target
@@ -130,8 +130,13 @@ def test_run_is_full_python(kernel):
     assert result.result == "('FL', True, True)", result
 
 
-def test_run_docstring_states_the_real_run_budget():
-    assert f"{RUN_BUDGET_SECONDS:g} s budget, fl calls included" in " ".join(server.run.__doc__.split())
+def test_the_run_description_states_this_hosts_run_budget(monkeypatch):
+    """The budget is a host setting (FLMCP_RUN_BUDGET), so the description is filled from it:
+    a hand-written "600 s" was false on a host that set another budget."""
+    assert f"its {RUN_BUDGET_SECONDS:g} s limit" in server.run.__doc__
+    monkeypatch.setenv(ENV_RUN_BUDGET, "240")
+    (listed,) = anyio.run(server.create_server().list_tools)
+    assert "its 240 s limit" in listed.description and "600 s" not in listed.description
 
 
 def test_run_without_a_kernel_is_a_structured_error(tmp_path):

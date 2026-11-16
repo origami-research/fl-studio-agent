@@ -16,7 +16,7 @@ from fl_mcp import flp, make_agent_project
 from fl_mcp.session import preview
 from fl_mcp.template import template_path
 
-TEMPLATE_SHA256 = "01c6a5a380cb3ddbb71baecc6cab8194f15b462cb11247d849813acedb968982"
+TEMPLATE_SHA256 = "bcf6792b634884aef8eab22a650a2dee31c3c4577bcd042b07e4ad2d1b72df26"
 
 # Record bytes 24-31 (the cut window) as FL itself saves a pattern clip that was never
 # resized: FL sizes such a clip from its pattern and regrows it whenever the pattern grows.
@@ -67,7 +67,9 @@ def test_every_palette_channel_says_what_it_is_for():
 
     assert names == PALETTE
     assert set(guide.about) == set(PALETTE)
-    assert "sampler" in guide.about["Kick"] and "plays its sample at its own pitch on MIDI 60" in guide.notes
+    assert "sampler" in guide.about["Kick"] and "MIDI 60 sounds C4 on Piano" in guide.notes
+    # How a sampler pitches its sample is help(fl.load_sample)'s fact (model text standard R2).
+    assert "own pitch" not in guide.notes
     assert "MIDI 36-96" in guide.about["Bass"] and "MIDI 24-72" in guide.about["Sax"]
     assert "fl.audition" in guide.about[preview.AUDITION_CHANNEL]
     assert "Drum Bus" in guide.notes

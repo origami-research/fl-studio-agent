@@ -83,7 +83,7 @@ def test_each_server_mode_serves_its_own_description_and_instructions():
         made = server.create_server(workspace_only=workspace_only)
         (listed,) = anyio.run(made.list_tools)
         assert listed.description == server.run_description(
-            fl_license=None if workspace_only else FLLicense.LICENSED
+            fl_license=None if workspace_only else FLLicense.LICENSED, confined=server._confined()
         )
         assert made.instructions == server.server_instructions(with_fl=not workspace_only)
         assert len(made.instructions) < manual.DESCRIPTION_MAX_CHARS

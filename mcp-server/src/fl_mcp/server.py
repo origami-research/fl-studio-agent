@@ -17,7 +17,6 @@ import argparse
 import base64
 import contextlib
 import functools
-import inspect
 import logging
 import os
 import sys
@@ -43,7 +42,7 @@ from fl_mcp.contract import (
 )
 from fl_mcp.errors import ToolError
 from fl_mcp.kernel.display import ShownImage
-from fl_mcp.kernel.host import KernelHost, run_budget_from_env
+from fl_mcp.kernel.host import RUN_BUDGET_SECONDS, KernelHost, run_budget_from_env
 from fl_mcp.kernel.launch import Workspace
 from fl_mcp.platform import PlatformUnsupportedError, platform_for
 
@@ -126,45 +125,29 @@ def _tool_boundary(fn: Any) -> Any:
 
 @_tool_boundary
 def run(code: str, ctx: Context) -> RunResult:
-    """Run Python in a persistent kernel, like a notebook cell; this is the only
-    tool, so everything is code. Variables and imports persist. The working
-    directory is your workspace, the one place you can write (files last for the
-    session); open(), subprocess, `!cmd` and `%pip install pkg` work, and the
-    internet is reachable. Pre-bound: fl, Note, theory, display; a trailing
-    expression is repr'd. Installed: numpy, scipy, soundfile, librosa,
-    matplotlib, pyloudnorm, mido, music21, Pillow.
-
-    Returns {outcome, stdout, result | traceback, actions, images}; actions says
-    what FL did, one sentence per change, even if the cell failed. outcome is ok,
-    error, interrupted (the run took its 600 s budget, fl calls included: stopped
-    between fl calls, variables kept; an fl call that would not fit, such as a
-    long render, is refused before it starts, so split long work across runs) or
-    kernel_lost (variables gone, files kept). Images show like a notebook's: end
-    with a matplotlib figure or PIL image, call display(...), or leave figures
-    open; at most 4 per run, about width x height / 750 tokens each.
-    """
-    # Engineering notes (not part of the model-facing description): the docstring
-    # above is the kernel's contract, true with or without an FL session;
-    # manual.tool_description adds the session facts, the SDK index and the guide
-    # index, generated from sdk.py's docstrings and fl_mcp/guides (with an FL
-    # session; a trial FL's index leaves out fl.save), or only the guide index
-    # (--workspace-only, where fl calls are refused). run.__doc__ becomes the licensed FL description below, so the contract and
-    # help(run) read the same text. The kernel is a separate process (fl_mcp.kernel, docs/38) and the OS, not Python
-    # filtering, confines it to its workspace. A test keeps the docstring's "600 s"
-    # in step with kernel.host.RUN_BUDGET_SECONDS.
+    """Run Python in the kernel bound to this session (the description is set below)."""
+    # The model reads manual.tool_description, generated from manual.KERNEL, sdk.py's
+    # docstrings and fl_mcp/guides and filled with this host's values (create_server):
+    # with an FL session, the session facts and the index of what that FL can use (a trial
+    # FL's leaves out fl.save); without one (--workspace-only, where fl calls are refused),
+    # the kernel and the guide index only. The kernel is a separate process (fl_mcp.kernel,
+    # docs/38) and the OS, not Python filtering, confines it to its workspace.
     ran = ctx.request_context.lifespan_context["kernel"].run(code)
     return _with_images(ran, ran.shown)
 
 
-_KERNEL_CONTRACT = inspect.getdoc(run) or ""
-run.__doc__ = manual.tool_description(_KERNEL_CONTRACT, fl_license=FLLicense.LICENSED)
+def run_description(
+    *, fl_license: FLLicense | None, confined: bool = True, run_budget: float = RUN_BUDGET_SECONDS
+) -> str:
+    """What the model reads about run on this host: with an FL session, the manual of what
+    that FL can use (a trial FL cannot save); without one (--workspace-only, ``fl_license``
+    None), the kernel and the guides, since every other fl call but reading a file is refused.
+    ``confined`` and ``run_budget`` are the host's, so the text states what holds there."""
+    return manual.tool_description(fl_license=fl_license, confined=confined, run_budget=run_budget)
 
 
-def run_description(*, fl_license: FLLicense | None) -> str:
-    """What the model reads about run: with an FL session, the manual of what that FL can
-    use (a trial FL cannot save); without one (--workspace-only, ``fl_license`` None), the
-    kernel and the guides, since every other fl call but reading a file is refused."""
-    return manual.tool_description(_KERNEL_CONTRACT, fl_license=fl_license)
+# help(run) and the contract read the same text the arena's boxes serve.
+run.__doc__ = run_description(fl_license=FLLicense.LICENSED)
 
 
 def server_instructions(*, with_fl: bool) -> str:
@@ -214,16 +197,20 @@ def _tool_error_response(error: ToolErrorResult) -> CallToolResult:
 def create_server(*, workspace_only: bool = False) -> MCPServer:
     """Create the versioned MCP server without opening its transport: the one
     tool, ``run``; ``workspace_only`` starts no FL session behind it."""
+    confined = _confined()
     server = MCPServer(
         SERVER_NAME,
         version=__version__,
-        description=server_description(_confined()),
+        description=server_description(confined),
         instructions=server_instructions(with_fl=not workspace_only),
         lifespan=functools.partial(lifespan, with_fl=not workspace_only),
     )
     (only,) = tool_definitions()
     fl_license = None if workspace_only else fl_license_from_env(os.environ)
-    server.add_tool(only, description=run_description(fl_license=fl_license))
+    description = run_description(
+        fl_license=fl_license, confined=confined, run_budget=run_budget_from_env(os.environ)
+    )
+    server.add_tool(only, description=description)
     return server
 
 

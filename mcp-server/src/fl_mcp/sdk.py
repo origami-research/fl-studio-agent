@@ -285,8 +285,8 @@ class FL:
     """The live FL Studio session: every call applies to FL at once and returns the result,
     or raises with the reason. Notes, playlist clips, automation clips and the project's
     notes are read from the song FL opened plus the edits made through fl, so changes to
-    them in FL's own windows are not seen until FL saves the song; everything else is read
-    from FL live. A channel is its index, exact name or a unique part of its name."""
+    them in FL's own windows are not seen until FL saves the song, which a trial FL cannot
+    do; everything else is read from FL live. A channel is its index, exact name or a unique part of its name."""
 
     def __init__(self, session: FLSession) -> None:
         self._session = session
@@ -312,10 +312,10 @@ class FL:
 
     @property
     def playlist(self) -> list[PlaylistClip]:
-        """The playlist's clips: those in the song FL opened, then those added this session
-        with fl.place and fl.automate: track (None when FL did not report it), start and
-        length in beats, and the pattern (or audio channel) each plays. FL cannot report
-        its clips, so a clip changed in FL's own window is not seen."""
+        """The playlist's clips, read as fl's own description says: those in the song FL
+        opened, then those added this session with fl.place and fl.automate: track (None
+        when FL did not report it), start and length in beats, and the pattern (or audio
+        channel) each plays."""
         return self._session.playlist()
 
     @property
@@ -330,11 +330,9 @@ class FL:
         """The whole project in one digest: print(fl.scene()) shows the project's notes,
         tempo and key, the playlist, and a line per pattern, channel and mixer track in use
         (a SceneSummary, whose fields hold the same parts as data). detail="notes" is every
-        note (by channel and pattern), optionally of one channel and one pattern. FL cannot
-        report the notes, the playlist's clips, the automation clips or the project's notes,
-        so those come from the song FL opened with this session's edits (as Track.notes and
-        fl.playlist read them); the rest is FL's own answer, and when FL does not answer
-        this raises."""
+        note (by channel and pattern), optionally of one channel and one pattern. The notes,
+        clips and project notes are read as fl's own description says; the rest is FL's own
+        answer, and when FL does not answer this raises."""
         if detail == "summary":
             return self._session.scene_summary()
         if detail != "notes":
@@ -431,7 +429,7 @@ class FL:
         before its first clip, so a later bar for a pattern already in the song is
         refused (place a copy from fl.new_pattern(name, copy_of=...) there instead).
         FL plays a moment from each bar to add it, and leaves song mode on so a render
-        plays the song. Clips cannot be moved or removed. Returns each clip with the track
+        plays the song. fl cannot move or remove a clip. Returns each clip with the track
         FL newly reports playing at that bar; track None means FL reported none, so that
         clip is not confirmed (FL reports only some clips of notes)."""
         try:
@@ -494,8 +492,8 @@ class FL:
             fl.effect(fx.mixer_track, fx.slot).params("decay")
 
         A compressor's sidechain input is not among its parameters: FL sets it only in the
-        plugin's window, so code cannot key one effect from another track; draw pumping as a
-        dip on each kick with fl.automate on the part's mixer track volume.
+        plugin's window, so code cannot key one effect from another track (fl.guide("sidechain")
+        draws the ducking with fl.automate instead).
         """
         try:
             args = _EffectArgs(mixer_track=mixer_track, slot=slot)
@@ -531,7 +529,7 @@ class FL:
         """The library's sounds ranked by how they sound: FL's stock samples and instrument
         presets, and the CC0 packs' samples ("CC0/..."), best match first.
 
-        ``query`` describes the sound ("punchy dry house kick", "warm analog pad slow
+        ``query`` describes the sound ("punchy dry kick", "warm pad with a slow
         attack"); ``like`` is a reference to match instead or as well: a Sound, a library
         path, or an audio file you wrote (an fl.audition render, a chop). Each Sound has
         ``kind`` ("preset" or "sample"), ``name``, ``plugin``, ``path``, ``score`` (by
@@ -543,10 +541,8 @@ class FL:
         below 150 Hz, above 5 kHz). A preset is measured by its preview, the default
         fl.audition phrase. ``kind`` keeps one kind; ``plugin`` that plugin's presets;
         ``limit`` caps the list (at most 200). No query and no ``like``: the library in
-        folder order.
-
-        Listen before choosing: fl.read_wav(sound) for a sample, fl.audition(sound) for
-        a preset.
+        folder order. fl.read_wav(sound) reads a sample and fl.audition(sound) renders a
+        preset, so a candidate can be heard before it is loaded.
         """
         try:
             args = _SoundsArgs(query=query, kind=kind, plugin=plugin, limit=limit)
@@ -694,7 +690,8 @@ class FL:
 
     def save(self) -> None:
         """Save the song to disk. Never needed for edits to take effect or be heard:
-        they are live in FL immediately. A trial FL Studio cannot save."""
+        they are live in FL immediately. Saving also lets fl read changes made in FL's own
+        windows. A trial FL Studio cannot save."""
         self._session.save_project()
 
     def read_wav(self, path: str | Path | Sound) -> tuple[np.ndarray, int]:
@@ -785,9 +782,8 @@ class Track:
         return self._fl._session.clear_notes(target)
 
     def notes(self) -> list[Note]:
-        """The notes on this track's pattern: those in the song FL opened, with this
-        session's writes applied. FL cannot report notes, so a note changed in FL's own
-        windows is not seen."""
+        """The notes on this track's pattern, read as fl's own description says: those in
+        the song FL opened, with this session's writes applied."""
         target = Target(pattern=self.pattern, channel=self.channel)
         return self._fl._session.read_notes(target)
 

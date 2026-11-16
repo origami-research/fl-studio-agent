@@ -10,15 +10,19 @@ The format, which ``parse`` enforces and CI checks for every guide:
   (agentskills.io) uses, so the files can be published as client skills later; each
   value stays plain YAML (no ": " inside, no leading quote):
   ``name``, the file's stem in lowercase letters, digits and hyphens; and
-  ``description``, one line of at most 80 characters saying what the guide is for
-  and that it is optional reference (the run description lists it, so keep it short).
+  ``description``, one line of at most 80 characters saying what the guide covers
+  (the run description lists it under a header that says guides are optional
+  reference, so it does not repeat that).
 - The body: Markdown, one sentence per line, at most 6,000 characters. It explains a
   technique or how something works in this environment, and the facts behind it. It
   is context, not instructions: musical choices (genre recipes, song structure,
   lengths, loudness targets, workflow steps) are the brief's and the model's, so a
-  guide does not make them (owner, 2026-11-15). It names SDK methods (``fl.automate``)
-  without restating their arguments or limits: ``help(fl.automate)`` owns those.
-  It points to another guide instead of copying it.
+  guide does not make them (owner, 2026-11-15; docs/model-text-standard.md R7). It
+  names SDK methods (``fl.automate``) without restating their arguments or limits:
+  ``help(fl.automate)`` owns those. It points to another guide instead of copying it.
+  Its prose holds for any project, so it names no channel or mixer track of the
+  engine's starting project (that project's notes describe them; the example may use
+  them, since CI runs it there).
 - Exactly one fenced block (``` or ~~~), tagged ``python``: the worked example. CI runs it as a run cell against the SDK fakes (tests/sdk_fakes.py,
   ``StudioFake``) in an empty working directory, and checks that every ``fl.<name>``
   and ``theory.<name>`` the guide mentions exists.
