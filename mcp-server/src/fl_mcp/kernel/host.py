@@ -39,8 +39,7 @@ log = logging.getLogger(__name__)
 # at its own limit (the arena harness at 900 s) and the run then gets no answer at
 # all, so the budget stays well under that limit: past it a run still finishes the
 # fl call in flight (one that plays in real time is refused up front if it would
-# not fit), the interrupt grace, and closing a file_edit block the cell left open,
-# which reopens the song in FL. A host whose client waits less sets ENV_RUN_BUDGET.
+# not fit) and the interrupt grace. A host whose client waits less sets ENV_RUN_BUDGET.
 RUN_BUDGET_SECONDS = 600.0
 # How long an interrupted cell gets to unwind before the kernel is killed.
 INTERRUPT_GRACE_SECONDS = 5.0
@@ -60,7 +59,7 @@ _STDERR_LOG_LINES = 200
 # A dead kernel's stderr pipe closes at once unless a grandchild still holds it.
 _STDERR_DRAIN_SECONDS = 2.0
 # Session calls whose ``output`` path the server writes: confined to renders.
-_SERVER_WRITES = frozenset({"audition", "render_wav", "render_stems", "export_offline"})
+_SERVER_WRITES = frozenset({"audition", "render_wav", "render_stems"})
 
 
 def run_budget_from_env(environ: Mapping[str, str]) -> float:
@@ -162,57 +161,12 @@ class _Kernel:
         return "\nKernel stderr (last lines):\n" + "\n".join(self.stderr_tail) if self.stderr_tail else ""
 
 
-class _FileEdits:
-    """The session file_edit contexts a cell opened; all closed when the cell ends.
-
-    FL takes a block's changes only when the outermost block closes and FL
-    reopens, so ``actions`` holds them until then and drops them if it fails.
-    """
-
-    def __init__(self, session: FLSession | None, actions: ActionLog) -> None:
-        self._session = session
-        self._actions = actions
-        self._open: list[contextlib.ExitStack] = []
-
-    def enter(self) -> None:
-        stack = contextlib.ExitStack()
-        stack.enter_context(self._session.file_edit())
-        self._open.append(stack)
-        self._actions.hold()
-
-    def exit(self) -> None:
-        if not self._open:
-            raise errors.invalid_argument("fl.file_edit", "exit without a matching enter")
-        self._close_one()
-
-    def close(self) -> str | None:
-        """Close every context, even past a failure; return what failed, if anything."""
-        failures = []
-        while self._open:
-            try:
-                self._close_one()
-            except Exception as exc:  # the rest must still close; the cell result reports it
-                log.exception("closing a file_edit a cell left open failed")
-                failures.append(f"{type(exc).__name__}: {exc}")
-        return "; ".join(failures) or None
-
-    def _close_one(self) -> None:
-        try:
-            self._open.pop().close()
-        except BaseException:
-            self._actions.release(applied=False)
-            raise
-        self._actions.release(applied=True)
-
-
 class _Cell:
-    """What one cell's fl calls leave behind (open file_edit blocks, what FL did) and the
-    budget of the run it belongs to."""
+    """What one cell's fl calls did in FL, and the budget of the run it belongs to."""
 
     def __init__(self, session: FLSession | None, run_budget: RunBudget) -> None:
         self.budget = run_budget
         self.actions = ActionLog(session.track_name if session is not None else None)
-        self.edits = _FileEdits(session, self.actions)
 
 
 class KernelHost:
@@ -367,18 +321,6 @@ class KernelHost:
         return kernel
 
     def _run_cell(self, kernel: _Kernel, code: str, cell: _Cell) -> RunResult:
-        try:
-            result = self._cell_outcome(kernel, code, cell)
-        finally:
-            failure = cell.edits.close()
-        if failure is None:
-            return result
-        note = f"Closing the fl.file_edit block this cell left open failed: {failure}"
-        if result.outcome == "ok":  # a copy, so the images the cell showed still show
-            return result.model_copy(update={"outcome": "error", "result": None, "traceback": note})
-        return result.model_copy(update={"traceback": f"{result.traceback}\n{note}"})
-
-    def _cell_outcome(self, kernel: _Kernel, code: str, cell: _Cell) -> RunResult:
         if not kernel.send(wire.Exec(code=code), self._write_timeout):
             return self._stalled(kernel)
         # The interrupt is sent only while no fl call is being served, so it lands
@@ -463,10 +405,6 @@ class KernelHost:
 
     def _dispatch(self, call: wire.Call, cell: _Cell) -> Any:
         if cell.budget.left() <= 0:  # the cell is being interrupted: FL does nothing more for it
-            if call.method == wire.FILE_EDIT_EXIT:
-                # Not refused: an error here would replace the cell's KeyboardInterrupt, which
-                # model code could catch. The block closes with the cell (_run_cell).
-                return None
             raise budget.spent(cell.budget)
         if self._session is None:
             # A kernel without FL (the box lockdown's boundary probe): plain Python works, fl does not.
@@ -475,10 +413,6 @@ class KernelHost:
                 "This Python session is not connected to FL Studio.",
                 "Use plain Python here; FL calls need the engine's FL session.",
             )
-        if call.method == wire.FILE_EDIT_ENTER:
-            return cell.edits.enter()
-        if call.method == wire.FILE_EDIT_EXIT:
-            return cell.edits.exit()
         kwargs = wire.decode_call(call)
         if call.method in _SERVER_WRITES:
             kwargs["output"] = self.workspace.output_path(kwargs["output"])

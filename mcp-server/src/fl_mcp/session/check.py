@@ -35,7 +35,8 @@ if TYPE_CHECKING:
 
 # FL's mixer track 0 is the master.
 MASTER = 0
-# At or below -60 dBFS a track is silent: the threshold render uses for a silent mix.
+# At or below -60 dBFS a meter's peak reads as silence. A meter shows a peak level, not the
+# loudness a render is judged silent by (audio.SILENCE_LUFS), so the two are different numbers.
 SILENCE_DBFS = -60.0
 # Pause between meter sweeps. FL's meters fall back slowly enough that a hit
 # between two sweeps still reads near its peak on the next one; until #317 a sweep

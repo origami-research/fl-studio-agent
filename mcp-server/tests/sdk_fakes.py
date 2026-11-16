@@ -94,6 +94,16 @@ class FakeSession(FLSession):
     def mixer_track_count(self) -> int:
         return MIXER_TRACK_COUNT
 
+    def effect(self, mixer_track: int, slot: int) -> MixerEffect:
+        found = next((e for e in self._effects.get(mixer_track, []) if e.slot == slot), None)
+        if found is None:
+            from fl_mcp import errors
+
+            raise errors.invalid_argument(
+                "fl.effect", f"mixer track {mixer_track} has no effect in slot {slot}; fl.mixer lists each track's effects"
+            )
+        return found
+
     def write_notes(self, target: Target, notes: list[Note], mode: NoteWriteMode) -> WriteResult:
         if self.fail_next_write is not None:
             exc, self.fail_next_write = self.fail_next_write, None
@@ -111,7 +121,11 @@ class FakeSession(FLSession):
     def read_notes(self, target: Target) -> list[Note]:
         return self.store.notes_at(target) or []
 
-    def tempo(self) -> float | None:
+    def tempo(self) -> float:
+        if self._tempo is None:  # as FL that does not answer
+            from fl_mcp import errors
+
+            raise errors.control_plane_unavailable("mixer.getCurrentTempo", 8.0)
         return self._tempo
 
     def set_tempo(self, bpm: float) -> float:
@@ -140,9 +154,6 @@ class FakeSession(FLSession):
                 for i in chosen
             ]
         )
-
-    def export_offline(self, output: Path) -> Path:
-        return self.render_wav(output).path
 
     def save_project(self) -> int | None:
         if self.control is None:

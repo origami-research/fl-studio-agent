@@ -117,7 +117,7 @@ def control_plane_unavailable(op: str, timeout: float) -> ToolError:
     return ToolError(
         "control_plane_unavailable",
         "FL Studio did not answer in time.",
-        "FL may be busy or still starting. Retry in a moment.",
+        "FL may be busy, still starting, or held by an open dialog: close any dialog in FL, then retry.",
         retryable=True,
     )
 
@@ -126,8 +126,10 @@ def fl_stopped_answering(unchanged: str) -> ToolError:
     """FL answered this session, is still running, and no longer answers (issue #290)."""
     return ToolError(
         "control_plane_unavailable",
-        f"FL Studio answered earlier and has stopped answering, so {unchanged}; it may be frozen.",
-        "If FL does not respond on screen, restart it (unsaved changes in FL are lost) and reopen the song.",
+        f"FL Studio answered earlier and has stopped answering, so {unchanged}; a dialog may be open, "
+        "or FL may be frozen.",
+        "Close any dialog in FL, then retry. If FL does not respond on screen, restart it (unsaved changes "
+        "in FL are lost) and reopen the song.",
         retryable=False,
     )
 
@@ -275,7 +277,7 @@ def fl_trial_unsupported(action: str) -> ToolError:
         "fl_trial_unsupported",
         f"This FL Studio is a trial, which cannot save or reopen songs, so {action} is not available.",
         "Nothing is lost: your edits are live in FL and render plays them. Notes, tempo, "
-        "parameters, levels and loading sounds all work; saving and offline export do not.",
+        "parameters, levels and loading sounds all work; saving does not.",
         retryable=False,
     )
 

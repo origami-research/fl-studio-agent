@@ -16,7 +16,7 @@ from fl_mcp import flp, make_agent_project
 from fl_mcp.session import preview
 from fl_mcp.template import template_path
 
-TEMPLATE_SHA256 = "8bbe5971574c6fa4c91cff62c0f5aa7614bdec37428d91a3283a18f5134c0307"
+TEMPLATE_SHA256 = "01c6a5a380cb3ddbb71baecc6cab8194f15b462cb11247d849813acedb968982"
 
 # Record bytes 24-31 (the cut window) as FL itself saves a pattern clip that was never
 # resized: FL sizes such a clip from its pattern and regrows it whenever the pattern grows.
@@ -67,11 +67,29 @@ def test_every_palette_channel_says_what_it_is_for():
 
     assert names == PALETTE
     assert set(guide.about) == set(PALETTE)
-    assert "fl.sounds" in guide.about["Kick"] and "MIDI 60" in guide.about["Snare"]
-    assert not any("fl.kit" in about for about in guide.about.values())
-    assert "MIDI 60" in guide.about["Cowbell"]
+    assert "sampler" in guide.about["Kick"] and "plays its sample at its own pitch on MIDI 60" in guide.notes
+    assert "MIDI 36-96" in guide.about["Bass"] and "MIDI 24-72" in guide.about["Sax"]
     assert "fl.audition" in guide.about[preview.AUDITION_CHANNEL]
-    assert "Pattern 1" in guide.notes and "Maximus" in guide.notes
+    assert "Drum Bus" in guide.notes
+
+
+# The audit of 0.1.14: the notes prescribed a genre ("the drift phonk lead", "for house and
+# electronic music"), a song structure ("the whole song lives in Pattern 1", which fl.new_pattern
+# and fl.place contradict) and a workflow ("choose each part by how it sounds with fl.sounds").
+# Model-facing text states facts only (owner, 2026-11-16).
+NOT_FACTS = re.compile(
+    r"\b(?:phonk|house|trap|jazz|funk|lo-?fi|soul|pop|rock|cinematic|epic|electronic|hooks?|comping|"
+    r"choose|grows as you write|whole song|write no|use it|good for|suits?)\b|\bfor (?!its\b)\w+ (?:music|parts|chords|leads)|fl\.(?!audition\b)",
+    re.IGNORECASE,
+)
+
+
+def test_the_projects_notes_state_facts_and_nothing_else():
+    names = [c.name for c in flp.read(template_path()).channels]
+    guide = flp.project_guide(template_path(), names)
+
+    for text in (guide.notes, *guide.about.values()):
+        assert not NOT_FACTS.search(text), text
 
 
 # FL 2026 event ids: a channel starts at 64; it names its insert in 22 (byte) and, for a

@@ -25,6 +25,7 @@ from fl_mcp import budget, errors
 from fl_mcp.errors import WriteRejected
 from fl_mcp.schemas import AutomationPoint, AutomationTake, PatternInfo, PlacedClip
 
+from . import routing
 from .controls import BEATS_PER_BAR, FL_STEPS_PER_BEAT, _live_int, _live_read, _live_write, plugin_param_count
 
 if TYPE_CHECKING:
@@ -208,7 +209,7 @@ def _cancel(session: FLSession) -> None:
 
 
 def _seconds(beats: float, session: FLSession) -> float:
-    tempo = session.tempo() or 120.0
+    tempo = session.tempo()
     return beats * 60.0 / tempo
 
 
@@ -401,17 +402,15 @@ def automation_target(
         index, pname = _plugin_param(session, call, channel, -1, param, name)
         return {"kind": "channel", "channel": channel, "param": index}, f"{name} {pname}"
     assert mixer_track is not None
-    count = _live_int(session, "mixer.trackCount")
-    if not 0 <= mixer_track < count:
-        raise errors.invalid_argument(call, f"mixer track {mixer_track} does not exist; FL has 0 to {count - 1}")
     where = "master" if mixer_track == 0 else f"mixer track {mixer_track}"
     if slot is None:
+        count = _live_int(session, "mixer.trackCount")
+        if not 0 <= mixer_track < count:
+            raise errors.invalid_argument(call, f"mixer track {mixer_track} does not exist; FL has 0 to {count - 1}")
         if param not in ("volume", "pan"):
             raise errors.invalid_argument(call, 'a mixer track automates "volume" or "pan"; pass slot for an effect')
         return {"kind": "mixer", "track": mixer_track, "param": param}, f"{where} {param}"
-    if not _live_read(session, "mixer.isTrackPluginValid", [mixer_track, slot]):
-        raise errors.invalid_argument(call, f"{where} has no effect in slot {slot}")
-    plugin = str(_live_read(session, "plugins.getPluginName", [mixer_track, slot, False]))
+    plugin = routing.effect(session, call, mixer_track, slot).plugin
     index, pname = _plugin_param(session, call, mixer_track, slot, param, f"{plugin} on {where}")
     return {"kind": "effect", "track": mixer_track, "slot": slot, "param": index}, f"{plugin} {pname} on {where}"
 

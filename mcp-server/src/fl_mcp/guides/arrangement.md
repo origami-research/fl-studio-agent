@@ -23,9 +23,9 @@ Swing or accents are arithmetic on each note's `start` and `velocity`, as the ex
 
 ```python
 fl.set_tempo(120)
-kick = theory.drums("x...x...x...x..." * 4, key=60)                 # 4 bars; a sampler plays MIDI 60
+kick = theory.drums("x...x...x...x..." * 4)                 # 4 bars, on MIDI 60
 swing = lambda notes, pct=56: [n.model_copy(update={"start": n.start + (pct - 50) / 200}) if round(n.start * 4) % 2 else n for n in notes]
-hats = swing(theory.drums("xxxxxxxxxxxxxxxx" * 4, key=60, velocity=0.6))  # off-sixteenths a little late
+hats = swing(theory.drums("xxxxxxxxxxxxxxxx" * 4, velocity=0.6))  # off-sixteenths a little late
 chords = [Note(k, bar * 4, 4, 0.6) for bar in range(4) for k in theory.chord(("A3", "F3", "C4", "G3")[bar], "minor" if bar == 0 else "major")]
 a = fl.rename_pattern(1, "A")
 b = fl.new_pattern("B")

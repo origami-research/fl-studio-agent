@@ -15,6 +15,7 @@ from pathlib import Path
 import anyio
 
 from fl_mcp import guides, manual, sdk, server, theory
+from fl_mcp.contract import FLLicense
 
 REFERENCE = Path(__file__).resolve().parents[2] / "docs" / "sdk-reference.md"
 DESCRIPTION = server.run.__doc__
@@ -22,7 +23,7 @@ DESCRIPTION = server.run.__doc__
 
 def test_the_run_description_fits_claude_codes_limit():
     assert len(DESCRIPTION) < manual.DESCRIPTION_MAX_CHARS, len(DESCRIPTION)
-    assert server.run_description(with_fl=True) == DESCRIPTION
+    assert server.run_description(fl_license=FLLicense.LICENSED) == DESCRIPTION
 
 
 def _public(owner: object, prefix: str) -> set[str]:
@@ -32,21 +33,58 @@ def _public(owner: object, prefix: str) -> set[str]:
 
 
 def test_with_no_fl_session_run_describes_the_kernel_and_the_guides_only():
-    """--workspace-only refuses every fl call but fl.guide(), so listing the SDK there
-    would send the model to calls that fail."""
-    alone = server.run_description(with_fl=False)
+    """--workspace-only refuses every fl call but fl.guide() and reading a file, so listing
+    the SDK there would send the model to calls that fail."""
+    alone = server.run_description(fl_license=None)
     assert len(alone) < manual.DESCRIPTION_MAX_CHARS
     assert manual.NO_SESSION in alone and "Installed: numpy" in alone and "display(" in alone
-    assert manual.sdk_index() not in alone and "fl.scene()" not in alone and "help(fl." not in alone
+    assert manual.sdk_index(FLLicense.LICENSED) not in alone and "fl.scene()" not in alone and "help(fl." not in alone
     assert "fl.guide(" in alone and all(g.name in alone for g in guides.load())
-    assert re.findall(r"\bfl\.(\w+)", alone) == ["guide"] * alone.count("fl.guide")
+    assert set(re.findall(r"\bfl\.(\w+)", alone)) == {"guide", "read_wav"}
+
+
+def test_the_workspace_only_text_is_true_of_what_works_without_fl(tmp_path, monkeypatch):
+    """The audit of 0.1.14: the text said only fl.guide() works, yet fl.read_wav read a file
+    the cell wrote. Both named calls work with no session behind fl."""
+    import numpy as np
+    import soundfile
+
+    monkeypatch.chdir(tmp_path)
+    soundfile.write("t.wav", np.zeros((480, 2)), 48000)
+    fl = sdk.FL(None)  # type: ignore[arg-type]  # no session, as in --workspace-only
+    samples, rate = fl.read_wav("t.wav")
+    assert samples.shape == (480, 2) and rate == 48000
+    fl.guide()
+
+
+def test_a_trial_fl_is_not_offered_saving():
+    """A trial FL cannot save, so its description leaves fl.save out; a licensed FL (the
+    public product's users saving their own work) keeps it. Every other member is listed
+    for both, and help() and the reference page keep fl.save."""
+    trial = server.run_description(fl_license=FLLicense.TRIAL)
+    assert "save()" not in manual.sdk_index(FLLicense.TRIAL) and "save()" in manual.sdk_index(FLLicense.LICENSED)
+    assert "save()" not in trial and "save()" in DESCRIPTION
+    assert trial.replace(manual.sdk_index(FLLicense.TRIAL), "") == DESCRIPTION.replace(
+        manual.sdk_index(FLLicense.LICENSED), ""
+    )
+    assert "fl.save" in manual.reference_markdown()
+
+
+def test_the_description_names_no_removed_member():
+    """fl.export_offline (a second way to render, licensed FL only) and fl.file_edit (refused
+    during a match) are gone from the SDK, so nothing may name them."""
+    for gone in ("export_offline", "file_edit"):
+        assert not hasattr(sdk.FL, gone)
+        assert gone not in DESCRIPTION and gone not in manual.reference_markdown()
 
 
 def test_each_server_mode_serves_its_own_description_and_instructions():
     for workspace_only in (False, True):
         made = server.create_server(workspace_only=workspace_only)
         (listed,) = anyio.run(made.list_tools)
-        assert listed.description == server.run_description(with_fl=not workspace_only)
+        assert listed.description == server.run_description(
+            fl_license=None if workspace_only else FLLicense.LICENSED
+        )
         assert made.instructions == server.server_instructions(with_fl=not workspace_only)
         assert len(made.instructions) < manual.DESCRIPTION_MAX_CHARS
 

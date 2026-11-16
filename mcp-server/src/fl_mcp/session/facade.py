@@ -17,7 +17,6 @@ import time
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any
 
 from fl_mcp import errors, flp, scene
 from fl_mcp import sounds as stock_sounds
@@ -58,6 +57,7 @@ from fl_mcp.schemas import (
     DoctorReport,
     HelloEvent,
     LoadKind,
+    MixerEffect,
     MixerSend,
     MixerTrack,
     Note,
@@ -246,13 +246,6 @@ class FLSession:
         # Clips FL added to the playlist this session (fl.place, fl.automate): FL has no
         # clip getter, so the playlist reads the song FL opened plus these.
         self._placed: list[PlacedClip] = []
-        # Development-mode file-edit batching: file-lane ops write the .flp
-        # but defer the FL reload so N edits cost ONE reboot, not N. Session
-        # mode refuses this lane before a file mutation because FL has no
-        # verified in-place project reload API.
-        self._reload_batch_depth = 0
-        self._reload_pending = False
-        self._file_write_prepared = False
         self._audio_stream_stop = threading.Event()
         self._audio_stream_thread: threading.Thread | None = None
         self._audio_endpoint: AudioEndpoint | None = None
@@ -455,10 +448,6 @@ class FLSession:
         with self._write_guard("render_wav"):
             return controls.render_stems(self, output, by, start_bar=start_bar, bars=bars, channels=channels)
 
-    def export_offline(self, output: Path) -> Path:
-        with self._write_guard("export_offline"):
-            return controls.export_offline(self, output)
-
     @contextmanager
     def audio_stream(self) -> Iterator[Iterator[AudioChunk]]:
         """Yield live master-mix chunks; every gap remains visible in metadata."""
@@ -518,6 +507,10 @@ class FLSession:
     def set_plugin_param(self, channel: int, param: int | str, value: float | str) -> PluginParam:
         with self._write_guard("set_plugin_param"):
             return controls.set_plugin_param(self, channel, param, value)
+
+    def effect(self, mixer_track: int, slot: int) -> MixerEffect:
+        """The effect in one mixer slot, as FL has it now (routing.effect)."""
+        return routing.effect(self, "fl.effect", mixer_track, slot)
 
     def effect_params(
         self, mixer_track: int, slot: int, *, query: str | None = None, limit: int = controls.PLUGIN_PARAMS_DEFAULT_LIMIT
@@ -691,7 +684,7 @@ class FLSession:
     def snapshot(self) -> SessionState:
         return state.snapshot(self)
 
-    def tempo(self) -> float | None:
+    def tempo(self) -> float:
         return state.tempo(self)
 
     def channel_names(self) -> list[Channel]:
@@ -706,8 +699,10 @@ class FLSession:
         return state.mixer_track_count(self)
 
     def playlist(self) -> list[PlaylistClip]:
-        """The playlist's clips in the song FL opened, then the clips added this session
-        (FL has no clip getter; an added clip's track is None when FL did not report it)."""
+        """The playlist's clips in the song FL opened, then the clips added this session.
+        A file read on purpose: FL cannot report its playlist's clips, so the song FL
+        opened is the only record of them (an added clip's track is None when FL did not
+        report it)."""
         opened = [
             PlaylistClip(
                 track=c.track, start=c.start_beat, length=c.length_beats, pattern=c.pattern, channel=c.channel,
@@ -740,36 +735,26 @@ class FLSession:
 
     def scene_summary(self) -> SceneSummary:
         """fl.scene(): the whole project in one digest, from the same reads as fl.channels,
-        fl.patterns, fl.playlist and fl.mixer, plus the notes and the automation. The
-        patterns and the mixer are only ever read live: when FL does not answer, the digest
-        leaves them out and says why rather than failing (channels and tempo fall back to
-        the saved song by themselves)."""
+        fl.patterns, fl.playlist and fl.mixer, plus the notes and the automation.
+
+        What FL reports (channels, patterns, mixer, tempo) is read live, and when FL does
+        not answer the scene raises: it never fills a part in from the saved song, which
+        is not what FL has now (a trial FL never saves, so it is always the song FL
+        opened). What FL cannot report at all (the notes nobody wrote this session, the
+        playlist's clips, the automation clips, the project's notes) comes from the song
+        FL opened, with this session's edits; those reads are labelled where they happen."""
         project = self._scene_project()
         channels = self.channel_names()
-        unanswered: list[str] = []
-
-        def live(read: Callable[[], list[Any]]) -> list[Any] | None:
-            try:
-                return read()
-            except errors.ToolError as exc:
-                if exc.category != "control_plane_unavailable":
-                    raise
-                log.warning("the scene left out a live read FL did not answer: %s", exc.message)
-                unanswered.append(exc.message)
-                return None
-
-        patterns, mixer = live(self.patterns), live(self.mixer_tracks)
         return SceneSummary.model_validate(
             scene.summarize(
                 scene.rows_from_notes(self.all_notes()),
                 channels,
-                patterns=patterns,
+                patterns=self.patterns(),
                 clips=self.playlist(),
-                mixer=mixer,
+                mixer=self.mixer_tracks(),
                 automations=scene.read_automations(project),
                 tempo=self.tempo(),
                 project_notes=self.project_guide([c.name for c in channels]).notes,
-                unanswered=unanswered[0] if unanswered else None,
             )
         )
 
@@ -813,12 +798,6 @@ class FLSession:
         return self.link.hello()
 
     def _reload_fl(self) -> None:
-        # Inside a file-edit batch, coalesce: each edit already wrote the .flp;
-        # the single reload on batch exit syncs FL once. A reload is a SIGKILL
-        # + relaunch, so doing it per edit would reboot the DAW N times.
-        if self._reload_batch_depth > 0:
-            self._reload_pending = True
-            return
         self._require_file_lane()
         lifecycle.reload_fl(self.project, self.link)
 
@@ -834,12 +813,9 @@ class FLSession:
         """Save live FL state before a project-file mutation can reload it.
 
         Saving after a .flp mutation is unsafe: FL's in-memory project can
-        overwrite that mutation. One save covers every write in a file_edit
-        batch; standalone writes prepare independently.
+        overwrite that mutation.
         """
         self._require_file_lane()
-        if self._file_write_prepared:
-            return
         if self.control is None or self._ensure_hello() is None:
             return
         try:
@@ -847,33 +823,6 @@ class FLSession:
         except errors.ToolError as exc:
             if exc.category != "control_plane_unavailable":
                 raise
-            return
-        if self._reload_batch_depth > 0:
-            self._file_write_prepared = True
-
-    @contextmanager
-    def file_edit(self) -> Iterator[None]:
-        """Batch development-mode file-lane edits into ONE reload.
-
-        The file fallbacks for notes, tempo and channel levels each rewrite the
-        .flp and normally reload FL - a full SIGKILL+relaunch. Inside this block
-        the edits still apply to the .flp but the reload is deferred to a single
-        reboot on exit, so a batch of edits costs one reload instead of N. The
-        first file write saves live bridge work before it mutates the .flp.
-        Nestable."""
-        self._require_file_lane()
-        if self._reload_batch_depth == 0:
-            self._file_write_prepared = False
-        self._reload_batch_depth += 1
-        try:
-            yield
-        finally:
-            self._reload_batch_depth -= 1
-            if self._reload_batch_depth == 0 and self._reload_pending:
-                self._reload_pending = False
-                self._reload_fl()
-            if self._reload_batch_depth == 0:
-                self._file_write_prepared = False
 
     def _bridge_ping(self) -> bool:
         """The breaker's gate: one stateless spool round trip proving the

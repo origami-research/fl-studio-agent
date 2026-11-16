@@ -229,21 +229,18 @@ def summarize(
     rows: Sequence[SceneRow],
     channels: Sequence[Channel] = (),
     *,
-    patterns: Sequence[PatternInfo] | None = (),
+    patterns: Sequence[PatternInfo] = (),
     clips: Sequence[PlaylistClip] = (),
-    mixer: Sequence[MixerTrack] | None = (),
+    mixer: Sequence[MixerTrack] = (),
     automations: Sequence[AutomationRow] = (),
     tempo: float | None = None,
     project_notes: str | None = None,
-    unanswered: str | None = None,
 ) -> dict[str, Any]:
     """The whole project as SceneSummary's fields: one digest per channel, pattern and
     mixer track in use, the playlist's extent and the automation, from what the session
     read. A channel or pattern with no notes is listed too, so empty reads as empty, not
     missing. The digest says where things are and what they hold; each object's own
-    read (fl.track(...).notes(), fl.playlist, fl.mixer) has the rest. ``patterns`` or
-    ``mixer`` None: FL did not answer that read (``unanswered`` says why), so the digest
-    leaves it out rather than guessing."""
+    read (fl.track(...).notes(), fl.playlist, fl.mixer) has the rest."""
     by_channel: dict[int, list[SceneRow]] = {}
     by_pattern: dict[int, list[SceneRow]] = {}
     for row in rows:
@@ -266,12 +263,11 @@ def summarize(
         "note_count": len(rows),
         "project_notes": project_notes or None,
         "playlist": _playlist(clips, arrangements),
-        "patterns": None if patterns is None else _patterns(patterns, by_pattern, clips, arrangements),
+        "patterns": _patterns(patterns, by_pattern, clips, arrangements),
         "channels": [
             _channel(listed[i], by_channel.get(i, []), clips, arrangements) for i in sorted(listed)
         ] + [_unlisted_channel(i, by_channel.get(i, []), clips, arrangements) for i in sorted(unlisted)],
-        "mixer": None if mixer is None else [_mixer_track(track) for track in mixer],
-        "unanswered": unanswered if patterns is None or mixer is None else None,
+        "mixer": [_mixer_track(track) for track in mixer],
         "automations": [
             {
                 "channel": a.channel,

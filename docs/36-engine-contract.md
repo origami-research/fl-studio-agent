@@ -24,8 +24,9 @@ replaced `get_scene`, `check`, `render` and the workspace tools with Python on
 ## The model's manual
 
 Updated 2026-11-15: the SDK's docstrings are the one source of what each `fl` member does.
-`run`'s description is generated from them by `fl_mcp/manual.py`: `run`'s own docstring (the kernel and its results), then the working loop and one line per SDK area naming each member and its required arguments, then the guide index.
-With `--workspace-only` there is no FL session and every `fl` call but `fl.guide()` is refused, so the description there is the kernel and the guide index only, and the instructions say there is no session; the contract publishes both under `server.workspace_only`.
+`run`'s description is generated from them by `fl_mcp/manual.py`: `run`'s own docstring (the kernel and its results), then a few facts about the session and one line per SDK area naming each member and its required arguments, then the guide index.
+A trial FL cannot save, so a session on one (`FLMCP_FL_LICENSE=trial`) leaves `fl.save` out of that index; `help(fl.save)` and the reference keep it, and the contract publishes that description under `server.trial`.
+With `--workspace-only` there is no FL session and every `fl` call but `fl.guide()` and `fl.read_wav()` of a file the cell wrote is refused, so the description there is the kernel and the guide index only, and the instructions say there is no session; the contract publishes both under `server.workspace_only`.
 In `run`, `help(fl.render)` gives a member's full docstring and `fl.guide("listening")` opens a guide (optional reference notes, `fl_mcp/guides/`, format in that package's docstring).
 The description stays under 4,096 characters, because Claude Code cuts server instructions and a tool description loaded upfront at that length ([Claude Code MCP docs](https://code.claude.com/docs/en/mcp#tool-search-for-mcp-server-authors)); a test fails past it.
 The server's `instructions` is one line naming `run`, because a client that defers tools shows the model only tool names and instructions until it searches.
@@ -52,7 +53,6 @@ Repeated undos read "Undid 4 actions in FL", and an identical sentence repeated 
 Changes are told apart by channel and pattern, not by name: two channels with one name are listed as "Sampler (channel 0)" and "Sampler (channel 2)".
 A call lists at most 200 actions, then "and N more actions", because a cell can make thousands of quick `fl` calls within its time budget.
 For `run`, the server records each `fl` call it serves while the cell runs, so a cell that raises partway, is interrupted, or loses its kernel still lists the changes FL already has.
-Inside `fl.file_edit()`, changes reach FL only when the block closes and FL reopens the changed song, so they are listed then; if closing fails, none of them are listed.
 `fl.read_wav` runs inside the kernel without reaching the server, so what a cell measures from a render is not listed.
 `fl_mcp/actions.py` holds the wording.
 

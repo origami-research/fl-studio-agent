@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import base64
 import binascii
+from collections.abc import Sequence
 from datetime import datetime
 from pathlib import Path
 from typing import Annotated, Any, Literal
@@ -518,6 +519,35 @@ def rounded(value: float) -> str:
     return f"{round(value, 2):g}"
 
 
+# The heading over mixer lines, in fl.mixer's printout and in fl.scene()'s.
+MIXER_HEADING = "mixer tracks in use (index 'name', volume; effects slot:plugin; sends track:level):"
+
+
+def mixer_line(
+    index: int,
+    name: str,
+    volume: float,
+    pan: float,
+    flags: Sequence[str],
+    effects: Sequence[tuple[int, str]],
+    sends: Sequence[tuple[int, float | None]],
+) -> str:
+    """THE printed line of one mixer track (fl.mixer and fl.scene() both print it): levels
+    rounded, ``flags`` such as "muted", effects by slot, and the sends that are on as
+    track:level (a send whose level FL did not report prints its track alone)."""
+    first = f"{index} {name!r}, vol {rounded(volume)}"
+    if round(pan, 2):
+        first += f", pan {rounded(pan)}"
+    parts = [first + "".join(f", {flag}" for flag in flags)]
+    if effects:
+        parts.append("effects " + ", ".join(f"{slot}:{plugin}" for slot, plugin in effects))
+    if sends:
+        parts.append(
+            "sends " + ", ".join(str(target) if level is None else f"{target}:{rounded(level)}" for target, level in sends)
+        )
+    return "; ".join(parts)
+
+
 class Channel(BaseModel):
     index: int
     name: str
@@ -616,23 +646,16 @@ class MixerTrack(BaseModel):
         return f"MixerTrack({self._text()})"
 
     def _text(self) -> str:
-        """One line, levels rounded: effects by slot, then the sends that are on, as
-        "→ track N at level" (tracks sent to at one level share it)."""
-        flags = "".join(f", {flag}" for flag in ("muted", "solo") if getattr(self, flag))
-        pan = f", pan {rounded(self.pan)}" if round(self.pan, 2) else ""
-        parts = [f"{self.index} {self.name!r}, vol {rounded(self.volume)}{pan}{flags}"]
-        if self.effects:
-            parts.append("effects " + ", ".join(f"{e.slot}:{e.plugin}" for e in self.effects))
-        levels: dict[str | None, list[int]] = {}
-        for send in self.sends:
-            if send.on:
-                levels.setdefault(None if send.level is None else rounded(send.level), []).append(send.target)
-        parts += [
-            f"→ track{'s' if len(targets) > 1 else ''} {', '.join(map(str, targets))}"
-            + ("" if level is None else f" at {level}")
-            for level, targets in levels.items()
-        ]
-        return "; ".join(parts)
+        """One line, as mixer_line prints it."""
+        return mixer_line(
+            self.index,
+            self.name,
+            self.volume,
+            self.pan,
+            [flag for flag in ("muted", "solo") if getattr(self, flag)],
+            [(e.slot, e.plugin) for e in self.effects],
+            [(s.target, s.level) for s in self.sends if s.on],
+        )
 
 
 class PatternInfo(BaseModel):

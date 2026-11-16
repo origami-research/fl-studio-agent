@@ -146,16 +146,11 @@ class FakePlatform:
     CI, where the real platform_for() fails closed. Only what the suite drives
     is implemented; anything else fails loudly instead of touching the host."""
 
-    render_executable = Path("/fake/FL/render")
-
     def __init__(self, control: FakeControl | None = None) -> None:
         self._control = control if control is not None else FakeControl(hello=None)
 
     def control_factory(self) -> Callable[[], FakeControl]:
         return lambda: self._control
-
-    def render_command(self, project: Path) -> Sequence[str]:
-        return (str(self.render_executable), "-R", str(project))
 
 
 class FakeSpool:

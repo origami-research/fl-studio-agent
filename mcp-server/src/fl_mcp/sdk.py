@@ -14,7 +14,6 @@ from __future__ import annotations
 
 import itertools
 from collections.abc import Sequence
-from contextlib import AbstractContextManager
 from pathlib import Path
 from typing import Annotated, Literal
 
@@ -35,6 +34,7 @@ from fl_mcp.contract import SceneNotesResult, SceneSummary
 
 from .kernel.wire import MAX_AUDIO_BYTES
 from .schemas import (
+    MIXER_HEADING,
     AutomationPoint,
     AutomationTake,
     Channel,
@@ -61,7 +61,7 @@ from .schemas import (
     WriteResult,
 )
 from .session import FLSession, create_session
-from .sounds import SEARCH_LIMIT_MAX
+from .sounds import SEARCH_LIMIT_MAX, is_library_path
 
 SdkChannel = Annotated[int, Field(strict=True, ge=0)]
 SdkPattern = Annotated[int, Field(strict=True, ge=1)]
@@ -265,7 +265,7 @@ class MixerTracks(list[MixerTrack]):
     def __repr__(self) -> str:
         lines = [f"  {t._text()}" for t in self]
         return "\n".join([
-            "MixerTracks in use (index 'name', volume; effects slot:plugin; sends):",
+            MIXER_HEADING,
             *lines,
             f"  (+ {self.empty} empty mixer tracks)",
         ])
@@ -312,7 +312,8 @@ class FL:
     def playlist(self) -> list[PlaylistClip]:
         """The playlist's clips: those in the song FL opened, then those added this session
         with fl.place and fl.automate: track (None when FL did not report it), start and
-        length in beats, and the pattern (or audio channel) each plays."""
+        length in beats, and the pattern (or audio channel) each plays. FL cannot report
+        its clips, so a clip changed in FL's own window is not seen."""
         return self._session.playlist()
 
     @property
@@ -327,7 +328,11 @@ class FL:
         """The whole project in one digest: print(fl.scene()) shows the project's notes,
         tempo and key, the playlist, and a line per pattern, channel and mixer track in use
         (a SceneSummary, whose fields hold the same parts as data). detail="notes" is every
-        note FL has (by channel and pattern), optionally of one channel and one pattern."""
+        note (by channel and pattern), optionally of one channel and one pattern. FL cannot
+        report the notes, the playlist's clips, the automation clips or the project's notes,
+        so those come from the song FL opened with this session's edits (as Track.notes and
+        fl.playlist read them); the rest is FL's own answer, and when FL does not answer
+        this raises."""
         if detail == "summary":
             return self._session.scene_summary()
         if detail != "notes":
@@ -337,10 +342,7 @@ class FL:
     @property
     def tempo(self) -> float:
         """FL's tempo now, in BPM."""
-        tempo = self._session.tempo()
-        if tempo is None:
-            raise errors.control_plane_unavailable("mixer.getCurrentTempo", 0.0)
-        return tempo
+        return self._session.tempo()
 
     def track(self, name_or_index: str | int, pattern: int = 1) -> Track:
         """A channel's piano roll in ``pattern``: by index, exact name, or a unique
@@ -497,14 +499,7 @@ class FL:
             args = _EffectArgs(mixer_track=mixer_track, slot=slot)
         except ValidationError as exc:
             raise errors.invalid_argument("fl.effect", str(exc)) from None
-        held = (e for t in self._session.mixer_tracks() if t.index == args.mixer_track for e in t.effects)
-        found = next((e for e in held if e.slot == args.slot), None)
-        if found is None:
-            where = "the master" if args.mixer_track == 0 else f"mixer track {args.mixer_track}"
-            raise errors.invalid_argument(
-                "fl.effect", f"{where} has no effect in slot {args.slot}; fl.mixer lists each track's effects"
-            )
-        return Effect._bound(self, found)
+        return Effect._bound(self, self._session.effect(args.mixer_track, args.slot))
 
     def presets(self, channel: str | int) -> list[str]:
         """The names of a plugin channel's presets, in FL's order: a preset's index is
@@ -695,10 +690,6 @@ class FL:
             self._session.render_wav(Path(output), start_bar=args.start_bar, bars=args.bars, **channels)
         )
 
-    def export_offline(self, output: str | Path) -> Path:
-        """Export the saved song with a second FL (about a minute). Licensed FL only; use render to listen."""
-        return self._session.export_offline(Path(output))
-
     def save(self) -> None:
         """Save the song to disk. Never needed for edits to take effect or be heard:
         they are live in FL immediately. A trial FL Studio cannot save."""
@@ -710,10 +701,17 @@ class FL:
         can be heard before it is loaded. Reads FL's Ogg-in-WAV and WavPack stock samples."""
         if isinstance(path, Sound):
             return read_wav(self._session.sound_file(path.path))
-        # As fl.load_sample tells them apart: a library path unless a file you wrote is there.
-        if not Path(path).is_file():
+        if Path(path).is_file():
+            return read_wav(Path(path))
+        if is_library_path(str(path)):
             return read_wav(self._session.sound_file(str(path)))
-        return read_wav(Path(path))
+        # Neither a file here nor a library path: answered at once, without searching the
+        # library for names like it (that search took 15 s on a fresh machine).
+        raise errors.invalid_argument(
+            "fl.read_wav",
+            f"there is no file {str(path)!r}; a render is read through the Render fl.render returned, "
+            "and a library sample is a Sound from fl.sounds() or its path",
+        )
 
     def meters(self, bars: int = 2, start_bar: int = 1) -> CheckResult:
         """Play ``bars`` bars (1 to 8) from ``start_bar`` and report which channels
@@ -751,22 +749,6 @@ class FL:
             )
         print(chosen.body)
 
-    def file_edit(self) -> AbstractContextManager[None]:
-        """Batch edits that rewrite the saved song into one FL reopen.
-
-        Outside a match only: during a match FL is never reopened, so this raises.
-        Notes, tempo and levels apply live. Only when FL's control wire is down in
-        development do they rewrite the saved song instead, each reopening FL;
-        inside this block FL reopens once::
-
-            with fl.file_edit():
-                fl.track("Bass").write(notes)
-                fl.set_tempo(124)
-        """
-        # Each file-lane op rewrites the .flp and normally reloads FL - a full
-        # restart; the batch reloads once on exit. Session mode refuses it.
-        return self._session.file_edit()
-
 
 class Track:
     """One channel's piano roll."""
@@ -801,7 +783,9 @@ class Track:
         return self._fl._session.clear_notes(target)
 
     def notes(self) -> list[Note]:
-        """The notes on this track's pattern as FL has them now, including your writes."""
+        """The notes on this track's pattern: those in the song FL opened, with this
+        session's writes applied. FL cannot report notes, so a note changed in FL's own
+        windows is not seen."""
         target = Target(pattern=self.pattern, channel=self.channel)
         return self._fl._session.read_notes(target)
 

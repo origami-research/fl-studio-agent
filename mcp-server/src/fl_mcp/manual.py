@@ -20,6 +20,7 @@ from typing import Any, get_args
 from pydantic import BaseModel
 
 from fl_mcp import contract, guides, schemas, sdk, theory
+from fl_mcp.contract import FLLicense
 from fl_mcp.schemas import Note
 
 # Claude Code's limit on a tool description loaded upfront and on server instructions.
@@ -41,9 +42,13 @@ AREAS: dict[str, tuple[str, ...]] = {
     "Mix": ("Track.set_levels", "fl.route", "fl.send", "fl.effect", "Effect.params", "Effect.set_param"),
     "Song": ("fl.set_tempo", "fl.new_pattern", "fl.rename_pattern", "fl.place", "fl.automate"),
     "Hear": ("fl.meters", "fl.render", "fl.read_wav"),
-    "Project": ("fl.save", "fl.undo", "fl.export_offline", "fl.file_edit"),
+    "Project": ("fl.save", "fl.undo"),
     "Guides": ("fl.guide",),
 }
+
+# Members only a licensed FL can use: a trial FL cannot save. The run description lists
+# them only for a session on a licensed FL; the reference page and help() keep them.
+LICENSED_ONLY = frozenset({"fl.save"})
 
 # What each prefix in AREAS names, and how the model writes it in a cell.
 _OWNERS: dict[str, tuple[Any, str]] = {
@@ -110,11 +115,17 @@ def _returns(entry: str) -> str:
     return "" if returned is inspect.Signature.empty else f" -> {returned}"
 
 
-def sdk_index() -> str:
-    """One line per area: the call of every member in it."""
-    width = max(len(area) for area in AREAS)
+def sdk_index(fl_license: FLLicense) -> str:
+    """One line per area: the call of every member in it that this FL can use."""
+    usable = {
+        area: [e for e in entries if fl_license is FLLicense.LICENSED or e not in LICENSED_ONLY]
+        for area, entries in AREAS.items()
+    }
+    width = max(len(area) for area in usable)
     return "\n".join(
-        f"  {area.ljust(width)}  " + " ".join(_short(entry) for entry in entries) for area, entries in AREAS.items()
+        f"  {area.ljust(width)}  " + " ".join(_short(entry) for entry in entries)
+        for area, entries in usable.items()
+        if entries
     )
 
 
@@ -124,21 +135,25 @@ SESSION_FACTS = """Good to know:
 - print(fl.scene()) shows the whole project in one digest: patterns, channels, playlist and mixer.
 - You hear by measuring: fl.meters() takes seconds, a render plays in real time."""
 
-NO_SESSION = "This kernel has no FL Studio session: every fl call is refused except fl.guide()."
+NO_SESSION = (
+    "This kernel has no FL Studio session: fl.guide() and fl.read_wav() of a file you wrote work, "
+    "and every other fl call is refused."
+)
 
 
-def tool_description(kernel: str, *, with_fl: bool) -> str:
+def tool_description(kernel: str, *, fl_license: FLLicense | None) -> str:
     """The run tool's description: the kernel's contract (run's docstring), then with an FL
-    session the session facts and the SDK index, and in both cases the guide index, all
-    generated from their sources."""
+    session (``fl_license`` is that FL's; None: no session) the session facts and the SDK
+    index of what that FL can use, and in both cases the guide index, all generated from
+    their sources."""
     found = guides.load()
     guide_lines = "\n".join(f"  {line}" for line in guides.index(found).splitlines())
-    if with_fl:
+    if fl_license is not None:
         fl_doc = " ".join(inspect.getdoc(sdk.FL).split())
         session = (
             f"{SESSION_FACTS}\n\n"
             f"fl: {fl_doc} help(fl.render) gives a member's arguments, defaults, results and "
-            f"limits; read it before first use.\n{sdk_index()}"
+            f"limits.\n{sdk_index(fl_license)}"
         )
     else:
         session = NO_SESSION

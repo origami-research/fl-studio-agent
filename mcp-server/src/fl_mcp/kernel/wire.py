@@ -29,8 +29,8 @@ SessionMethod = Literal[
     "channel_names",
     "check",
     "clear_notes",
+    "effect",
     "effect_params",
-    "export_offline",
     "live_channels",
     "load_audio",
     "load_sound",
@@ -69,10 +69,6 @@ MAX_MESSAGE_BYTES = 64 << 20
 # The largest audio file one call carries: base64 makes it a third larger, and the rest of
 # the message is a few hundred bytes.
 MAX_AUDIO_BYTES = (MAX_MESSAGE_BYTES - (1 << 20)) * 3 // 4
-# FLSession.file_edit is a context manager; the wire carries its two halves.
-FILE_EDIT_ENTER = "file_edit_enter"
-FILE_EDIT_EXIT = "file_edit_exit"
-CallMethod = SessionMethod | Literal["file_edit_enter", "file_edit_exit"]
 
 
 class WireError(BaseModel):
@@ -145,7 +141,7 @@ class Call(BaseModel):
     # Pairs the reply with its call: an interrupt can abandon a call mid-wait,
     # and its late reply must not answer the next one.
     id: int = 0
-    method: CallMethod
+    method: SessionMethod
     args: dict[str, Any] = Field(default_factory=dict)
 
 

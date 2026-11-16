@@ -150,10 +150,10 @@ Using the FL Studio trial? Set `FLMCP_FL_LICENSE=trial` in the server's `env`, a
 The server exposes one tool, `run`: Python in a persistent kernel bound to the live FL Studio session.
 Everything is code on the `fl` object: read the song (`fl.channels`, `fl.mixer`, `fl.playlist`, `fl.patterns`, notes, `fl.scene()`), write notes, tempo, levels, parameters, routing and sounds, read FL's meters (`fl.meters()`), and render the mix, a few bars, single instruments or stems (`fl.render(...)`) to listen with numpy, scipy, librosa and matplotlib, which come installed.
 Files and shell are plain Python in the same sandbox.
-The tool's description is the short manual: the kernel, how to work, one line per SDK area and the guides.
+The tool's description is the short manual: the kernel, a few facts about the session, one line per SDK area and the guides.
 In `run`, `help(fl.render)` gives any method's detail and `fl.guide("listening")` opens a guide (optional reference on techniques such as measuring a render, ducking under the kick and finding sounds); [docs/sdk-reference.md](docs/sdk-reference.md) is the same docstrings as one page.
 
-The working rhythm is write, check the meters at milestones, render and listen at the end.
+A model hears by measuring: `fl.meters()` takes seconds, and a render plays in real time.
 Every result is what FL now has, so nothing needs waiting for, saving, or re-reading.
 FL's transient refusals ("operation unsafe at current time", a busy control wire) are retried inside the engine; a model sees only errors it can act on.
 Setup diagnostics are for the operator, not the model: `fl-mcp-doctor` prints the same report as JSON.

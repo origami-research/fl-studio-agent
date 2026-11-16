@@ -59,6 +59,13 @@ def test_drums_ignores_dots_and_spaces_as_rests():
     assert len(notes) == 3
 
 
+def test_drums_play_a_sampler_at_its_own_pitch_by_default():
+    """The audit of 0.1.14: the default was "C1" (MIDI 24) while every drum channel of the
+    starting project, like any FL sampler, plays its sample at its own pitch on MIDI 60, so
+    a call without key= played three octaves down."""
+    assert {n.key for n in theory.drums("x.x.")} == {60}
+
+
 def test_drums_custom_key_and_velocity():
     notes = theory.drums("x", key="C1", velocity=0.5)
     assert notes[0].key == 24  # "C1" resolved to MIDI once, at construction

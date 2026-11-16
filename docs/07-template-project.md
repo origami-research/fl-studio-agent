@@ -30,19 +30,21 @@ PPQ and tempo are read from the project, never assumed.
 `make_agent_project.create(force=True)` copies it to the agent project path; the Windows box installer and the arena's FL launch do this before every start.
 
 Updated 2026-11-02: the template was five channels (four 808 samplers and a FLEX bass, all on the master), and models had nothing to play chords, pads or leads on.
-It is now a palette of FL's stock instruments on a mixed bus layout, and it says in its own notes what each channel is for.
+It is now a palette of FL's stock instruments on a mixed bus layout, and its own notes say what each channel holds.
 
 ### What it contains
 
 - PPQ 48 (the stock template's), 120 BPM, 4/4, no notes; Pattern 1 on playlist track 1 with the auto-length clip window (below).
 - 28 channels, each on its own named mixer track:
-  seven drum samplers named after their parts (Kick, Snare, Clap, Hat, Open Hat, Perc, Crash), which start as one house kit (ModeAudio HouseGen) and take any sample the model chooses by sound with `fl.sounds` and loads with `fl.load_sample` ([sdk-reference](sdk-reference.md)), a pitched 808 cowbell sampler, an 808 (FLEX) into Fruity Fast Dist and Fruity Soft Clipper, electric bass, synth bass, piano, Rhodes, strings, pad, choir, brass, woodwinds, sax, guitar, lead and pluck, five spare channels for live loading (two synths, 3x Osc and Sytrus, and three samplers), and `Audition`, where `fl.audition` plays a preset alone and which nothing in the song plays.
+  seven drum samplers named after their parts (Kick, Snare, Clap, Hat, Open Hat, Perc, Crash), holding one stock series (ModeAudio HouseGen), which take any sample `fl.load_sample` loads ([sdk-reference](sdk-reference.md)), a pitched 808 cowbell sampler, an 808 (FLEX) into Fruity Fast Dist and Fruity Soft Clipper, electric bass, synth bass, piano, Rhodes, strings, pad, choir, brass, woodwinds, sax, guitar, lead and pluck, five spare channels for live loading (two synths, 3x Osc and Sytrus, and three samplers), and `Audition`, where `fl.audition` plays a preset alone and which nothing in the song plays.
   Updated 2026-11-12: the three FPC kits (808, house, acoustic jazz) were replaced by the drum samplers, because models picked FPC pads and stock samples blind by name and the listening test heard the result; the curated kits that first filled them were removed on 2026-11-13 for search by sound (`fl.sounds`), which replaces the guessing.
   The drums play through the base template's Kick, Snare and Overhead buses into the Drum Bus.
 - The mixer of FL's "Advanced/Electronic/Trap" template: instrument tracks into drum, instrument, background, vocal and sub buses, a kick-driven sidechain (Fruity Peak Controller) feeding the sidechained and sub buses, a mid/side pre-master, and Maximus on the master.
   Measured 2026-11-09 on trial FL 2026 for Windows: a kick into the SideChain track left a pad on the Sidechained Bus unducked, so the palette guide's "ducked by the kick" does not hold on this build ([note](research/sidechain-samples-live-2026-11-09.md)). The builder no longer says it (2026-11-10); the guide is part of the built file, so the packaged template drops it at its next build. Pumping is drawn live with `fl.automate` ([note](research/live-pumping-2026-11-10.md)).
   Added: a Drum Bus with Parametric EQ 2 and a Fruity Limiter compressing, a Reverb Send (Fruity Reeverb 2) fed by the melodic tracks, a Delay Send (Fruity Delay Bank) fed by Lead and Pluck, and the FL MCP Bridge in Master slot 10, the last effect.
-- The project's comments (FL's File > Project info) hold the palette guide: one line `<channel name>: <what it is for>` per channel, then how the song and the mixer work.
+- The project's comments (FL's File > Project info) hold the palette guide: the pitch MIDI 60 sounds, one line `<channel name>: <what it holds>` per channel, then how the mixer routes.
+  Updated 2026-11-16: the guide states facts only, each channel's instrument, the keys it plays where that is limited, and the pitch MIDI 60 sounds, all measured live on trial FL 2026 (every key 21-108 rendered alone; the pitch at MIDI 60 read with pyin and the spectrum).
+  It no longer names genres ("the drift phonk lead"), a song structure ("the whole song lives in Pattern 1", which `fl.new_pattern` and `fl.place` contradict) or a workflow ("choose each part with fl.sounds"); the brief and the model own those.
   `fl.scene()` returns each channel's line as its `about` and the rest as `project_notes`, and `fl.channels` carries `about`, for this template or any project written the same way (`flp.project_guide`).
 
 ### How it is built

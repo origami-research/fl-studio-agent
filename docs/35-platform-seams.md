@@ -140,7 +140,6 @@ Keep `fl_mcp.fl.paths` and `fl_mcp.fl.process` as compatibility-free implementat
 class Platform(Protocol):
     def control_factory(self) -> Callable[[], ControlCarrier]: ...
     def broker_endpoint(self) -> BrokerEndpoint: ...
-    def render_command(self, project: Path) -> Sequence[str]: ...
     def fl_install(self) -> FLInstall: ...
     def sweep_fl(self) -> ProcessSweep: ...
     def kernel_launcher(self) -> Launcher: ...
@@ -150,9 +149,9 @@ class Platform(Protocol):
 
 `BrokerEndpoint` is one immutable TCP-loopback value object for every platform: `host="127.0.0.1"`, ephemeral `port`, 128-bit `token`, and `port_file` for discovery. It owns bind, connect, stale-endpoint cleanup, and its identifier, so neither broker side imports `AF_UNIX`. This is the existing proven pattern in `core/carriers/udp.py` and `bridge_udp.json`: one code path, no 104-character socket-path limit, and no Node pipe semantics to preserve because the broker is Python-only. Delete the AF_UNIX endpoint rather than retaining it beside a named pipe. Named pipes are not a target.
 
-`FLInstall` returns the authoritative executable, settings directories, templates directory, data directory, native plugin directory, engine image when supported, and app-data root. `ProcessSweep` lists exact FL process identities, kills either all listed processes or one confirmed PID, reports whether FL is running, and launches a project. `Platform.render_command(project)` returns complete immutable argv and never runs it.
+`FLInstall` returns the authoritative executable, settings directories, templates directory, data directory, native plugin directory, engine image when supported, and app-data root. `ProcessSweep` lists exact FL process identities, kills either all listed processes or one confirmed PID, reports whether FL is running, and launches a project.
 
-`MacPlatform` delegates to the existing CoreMIDI factory, app-bundle resolver, plist executable lookup, exact `pgrep -x`, exact-PID signals, direct executable spawning, and `-R` renderer. `WindowsPlatform` opens provisioned loopMIDI names, uses the same authenticated loopback-TCP broker endpoint, resolves `FL64.exe`, scopes process teardown to its launched project marker, and emits the Windows CLI render argv. Unsupported platforms raise a typed, actionable error on use.
+`MacPlatform` delegates to the existing CoreMIDI factory, app-bundle resolver, plist executable lookup, exact `pgrep -x`, exact-PID signals, and direct executable spawning. `WindowsPlatform` opens provisioned loopMIDI names, uses the same authenticated loopback-TCP broker endpoint, resolves `FL64.exe`, and scopes process teardown to its launched project marker. Unsupported platforms raise a typed, actionable error on use.
 
 Later, `create_session` receives an optional `platform: Platform | None = None`, resolves `platform_for(sys.platform)` once when absent, and injects the endpoint and control factory. `FLSession` stores no OS name. `FLMCP_SPOOL_ROOT` remains an OS-neutral routing decision.
 
@@ -259,6 +258,7 @@ These steps start only after the currently parked engine PRs merge, because this
    VERIFY-ON-WINDOWS: process enumeration never matches a non-FL process, launch carries the session environment, and one-owned-PID teardown works.
 
 4. Move the saved-copy renderer behind `render_command`, convert the matrix render test to consume it, and mark the current executable assertion macOS-only.
+   Updated 2026-11-16: the saved-copy renderer (`fl.export_offline`) was removed, and `render_command` with it; `fl.render` is the one way to render.
 
    Gate: the existing macOS live render regression still renders and its WAV analysis reads back.
 
@@ -362,10 +362,9 @@ A trial FL cannot reopen a project it saved, and it answers Save with a modal Bu
 | Where the engine needs FL to save or open a .flp | Code | Trial |
 | --- | --- | --- |
 | FL launch on the agent project (box install, `fl-mcp-dev-session`) | `fl.process.launch_fl` | Works: the file is a fresh copy of the licensed-authored template, never saved by the trial. |
-| File-lane reload after a project-file edit: note writes whose target channel the live Bridge cannot verify, tempo and channel-level fallbacks without the control wire | `FLSession._reload_fl`, `lifecycle.reload_fl` | Refused: it kills FL and reopens a file the trial may have saved. |
-| `export_offline` (a second FL rendering the saved project, `-R` or `/R`) | `controls.export_offline` | Refused. |
+| File-lane reload after a project-file edit: note writes whose target channel the live Bridge cannot verify | `FLSession._reload_fl`, `lifecycle.reload_fl` | Refused: it kills FL and reopens a file the trial may have saved. |
 | `render_wav` (play the live arrangement once while the Bridge captures) | `controls.render_wav` | Works: it saves nothing, and its length is read live (`controls.live_arrangement_span`). |
 | Bridge note results (save, then parse the saved file) | `BridgeLane._saved_state` | `save_project` is never attempted; the Bridge acknowledgement confirms the write and the session records it. |
 
 Live lanes need no file: control-wire tempo, channel levels, plugin parameters, transport, and Bridge note writes work the same in trial.
-Reads parse the last saved file and are only as current as the last successful save.
+Reads are FL's live answer or an error (0.1.15); only what FL cannot report (notes nobody wrote this session, the playlist's clips, automation clips, the project's notes) comes from the song FL opened, with this session's edits.

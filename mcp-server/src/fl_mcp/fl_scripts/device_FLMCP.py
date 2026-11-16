@@ -41,7 +41,7 @@ except ImportError:
     arrangement = channels = device = general = midi = None
     mixer = patterns = playlist = plugins = transport = ui = None
 
-SCRIPT_VER = "0.2.9"
+SCRIPT_VER = "0.2.10"
 
 # ---------------------------------------------------------------------------
 # Wire codec (framing, chunking/reassembly) - flmcp_codec.py beside this file is the single
@@ -250,8 +250,8 @@ MIXER_SLOTS = 10
 def _mixer_tracks():
     """`state.mixer` - the mixer tracks in use, with their effects and sends, in one
     round trip: fl.mixer. A track is in use when it is the master, a channel plays
-    into it, it holds an effect, it was renamed from FL's "Insert N", or a track in
-    use sends to it. Sends are scanned only from tracks in use (each scan is one
+    into it, it holds an effect, it was renamed from FL's "Insert N" (FL names its last
+    track nothing, which is not a rename), or a track in use sends to it. Sends are scanned only from tracks in use (each scan is one
     getRouteSendActive per track), so a 127-track mixer costs a few thousand calls
     inside FL rather than sixteen thousand."""
     count = mixer.trackCount()
@@ -278,7 +278,8 @@ def _mixer_tracks():
     used = {0}
     used.update(channels.getTargetFxTrack(c, GLOBAL) for c in range(channels.channelCount(GLOBAL)))
     for i in range(1, count):
-        if mixer.getTrackName(i) != "Insert %d" % i or any(mixer.isTrackPluginValid(i, s) for s in range(MIXER_SLOTS)):
+        name = mixer.getTrackName(i)
+        if (name and name != "Insert %d" % i) or any(mixer.isTrackPluginValid(i, s) for s in range(MIXER_SLOTS)):
             used.add(i)
     pending = sorted(t for t in used if 0 <= t < count)
     scanned = set()

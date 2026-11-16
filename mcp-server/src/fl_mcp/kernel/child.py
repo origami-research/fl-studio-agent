@@ -24,7 +24,7 @@ import subprocess
 import sys
 import threading
 import traceback
-from collections.abc import Callable, Iterator
+from collections.abc import Callable
 from pathlib import Path
 from typing import IO, Any
 
@@ -152,14 +152,6 @@ class RemoteSession:
     def _call(self, method: str, *args: Any, **kwargs: Any) -> Any:
         value = self._channel.call(wire.encode_call(method, args, kwargs))
         return wire.decode_result(method, value)
-
-    @contextlib.contextmanager
-    def file_edit(self) -> Iterator[None]:
-        self._channel.call(wire.Call(method=wire.FILE_EDIT_ENTER))
-        try:
-            yield
-        finally:
-            self._channel.call(wire.Call(method=wire.FILE_EDIT_EXIT))
 
 
 def boundary_probe(canary: Path, home: Path, loopback_port: int) -> wire.BoundaryProbe:

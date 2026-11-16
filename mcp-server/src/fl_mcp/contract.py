@@ -15,7 +15,7 @@ from pydantic import BaseModel, Field, PrivateAttr, model_validator
 
 from fl_mcp import __version__
 from fl_mcp.kernel.display import ShownImage, describe
-from fl_mcp.schemas import rounded
+from fl_mcp.schemas import MIXER_HEADING, mixer_line, rounded
 
 ENV_SPOOL_ROOT = "FLMCP_SPOOL_ROOT"
 ENV_AGENT_PROJECT = "FLMCP_AGENT_PROJECT"
@@ -152,35 +152,29 @@ class SceneSummary(BaseModel):
     project's notes, tempo and key, the playlist, then a line per pattern (length, where
     the playlist plays it, notes by channel), per channel (mixer track, volume, what its
     notes span, what the project's notes say it is for) and per mixer track in use
-    (volume, effects, sends), then the automation. When FL does not answer, the patterns
-    and the mixer are None and one line says they were left out. It is an object, not a string: read a
+    (volume, effects, sends), then the automation. It is an object, not a string: read a
     part by its field (scene.channels, scene.mixer) rather than slicing printed text. An
     object's detail is its own read: fl.track(channel).notes(), fl.playlist, fl.mixer."""
 
-    tempo: float | None
+    tempo: float
     key: str | None
     key_confidence: str | None = None
     note_count: int
     project_notes: str | None = None
     playlist: dict[str, Any]
-    # None: FL did not answer the read (``unanswered`` says why), so the digest leaves it out.
-    patterns: list[dict[str, Any]] | None
+    patterns: list[dict[str, Any]]
     channels: list[dict[str, Any]]
-    mixer: list[dict[str, Any]] | None
-    unanswered: str | None = None
+    mixer: list[dict[str, Any]]
     automations: list[dict[str, Any]] = Field(default_factory=list)
 
     def __str__(self) -> str:
-        tempo = "tempo unknown" if self.tempo is None else f"tempo {self.tempo:g}"
+        tempo = f"tempo {self.tempo:g}"
         lines = [f"project notes: {self.project_notes}"] if self.project_notes else []
         if self.note_count:
             lines.append(f"{tempo}, key {self.key} (confidence: {self.key_confidence}), {self.note_count} notes")
         else:
             lines.append(f"{tempo}, no notes yet")
         lines.append(_playlist_line(self.playlist))
-        left_out = [part for part, read in (("the patterns", self.patterns), ("the mixer", self.mixer)) if read is None]
-        if left_out:
-            lines.append(f"left out {' and '.join(left_out)}: {self.unanswered or 'FL Studio did not answer.'}")
         several = len(self.playlist.get("arrangements", [])) > 1
         if self.patterns:
             lines.append("patterns (number 'name': length; beats the playlist plays it from; notes on channels):")
@@ -192,7 +186,7 @@ class SceneSummary(BaseModel):
             )
             lines += [f"  {_channel_line(c, several)}" for c in self.channels]
         if self.mixer:
-            lines.append("mixer tracks in use (index name: volume; effects slot:plugin; sends track:level):")
+            lines.append(MIXER_HEADING)
             lines += [f"  {_mixer_line(t)}" for t in self.mixer]
         lines += [
             f"automation: {a['name']} ({a['points']} pts over {a['span_beats']:g} beats, "
@@ -286,19 +280,15 @@ def _channel_line(channel: dict[str, Any], several: bool) -> str:
 
 
 def _mixer_line(track: dict[str, Any]) -> str:
-    parts = [f"vol {rounded(track['volume'])}"]
-    if round(track["pan"], 2):
-        parts[0] += f", pan {rounded(track['pan'])}"
-    parts[0] += "".join(f", {flag}" for flag in ("muted", "solo") if track[flag])
-    if track["effects"]:
-        parts.append("effects " + ", ".join(f"{e['slot']}:{e['plugin']}" for e in track["effects"]))
-    if track["sends"]:
-        parts.append(
-            "sends " + ", ".join(
-                f"{s['target']}" if s["level"] is None else f"{s['target']}:{rounded(s['level'])}" for s in track["sends"]
-            )
-        )
-    return f"{track['index']} {track['name']}: {'; '.join(parts)}"
+    return mixer_line(
+        track["index"],
+        track["name"],
+        track["volume"],
+        track["pan"],
+        [flag for flag in ("muted", "solo") if track[flag]],
+        [(e["slot"], e["plugin"]) for e in track["effects"]],
+        [(s["target"], s["level"]) for s in track["sends"]],
+    )
 
 
 class SceneNotesResult(BaseModel):
@@ -357,9 +347,12 @@ def build_contract() -> dict[str, Any]:
             "workspace_only_flag": WORKSPACE_ONLY_FLAG,
             "description": "serverInfo.description ends with '; confined=true' or '; confined=false'",
             "instructions": server_instructions(with_fl=True),
+            "trial": {
+                "run_description": run_description(fl_license=FLLicense.TRIAL),
+            },
             "workspace_only": {
                 "instructions": server_instructions(with_fl=False),
-                "run_description": run_description(with_fl=False),
+                "run_description": run_description(fl_license=None),
             },
         },
         "errors": {

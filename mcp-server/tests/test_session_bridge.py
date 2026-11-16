@@ -147,11 +147,11 @@ def test_fresh_heartbeat_and_matching_channel_routes_bridge(monkeypatch, tmp_pat
     result = session.write_notes(TARGET, NOTES, "merge")
 
     assert routed(session) == "bridge"
-    # Ping-gated first use, then the spooled command carries the project's
-    # ppq; the consumer never guesses.
+    # Ping-gated first use, then the spooled command carries FL's live ppq (the
+    # hello's), not the saved song's 192; the consumer never guesses.
     assert spool.sent == [
         ("ping", {}),
-        ("add_notes", {"target": TARGET, "notes": NOTES, "mode": "merge", "ppq": 192}),
+        ("add_notes", {"target": TARGET, "notes": NOTES, "mode": "merge", "ppq": HELLO.ppq}),
     ]
     # A licensed FL saved, so the total is the saved file's readback, NEVER the echo (999).
     assert result.total == 2
@@ -676,7 +676,7 @@ def test_a_save_that_left_the_song_file_as_it_was_is_no_readback(monkeypatch, tm
     assert actions.sentences() == [f"Replaced the notes on {result.track} (3 notes)"]
 
 
-def test_ppq_stamp_falls_back_to_hello_when_file_unreadable(monkeypatch, tmp_path, bridge_env, no_reload):
+def test_ppq_stamp_is_the_live_one_even_when_the_file_is_unreadable(monkeypatch, tmp_path, bridge_env, no_reload):
     def unreadable(path):
         raise flp.FlpError("torn header")
 

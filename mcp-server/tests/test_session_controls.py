@@ -6,8 +6,6 @@ refusal is retryable - never a fallthrough (addenda A6/A11).
 
 from __future__ import annotations
 
-import subprocess
-import tempfile
 import threading
 from pathlib import Path
 from types import SimpleNamespace
@@ -18,7 +16,6 @@ from session_fakes import (
     RENDER_SPAN,
     TEMPLATE_CHANNELS,
     FakeControl,
-    FakePlatform,
     FakeSpool,
     arrangement,
     make_session,
@@ -27,7 +24,7 @@ from session_fakes import (
 
 from fl_mcp import errors, flp
 from fl_mcp.schemas import ControlResponse, PluginParamModel, PluginParamSpec, RenderReceipt
-from fl_mcp.session import FLSession, NotePlaneUnavailable, WriteRejected, controls
+from fl_mcp.session import FLSession, WriteRejected, controls
 from fl_mcp.session import facade as facade_mod
 
 
@@ -57,47 +54,6 @@ def test_set_tempo_live_returns_the_readback_not_the_request():
 
     assert session.set_tempo(130.0) == 128.5
     assert ("mixer.setCurrentTempo", [130.0, 1]) in control.calls
-
-
-def fake_render_cli(monkeypatch, render):
-    """Stand in for FL's command-line render, and only for it.
-
-    ``subprocess.run`` is one attribute of the process-wide ``subprocess`` module, so a plain
-    patch also catches the session's other callers: on macOS the link looks FL up with
-    ``pgrep`` (``fl_pids``), and a fake built for the render rejected that call
-    (the v0.1.7 publish run, on a macOS runner; Linux CI never calls ``pgrep``).
-    """
-    real_run = subprocess.run
-
-    def run(command, *args, **kwargs):
-        if command and command[0] == str(FakePlatform.render_executable):
-            return render(command, *args, **kwargs)
-        return real_run(command, *args, **kwargs)
-
-    monkeypatch.setattr(subprocess, "run", run)
-
-
-def test_export_offline_saves_then_subprocesses_the_resolved_fl_path(monkeypatch, tmp_path):
-    project = tmp_path / "live.flp"
-    output = tmp_path / "mix.wav"
-    project.write_bytes(b"FLhd")
-    commands: list[list[str]] = []
-    events: list[str] = []
-
-    def render(command, check, timeout, env=None):
-        events.append("render")
-        commands.append(command)
-        project.with_suffix(".wav").write_bytes(b"RIFF....WAVE")
-
-    fake_render_cli(monkeypatch, render)
-    control = FakeControl(hello=HELLO, handlers={"ctl.save": lambda args: events.append("save")})
-    session, _ = make_session(control=control, project=project)
-
-    assert session.export_offline(output) == output.resolve()
-    assert events == ["save", "render"]
-    assert control.calls[-1] == ("ctl.save", [])
-    assert commands == [[str(FakePlatform.render_executable), "-R", str(project.resolve())]]
-    assert output.read_bytes() == b"RIFF....WAVE"
 
 
 def test_render_wav_refuses_when_the_live_bridge_is_unavailable(tmp_path, caplog):
@@ -320,6 +276,24 @@ def test_live_render_stops_any_leftover_capture_before_it_starts(monkeypatch, tm
     assert [op for op, _ in session.transport.sent] == ["capture_stop", "capture_start", "capture_stop"]
 
 
+@pytest.mark.parametrize(("lufs", "silent"), [(-63.7, False), (-69.9, False), (-70.0, True), (-120.0, True)])
+def test_one_silence_threshold_judges_every_render(monkeypatch, tmp_path, lufs, silent):
+    """The audit of 0.1.14: a whole-mix render was refused as silent at -60 LUFS while
+    Render.silent meant -70, so a quiet but audible mix (a solo hat measured -63.7 LUFS) was
+    refused whole and accepted solo. audio.SILENCE_LUFS is the one definition for both."""
+    session, _ = _verified_live_render(monkeypatch, tmp_path, lambda args: None)
+    monkeypatch.setattr(controls.audio, "integrated_lufs", lambda path: lufs)
+
+    assert controls._live_render(session, tmp_path / "solo.wav", 1.0, refuse_silence=False) == (
+        tmp_path / "solo.wav", silent
+    )
+    if silent:
+        with pytest.raises(errors.ToolError, match="recorded silence"):
+            controls._live_render(session, tmp_path / "mix.wav", 1.0)
+    else:
+        assert controls._live_render(session, tmp_path / "mix.wav", 1.0) == (tmp_path / "mix.wav", False)
+
+
 def test_a_clearing_stop_that_fails_does_not_block_the_render(monkeypatch, tmp_path, caplog):
     session, _ = _verified_live_render(monkeypatch, tmp_path, lambda args: None)
     good_stop = session.transport.responses["capture_stop"]
@@ -328,40 +302,6 @@ def test_a_clearing_stop_that_fails_does_not_block_the_render(monkeypatch, tmp_p
     with caplog.at_level("WARNING"):
         assert controls._live_render(session, tmp_path / "mix.wav", 1.0) == (tmp_path / "mix.wav", False)
     assert "could not clear the Bridge's capture" in caplog.text
-
-
-@pytest.mark.parametrize("wav", [None, b""])
-def test_export_offline_raises_when_cli_wav_is_missing_or_empty(monkeypatch, tmp_path, wav):
-    project = tmp_path / "live.flp"
-    project.write_bytes(b"FLhd")
-
-    def render(command, check, timeout, env=None):
-        if wav is not None:
-            project.with_suffix(".wav").write_bytes(wav)
-
-    fake_render_cli(monkeypatch, render)
-    control = FakeControl(hello=HELLO, handlers={"ctl.save": lambda args: None})
-    session, _ = make_session(control=control, project=project)
-
-    with pytest.raises(errors.ToolError) as excinfo:
-        session.export_offline(tmp_path / "mix.wav")
-    assert excinfo.value.category == "render_failed"
-
-
-def test_export_offline_maps_a_subprocess_timeout_to_render_failed(monkeypatch, tmp_path):
-    project = tmp_path / "live.flp"
-    project.write_bytes(b"FLhd")
-
-    def render(command, check, timeout, env=None):
-        raise subprocess.TimeoutExpired(command, timeout)
-
-    fake_render_cli(monkeypatch, render)
-    control = FakeControl(hello=HELLO, handlers={"ctl.save": lambda args: None})
-    session, _ = make_session(control=control, project=project)
-
-    with pytest.raises(errors.ToolError) as excinfo:
-        session.export_offline(tmp_path / "mix.wav")
-    assert excinfo.value.category == "render_failed"
 
 
 def test_save_project_uses_the_control_lane():
@@ -415,18 +355,18 @@ def test_set_tempo_live_unconfirmed_raises():
         session.set_tempo(130.0)
 
 
-def test_set_tempo_project_backend(monkeypatch, tmp_path, no_reload):
-    monkeypatch.setattr(flp, "set_tempo", lambda path, bpm: 137.0)
-    session, _ = make_session(project=tmp_path / "agent.flp")
+@pytest.mark.parametrize("control", [None, FakeControl(hello=None)])
+def test_set_tempo_never_rewrites_the_song_when_fl_does_not_answer(monkeypatch, tmp_path, no_reload, control):
+    """Until 0.1.15 a tempo FL did not answer was written into the saved song and FL was
+    killed and reopened on it, losing FL's unsaved work (a dialog open was enough). Now it
+    is FL's answer or an error, like every other control."""
+    monkeypatch.setattr(flp, "set_tempo", lambda *a: pytest.fail("must not rewrite the saved song"))
+    session, _ = make_session(control=control, project=tmp_path / "agent.flp")
 
-    assert session.set_tempo(137.0) == 137.0
-    assert no_reload == [True]
-
-
-def test_set_tempo_no_backend_raises():
-    session, _ = make_session()
-    with pytest.raises(NotePlaneUnavailable):
-        session.set_tempo(120.0)
+    with pytest.raises(errors.ToolError) as raised:
+        session.set_tempo(137.0)
+    assert raised.value.category == "control_plane_unavailable"
+    assert no_reload == []
 
 
 def test_set_tempo_unsafe_refusal_never_falls_through(monkeypatch, tmp_path, no_reload):
@@ -484,15 +424,15 @@ def test_levels_live_partial_failure_raises_and_never_falls_through(monkeypatch,
     assert no_reload == []
 
 
-def test_levels_project_backend(monkeypatch, tmp_path, no_reload):
-    from fl_mcp.schemas import ChannelLevels
-
-    confirmed = ChannelLevels(channel=2, volume=0.6, pan=-0.3, pitch_semitones=0)
-    monkeypatch.setattr(flp, "set_channel_levels", lambda *a, **k: confirmed)
+def test_levels_never_rewrite_the_song_when_fl_does_not_answer(monkeypatch, tmp_path, no_reload):
+    """As for the tempo: FL's answer or an error, never the saved song rewritten and FL reopened."""
+    monkeypatch.setattr(flp, "set_channel_levels", lambda *a, **k: pytest.fail("must not rewrite the saved song"))
     session, _ = make_session(project=tmp_path / "agent.flp")
 
-    assert session.set_channel_levels(2, volume=0.6, pan=-0.3) == confirmed
-    assert no_reload == [True]
+    with pytest.raises(errors.ToolError) as raised:
+        session.set_channel_levels(2, volume=0.6, pan=-0.3)
+    assert raised.value.category == "control_plane_unavailable"
+    assert no_reload == []
 
 
 def test_levels_require_at_least_one_field():
@@ -872,23 +812,7 @@ def test_plugin_params_without_a_wire_is_an_honest_error():
     assert excinfo.value.category == "control_plane_unavailable"
 
 
-def test_file_edit_batches_reloads_into_one(monkeypatch):
-    # N file-lane reloads inside file_edit() collapse to a single FL reboot.
-    from fl_mcp.session import lifecycle
-
-    session, _ = make_session()
-    reloads = []
-    monkeypatch.setattr(lifecycle, "reload_fl", lambda project, link: reloads.append(1))
-
-    with session.file_edit():
-        session._reload_fl()
-        session._reload_fl()
-        session._reload_fl()
-        assert reloads == [], "reloads must be deferred inside the batch"
-    assert reloads == [1], "exactly one reload on batch exit"
-
-
-def test_file_edit_saves_live_work_before_reloading(monkeypatch):
+def test_a_file_rewrite_saves_fls_live_work_first(monkeypatch):
     from fl_mcp.session import lifecycle
 
     session, _ = make_session(control=FakeControl(hello=HELLO))
@@ -896,31 +820,13 @@ def test_file_edit_saves_live_work_before_reloading(monkeypatch):
     monkeypatch.setattr(controls, "save_project", lambda session: events.append("save"))
     monkeypatch.setattr(lifecycle, "reload_fl", lambda project, link: events.append("reload"))
 
-    with session.file_edit():
-        session._prepare_file_write()
-        session._reload_fl()
+    session._prepare_file_write()
+    session._reload_fl()
 
     assert events == ["save", "reload"]
 
 
-def test_file_edit_saves_once_before_its_single_reload(monkeypatch):
-    from fl_mcp.session import lifecycle
-
-    session, _ = make_session(control=FakeControl(hello=HELLO))
-    events = []
-    monkeypatch.setattr(controls, "save_project", lambda session: events.append("save"))
-    monkeypatch.setattr(lifecycle, "reload_fl", lambda project, link: events.append("reload"))
-
-    with session.file_edit():
-        session._prepare_file_write()
-        session._reload_fl()
-        session._prepare_file_write()
-        session._reload_fl()
-
-    assert events == ["save", "reload"]
-
-
-def test_reload_outside_a_batch_is_immediate(monkeypatch):
+def test_each_reload_is_immediate(monkeypatch):
     from fl_mcp.session import lifecycle
 
     session, _ = make_session()
@@ -929,33 +835,6 @@ def test_reload_outside_a_batch_is_immediate(monkeypatch):
     session._reload_fl()
     session._reload_fl()
     assert reloads == [1, 1], "each reload is immediate when not batching"
-
-
-def test_file_edit_with_no_file_ops_does_not_reload(monkeypatch):
-    from fl_mcp.session import lifecycle
-
-    session, _ = make_session()
-    reloads = []
-    monkeypatch.setattr(lifecycle, "reload_fl", lambda project, link: reloads.append(1))
-    with session.file_edit():
-        pass
-    assert reloads == [], "an empty batch never reboots FL"
-
-
-def test_session_file_edit_refuses_before_the_file_lane(monkeypatch, tmp_path):
-    """Regression for live arenas: file_edit must never initiate a session reboot."""
-    from fl_mcp.session import lifecycle
-
-    session, _ = make_session(project=tmp_path / "agent.flp", session_spool_root=tmp_path)
-    reloads: list[bool] = []
-    monkeypatch.setattr(lifecycle, "reload_fl", lambda *args, **kwargs: reloads.append(True))
-
-    with pytest.raises(errors.ToolError) as excinfo, session.file_edit():
-        pass
-
-    assert excinfo.value.category == "file_lane_requires_reload"
-    assert excinfo.value.retryable is False, "retrying never helps: FL is never reopened in a match"
-    assert reloads == []
 
 
 def test_session_file_fallback_refuses_before_mutating_project(monkeypatch, tmp_path):
@@ -968,7 +847,7 @@ def test_session_file_fallback_refuses_before_mutating_project(monkeypatch, tmp_
     with pytest.raises(errors.ToolError) as excinfo:
         session.set_tempo(140)
 
-    assert excinfo.value.category == "file_lane_requires_reload"
+    assert excinfo.value.category == "control_plane_unavailable"
     assert writes == []
 
 
@@ -985,33 +864,3 @@ def test_session_reload_refuses_without_touching_lifecycle(monkeypatch, tmp_path
 
     assert excinfo.value.category == "file_lane_requires_reload"
     assert reloads == []
-
-
-def test_render_child_never_inherits_the_live_session_identity(monkeypatch, tmp_path):
-    """The -R render FL loads the Bridge too; it must publish into a throwaway spool, never ours."""
-    from fl_mcp.contract import ENV_AGENT_PROJECT, ENV_SPOOL_ROOT
-
-    project = tmp_path / "live.flp"
-    project.write_bytes(b"FLhd")
-    monkeypatch.setenv(ENV_SPOOL_ROOT, str(tmp_path / "live-spool"))
-    monkeypatch.setenv(ENV_AGENT_PROJECT, str(project))
-    seen: dict[str, object] = {}
-
-    def render(command, check, timeout, env):
-        seen["env"] = env
-        raise subprocess.TimeoutExpired(command, timeout)
-
-    fake_render_cli(monkeypatch, render)
-    control = FakeControl(hello=HELLO, handlers={"ctl.save": lambda args: None})
-    session, _ = make_session(control=control, project=project)
-
-    with pytest.raises(errors.ToolError):
-        session.export_offline(tmp_path / "mix.wav")
-
-    env = seen["env"]
-    assert isinstance(env, dict)
-    assert env[ENV_SPOOL_ROOT] != str(tmp_path / "live-spool"), "the render child joined the live session"
-    assert (
-        env[ENV_SPOOL_ROOT].startswith(tempfile.gettempdir()) or "flmcp-render-spool-" in env[ENV_SPOOL_ROOT]
-    )
-    assert ENV_AGENT_PROJECT not in env

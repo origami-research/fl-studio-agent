@@ -91,7 +91,6 @@ def test_each_kind_of_change_reads_as_one_plain_sentence():
     actions.called("check", {}, check_result())
     actions.called("render_wav", {}, RenderReceipt(path=Path("r.wav"), span=_song_span(34.2)))
     actions.called("render_wav", {}, RenderReceipt(path=Path("r.wav"), span=RENDER_SPAN))
-    actions.called("export_offline", {}, Path("/renders/mix.wav"))
     actions.called("save_project", {}, None)
     actions.called("undo", {}, None)
     assert actions.sentences() == [
@@ -108,7 +107,6 @@ def test_each_kind_of_change_reads_as_one_plain_sentence():
         "Checked bars 9-10: 5 of 5 tracks sound, master -1.8 dBFS",
         "Rendered 0:34",
         "Rendered 0:07 of pattern 1",
-        "Exported the song to mix.wav",
         "Saved the song",
         "Undid the last action in FL",
     ]
@@ -356,25 +354,6 @@ def test_repeats_are_counted_and_the_list_is_bounded():
     assert listed[-1] == "and 1800 more actions"
 
 
-def test_a_file_edit_blocks_changes_count_only_once_fl_reopened_with_them():
-    """Review of #257: changes inside fl.file_edit() reach FL when the block closes;
-    a failed reopen must not list them."""
-    applied = log()
-    applied.hold()
-    applied.called("set_tempo", {"bpm": 100.0}, 100.0)
-    assert applied.sentences() == [], "nothing is listed while the block is open"
-    applied.release(applied=True)
-    assert applied.sentences() == ["Set tempo to 100 BPM"]
-
-    failed = log()
-    failed.hold()
-    failed.hold()
-    failed.called("set_tempo", {"bpm": 100.0}, 100.0)
-    failed.release(applied=True)
-    failed.release(applied=False)
-    assert failed.sentences() == []
-
-
 def test_groups_list_every_item_and_only_pathological_sentences_are_cut():
     """The UI shows one line and expands on click, so a sentence carries every item;
     only a runaway size (a name thousands of characters long) is cut."""
@@ -416,7 +395,7 @@ def test_a_cell_reports_its_writes_and_keeps_them_past_a_mid_cell_error(host, se
     result = run(
         host,
         "fl.set_tempo(122)\n"
-        "kick = theory.drums('x...x...x...x...' * 4, key='C1')\n"
+        "kick = theory.drums('x...x...x...x...' * 4)\n"
         "fl.track('Kick').write(kick, mode='replace')\n"
         "fl.track('Bass').set_levels(volume=0.6)\n"
         "fl.track('Bass').set_param('Cutoff', 0.68)\n"

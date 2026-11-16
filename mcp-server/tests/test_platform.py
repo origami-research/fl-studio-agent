@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Sequence
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
@@ -89,9 +89,6 @@ class _FakePlatform:
     def broker_endpoint(self) -> BrokerEndpoint:
         return BrokerEndpoint("127.0.0.1", 1234, "a" * 32, Path("broker.json"))
 
-    def render_command(self, project: Path) -> Sequence[str]:
-        return ("fl", "-R", str(project))
-
     def fl_install(self) -> FLInstall:
         return FLInstall(Path("FL"), (), Path("data"))
 
@@ -105,7 +102,6 @@ class _FakePlatform:
 def test_fake_platform_satisfies_the_protocol():
     fake: Platform = _FakePlatform()
     assert isinstance(fake, Platform)
-    assert fake.render_command(Path("song.flp")) == ("fl", "-R", "song.flp")
 
 
 @pytest.mark.platform("darwin")
@@ -116,21 +112,6 @@ def test_darwin_platform_marker_runs_only_on_darwin():
 @pytest.mark.platform("win32")
 def test_windows_platform_marker_runs_only_on_windows():
     assert isinstance(platform_for("win32"), WindowsPlatform)
-
-
-def test_windows_render_command_is_documented_cli_argv(monkeypatch, tmp_path):
-    from fl_mcp.fl import paths
-
-    monkeypatch.setattr(paths.sys, "platform", "win32")
-    monkeypatch.setenv("FL_APP", r"C:\\FL Studio\\FL64.exe")
-    project = tmp_path / "song.flp"
-    assert WindowsPlatform().render_command(project) == (
-        r"C:\\FL Studio\\FL64.exe",
-        "/R",
-        "/Ewav",
-        f"/F{tmp_path}",
-        str(project),
-    )
 
 
 def test_windows_sweep_kills_only_the_project_marked_fl_tree(monkeypatch, tmp_path):

@@ -25,7 +25,7 @@ import logging
 import math
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
-from pathlib import Path, PurePosixPath
+from pathlib import PurePosixPath
 from typing import Any
 
 from fl_mcp.schemas import (
@@ -55,8 +55,6 @@ MAX_CHARS = 2000
 MAX_ACTIONS = 200
 # This many changes of one kind in a row read as one sentence.
 GROUP_AT = 3
-# Calls held inside an unfinished fl.file_edit() block, past which they are only counted.
-_MAX_HELD = 10_000
 
 
 @dataclass(frozen=True)
@@ -199,10 +197,6 @@ class ActionLog:
         self._names: dict[int, str] = {}
         self._runs: list[_Run] = []
         self._more = 0  # actions past MAX_ACTIONS, only counted
-        self._held: list[tuple[str, Mapping[str, Any], Any]] = []
-        self._held_more = 0
-        self._holding = 0
-        self._hold_failed = False
 
     def called(self, method: str, kwargs: Mapping[str, Any], value: Any) -> None:
         """Record an FL session call that returned. Never raises: FL already has
@@ -210,34 +204,7 @@ class ActionLog:
         into an error for a call that succeeded."""
         if method not in _CALLS:
             return
-        if self._holding:
-            if len(self._held) < _MAX_HELD:
-                self._held.append((method, kwargs, value))
-            else:
-                self._held_more += 1
-            return
         self._describe(method, kwargs, value)
-
-    def hold(self) -> None:
-        """An fl.file_edit() block opened: its changes reach FL only when it closes."""
-        self._holding += 1
-
-    def release(self, applied: bool) -> None:
-        """A block closed; once the outermost closes and FL reopened with every
-        change, they are recorded, in order. A failed close records none of them."""
-        self._holding -= 1
-        self._hold_failed = self._hold_failed or not applied
-        if self._holding:
-            return
-        held, self._held = self._held, []
-        more, self._held_more = self._held_more, 0
-        failed, self._hold_failed = self._hold_failed, False
-        if failed:
-            log.warning("a file_edit block failed to close; its %d changes are not listed", len(held) + more)
-            return
-        for call in held:
-            self._describe(*call)
-        self._more += more
 
     def sentences(self) -> list[str]:
         out = [_fit(sentence) for run in self._runs for sentence in run.sentences()]
@@ -412,9 +379,6 @@ class ActionLog:
             text += ", muting " + ", ".join(self._name(c) for c in receipt.mute)
         return text
 
-    def _export(self, kwargs: Mapping[str, Any], path: Path) -> list[_Entry]:
-        return [_Entry(f"Exported the song to {Path(path).name}")]
-
     def _save(self, kwargs: Mapping[str, Any], value: Any) -> list[_Entry]:
         return [_Entry("Saved the song")]
 
@@ -442,7 +406,6 @@ _CALLS: dict[str, Callable[[ActionLog, Mapping[str, Any], Any], list[_Entry]]] =
     "check": ActionLog._check,
     "render_wav": ActionLog._render,
     "render_stems": ActionLog._stems,
-    "export_offline": ActionLog._export,
     "save_project": ActionLog._save,
     "undo": ActionLog._undo,
 }

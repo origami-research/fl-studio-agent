@@ -22,23 +22,21 @@ def bridge_installed(monkeypatch):
 # --- snapshot ----------------------------------------------------------------
 
 
-def test_snapshot_from_project_file(monkeypatch, tmp_path):
-    channel = flp.FlpChannel(index=0, name="Lead", volume=10000, pan=6400, pitch_semitones=0)
-    monkeypatch.setattr(
-        flp,
-        "read",
-        lambda path: flp.FlpProject(ppq=192, tempo=140.0, channels=(channel,), notes=()),
-    )
-    session, _ = make_session(project=tmp_path / "agent.flp")
+@pytest.mark.parametrize("control", [None, FakeControl(hello=None)])
+def test_snapshot_never_reads_the_saved_song(monkeypatch, tmp_path, control):
+    """The audit of 0.1.14: with FL not answering (paused, a dialog open) the snapshot read
+    the saved song, which a trial FL never saves, and presented the starting project as
+    FL's state. The snapshot is FL's answer or an error saying FL did not answer."""
+    monkeypatch.setattr(flp, "read", lambda path: pytest.fail("the snapshot must not read the saved song"))
+    project = tmp_path / "agent.flp"
+    project.write_bytes(b"FLhd")
+    session, _ = make_session(control=control, project=project)
 
-    state = session.snapshot()
-
-    assert state.ppq == 192
-    assert state.tempo_bpm == 140.0
-    assert state.current_pattern is None, "the live pattern is unknown on the file lane"
-    assert state.channels[0].name == "Lead"
-    assert state.channels[0].volume == pytest.approx(0.78125)
-    assert state.channels[0].pan == 0.0
+    with pytest.raises(errors.ToolError) as excinfo:
+        session.snapshot()
+    assert excinfo.value.category == "control_plane_unavailable"
+    assert excinfo.value.message == "FL Studio did not answer in time."
+    assert "close any dialog in FL" in excinfo.value.fix
 
 
 SNAPSHOT_PAYLOAD = {
@@ -97,7 +95,6 @@ def test_snapshot_without_live_or_project_is_an_explicit_setup_error():
         session.snapshot()
 
     assert excinfo.value.category == "control_plane_unavailable"
-    assert "state cannot be read" in excinfo.value.message
     assert excinfo.value.retryable is True
 
 
@@ -125,11 +122,20 @@ def test_channel_names_are_fls_live_names_while_fl_is_connected(monkeypatch, tmp
     assert [(c.index, c.name) for c in session.channel_names()] == [(0, "808 Kick"), (1, "808 Cowbell")]
 
 
-def test_channel_names_fall_back_to_the_saved_song_without_fl(monkeypatch, tmp_path):
+def test_channel_names_never_come_from_the_saved_song(monkeypatch, tmp_path):
     project = tmp_path / "agent.flp"
     project.write_bytes(b"")
     saved_song(monkeypatch, "808 Kick", "")
     session, _ = make_session(project=project)
+
+    with pytest.raises(errors.ToolError) as excinfo:
+        session.channel_names()
+    assert excinfo.value.category == "control_plane_unavailable"
+
+
+def test_a_channel_fl_never_named_reads_channel_and_its_index():
+    control = FakeControl(hello=HELLO, handlers={"state.snapshot": lambda args: snapshot_answer(["808 Kick", ""])})
+    session, _ = make_session(control=control)
 
     assert [c.name for c in session.channel_names()] == ["808 Kick", "Channel 1"]
 

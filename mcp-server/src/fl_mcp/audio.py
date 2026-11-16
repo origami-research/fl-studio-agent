@@ -17,7 +17,9 @@ from pathlib import Path
 
 import numpy as np
 
-# A recording with nothing above BS.1770's absolute gate is silence: integrated_lufs reads
+# THE definition of a silent recording, used by every render: a whole-mix render is refused
+# as silent, and a solo, range or stem says Render.silent, by this one number. A recording
+# with nothing above BS.1770's absolute gate is silence: integrated_lufs reads
 # no block louder than -70 LUFS there (and answers -120). A quiet but audible solo hat
 # measured -63.7 LUFS (showcase run, 2026-11-15); a note outside a sampled instrument's
 # keys records digital zero.

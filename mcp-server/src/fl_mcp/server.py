@@ -35,8 +35,10 @@ from fl_mcp import __version__, manual
 from fl_mcp.contract import (
     ENV_KERNEL_ROOT,
     WORKSPACE_ONLY_FLAG,
+    FLLicense,
     RunResult,
     ToolErrorResult,
+    fl_license_from_env,
     server_description,
 )
 from fl_mcp.errors import ToolError
@@ -145,8 +147,8 @@ def run(code: str, ctx: Context) -> RunResult:
     # above is the kernel's contract, true with or without an FL session;
     # manual.tool_description adds the session facts, the SDK index and the guide
     # index, generated from sdk.py's docstrings and fl_mcp/guides (with an FL
-    # session), or only the guide index (--workspace-only, where fl calls are
-    # refused). run.__doc__ becomes the FL description below, so the contract and
+    # session; a trial FL's index leaves out fl.save), or only the guide index
+    # (--workspace-only, where fl calls are refused). run.__doc__ becomes the licensed FL description below, so the contract and
     # help(run) read the same text. The kernel is a separate process (fl_mcp.kernel, docs/38) and the OS, not Python
     # filtering, confines it to its workspace. A test keeps the docstring's "600 s"
     # in step with kernel.host.RUN_BUDGET_SECONDS.
@@ -155,13 +157,14 @@ def run(code: str, ctx: Context) -> RunResult:
 
 
 _KERNEL_CONTRACT = inspect.getdoc(run) or ""
-run.__doc__ = manual.tool_description(_KERNEL_CONTRACT, with_fl=True)
+run.__doc__ = manual.tool_description(_KERNEL_CONTRACT, fl_license=FLLicense.LICENSED)
 
 
-def run_description(*, with_fl: bool) -> str:
-    """What the model reads about run: with an FL session, the whole manual; without
-    one (--workspace-only), the kernel and the guides, since every other fl call is refused."""
-    return manual.tool_description(_KERNEL_CONTRACT, with_fl=with_fl)
+def run_description(*, fl_license: FLLicense | None) -> str:
+    """What the model reads about run: with an FL session, the manual of what that FL can
+    use (a trial FL cannot save); without one (--workspace-only, ``fl_license`` None), the
+    kernel and the guides, since every other fl call but reading a file is refused."""
+    return manual.tool_description(_KERNEL_CONTRACT, fl_license=fl_license)
 
 
 def server_instructions(*, with_fl: bool) -> str:
@@ -219,7 +222,8 @@ def create_server(*, workspace_only: bool = False) -> MCPServer:
         lifespan=functools.partial(lifespan, with_fl=not workspace_only),
     )
     (only,) = tool_definitions()
-    server.add_tool(only, description=run_description(with_fl=not workspace_only))
+    fl_license = None if workspace_only else fl_license_from_env(os.environ)
+    server.add_tool(only, description=run_description(fl_license=fl_license))
     return server
 
 

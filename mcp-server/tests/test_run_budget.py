@@ -20,7 +20,7 @@ from fl_mcp.kernel.host import RUN_BUDGET_SECONDS, run_budget_from_env
 
 def test_the_default_budget_leaves_room_under_the_harness_limit():
     """The arena harness gives each tool call 900 s; past the budget a run still finishes
-    the call in flight, the interrupt and an open file_edit block (FL reopens the song)."""
+    the call in flight and the interrupt."""
     assert RUN_BUDGET_SECONDS <= 900 - 300
     assert run_budget_from_env({}) == RUN_BUDGET_SECONDS
 
@@ -56,8 +56,8 @@ def test_a_call_longer_than_what_is_left_is_refused_with_how_to_split_it():
 
 def test_a_call_longer_than_a_whole_run_says_only_how_to_shrink_it():
     with budget.serving(budget.RunBudget.starting_now(240.0)), pytest.raises(ToolError) as refused:
-        budget.require(300.0, "An offline export", "record the song with fl.render instead")
-    assert refused.value.fix == "It does not fit in any run here: record the song with fl.render instead."
+        budget.require(300.0, "This render", "render fewer bars")
+    assert refused.value.fix == "It does not fit in any run here: render fewer bars."
 
 
 def test_serving_ends_with_its_call():

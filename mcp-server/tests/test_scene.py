@@ -89,6 +89,7 @@ def test_root_motion_is_capped_to_stay_compact():
 
 def digest(rows=(), channels=(), **reads) -> SceneSummary:
     """What fl.scene() returns for these reads: summarize's fields, as the model gets them."""
+    reads.setdefault("tempo", 120.0)  # the scene always has FL's live tempo
     return SceneSummary.model_validate(scene.summarize(list(rows), list(channels), **reads))
 
 
@@ -260,7 +261,21 @@ def test_the_mixer_reads_one_line_per_track_with_fl_levels_rounded():
 
     assert out.mixer[0]["volume"] == 0.7999999998137355, "the data keeps what FL reported"
     assert out.mixer[0]["sends"] == [{"target": 117, "level": 0.8}], "a send that is off is not a route"
-    assert "  4 Kick: vol 0.8, pan -0.42, muted; effects 0:Fruity Limiter; sends 117:0.8" in str(out)
+    assert "  4 'Kick', vol 0.8, pan -0.42, muted; effects 0:Fruity Limiter; sends 117:0.8" in str(out)
+
+
+def test_the_scene_and_fl_mixer_print_a_mixer_track_the_same_way():
+    """The audit of 0.1.14: fl.mixer printed sends as "→ tracks 113, 120 at 0.8" and the scene
+    as "sends 113:0.8, 120:0.8". One line, in ASCII, from one function, in both."""
+    track = MixerTrack(
+        index=14, name="Lead", solo=True,
+        effects=[MixerEffect(mixer_track=14, slot=0, plugin="Fruity Delay 3")],
+        sends=[MixerSend(source=14, target=113, on=True, level=0.8), MixerSend(source=14, target=120, on=True, level=0.8)],
+    )
+    line = "14 'Lead', vol 0.8, solo; effects 0:Fruity Delay 3; sends 113:0.8, 120:0.8"
+    printed = repr(sdk.MixerTracks([track]))
+    assert f"  {line}" in printed and f"  {line}" in str(digest(mixer=[track]))
+    assert printed.isascii()
 
 
 # --- automation ----------------------------------------------------------------
@@ -281,35 +296,51 @@ def test_summary_reports_automation_channels():
 # --- FL not answering --------------------------------------------------------------
 
 
-def test_the_scene_leaves_out_what_fl_did_not_answer_and_says_so():
-    out = digest([Row(midi=60, channel=0)], [Channel(index=0, name="Lead")], patterns=None, mixer=None,
-                 unanswered="FL Studio did not answer in time.")
-
-    assert out.patterns is None and out.mixer is None
-    text = str(out)
-    assert "left out the patterns and the mixer: FL Studio did not answer in time." in text
-    assert "patterns (" not in text and "mixer tracks" not in text
-    assert "  0 Lead: vol 0.78; 1 note, beats 0-1, C4" in text
+SNAPSHOT = {"tempo": 120_000, "ppq": 96, "playing": False, "current_pattern": 1, "mixer": [], "channels": []}
 
 
-def test_the_scene_reads_the_saved_song_while_fl_is_not_connected():
-    """Before the scene read the patterns and the mixer it worked from the saved song with
-    FL closed or starting; it still does, leaving out the two reads only FL can answer."""
+def test_the_scene_raises_rather_than_read_the_saved_song_when_fl_does_not_answer():
+    """The audit of 0.1.14: with FL paused, fl.scene() printed the saved song (a trial FL never
+    saves, so the untouched starting project) as if it were current, so a model with a
+    dialog open read that its song was empty. The scene now raises, saying FL did not answer."""
+    session, _ = make_session(project=FIVE_CHANNEL_PROJECT)  # nothing answers
+
+    with pytest.raises(errors.ToolError) as raised:
+        session.scene_summary()
+
+    assert raised.value.category == "control_plane_unavailable"
+    assert "dialog" in raised.value.fix
+
+
+def test_the_scene_raises_when_fl_stops_answering_partway():
+    """No part of the scene is left out or filled in: FL answered the channels, then not the
+    patterns, and the whole scene raises."""
+    session, _ = make_session(control=FakeControl(hello=HELLO, handlers={"state.snapshot": lambda args: SNAPSHOT}),
+                              project=FIVE_CHANNEL_PROJECT)
+
+    def silent():
+        raise errors.control_plane_unavailable("patterns.patternCount", 8.0)
+
+    session.patterns = silent  # type: ignore[method-assign]
+    with pytest.raises(errors.ToolError) as raised:
+        session.scene_summary()
+    assert raised.value.category == "control_plane_unavailable"
+
+
+def test_channels_and_tempo_are_never_read_from_the_saved_song():
+    """fl.channels, fl.tempo and the names fl.track resolves are FL's answer or an error."""
     session, _ = make_session(project=FIVE_CHANNEL_PROJECT)
 
-    out = session.scene_summary()
-
-    assert out.patterns is None and out.mixer is None
-    assert out.unanswered == "FL Studio did not answer in time."
-    assert [c["name"] for c in out.channels][:2] == ["808 Kick", "808 Clap"]
-    assert "left out the patterns and the mixer: FL Studio did not answer in time." in str(out)
+    for read in (session.snapshot, session.channel_names, session.tempo, session.live_channels):
+        with pytest.raises(errors.ToolError) as raised:
+            read()
+        assert raised.value.category == "control_plane_unavailable", read
 
 
 def test_a_failure_other_than_fl_not_answering_still_raises():
-    """Only "FL did not answer" is left out; FL refusing a read is a real error."""
-    control = FakeControl(hello=HELLO, handlers={"state.snapshot": lambda args: {
-        "tempo": 120_000, "ppq": 96, "playing": False, "current_pattern": 1, "mixer": [], "channels": []}})
-    session, _ = make_session(control=control, project=FIVE_CHANNEL_PROJECT)
+    """FL refusing a read is its own error, not "FL did not answer"."""
+    session, _ = make_session(control=FakeControl(hello=HELLO, handlers={"state.snapshot": lambda args: SNAPSHOT}),
+                              project=FIVE_CHANNEL_PROJECT)
 
     with pytest.raises(errors.ToolError) as raised:
         session.scene_summary()
@@ -378,8 +409,9 @@ def test_the_whole_project_prints_well_under_runs_output_cap(tmp_path):
 
     assert "project notes: FLMCP agent project" in start and "no notes yet" in start
     assert all(f"  {c.index} {c.name} -> {c.mixer_track}: " in busy for c in fl.channels)
-    assert "  16 'Section 16': " in busy and "  125 Sub Bus: " in busy
-    assert "  125 'Sub Bus', vol 0.8; effects 8:Fruity Limiter, 9:Fruity PanOMatic; → tracks 2, 3 at 0.8" in busy_four
+    assert "  16 'Section 16': " in busy
+    sub_bus = "  125 'Sub Bus', vol 0.8; effects 8:Fruity Limiter, 9:Fruity PanOMatic; sends 2:0.8, 3:0.8"
+    assert sub_bus in busy and sub_bus in busy_four
     assert len(start) < SCENE_BUDGET / 1.5, len(start)
     assert len(busy) < SCENE_BUDGET, len(busy)
     assert len(start_four) < FOUR_BUDGET_START, len(start_four)

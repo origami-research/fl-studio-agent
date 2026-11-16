@@ -17,7 +17,11 @@ part of its name.
 The whole project in one digest: print(fl.scene()) shows the project's notes,
 tempo and key, the playlist, and a line per pattern, channel and mixer track in use
 (a SceneSummary, whose fields hold the same parts as data). detail="notes" is every
-note FL has (by channel and pattern), optionally of one channel and one pattern.
+note (by channel and pattern), optionally of one channel and one pattern. FL cannot
+report the notes, the playlist's clips, the automation clips or the project's notes,
+so those come from the song FL opened with this session's edits (as Track.notes and
+fl.playlist read them); the rest is FL's own answer, and when FL does not answer
+this raises.
 
 ### `fl.tempo: float`
 
@@ -39,7 +43,8 @@ effect, it was renamed, or a track in use sends to it; ``empty`` counts the othe
 
 The playlist's clips: those in the song FL opened, then those added this session
 with fl.place and fl.automate: track (None when FL did not report it), start and
-length in beats, and the pattern (or audio channel) each plays.
+length in beats, and the pattern (or audio channel) each plays. FL cannot report
+its clips, so a clip changed in FL's own window is not seen.
 
 ### `fl.patterns: list[PatternInfo]`
 
@@ -64,7 +69,9 @@ hear them with fl.render(). Raises if FL did not take the edit.
 
 ### `track.notes() -> list[Note]`
 
-The notes on this track's pattern as FL has them now, including your writes.
+The notes on this track's pattern: those in the song FL opened, with this
+session's writes applied. FL cannot report notes, so a note changed in FL's own
+windows is not seen.
 
 ### `track.clear() -> WriteResult`
 
@@ -89,9 +96,10 @@ A chord's MIDI notes in root position, e.g. chord("C4", "maj7").
 
 A scale's MIDI notes ascending from root, e.g. scale("C4", "dorian", 2).
 
-### `theory.drums(pattern: str, key: str | int = 'C1', step_beats: float = 0.25, velocity: float = 0.8) -> list[schemas.Note]`
+### `theory.drums(pattern: str, key: str | int = 60, step_beats: float = 0.25, velocity: float = 0.8) -> list[schemas.Note]`
 
-A step string like "x---x---x---x---" into one Note per non-rest step.
+A step string like "x---x---x---x---" into one Note per non-rest step, each on
+``key``: MIDI 60 (C4) by default, the key a sampler plays its sample at its own pitch.
 
 Any character other than space, '-', or '.' counts as a hit - so "x" and
 "X" both work, and accents can later be encoded as different hit chars
@@ -330,23 +338,6 @@ Undo FL's last action. Notes this session wrote still read as written:
 write the track again to set its notes for certain. After a render with solo or
 mute, write the track back instead: FL's undo holds the mute changes.
 
-### `fl.export_offline(output: str | Path) -> Path`
-
-Export the saved song with a second FL (about a minute). Licensed FL only; use render to listen.
-
-### `fl.file_edit() -> AbstractContextManager[None]`
-
-Batch edits that rewrite the saved song into one FL reopen.
-
-Outside a match only: during a match FL is never reopened, so this raises.
-Notes, tempo and levels apply live. Only when FL's control wire is down in
-development do they rewrite the saved song instead, each reopening FL;
-inside this block FL reopens once::
-
-    with fl.file_edit():
-        fl.track("Bass").write(notes)
-        fl.set_tempo(124)
-
 ## Guides
 
 ### `fl.guide(name: str | None = None) -> None`
@@ -363,12 +354,11 @@ fl.scene(): the whole project in one digest. print(fl.scene()) reads it: the
 project's notes, tempo and key, the playlist, then a line per pattern (length, where
 the playlist plays it, notes by channel), per channel (mixer track, volume, what its
 notes span, what the project's notes say it is for) and per mixer track in use
-(volume, effects, sends), then the automation. When FL does not answer, the patterns
-and the mixer are None and one line says they were left out. It is an object, not a string: read a
+(volume, effects, sends), then the automation. It is an object, not a string: read a
 part by its field (scene.channels, scene.mixer) rather than slicing printed text. An
 object's detail is its own read: fl.track(channel).notes(), fl.playlist, fl.mixer.
 
-Fields: tempo: float | None, key: str | None, key_confidence: str | None, note_count: int, project_notes: str | None, playlist: dict[str, Any], patterns: list[dict[str, Any]] | None, channels: list[dict[str, Any]], mixer: list[dict[str, Any]] | None, unanswered: str | None, automations: list[dict[str, Any]].
+Fields: tempo: float, key: str | None, key_confidence: str | None, note_count: int, project_notes: str | None, playlist: dict[str, Any], patterns: list[dict[str, Any]], channels: list[dict[str, Any]], mixer: list[dict[str, Any]], automations: list[dict[str, Any]].
 
 ### `SceneNotesResult`
 

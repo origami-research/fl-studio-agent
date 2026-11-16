@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import os
 import subprocess
-from collections.abc import Callable, Sequence
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Protocol, runtime_checkable
@@ -73,8 +73,6 @@ class Platform(Protocol):
 
     def broker_endpoint(self) -> BrokerEndpoint: ...
 
-    def render_command(self, project: Path) -> Sequence[str]: ...
-
     def fl_install(self) -> FLInstall: ...
 
     def sweep_fl(self) -> ProcessSweep: ...
@@ -123,10 +121,6 @@ class MacPlatform:
 
         return default_endpoint()
 
-    def render_command(self, project: Path) -> Sequence[str]:
-        executable = paths.fl_app() / "Contents" / "MacOS" / process.fl_executable_name()
-        return (str(executable), "-R", str(project))
-
     def fl_install(self) -> FLInstall:
         return _existing_install()
 
@@ -150,10 +144,6 @@ class WindowsPlatform:
         from fl_mcp.core.carriers.control_broker import default_endpoint
 
         return default_endpoint()
-
-    def render_command(self, project: Path) -> Sequence[str]:
-        # VERIFY-ON-WINDOWS: FL64.exe CLI render and output naming on a Windows host image.
-        return (str(paths.fl_app()), "/R", "/Ewav", f"/F{project.parent}", str(project))
 
     def fl_install(self) -> FLInstall:
         return _existing_install()
@@ -229,9 +219,6 @@ class UnsupportedPlatform:
         self._unsupported()
 
     def broker_endpoint(self) -> BrokerEndpoint:
-        self._unsupported()
-
-    def render_command(self, project: Path) -> Sequence[str]:
         self._unsupported()
 
     def fl_install(self) -> FLInstall:

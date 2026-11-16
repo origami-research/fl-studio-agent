@@ -63,6 +63,24 @@ def test_the_mixer_read_lists_the_tracks_in_use_with_effects_and_sends(monkeypat
     assert calls["route"] == 5 * (len(names) - 1)  # sends scanned only from the five tracks in use
 
 
+def test_a_track_fl_names_nothing_is_not_in_use_by_its_name(monkeypatch):
+    """The audit of 0.1.14: fl.mixer listed FL's last track as "126 ''" with a send to the
+    master, though nothing played into it. FL names that track nothing, which is not a rename;
+    it is in use only for what really makes a track in use (an effect, a channel, a send in)."""
+    names = ["Master", "Insert 1", "Insert 2", "", ""]
+    _fl_mixer(
+        monkeypatch,
+        names=names,
+        effects={4: {0: "Fruity Limiter"}},
+        sends={(1, 0): 0.8, (3, 0): 0.8, (4, 0): 0.8},
+        targets=[1],
+    )
+
+    rows = flmcp._mixer_tracks()
+
+    assert [r["idx"] for r in rows] == [0, 1, 4]
+
+
 def test_the_session_reads_the_mixer_into_tracks_with_effects_and_sends():
     payload = [
         {"idx": 0, "name": "Master", "vol": 0.8, "pan": 0.0, "muted": False, "solo": False,

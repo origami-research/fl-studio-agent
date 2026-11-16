@@ -15,7 +15,7 @@ from typing import TYPE_CHECKING
 
 from fl_mcp import errors
 from fl_mcp.errors import WriteRejected
-from fl_mcp.schemas import ChannelRoute, MixerSend
+from fl_mcp.schemas import ChannelRoute, MixerEffect, MixerSend
 
 from .controls import _live_int, _live_read, _live_write
 
@@ -42,8 +42,18 @@ def _require_mixer_track(session: FLSession, call: str, track: int) -> None:
         )
 
 
+def effect(session: FLSession, call: str, track: int, slot: int) -> MixerEffect:
+    """THE lookup of one mixer slot's effect (fl.effect, fl.automate on an effect): the
+    effect FL has there, or a refusal naming the empty slot. Three reads (the track count,
+    whether the slot holds a plugin, and its name), never a scan of the mixer."""
+    require_effect(session, call, track, slot)
+    plugin = str(_live_read(session, "plugins.getPluginName", [track, slot, False]))
+    return MixerEffect(mixer_track=track, slot=slot, plugin=plugin)
+
+
 def require_effect(session: FLSession, call: str, track: int, slot: int) -> None:
-    """Refuse a mixer slot that holds no effect before its parameters are read or set."""
+    """Refuse a mixer slot that holds no effect, before its parameters are read or set:
+    the track count and whether the slot holds a plugin, two reads."""
     _require_mixer_track(session, call, track)
     if not 0 <= slot < MIXER_SLOTS:
         raise errors.invalid_argument(call, f"effect slots are 0 to {MIXER_SLOTS - 1}, not {slot}")

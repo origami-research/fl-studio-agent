@@ -8,11 +8,8 @@ from __future__ import annotations
 
 import logging
 import math
-import os
 import re
 import shutil
-import subprocess
-import tempfile
 import time
 from collections.abc import Sequence
 from math import isfinite
@@ -20,10 +17,10 @@ from numbers import Real
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal
 
-from fl_mcp import audio, budget, errors, flp
-from fl_mcp.contract import ENV_AGENT_PROJECT, ENV_SPOOL_ROOT, FLLicense
+from fl_mcp import audio, budget, errors
+from fl_mcp.contract import FLLicense
 from fl_mcp.core.carriers import CarrierUnavailable
-from fl_mcp.errors import NotePlaneUnavailable, WriteRejected
+from fl_mcp.errors import WriteRejected
 from fl_mcp.schemas import (
     CAPTURE_MAX_SECONDS,
     ChannelLevels,
@@ -49,7 +46,6 @@ if TYPE_CHECKING:
 # (E2: set 0.42 -> stored 0.41875), and big synths are big - bound the listing.
 PLUGIN_PARAMS_DEFAULT_LIMIT = 40
 PLUGIN_PARAM_TOLERANCE = 0.02
-RENDER_TIMEOUT_SECONDS = 300.0
 # A render's capture, this decay tail included, stops at CAPTURE_MAX_SECONDS
 # because it holds the tool call for its whole length.
 RENDER_TAIL_SECONDS = 0.5
@@ -103,47 +99,6 @@ def save_project(session: FLSession) -> None:
         # even though no save request had received a zero-second timeout.
         raise session.not_answering("ctl.save", LIVE_ANSWER_SECONDS, "nothing was saved")
     session.link.command("ctl.save")
-
-
-def _render_saved_project(session: FLSession, project: Path) -> Path:
-    """Run FL's blocking macOS project renderer.
-
-    Live-verified (#169): FL's bundle executable accepts ``-R <project.flp>``
-    and writes ``<project>.wav`` beside it. Keep this process boundary small so
-    its command spelling is straightforward to verify and adjust live.
-    """
-    command = list(session.platform.render_command(project))
-    try:
-        subprocess.run(
-            command,
-            check=True,
-            timeout=RENDER_TIMEOUT_SECONDS,
-            env=_render_env(),
-        )
-    except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
-        raise errors.ToolError(
-            "render_failed",
-            f"FL CLI could not render {project}: {exc}",
-            "Check the FL CLI render invocation and retry.",
-            retryable=True,
-        ) from exc
-    return project.with_suffix(".wav")
-
-
-def _render_env() -> dict[str, str]:
-    """The render child must never join the live session.
-
-    FL's ``-R`` render is a second FL process that loads the same project, so it
-    loads the Bridge too. Inheriting this session's ``FLMCP_SPOOL_ROOT`` made
-    that render-only FL publish ITS pid into the live session's port file, then
-    exit: the broker addressed a dead pid ("No response to ctl.save"), and the
-    arena's liveness watcher declared the producer's FL lost (live run 9,
-    2026-09-04). The render gets a throwaway spool root and no agent project.
-    """
-    env = os.environ.copy()
-    env.pop(ENV_AGENT_PROJECT, None)
-    env[ENV_SPOOL_ROOT] = tempfile.mkdtemp(prefix="flmcp-render-spool-")
-    return env
 
 
 def _live_read(session: FLSession, op: str, args: list) -> object:
@@ -432,21 +387,22 @@ def _live_render(
             "Retry the render.",
             retryable=True,
         ) from exc
+    silent = lufs <= audio.SILENCE_LUFS
     if (
         rate != start.sample_rate
         or abs(frames - expected_frames) > expected_frames * 0.01
-        or (refuse_silence and lufs <= -60)
+        or (refuse_silence and silent)
     ):
         log.warning(
             "Bridge WAV did not verify: frames=%s/%s rate=%s/%s lufs=%.1f%s",
             frames, expected_frames, rate, start.sample_rate, lufs, stop_detail,
         )
-        silent = refuse_silence and lufs <= -60
+        refused = refuse_silence and silent
         raise errors.ToolError(
             "render_failed",
-            "The render recorded silence." if silent else "The render's recording was incomplete.",
+            "The render recorded silence." if refused else "The render's recording was incomplete.",
             "Check that the song has notes on channels that make sound, then render again."
-            if silent
+            if refused
             else "Retry the render.",
             retryable=True,
         )
@@ -458,7 +414,7 @@ def _live_render(
         )
     output.parent.mkdir(parents=True, exist_ok=True)
     shutil.copyfile(captured, output)
-    return output, lufs <= audio.SILENCE_LUFS
+    return output, silent
 
 
 def _prepare_render(session: FLSession, start_bar: int, bars: int | None) -> tuple[RenderSpan, RenderSpan, int]:
@@ -492,8 +448,7 @@ def render_wav(
     The length is FL's own, read live just before the capture
     (live_arrangement_span); nothing is saved first, so a trial FL renders
     exactly like a licensed one. The Bridge and FL audio output device are
-    required: it fails loudly when that live path is unavailable rather than
-    masking it with an offline export.
+    required: it fails loudly when that live path is unavailable.
     """
     whole, span, start_tick = _prepare_render(session, start_bar, bars)
     _check_capture_length(span)
@@ -602,65 +557,29 @@ def _label(text: str) -> str:
     return re.sub(r"[^A-Za-z0-9]+", "-", text).strip("-")[:40] or "stem"
 
 
-def export_offline(session: FLSession, output: Path) -> Path:
-    """Boot a second FL and export with -R, for offline deliverables only."""
-    if session.fl_license is FLLicense.TRIAL:
-        raise errors.fl_trial_unsupported("offline export")
-    if session.project is None:
-        raise errors.ToolError(
-            "render_failed",
-            "This session has no saved song to export.",
-            "Use render to record the song instead.",
-        )
-    # How long the export takes is known only once it ends, so it needs its whole bound.
-    budget.require(RENDER_TIMEOUT_SECONDS, "An offline export", "record the song with fl.render instead")
-    output = output.expanduser().resolve()
-    project = session.project.expanduser().resolve()
-    save_project(session)
-    rendered = _render_saved_project(session, project)
-    if not rendered.is_file() or rendered.stat().st_size == 0:
-        raise errors.ToolError(
-            "render_failed",
-            f"FL CLI did not create a non-empty WAV at {rendered}.",
-            "Check FL's CLI render settings and retry; a render is successful only when its WAV exists.",
-            retryable=True,
-        )
-    output.parent.mkdir(parents=True, exist_ok=True)
-    if rendered != output:
-        shutil.copyfile(rendered, output)
-    return output
-
-
 def set_tempo(session: FLSession, bpm: float) -> float:
-    """Live-first (confirmed via getCurrentTempo readback, BPM x 1000);
-    else the project file (flp.set_tempo) + reload. Returns the readback."""
-    if session._ensure_hello() is not None and session.control is not None:
-        resp = session.link.request("mixer.setCurrentTempo", [bpm, 1], timeout=LIVE_ANSWER_SECONDS)
-        if not resp.ok:
-            # Unsafe-at-current-time means busy (warm-up window after a
-            # load, addendum A6) - retryable, and NEVER a fallthrough.
-            if errors.is_operation_unsafe(resp.err or ""):
-                raise errors.operation_unsafe("mixer.setCurrentTempo")
-            raise WriteRejected(
-                f"mixer.setCurrentTempo({bpm}) failed inside FL: {resp.err}",
-                fix="Check the value (10-999 BPM) and retry.",
-            )
-        readback = session.link.request("mixer.getCurrentTempo", timeout=LIVE_ANSWER_SECONDS)
-        if not readback.ok or readback.ret is None:
-            raise WriteRejected(
-                f"FL Studio took the tempo but did not report it back ({readback.err}).",
-                fix="Read fl.tempo, and set the tempo again if it is not what you want.",
-            )
-        return float(readback.ret) / 1000.0
-
-    if session.project is not None:
-        session._prepare_file_write()
-        confirmed = flp.set_tempo(session.project, bpm)
-        session._reload_fl()
-        return confirmed
-
-    log.warning("set_tempo: the control wire is not connected and no project file is configured")
-    raise NotePlaneUnavailable("FL Studio is not accepting a tempo change right now.")
+    """Live only, confirmed via the getCurrentTempo readback (BPM x 1000), which it returns.
+    When FL does not answer it raises: the saved song is never rewritten in its place,
+    which would need FL killed and reopened and would lose its unsaved work."""
+    if session._ensure_hello() is None or session.control is None:
+        raise session.not_answering("mixer.setCurrentTempo", LIVE_ANSWER_SECONDS, "the tempo was not changed")
+    resp = session.link.request("mixer.setCurrentTempo", [bpm, 1], timeout=LIVE_ANSWER_SECONDS)
+    if not resp.ok:
+        # Unsafe-at-current-time means busy (warm-up window after a
+        # load, addendum A6) - retryable, and NEVER a fallthrough.
+        if errors.is_operation_unsafe(resp.err or ""):
+            raise errors.operation_unsafe("mixer.setCurrentTempo")
+        raise WriteRejected(
+            f"mixer.setCurrentTempo({bpm}) failed inside FL: {resp.err}",
+            fix="Check the value (10-999 BPM) and retry.",
+        )
+    readback = session.link.request("mixer.getCurrentTempo", timeout=LIVE_ANSWER_SECONDS)
+    if not readback.ok or readback.ret is None:
+        raise WriteRejected(
+            f"FL Studio took the tempo but did not report it back ({readback.err}).",
+            fix="Read fl.tempo, and set the tempo again if it is not what you want.",
+        )
+    return float(readback.ret) / 1000.0
 
 
 def set_channel_levels(
@@ -671,65 +590,53 @@ def set_channel_levels(
     pan: float | None = None,
     pitch_semitones: int | None = None,
 ) -> ChannelLevels:
-    """All-or-nothing per call: a field that landed is never silently
-    discarded by a fallback (the v1 partial-then-reload bug)."""
+    """Live only, all-or-nothing per call: a mid-call failure raises with what already
+    landed, and when FL does not answer nothing is written (the saved song is never
+    rewritten in its place)."""
     if volume is None and pan is None and pitch_semitones is None:
         raise ValueError("nothing to change - pass volume, pan and/or pitch_semitones")
 
-    if session._ensure_hello() is not None and session.control is not None:
-        # ONE backend for the whole call. A mid-call failure raises with
-        # what already landed - it never falls through to the file path,
-        # which would reload FL and discard the fields that landed live.
-        requested = [
-            ("volume", "channels.setChannelVolume", [channel, volume, PICKUP_NONE]),
-            ("pan", "channels.setChannelPan", [channel, pan, PICKUP_NONE]),
-            ("pitch_semitones", "channels.setChannelPitch", [channel, pitch_semitones, PITCH_SEMITONES, PICKUP_NONE]),
-        ]
-        applied: list[str] = []
-        for field_name, op, args in requested:
-            if args[1] is None:
-                continue
-            resp = session.link.request(op, args, timeout=LIVE_ANSWER_SECONDS)
-            if not resp.ok:
-                if errors.is_operation_unsafe(resp.err or ""):
-                    raise errors.operation_unsafe(op)  # busy, not broken (A6)
-                raise WriteRejected(
-                    f"{op} failed inside FL: {resp.err}. "
-                    f"Already applied live and KEPT: {', '.join(applied) or 'nothing'}.",
-                    fix="Retry the failed field; the fields that landed were not rolled back.",
-                )
-            applied.append(field_name)
+    if session._ensure_hello() is None or session.control is None:
+        raise session.not_answering("channels.setChannelVolume", LIVE_ANSWER_SECONDS, "the levels were not changed")
+    requested = [
+        ("volume", "channels.setChannelVolume", [channel, volume, PICKUP_NONE]),
+        ("pan", "channels.setChannelPan", [channel, pan, PICKUP_NONE]),
+        ("pitch_semitones", "channels.setChannelPitch", [channel, pitch_semitones, PITCH_SEMITONES, PICKUP_NONE]),
+    ]
+    applied: list[str] = []
+    for field_name, op, args in requested:
+        if args[1] is None:
+            continue
+        resp = session.link.request(op, args, timeout=LIVE_ANSWER_SECONDS)
+        if not resp.ok:
+            if errors.is_operation_unsafe(resp.err or ""):
+                raise errors.operation_unsafe(op)  # busy, not broken (A6)
+            raise WriteRejected(
+                f"{op} failed inside FL: {resp.err}. "
+                f"Already applied live and KEPT: {', '.join(applied) or 'nothing'}.",
+                fix="Retry the failed field; the fields that landed were not rolled back.",
+            )
+        applied.append(field_name)
 
-        readbacks = {}
-        for field_name, op, args in (
-            ("volume", "channels.getChannelVolume", [channel, False]),  # 0..1, not dB
-            ("pan", "channels.getChannelPan", [channel]),
-            ("pitch_semitones", "channels.getChannelPitch", [channel, PITCH_SEMITONES]),
-        ):
-            resp = session.link.request(op, args, timeout=LIVE_ANSWER_SECONDS)
-            if not resp.ok or resp.ret is None:
-                raise WriteRejected(
-                    f"FL Studio took the levels but did not report {op} back ({resp.err}).",
-                    fix="Set the levels again to be sure they are what you want.",
-                )
-            readbacks[field_name] = resp.ret
-        return ChannelLevels(
-            channel=channel,
-            volume=float(readbacks["volume"]),
-            pan=float(readbacks["pan"]),
-            pitch_semitones=round(float(readbacks["pitch_semitones"])),
-        )
-
-    if session.project is not None:
-        session._prepare_file_write()
-        confirmed = flp.set_channel_levels(
-            session.project, channel, volume=volume, pan=pan, pitch_semitones=pitch_semitones
-        )
-        session._reload_fl()
-        return confirmed
-
-    log.warning("set_channel_levels: the control wire is not connected and no project file is configured")
-    raise NotePlaneUnavailable("FL Studio is not accepting a level change right now.")
+    readbacks = {}
+    for field_name, op, args in (
+        ("volume", "channels.getChannelVolume", [channel, False]),  # 0..1, not dB
+        ("pan", "channels.getChannelPan", [channel]),
+        ("pitch_semitones", "channels.getChannelPitch", [channel, PITCH_SEMITONES]),
+    ):
+        resp = session.link.request(op, args, timeout=LIVE_ANSWER_SECONDS)
+        if not resp.ok or resp.ret is None:
+            raise WriteRejected(
+                f"FL Studio took the levels but did not report {op} back ({resp.err}).",
+                fix="Set the levels again to be sure they are what you want.",
+            )
+        readbacks[field_name] = resp.ret
+    return ChannelLevels(
+        channel=channel,
+        volume=float(readbacks["volume"]),
+        pan=float(readbacks["pan"]),
+        pitch_semitones=round(float(readbacks["pitch_semitones"])),
+    )
 
 
 # -- plugin parameters (live-only; E2-verified ops) --------------------------

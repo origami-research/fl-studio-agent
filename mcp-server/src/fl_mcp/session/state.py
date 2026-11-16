@@ -43,12 +43,11 @@ PYSCRIPT_NAME = "MCP Write Notes.pyscript"
 
 def channel_names(session: FLSession) -> list[Channel]:
     """The channels names resolve against (``fl.track`` and every SDK method that
-    takes a channel) and the labels results use: the snapshot's, so live from FL
-    whenever FL is connected. FL renames channels itself (loading a sample or a
-    preset, stepping a preset, a person renaming one), and the saved song keeps
-    the names it was saved with. A file-lane edit saves FL's live state before
-    patching the file, so a live index is also the file's. The saved song only
-    when FL is not connected; a channel it never named reads ``Channel <index>``."""
+    takes a channel) and the labels results use: the snapshot's, live from FL. FL
+    renames channels itself (loading a sample or a preset, stepping a preset, a
+    person renaming one), and the saved song keeps the names it was saved with, so
+    the saved song is never read for them. A channel FL never named reads
+    ``Channel <index>``."""
     return described(session, [
         channel if channel.name else channel.model_copy(update={"name": f"Channel {channel.index}"})
         for channel in session.snapshot().channels
@@ -62,6 +61,8 @@ def described(session: FLSession, channels: list[Channel]) -> list[Channel]:
 
 
 def project_guide(session: FLSession, names: list[str]) -> flp.ProjectGuide:
+    """The project's notes (FL's Project info), read from the song FL opened: FL cannot
+    report them, and nothing in a session changes them."""
     if session.project is None or not session.project.is_file():
         return flp.ProjectGuide()
     try:
@@ -71,17 +72,11 @@ def project_guide(session: FLSession, names: list[str]) -> flp.ProjectGuide:
         return flp.ProjectGuide()
 
 
-def tempo(session: FLSession) -> float | None:
-    """FL's tempo now - THE tempo read behind fl.tempo and fl.scene().
-
-    Live from FL whenever FL is connected, so a set_tempo shows at once;
-    the project's saved tempo only when FL is not connected (a trial FL
-    never saves, so its file keeps the tempo it opened with)."""
-    if session._ensure_hello() is not None and session.control is not None:
-        return controls._live_int(session, "mixer.getCurrentTempo") / 1000.0
-    if session.project is not None and session.project.is_file():
-        return flp.read(session.project).tempo
-    return None
+def tempo(session: FLSession) -> float:
+    """FL's tempo now - THE tempo read behind fl.tempo and fl.scene(). Live only: the
+    saved song keeps the tempo it was saved with (a trial FL never saves), so when FL
+    does not answer this raises rather than reading it."""
+    return controls._live_int(session, "mixer.getCurrentTempo") / 1000.0
 
 
 def mixer_tracks(session: FLSession) -> list[MixerTrack]:
@@ -136,40 +131,19 @@ def patterns(session: FLSession) -> list[PatternInfo]:
 
 
 def snapshot(session: FLSession) -> SessionState:
-    """Live: ONE composite ``state.snapshot`` round trip (chunked response;
-    v1's transport silently dropped it, Lane W fixed the routing - addendum
-    A5). Else: decoded from the project file. One backend per call, so a
-    stale file never contaminates a live view or vice versa."""
-    if session._ensure_hello() is not None and session.control is not None:
-        snap = session.link.call("state.snapshot", timeout=SNAPSHOT_TIMEOUT_SECONDS)
-        try:
-            return SessionState.from_wire(snap)
-        except (KeyError, TypeError, ValueError) as exc:
-            raise errors.fl_api_error("state.snapshot", f"malformed snapshot payload ({exc!r})") from exc
-
-    if session.project is not None:
-        project = flp.read(session.project)
-        return SessionState(
-            ppq=project.ppq,
-            tempo_bpm=project.tempo,
-            channels=[
-                Channel(
-                    index=c.index,
-                    name=c.name,
-                    volume=c.volume / flp.LEVEL_MAX,
-                    pan=(c.pan - flp.PAN_CENTRE) / flp.PAN_CENTRE,
-                )
-                for c in project.channels
-            ],
-        )
-
-    log.warning("snapshot: the control wire is not connected and no project file is configured")
-    raise errors.ToolError(
-        "control_plane_unavailable",
-        "FL Studio is not answering, so its state cannot be read right now.",
-        "FL may still be starting. Retry in a moment.",
-        retryable=True,
-    )
+    """ONE composite ``state.snapshot`` round trip (chunked response; v1's transport
+    silently dropped it, Lane W fixed the routing - addendum A5). Live only: when FL
+    does not answer (a dialog open, FL still starting or frozen) this raises. The
+    saved song is never read in its place, because it is not what FL has now (a trial
+    FL never saves, so it is always the song FL opened), and a read that mixed the
+    two would present it as current."""
+    if session._ensure_hello() is None or session.control is None:
+        raise session.not_answering("state.snapshot", SNAPSHOT_TIMEOUT_SECONDS, "nothing could be read")
+    snap = session.link.call("state.snapshot", timeout=SNAPSHOT_TIMEOUT_SECONDS)
+    try:
+        return SessionState.from_wire(snap)
+    except (KeyError, TypeError, ValueError) as exc:
+        raise errors.fl_api_error("state.snapshot", f"malformed snapshot payload ({exc!r})") from exc
 
 
 def doctor(session: FLSession, *, clock: Callable[[], float] = time.time) -> DoctorReport:

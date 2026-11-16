@@ -71,9 +71,10 @@ def scale(root: str | int, mode: str = "major", octaves: int = 1) -> list[int]:
 
 
 def drums(
-    pattern: str, key: str | int = "C1", step_beats: float = 0.25, velocity: float = 0.8
+    pattern: str, key: str | int = 60, step_beats: float = 0.25, velocity: float = 0.8
 ) -> list[schemas.Note]:
-    """A step string like "x---x---x---x---" into one Note per non-rest step.
+    """A step string like "x---x---x---x---" into one Note per non-rest step, each on
+    ``key``: MIDI 60 (C4) by default, the key a sampler plays its sample at its own pitch.
 
     Any character other than space, '-', or '.' counts as a hit - so "x" and
     "X" both work, and accents can later be encoded as different hit chars

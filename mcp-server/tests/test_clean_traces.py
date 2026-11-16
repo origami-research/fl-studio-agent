@@ -177,7 +177,7 @@ def test_write_then_read_on_a_trial_fl_is_definitive_and_plain(box):
     wrote = run(
         box,
         'print(fl.set_tempo(100.0))\n'
-        'kick = theory.drums("x...x...x...x..." * 4, key="C1")\n'
+        'kick = theory.drums("x...x...x...x..." * 4)\n'
         'print(fl.track("808 Kick").write(kick, mode="replace"))',
     )
     # Definitive: what was written, where, and the total - nothing to doubt.
@@ -225,7 +225,7 @@ def test_write_then_read_on_a_trial_fl_is_definitive_and_plain(box):
 
 def test_meters_prove_what_sounds_in_plain_words(box):
     """The cheap proof a model was missing: write, then read the meters, instead of a full render."""
-    run(box, 'fl.track("808 Kick").write(theory.drums("x...x...x...x...", key="C1"), mode="replace")')
+    run(box, 'fl.track("808 Kick").write(theory.drums("x...x...x...x..."), mode="replace")')
     checked = run(
         box,
         "m = fl.meters()\nk, b = (next(c for c in m.channels if c.name == n) for n in ('808 Kick', 'FLEX Bass'))\n"

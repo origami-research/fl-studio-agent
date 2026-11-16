@@ -292,9 +292,10 @@ def test_tempo_property_reads_confirmed_state(fl):
 
 
 def test_tempo_unconfirmed_raises_instead_of_guessing(tmp_path):
-    from fl_mcp.store import Store
+    """FL's live tempo or an error: never the saved song's (a trial FL never saves)."""
+    from session_fakes import FIVE_CHANNEL_PROJECT, make_session
 
-    session = FakeSession(store=Store("test", root=tmp_path), channels=DEFAULT_CHANNELS, tempo=None)
+    session, _ = make_session(project=FIVE_CHANNEL_PROJECT)  # nothing answers
     with pytest.raises(errors.ToolError) as exc_info:
         _ = connect(session).tempo
     assert exc_info.value.category == "control_plane_unavailable"
@@ -381,9 +382,9 @@ def test_the_channels_and_the_mixer_print_a_line_each_and_keep_their_data(fl, fa
     assert repr(channels[0]) == "Channel(0 'Kick' -> 4, vol 0.78)"
     assert mixer.empty == MIXER_TRACK_COUNT - 2
     assert repr(mixer) == (
-        "MixerTracks in use (index 'name', volume; effects slot:plugin; sends):\n"
+        "mixer tracks in use (index 'name', volume; effects slot:plugin; sends track:level):\n"
         "  0 'Master', vol 0.8; effects 7:Maximus\n"
-        "  14 'Lead', vol 0.8, solo; → tracks 113, 120 at 0.8; → track 114 at 0.25\n"
+        "  14 'Lead', vol 0.8, solo; sends 113:0.8, 120:0.8, 114:0.25\n"
         f"  (+ {MIXER_TRACK_COUNT - 2} empty mixer tracks)"
     )
     assert mixer[0].volume == 0.7999999998137355 and isinstance(mixer[0].effects[0], sdk.Effect)
@@ -423,6 +424,28 @@ def test_read_wav_loads_synthetic_pcm(fl, tmp_path):
 
     assert sample_rate == 44100
     np.testing.assert_allclose(samples, [[-1.0, 0.0], [0.0, 32767 / 32768]])
+
+
+def test_read_wav_of_a_missing_file_says_so_at_once(fl, fake_session, tmp_path, monkeypatch):
+    """The audit of 0.1.14: fl.read_wav("q.wav") took 14.8 s to fail on a fresh box, searching
+    the whole library for names like it. A name that is neither a file here nor a library
+    path is refused in the kernel, without asking the engine; a library path still is."""
+    monkeypatch.chdir(tmp_path)
+    asked: list[str] = []
+    fake_session.sound_file = lambda sound: asked.append(sound) or pytest.fail("the engine was asked")
+
+    with pytest.raises(errors.ToolError, match=r"there is no file 'q\.wav'") as raised:
+        fl.read_wav("q.wav")
+    assert raised.value.category == "invalid_argument"
+    assert "Render fl.render returned" in raised.value.message
+    assert asked == []
+
+    fake_session.sound_file = lambda sound: asked.append(sound) or (_ for _ in ()).throw(
+        errors.invalid_argument("fl.read_wav", "FL has no sample there")
+    )
+    with pytest.raises(errors.ToolError, match="FL has no sample there"):
+        fl.read_wav("Packs/Drums/Kicks/Nope.wav")
+    assert asked == ["Packs/Drums/Kicks/Nope.wav"]
 
 
 # -- plugin params -------------------------------------------------------------

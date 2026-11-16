@@ -353,17 +353,21 @@ class BridgeLane:
         return cmd.id
 
     def _ppq(self) -> int | None:
-        """The PPQ stamp for spooled note commands: the target universe's ppq
-        (the project file), else the live hello's. None lets the consumer fall
-        back (the bridge assumes 96 and flags it in its response summary)."""
+        """The PPQ stamp for spooled note commands: FL's live one (the hello's
+        getRecPPQ), as every other read is live; the song FL opened only when the
+        controller does not answer (the Bridge, which takes the notes, may still).
+        None lets the consumer fall back (the bridge assumes 96 and flags it in its
+        response summary)."""
         session = self._session
+        hello = session._ensure_hello()
+        if hello is not None:
+            return hello.ppq
         if session.project is not None and session.project.is_file():
             try:
                 return flp.read(session.project).ppq
             except flp.FlpError:
-                log.exception("could not read ppq from %s; trying the live hello", session.project)
-        hello = session._ensure_hello()
-        return hello.ppq if hello is not None else None
+                log.exception("could not read ppq from %s", session.project)
+        return None
 
     def _saved_state(self, target: Target, command_id: int) -> list[Note] | None:
         """FL's saved post-write state of the target, when FL can save.

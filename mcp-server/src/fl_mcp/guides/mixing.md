@@ -19,7 +19,7 @@ Rendering with `stems=[...]` gives each part its own WAV to measure.
 ```python
 import pyloudnorm as pyln
 # two bars to balance; in a session, the song you wrote
-fl.track("Kick").write(theory.drums("x...x...x...x..." * 2, key=60), mode="replace")
+fl.track("Kick").write(theory.drums("x...x...x...x..." * 2), mode="replace")
 fl.track("Synth Bass").write([Note(33, b + 0.5, 0.4, 0.8) for b in range(8)], mode="replace")
 fl.track("Pad").write([Note(k, 0, 8, 0.6) for k in theory.chord("A3", "minor")], mode="replace")
 track = {c.name: c.mixer_track for c in fl.channels}

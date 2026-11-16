@@ -8,7 +8,6 @@ the shipped code paths. Network is never touched except by the opt-in test.
 from __future__ import annotations
 
 import ast
-import contextlib
 import inspect
 import os
 import subprocess
@@ -46,8 +45,6 @@ class _Session(FakeSession):
         super().__init__(*args, **kwargs)
         self.render_seconds = render_seconds
         self.tempo_seconds = tempo_seconds
-        self.file_edit_log: list[str] = []
-        self.file_edit_exit_failures = 0
 
     def render_wav(self, output: Path, *args, **kwargs) -> RenderReceipt:
         # As the real render: it knows how long it plays, and asks the run first.
@@ -59,18 +56,6 @@ class _Session(FakeSession):
         # A call that does not play in real time but can still be slow (a preset load).
         time.sleep(self.tempo_seconds)
         return super().set_tempo(bpm)
-
-    @contextlib.contextmanager
-    def file_edit(self) -> Iterator[None]:
-        self.file_edit_log.append("enter")
-        try:
-            yield
-        finally:
-            self.file_edit_log.append("exit")
-            if self.file_edit_exit_failures:
-                self.file_edit_exit_failures -= 1
-                raise errors.ToolError("fl_relaunch_required", "FL did not come back", "relaunch FL")
-
 
 @pytest.fixture
 def session(tmp_path) -> _Session:
@@ -269,30 +254,6 @@ def test_no_fl_call_is_served_once_the_budget_is_spent(tmp_path, workspace):
         assert result.outcome == "interrupted", result
         assert result.actions == ["Set tempo to 100 BPM"]
         assert slow.tempo() == 100
-    finally:
-        kernel.close()
-
-
-def test_closing_a_file_edit_block_past_the_budget_does_not_swallow_the_interrupt(tmp_path, workspace):
-    """A refused close would raise from the block's exit in place of the KeyboardInterrupt,
-    and `except Exception` would catch it and carry on; the server closes the block itself."""
-    slow = _Session(store=Store("k", root=tmp_path / "s"), channels=DEFAULT_CHANNELS, tempo_seconds=2.0)
-    kernel = _host(slow, workspace, run_budget=1.0, interrupt_grace=3.0)
-    code = (
-        "caught = []\n"
-        "try:\n"
-        "    with fl.file_edit():\n"
-        "        fl.set_tempo(100)\n"
-        "        while True:\n"
-        "            pass\n"
-        "except Exception as exc:\n"
-        "    caught.append(exc)\n"
-    )
-    try:
-        result = kernel.run(code)
-        assert result.outcome == "interrupted", result
-        assert slow.file_edit_log == ["enter", "exit"]
-        assert kernel.run("caught").result == "[]"
     finally:
         kernel.close()
 
@@ -569,28 +530,6 @@ def test_a_plain_render_name_maps_into_renders(workspace):
     assert workspace.output_path(Path("sub/Mix 2.wav")) == workspace.renders / "Mix 2.wav"
 
 
-def test_file_edit_crosses_the_wire_and_closes_with_the_cell(host, session):
-    assert host.run("with fl.file_edit():\n    pass").outcome == "ok"
-    assert session.file_edit_log == ["enter", "exit"]
-    host.run(
-        "left_open = fl.file_edit()\nleft_open.__enter__()"
-    )  # still referenced, so only the server closes it
-    assert session.file_edit_log == ["enter", "exit", "enter", "exit"]
-
-
-def test_a_file_edit_blocks_changes_are_listed_only_once_fl_reopened_with_them(host, session):
-    """FL takes a block's changes when it closes; a failed close lists none of them."""
-    cell = "with fl.file_edit():\n    fl.set_tempo(100)\nfl.set_tempo(101)"
-    applied = host.run(cell)
-    assert applied.actions == ["Set tempo to 100 BPM", "Set tempo to 101 BPM"]
-    session.file_edit_exit_failures = 1
-    failed = host.run(cell)
-    assert failed.outcome == "error" and "FL did not come back" in failed.traceback
-    assert failed.actions == []
-    left_open = host.run("block = fl.file_edit()\nblock.__enter__()\nfl.set_tempo(102)")
-    assert left_open.actions == ["Set tempo to 102 BPM"], "the server closed the block, so FL has it"
-
-
 def test_wire_methods_are_exactly_what_the_sdk_calls_on_its_session():
     """The RPC surface is the SDK's session surface: no more (attack surface), no less (breakage)."""
     used = {
@@ -600,7 +539,7 @@ def test_wire_methods_are_exactly_what_the_sdk_calls_on_its_session():
         and isinstance(node.value, ast.Attribute)
         and node.value.attr == "_session"
     }
-    assert used == wire.SESSION_METHODS | {"file_edit"}
+    assert used == wire.SESSION_METHODS
 
 
 def test_wire_rejects_a_call_outside_the_sdk_surface():
@@ -671,15 +610,6 @@ def test_a_late_interrupt_between_cells_is_ignored(host):
     assert host._kernel.send(wire.Interrupt(), 1.0)
     time.sleep(0.3)
     assert host.run("import time\nfor _ in range(5):\n    time.sleep(0.05)\nkept").result == "'yes'"
-
-
-def test_every_left_open_file_edit_closes_even_when_one_fails(host, session):
-    session.file_edit_exit_failures = 1
-    result = host.run("a, b = fl.file_edit(), fl.file_edit()\na.__enter__()\nb.__enter__()\n'done'")
-    assert session.file_edit_log == ["enter", "enter", "exit", "exit"]
-    assert result.outcome == "error"
-    assert "FL did not come back" in result.traceback
-    assert host.run("1 + 1").result == "2"  # the kernel is unaffected
 
 
 def test_a_kernel_that_died_between_cells_is_replaced_and_the_cell_runs(host):
