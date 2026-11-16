@@ -6,9 +6,11 @@
 The `fl` object in the `run` tool is the live FL Studio session.
 In `run`, `help(fl.render)` shows the same text as each entry below.
 
-The live FL Studio session: every call applies to FL at once and returns what FL
-now has, or raises with the reason. A channel is its index, exact name or a unique
-part of its name.
+The live FL Studio session: every call applies to FL at once and returns the result,
+or raises with the reason. Notes, playlist clips, automation clips and the project's
+notes are read from the song FL opened plus the edits made through fl, so changes to
+them in FL's own windows are not seen until FL saves the song; everything else is read
+from FL live. A channel is its index, exact name or a unique part of its name.
 
 ## Read
 

@@ -7,6 +7,7 @@ it mentions must exist, so a guide fails CI the day the SDK changes under it.
 
 from __future__ import annotations
 
+import itertools
 import re
 
 import pytest
@@ -17,6 +18,11 @@ from fl_mcp.kernel.cell import new_namespace, run_cell
 from fl_mcp.store import Store
 
 GUIDES = guides.load()
+
+# The patterns an example promises, by name: their length in beats (its comments say so).
+# The arrangement example's swung hats ran 0.03 beats past bar 4, so B was 20 beats and its
+# clips at bars 5 and 9 overlapped (all three live checks of 0.1.15).
+PATTERN_BEATS = {"arrangement": {"A": 16.0, "B": 16.0}}
 
 
 def test_the_techniques_that_left_the_description_are_guides():
@@ -41,6 +47,11 @@ def test_a_guides_worked_example_runs_on_the_fakes(guide, tmp_path, monkeypatch)
     result = run_cell(guide.example, new_namespace(sdk.connect(fake)))
 
     assert result.outcome == "ok", f"{guide.name}:\n{result.stdout}\n{result.traceback}"
+    beats, promised = {p.name: p.beats for p in fake.patterns()}, PATTERN_BEATS.get(guide.name, {})
+    assert {name: beats.get(name) for name in promised} == promised
+    clips = sorted((c for c in fake.playlist() if c.pattern is not None), key=lambda c: (c.pattern, c.start))
+    for one, two in itertools.pairwise(clips):
+        assert one.pattern != two.pattern or one.start + one.length <= two.start, f"{guide.name}: {one} overlaps {two}"
 
 
 def test_fl_guide_prints_the_index_then_one_guide(fake_session, capsys):

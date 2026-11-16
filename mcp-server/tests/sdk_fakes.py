@@ -8,6 +8,7 @@ the action log - is the shipped code, not a mock of it.
 from __future__ import annotations
 
 import contextlib
+import math
 import shutil
 import time
 from collections.abc import Iterator
@@ -295,13 +296,17 @@ def studio_wav(path: Path, seconds: float, tempo: float = 120.0) -> Path:
     return path
 
 
+FAKE_PPQ = 96  # FL's PPQ on the boxes (the hello's getRecPPQ)
+
+
 class StudioFake(FakeSession):
     """The whole session surface the SDK calls, over the agent template's channels:
     what a guide's worked example runs against in CI (fl_mcp/guides). Writes succeed
     and return what was asked; renders, auditions and library sounds are real WAVs.
-    Like FL, loading a sound or a preset renames the channel after it. The project FL
-    opened is a copy of the packaged agent project, so fl.scene() and what each channel
-    is for (``about``) are the real reads of it."""
+    Like FL, loading a sound or a preset renames the channel after it, and a pattern
+    lasts as long as its notes in whole bars, which its clips play. The project FL opened
+    is a copy of the packaged agent project, so fl.scene() and what its notes say about
+    each channel (``about``) are the real reads of it."""
 
     def __init__(self, *, store: Store, library: Path) -> None:
         from fl_mcp.schemas import PatternInfo, PlaylistClip
@@ -369,7 +374,24 @@ class StudioFake(FakeSession):
     # -- notes
     def write_notes(self, target, notes, mode):
         self._written[(target.channel, target.pattern)] = target
-        return super().write_notes(target, notes, mode)
+        result = super().write_notes(target, notes, mode)
+        self._fit_pattern(target.pattern)
+        return result
+
+    def _fit_pattern(self, number):
+        """FL's pattern length: its notes' end, in ticks as the note script writes them
+        (start and length each rounded at PPQ 96), rounded up to whole bars. A note 0.03
+        beats past bar 4 made a pattern 20 beats long on the box (r0115)."""
+        ticks = [
+            round(n.start * FAKE_PPQ) + max(1, round(n.length * FAKE_PPQ))
+            for (_, pattern), t in self._written.items()
+            if pattern == number
+            for n in self.read_notes(t)
+        ]
+        found = next((p for p in self._patterns if p.number == number), None)
+        if ticks and found is not None:
+            bars = math.ceil(max(ticks) / (4 * FAKE_PPQ))
+            self._patterns[self._patterns.index(found)] = found.model_copy(update={"beats": 4.0 * bars})
 
     # -- song
     def _pattern(self, ref):
@@ -386,6 +408,11 @@ class StudioFake(FakeSession):
         beats = 0.0 if copy_of is None else self._pattern(copy_of).beats
         made = PatternInfo(number=len(self._patterns) + 1, name=name, beats=beats)
         self._patterns.append(made)
+        if copy_of is not None:  # like FL, the copy carries the original's notes
+            source = self._pattern(copy_of).number
+            for (channel, pattern), target in list(self._written.items()):
+                if pattern == source:
+                    self.write_notes(Target(pattern=made.number, channel=channel), self.read_notes(target), "replace")
         return made
 
     def rename_pattern(self, pattern, name):
