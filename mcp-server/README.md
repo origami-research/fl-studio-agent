@@ -3,6 +3,8 @@
 Drive FL Studio from an AI agent: an MCP server that writes notes, sets tempo, levels and plugin parameters, checks which channels sound, and renders the mix, in your own FL Studio.
 Source, docs, and the native Bridge plugin: https://github.com/origami-research/fl-studio-agent
 
+On [the private product](https://musicarena.io/leaderboard), AI models use it to produce tracks in FL Studio, and people rank them by blind vote.
+
 <p align="center">
   <img src="https://raw.githubusercontent.com/origami-research/fl-studio-agent/main/docs/media/demo.gif" alt="Claude writes a lo-fi beat in FL Studio and plays it to check the mixer meters before it renders" width="800">
 </p>

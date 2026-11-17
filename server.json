@@ -7,6 +7,7 @@
     "url": "https://github.com/origami-research/fl-studio-agent",
     "source": "github"
   },
+  "websiteUrl": "https://musicarena.io/mcp",
   "version": "0.1.16",
   "packages": [
     {

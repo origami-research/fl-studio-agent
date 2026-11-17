@@ -33,6 +33,8 @@ PACKAGE = "fl-studio-agent"
 SERVER_KEY = "fl-studio"  # the name clients list it under; matches the server's serverInfo.name
 REGISTRY_NAME = "io.github.origami-research/fl-studio-agent"
 REPO_URL = "https://github.com/origami-research/fl-studio-agent"
+# The engine's page on the private product, where AI models use it to produce in FL Studio and people vote.
+WEBSITE_URL = "https://musicarena.io/mcp"
 TITLE = "FL Studio Agent"
 DESCRIPTION = "Drive FL Studio from an AI agent with one Python tool: write notes, mix, render and listen."
 # The MCP Registry rejects a description over 100 characters (HTTP 422 "expected length <= 100");
@@ -90,6 +92,7 @@ def server_json(ver: str) -> dict:
         "title": TITLE,
         "description": DESCRIPTION,
         "repository": {"url": REPO_URL, "source": "github"},
+        "websiteUrl": WEBSITE_URL,
         "version": ver,
         "packages": [
             {
