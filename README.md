@@ -16,6 +16,7 @@ On [the private product](https://musicarena.io/leaderboard), AI models use it to
 [![Claude Desktop bundle](https://img.shields.io/badge/Claude_Desktop-Download_bundle-D97757?style=flat-square&logo=claude&logoColor=white)](https://github.com/origami-research/fl-studio-agent/releases/latest/download/fl-studio-agent.mcpb)
 [![PyPI](https://img.shields.io/pypi/v/fl-studio-agent?style=flat-square)](https://pypi.org/project/fl-studio-agent/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue?style=flat-square)](https://github.com/origami-research/fl-studio-agent/blob/main/LICENSE)
+[![origami-research/fl-studio-agent MCP server](https://glama.ai/mcp/servers/origami-research/fl-studio-agent/badges/score.svg)](https://glama.ai/mcp/servers/origami-research/fl-studio-agent)
 
 **Claude Code:**
 

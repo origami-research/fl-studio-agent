@@ -35,6 +35,8 @@ REGISTRY_NAME = "io.github.origami-research/fl-studio-agent"
 REPO_URL = "https://github.com/origami-research/fl-studio-agent"
 # The engine's page on the private product, where AI models use it to produce in FL Studio and people vote.
 WEBSITE_URL = "https://musicarena.io/mcp"
+# The listing on Glama; awesome-mcp-servers lists only servers whose README links their Glama page.
+GLAMA_URL = "https://glama.ai/mcp/servers/origami-research/fl-studio-agent"
 TITLE = "FL Studio Agent"
 DESCRIPTION = "Drive FL Studio from an AI agent with one Python tool: write notes, mix, render and listen."
 # The MCP Registry rejects a description over 100 characters (HTTP 422 "expected length <= 100");
@@ -186,6 +188,7 @@ def install_section() -> str:
 [![Claude Desktop bundle](https://img.shields.io/badge/Claude_Desktop-Download_bundle-D97757?style=flat-square&logo=claude&logoColor=white)]({BUNDLE_URL})
 [![PyPI](https://img.shields.io/pypi/v/{PACKAGE}?style=flat-square)](https://pypi.org/project/{PACKAGE}/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue?style=flat-square)]({REPO_URL}/blob/main/LICENSE)
+[![origami-research/fl-studio-agent MCP server]({GLAMA_URL}/badges/score.svg)]({GLAMA_URL})
 
 **Claude Code:**
 
