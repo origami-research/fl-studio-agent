@@ -118,7 +118,8 @@ presets, and the CC0 packs' samples ("CC0/..."), best match first.
 
 ``query`` describes the sound ("punchy dry kick", "warm pad with a slow
 attack"); ``like`` is a reference to match instead or as well: a Sound, a library
-path, or an audio file you wrote (an fl.audition render, a chop). Each Sound has
+path, or an audio file in your workspace (an fl.audition render, a chop, a file
+the user attached). Each Sound has
 ``kind`` ("preset" or "sample"), ``name``, ``plugin``, ``path``, ``score`` (by
 sound, higher is closer; None when it matched by name only: an effect preset,
 which makes no sound alone, or a sound the index lacks; those come first, so
@@ -143,10 +144,11 @@ Do not fl.undo() after it: FL's undo would take back writing the notes back.
 ### `fl.load_sample(channel: str | int, sample: Sound | str | Path) -> ChannelSound`
 
 Load a sample into a sampler channel: a Sound from ``fl.sounds(kind="sample")``
-or its path, or an audio file you wrote (WAV, FLAC, Ogg, AIFF), such as a chop
-or a stretched loop made with numpy or librosa. FL renames the channel after the
-file; returns the channel's name as FL now reports it. A plugin channel is
-refused (give it an instrument preset instead).
+or its path, or the path of any audio file in your workspace, such as one the user
+attached or a chop or stretched loop you made with numpy or librosa (WAV, FLAC,
+AIFF, MP3, Ogg, Opus, M4A or WebM). FL renames the channel after the file; returns
+the channel's name as FL now reports it. A plugin channel is refused (give it an
+instrument preset instead).
 
 A note plays the sample from its start, at its own pitch on C4 (MIDI 60) and
 resampled on other keys; some channels stop it when the note ends, so write the
@@ -315,9 +317,10 @@ records exactly those channels, each alone, notes or not.
 
 ### `fl.read_wav(path: str | Path | Sound) -> tuple[np.ndarray, int]`
 
-Audio's samples, float (frames, channels), and its sample rate: a render, a file
-you wrote, or a library sample (a Sound from fl.sounds, or its path), so a sample
-can be heard before it is loaded. Reads FL's Ogg-in-WAV and WavPack stock samples.
+Audio's samples, float (frames, channels), and its sample rate: a render, an
+audio file in your workspace, or a library sample (a Sound from fl.sounds, or its
+path), so a sample can be heard before it is loaded. Reads FL's Ogg-in-WAV and
+WavPack stock samples.
 
 ## Project
 

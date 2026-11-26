@@ -174,6 +174,34 @@ def test_decode_audio_reads_what_a_model_writes_and_a_stock_sample_it_passes_on(
     assert abs(decode_audio(io.BytesIO(_ogg_in_wav(44100)).getvalue())[0].shape[0] - 44100) < 2048
 
 
+@pytest.mark.parametrize(("suffix", "codec"), [("m4a", "aac"), ("webm", "libopus"), ("ogg", "libopus")])
+def test_a_phone_or_browser_recording_reads_and_loads(tmp_path, suffix, codec):
+    """A user attaches what their phone or browser records: M4A from iOS, WebM or Ogg Opus
+    from a browser. read_wav read them through FFmpeg while decode_audio, what
+    fl.load_sample decodes, refused M4A and WebM (libsndfile reads neither), so the model
+    could measure the file and not sample it. Both now read all three alike."""
+    import av
+
+    rate = 48000
+    tone = (0.5 * np.sin(2 * np.pi * 440 * np.arange(rate) / rate)).astype(np.float32)
+    path = tmp_path / f"take.{suffix}"
+    with av.open(str(path), "w") as out:
+        stream = out.add_stream(codec, rate=rate, layout="mono")
+        for start in range(0, rate, 960):
+            frame = av.AudioFrame.from_ndarray(tone[None, start : start + 960], format="flt", layout="mono")
+            frame.sample_rate, frame.pts = rate, start
+            for packet in stream.encode(frame):
+                out.mux(packet)
+        for packet in stream.encode(None):
+            out.mux(packet)
+
+    for samples, got_rate in (read_wav(path), decode_audio(path.read_bytes())):
+        assert got_rate == rate and samples.shape[1] == 1
+        assert abs(len(samples) - rate) < 4096, suffix  # codec padding, not lost audio
+        peak = np.abs(np.fft.rfft(samples[:, 0])).argmax() * rate / len(samples)
+        assert abs(peak - 440) < 5, suffix
+
+
 @pytest.mark.parametrize("blob", [b"", b"not audio at all", b"RIFF\x10\x00\x00\x00WAVEjunk\x04\x00\x00\x00abcd"])
 def test_decode_audio_refuses_what_is_not_audio(blob):
     with pytest.raises(ValueError, match=r"not an audio file|no frames"):

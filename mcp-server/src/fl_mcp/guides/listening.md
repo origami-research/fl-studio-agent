@@ -14,7 +14,7 @@ Some measurements and what they show:
 
 A render plays in real time, so a few bars or one channel alone (`solo=`) costs less than the whole song; `fl.meters` takes seconds and says which channels sound.
 To hear what one part adds, render the same bars with it muted (`mute=[part]`) and compare.
-To compare with a reference track the user gives (in your workspace, such as `uploads/`), measure it the same way.
+Audio the user gives you (in your workspace, such as `uploads/`) reads with `fl.read_wav` and measures the same way.
 Numbers are cheap to read; a picture costs tokens, but a spectrogram shows a lot at once.
 
 Reading a spectrogram: time runs left to right, pitch bottom to top, brightness is energy.

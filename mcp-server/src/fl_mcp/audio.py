@@ -27,6 +27,9 @@ SILENCE_LUFS = -70.0
 # Frames decoded per read.
 _BLOCK = 1 << 15
 _LOUDNESS_RATE = 48000
+# What read_wav and decode_audio read, as an error names it: libsndfile's formats and the
+# rest FFmpeg decodes, phone and browser recordings among them.
+FORMATS = "WAV, FLAC, AIFF, MP3, Ogg, Opus, M4A or WebM"
 
 
 def integrated_lufs(path: Path) -> float:
@@ -60,8 +63,8 @@ def read_wav(path: Path) -> tuple[np.ndarray, int]:
     (format tag 0x674F and its siblings, the data chunk an Ogg stream: box run
     2026-11-03, where the stdlib, scipy and libsndfile all refused them as WAVs) or
     WavPack (.wv, 1,954 of FL 2026's stock samples and most of the kits' drums, which
-    libsndfile cannot read either); and FLAC, AIFF, Ogg or MP3 (the CC0 packs, files
-    the model wrote)."""
+    libsndfile cannot read either); and FLAC, AIFF, Ogg, Opus, MP3, M4A or WebM (the CC0
+    packs, files the model wrote, a user's recordings)."""
     try:
         with path.open("rb") as file, wave.open(file, "rb") as wav:
             channels, width, sample_rate, _ = _header(wav)
@@ -69,20 +72,47 @@ def read_wav(path: Path) -> tuple[np.ndarray, int]:
     except wave.Error:
         stream = _ogg_in_wav(path.read_bytes())
         if stream is None:
-            return _decode_file(path)
+            decoded = _decode_ffmpeg(str(path), np.float64)
+            if decoded is None:
+                raise ValueError(f"{path.name} is not an audio file this engine reads ({FORMATS})")
+            if not len(decoded[0]):
+                raise ValueError(f"{path.name} has no audio frames")
+            return decoded
     import soundfile
 
     samples, sample_rate = soundfile.read(io.BytesIO(stream), dtype="float64", always_2d=True)
     return samples, sample_rate
 
 
-def _decode_file(path: Path) -> tuple[np.ndarray, int]:
-    """Any audio FFmpeg decodes (PyAV bundles it), as float64 frames and the sample rate.
-    Raises ValueError for a file that is not audio."""
+def decode_audio(blob: bytes) -> tuple[np.ndarray, int]:
+    """An audio file's bytes as float frames (channels last) and its sample rate.
+
+    Whatever libsndfile reads (WAV of any sample format, FLAC, Ogg, AIFF, MP3) and FL's
+    Ogg-in-WAV stock samples; anything else FFmpeg decodes, such as the M4A, WebM and
+    Opus a phone or browser records, goes through the same decoder as read_wav, so every
+    file read_wav reads also loads. Raises ValueError for anything else or for no frames."""
+    import soundfile
+
+    stream = _ogg_in_wav(blob) or blob
+    try:
+        samples, sample_rate = soundfile.read(io.BytesIO(stream), dtype="float32", always_2d=True)
+    except (RuntimeError, TypeError):  # libsndfile's errors are RuntimeErrors
+        decoded = _decode_ffmpeg(io.BytesIO(blob), np.float32)
+        if decoded is None:
+            raise ValueError(f"not an audio file this engine reads ({FORMATS})") from None
+        samples, sample_rate = decoded
+    if not len(samples):
+        raise ValueError("the audio file has no frames")
+    return samples, sample_rate
+
+
+def _decode_ffmpeg(source: str | io.BytesIO, dtype: type) -> tuple[np.ndarray, int] | None:
+    """Any audio FFmpeg decodes (PyAV bundles it), as float frames and the sample rate;
+    None for a file that is not audio."""
     import av
 
     try:
-        with av.open(str(path)) as container:
+        with av.open(source) as container:
             stream = container.streams.audio[0]
             # Planar float keeps every codec's layout alike: (channels, frames) per chunk.
             resampler = av.AudioResampler(format="fltp")
@@ -91,27 +121,10 @@ def _decode_file(path: Path) -> tuple[np.ndarray, int]:
             ]
             rate = stream.rate
     except (av.FFmpegError, IndexError):
-        raise ValueError(f"{path.name} is not an audio file this engine reads") from None
+        return None
     if not chunks:
-        raise ValueError(f"{path.name} has no audio frames")
-    return np.concatenate(chunks, axis=1).T.astype(np.float64), rate
-
-
-def decode_audio(blob: bytes) -> tuple[np.ndarray, int]:
-    """An audio file's bytes as float frames (channels last) and its sample rate.
-
-    Whatever libsndfile reads (WAV of any sample format, FLAC, Ogg, AIFF, MP3), and FL's
-    Ogg-in-WAV stock samples. Raises ValueError for anything else or for no frames."""
-    import soundfile
-
-    stream = _ogg_in_wav(blob) or blob
-    try:
-        samples, sample_rate = soundfile.read(io.BytesIO(stream), dtype="float32", always_2d=True)
-    except (RuntimeError, TypeError):  # libsndfile's errors are RuntimeErrors
-        raise ValueError("not an audio file (WAV, FLAC, Ogg, AIFF or MP3)") from None
-    if not len(samples):
-        raise ValueError("the audio file has no frames")
-    return samples, sample_rate
+        return np.zeros((0, 1), dtype), rate
+    return np.concatenate(chunks, axis=1).T.astype(dtype), rate
 
 
 def _ogg_in_wav(blob: bytes) -> bytes | None:
