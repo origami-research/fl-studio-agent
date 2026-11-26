@@ -38,8 +38,8 @@ AREAS: dict[str, tuple[str, ...]] = {
         "theory.chord", "theory.scale", "theory.drums", "theory.transpose", "theory.quantize",
     ),
     "Sound": (
-        "fl.sounds", "fl.audition", "fl.load_sample", "fl.load_preset", "fl.presets", "fl.set_preset",
-        "Track.params", "Track.set_param",
+        "fl.sounds", "fl.audition", "fl.load_sample", "fl.separate", "fl.load_preset", "fl.presets",
+        "fl.set_preset", "Track.params", "Track.set_param",
     ),
     "Mix": ("Track.set_levels", "fl.route", "fl.send", "fl.effect", "Effect.params", "Effect.set_param"),
     "Song": ("fl.set_tempo", "fl.new_pattern", "fl.rename_pattern", "fl.place", "fl.automate"),

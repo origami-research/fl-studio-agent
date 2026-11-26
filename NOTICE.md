@@ -19,6 +19,39 @@ The sound index fl-mcp-install downloads holds, per stock sample and instrument 
 - Paper: Wu, Chen, Zhang, Hui, Berg-Kirkpatrick, Dubnov, "Large-scale Contrastive Language-Audio Pretraining with Feature Fusion and Keyword-to-Caption Augmentation", ICASSP 2023.
 - Changes: the text and audio encoders with their projections were exported separately, with unit-length outputs, and their weights quantized to int8 (the audio encoder's log-mel front end kept in float).
 
+## The stem model
+
+`fl-mcp-install` downloads the Spleeter model `fl.separate` splits audio with, exported to ONNX by `scripts/export_stem_model.py` (the pinned file and its SHA-256 are in `mcp-server/src/fl_mcp/assets/sound-search.json`).
+
+- Checkpoint: Deezer's `4stems.tar.gz` from https://github.com/deezer/spleeter/releases/tag/v1.4.0, SHA-256 `3adb4a50ad4eb18c7c4d65fcf4cf2367a07d48408a5eb7d03cd20067429dfaa8`, trained by Deezer on its own catalogue.
+- Licence: MIT, for the code and the pre-trained models alike (the repository's LICENSE, and the paper: "source code and pre-trained models ... distributed under a MIT license"). The archive itself holds no licence file.
+- Paper: Hennequin, Khlif, Voituret, Moussallam, "Spleeter: a fast and efficient music source separation tool with pre-trained models", Journal of Open Source Software 5(50), 2154, 2020, doi:10.21105/joss.02154.
+- Changes: the four U-Nets were exported as one float32 ONNX graph over the lowest 1536 frequency bins (Spleeter's 4stems-16kHz setting); the weights are unchanged.
+
+```text
+MIT License
+
+Copyright (c) 2019-present, Deezer SA.
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+```
+
 ## CC0 sample packs
 
 `fl-mcp-install` downloads a curated subset of two sample libraries by Versilian Studios.

@@ -1,17 +1,19 @@
-"""Download what fl.sounds ranks by: the sound model and the sound index, checked.
+"""Download the models the server runs, checked: what fl.sounds ranks by (the sound
+model and the sound index) and what fl.separate splits with (the stem model).
 
 ``assets/sound-search.json`` pins each file (sound_model.MODEL_FILES and the index,
-sound_index.INDEX_FILE) by its name here, the URL it is downloaded from (this
-repository's GitHub releases), its size and its SHA-256. The model is
-LAION's CLAP music checkpoint (CC0, NOTICE.md) exported to ONNX; the index is built
-per FL build by scripts/build_sound_index.py and holds numbers
-and paths only, none of FL's audio. A file is kept only when its bytes hash to the
-pinned value, so every machine with this engine version ranks sounds the same way.
+sound_index.INDEX_FILE; stem_model.MODEL_FILE) by its name here, the call that uses it
+(``for``), the URL it is downloaded from (this repository's GitHub releases), its size
+and its SHA-256. The sound model is LAION's CLAP music checkpoint (CC0) and the stem
+model Deezer's Spleeter 4stems (MIT), both exported to ONNX (NOTICE.md); the index is
+built per FL build by scripts/build_sound_index.py and holds numbers and paths only,
+none of FL's audio. A file is kept only when its bytes hash to the pinned value, so
+every machine with this engine version ranks and splits the same way.
 
 A rerun fetches only what is missing or differs and removes files the manifest no
 longer lists, so the folder is exactly this version's files. Files the release does not
 publish (HTTP 404: the release is still a draft) are not a failure: fl.sounds then
-matches by name, and fl-mcp-doctor's sound_search line says so.
+matches by name and fl.separate is unavailable, and fl-mcp-doctor says so.
 """
 
 from __future__ import annotations
@@ -28,6 +30,9 @@ from .paths import sound_search_dir
 from .sound_packs import Fetch, current, download, place
 from .steps import InstallStep
 
+# What each call does without its files.
+WITHOUT = {"fl.sounds": "fl.sounds matches by name only", "fl.separate": "fl.separate cannot split audio"}
+
 
 @cache
 def manifest() -> dict[str, Any]:
@@ -35,12 +40,13 @@ def manifest() -> dict[str, Any]:
 
 
 def install(root: Path | None = None, fetch: Fetch | None = None) -> InstallStep:
-    """Make ``root`` (the sound search folder) hold exactly this version's model and index."""
+    """Make ``root`` (the sound search folder) hold exactly this version's models and index."""
     root = sound_search_dir() if root is None else root
     fetch = download if fetch is None else fetch
     spec = manifest()
     wanted = {root / entry["name"]: entry for entry in spec["files"]}
-    fetched, failed, unpublished = 0, [], set()
+    fetched, unpublished = 0, set()
+    failed: list[tuple[dict[str, Any], str]] = []
 
     def get(url: str) -> bytes:
         try:
@@ -55,7 +61,7 @@ def install(root: Path | None = None, fetch: Fetch | None = None) -> InstallStep
             continue
         problem = place(path, entry["sha256"], lambda url=entry["url"]: get(url))
         if problem:
-            failed.append(f"{entry['name']} ({problem})")
+            failed.append((entry, problem))
         else:
             fetched += 1
     removed = 0
@@ -64,19 +70,20 @@ def install(root: Path | None = None, fetch: Fetch | None = None) -> InstallStep
             if path.is_file() and path not in wanted:
                 path.unlink()
                 removed += 1
-    what = f"the sound model and the sound index for FL {spec['fl_build']} (version {spec['version']})"
+    calls = " and ".join(sorted({entry["for"] for entry in spec["files"]}))
+    what = f"the models {calls} use, for FL {spec['fl_build']} (version {spec['version']})"
+    lost = "; ".join(WITHOUT[call] for call in sorted({entry["for"] for entry, _ in failed}))
     if failed and len(unpublished) == len(failed):
-        # Not a failure and nothing to fix: the release is not public (yet), and name
-        # matching is the search this install has. A rerun picks the files up once it is.
-        return InstallStep(
-            status="OK",
-            detail=f"fl.sounds matches by name only: {what} are not published for download",
-        )
+        # Not a failure and nothing to fix: the release is not public (yet), and what
+        # works without these files is what this install has. A rerun picks them up once it is.
+        names = ", ".join(entry["name"] for entry, _ in failed)
+        return InstallStep(status="OK", detail=f"{lost}: {names} not published for download")
     if failed:
+        entry, problem = failed[0]
         return InstallStep(
             status="WARN",
-            detail=f"{len(failed)} of {len(wanted)} sound search files could not be downloaded, so fl.sounds "
-            f"matches by name only; rerun fl-mcp-install when online. First: {failed[0]}",
+            detail=f"{len(failed)} of {len(wanted)} model files could not be downloaded, so {lost}; "
+            f"rerun fl-mcp-install when online. First: {entry['name']} ({problem})",
         )
     if not fetched and not removed:
         return InstallStep(status="OK", detail=f"{what}; already current")

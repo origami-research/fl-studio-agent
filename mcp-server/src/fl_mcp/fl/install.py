@@ -20,7 +20,8 @@ for a stale controller. Done with FL closed:
      folder, each file from a pinned upstream commit and checked against its
      SHA-256 (fl/sound_packs.py); fl.sounds lists them
   8. the sound model and the sound index fl.sounds ranks by (LAION's CLAP music
-     checkpoint as ONNX, CC0; numbers per FL stock sound, none of FL's audio), each
+     checkpoint as ONNX, CC0; numbers per FL stock sound, none of FL's audio) and the
+     stem model fl.separate splits with (Deezer's Spleeter 4stems as ONNX, MIT), each
      file pinned by SHA-256 (fl/sound_search.py)
 
 FL only loads these from fixed locations under the user's Image-Line data

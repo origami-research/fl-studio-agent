@@ -103,17 +103,16 @@ class Workspace:
         workspace.canary.write_text("the kernel must not be able to read this file\n", encoding="utf-8")
         return workspace
 
-    def output_path(self, requested: Path) -> Path:
-        """Where a server-side write the kernel asked for lands: its file name in renders.
+    def output_path(self, requested: Path, call: str = "fl.render") -> Path:
+        """Where a server-side write the kernel asked for (with ``call``) lands: its file
+        name in renders.
 
         The name must be a plain ``.wav`` file name, which also rules out Windows
         device names (``NUL.wav``) and alternate data streams (``a:b.wav``).
         """
         name = requested.name
         if not _RENDER_NAME.fullmatch(name) or name.split(".")[0].upper() in _WINDOWS_DEVICES:
-            raise errors.invalid_argument(
-                "fl.render", f"{str(requested)!r}: use a plain file name like 'mix.wav'"
-            )
+            raise errors.invalid_argument(call, f"{str(requested)!r}: use a plain file name like 'mix.wav'")
         return self.renders / name
 
     def kernel_env(self, environ: Mapping[str, str], python: Path) -> dict[str, str]:

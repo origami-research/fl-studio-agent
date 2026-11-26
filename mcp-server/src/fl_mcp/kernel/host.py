@@ -58,8 +58,14 @@ _STDERR_LINE_BYTES = 4096
 _STDERR_LOG_LINES = 200
 # A dead kernel's stderr pipe closes at once unless a grandchild still holds it.
 _STDERR_DRAIN_SECONDS = 2.0
-# Session calls whose ``output`` path the server writes: confined to renders.
-_SERVER_WRITES = frozenset({"audition", "render_wav", "render_stems"})
+# Session calls whose ``output`` path the server writes, confined to renders, and the
+# SDK call that asks for each (for the error a bad name gets).
+_SERVER_WRITES = {
+    "audition": "fl.audition",
+    "render_wav": "fl.render",
+    "render_stems": "fl.render",
+    "separate": "fl.separate",
+}
 
 
 def run_budget_from_env(environ: Mapping[str, str]) -> float:
@@ -415,7 +421,7 @@ class KernelHost:
             )
         kwargs = wire.decode_call(call)
         if call.method in _SERVER_WRITES:
-            kwargs["output"] = self.workspace.output_path(kwargs["output"])
+            kwargs["output"] = self.workspace.output_path(kwargs["output"], _SERVER_WRITES[call.method])
         with budget.serving(cell.budget):  # a call that plays in real time refuses what would not fit
             value = getattr(self._session, call.method)(**kwargs)
         # Recorded the moment FL confirmed it, so it counts even if the cell

@@ -1,5 +1,5 @@
 {
- "version": "1",
+ "version": "2",
  "fl_build": "26.1.6.5639",
  "model": {
   "id": "lukewys/laion_clap",
@@ -10,30 +10,48 @@
   "tokenizer": "FacebookAI/roberta-base@e2da8e2f811d1448a5b465c236feacd80ffbac7b tokenizer.json (MIT)",
   "export": "scripts/export_sound_model.py: text and audio encoders with projections, unit length, ONNX opset 17, per-channel int8 weights (audio log-mel front end kept float)"
  },
+ "stem_model": {
+  "id": "deezer/spleeter 4stems",
+  "source": "https://github.com/deezer/spleeter/releases/download/v1.4.0/4stems.tar.gz",
+  "sha256": "3adb4a50ad4eb18c7c4d65fcf4cf2367a07d48408a5eb7d03cd20067429dfaa8",
+  "licence": "MIT (code and weights: the repository's LICENSE and doi:10.21105/joss.02154)",
+  "export": "scripts/export_stem_model.py: the four U-Nets as one float32 ONNX graph, opset 17, input (1, 512, 1536, 2) as 4stems-16kHz"
+ },
  "files": [
   {
    "name": "clap-text-int8.onnx",
+   "for": "fl.sounds",
    "url": "https://github.com/origami-research/fl-studio-agent/releases/download/sound-search-1/clap-text-int8.onnx",
    "sha256": "45c7a875ba53e493f189c4d1d9869775724c08d1c2fac20177da1efc71472852",
    "size": 126532890
   },
   {
    "name": "clap-audio-int8.onnx",
+   "for": "fl.sounds",
    "url": "https://github.com/origami-research/fl-studio-agent/releases/download/sound-search-1/clap-audio-int8.onnx",
    "sha256": "95ca8ba89db0c9e7bbc0fc0319540f5304668136ba4905281174f55abb4361d8",
    "size": 80632013
   },
   {
    "name": "clap-tokenizer.json",
+   "for": "fl.sounds",
    "url": "https://github.com/origami-research/fl-studio-agent/releases/download/sound-search-1/clap-tokenizer.json",
    "sha256": "847bbeab6174d66a88898f729d52fa8d355fafe1bea101cf960dd404581df70e",
    "size": 1355863
   },
   {
    "name": "sound-index.npz",
+   "for": "fl.sounds",
    "url": "https://github.com/origami-research/fl-studio-agent/releases/download/sound-search-1/sound-index-fl26.1.6.5639.npz",
    "sha256": "5467f612d8b71ba09e9ff2bb0b1b0cac38615489f54bd10bd5b6c3bcf2064131",
    "size": 10149914
+  },
+  {
+   "name": "spleeter-4stems.onnx",
+   "for": "fl.separate",
+   "url": "https://github.com/origami-research/fl-studio-agent/releases/download/stem-model-1/spleeter-4stems.onnx",
+   "sha256": "cc2078ed3a669b183c56f7e70fa6ba7ef9d9fee120a8539b78c2b50fed184cdd",
+   "size": 157214482
   }
  ],
  "index": {

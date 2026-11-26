@@ -13,6 +13,7 @@ session/flp/store. A private function appearing here is a design smell.
 from __future__ import annotations
 
 import itertools
+import re
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Annotated, Literal
@@ -714,6 +715,28 @@ class FL:
             f"there is no file {str(path)!r}; a render is read through the Render fl.render returned, "
             "and a library sample is a Sound from fl.sounds() or its path",
         )
+
+    def separate(self, audio: str | Path, output: str | Path | None = None) -> dict[str, Path]:
+        """Split a recording into four stems: vocals, drums, bass and other (everything
+        else). ``audio`` is an audio file in your workspace, such as one the user attached
+        or a render. Each stem is written as a WAV to the renders folder, named after
+        ``output`` (by default after ``audio``): "song-vocals.wav", "song-drums.wav" and so
+        on. Returns the stems' paths by name, {"vocals": Path, ...}, which fl.read_wav and
+        fl.load_sample take. The stems add back up to the input. Takes about 10 s per
+        minute of audio and leaves the song unchanged.
+        """
+        if not isinstance(audio, str | Path) or not Path(audio).is_file():
+            raise errors.invalid_argument(
+                "fl.separate", f"pass the path of an audio file in your workspace, not {audio!r}"
+            )
+        path = Path(audio)
+        if path.stat().st_size > MAX_AUDIO_BYTES:
+            raise errors.invalid_argument(
+                "fl.separate", f"{path.name} is over {MAX_AUDIO_BYTES >> 20} MB; pass a shorter file"
+            )
+        if output is None:
+            output = (re.sub(r"[^A-Za-z0-9._ -]+", "_", path.stem).strip("._ -")[:90] or "stems") + ".wav"
+        return self._session.separate(path.read_bytes(), Path(output))
 
     def meters(self, bars: int = 2, start_bar: int = 1) -> CheckResult:
         """Play ``bars`` bars (1 to 8) from ``start_bar`` and report which channels

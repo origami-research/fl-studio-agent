@@ -25,7 +25,7 @@ import logging
 import math
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
-from pathlib import PurePosixPath
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 from fl_mcp.schemas import (
@@ -363,6 +363,10 @@ class ActionLog:
         silent = f"; silent: {', '.join(quiet)}" if quiet else ""
         return [_Entry(f"Rendered {_count(len(receipt.stems), 'stem')}, each {each}{skipped}{silent}")]
 
+    def _separate(self, kwargs: Mapping[str, Any], paths: Mapping[str, Path]) -> list[_Entry]:
+        names = ", ".join(path.name for path in paths.values())
+        return [_Entry(f"Split audio into {_count(len(paths), 'stem')}: {names}")]
+
     def _rendered(self, receipt: RenderReceipt, *, bars: int | None = None, alone: bool = True) -> str:
         """What a render played: "0:34", "0:08 of bars 9-10 of pattern 1, solo Bass"."""
         span = receipt.span
@@ -406,6 +410,7 @@ _CALLS: dict[str, Callable[[ActionLog, Mapping[str, Any], Any], list[_Entry]]] =
     "check": ActionLog._check,
     "render_wav": ActionLog._render,
     "render_stems": ActionLog._stems,
+    "separate": ActionLog._separate,
     "save_project": ActionLog._save,
     "undo": ActionLog._undo,
 }

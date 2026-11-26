@@ -148,8 +148,9 @@ def sound_library_dir() -> Path:
 
 
 def sound_search_dir() -> Path:
-    """The sound model and the sound index fl-mcp-install downloads (fl/sound_search.py),
-    which fl.sounds ranks by. Read by the server only, never the run kernel."""
+    """The models fl-mcp-install downloads (fl/sound_search.py): the sound model and the
+    sound index fl.sounds ranks by, and the stem model fl.separate splits with. Read by the
+    server only, never the run kernel."""
     return app_data_root() / "sound-search"
 
 

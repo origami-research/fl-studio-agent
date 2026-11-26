@@ -154,6 +154,16 @@ A note plays the sample from its start, at its own pitch on C4 (MIDI 60) and
 resampled on other keys; some channels stop it when the note ends, so write the
 note as long as the sample. fl.guide("chops") makes one in Python.
 
+### `fl.separate(audio: str | Path, output: str | Path | None = None) -> dict[str, Path]`
+
+Split a recording into four stems: vocals, drums, bass and other (everything
+else). ``audio`` is an audio file in your workspace, such as one the user attached
+or a render. Each stem is written as a WAV to the renders folder, named after
+``output`` (by default after ``audio``): "song-vocals.wav", "song-drums.wav" and so
+on. Returns the stems' paths by name, {"vocals": Path, ...}, which fl.read_wav and
+fl.load_sample take. The stems add back up to the input. Takes about 10 s per
+minute of audio and leaves the song unchanged.
+
 ### `fl.load_preset(channel: str | int, preset: Sound | str) -> ChannelSound`
 
 Load a stock preset into a channel: a Sound from ``fl.sounds(kind="preset")``,

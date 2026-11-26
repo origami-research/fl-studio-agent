@@ -4,6 +4,7 @@ description: Editing a sample in Python and playing it on a channel.
 ---
 
 A sampler plays whatever WAV you give it, so any sample edit is a few lines of numpy or librosa and a `fl.load_sample` of the file you wrote.
+`fl.separate` splits a recording, such as one the user attached, into vocals, drums, bass and the rest, one WAV each, to chop or load like any other.
 
 `help(fl.load_sample)` says how a sampler plays the file.
 

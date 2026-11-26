@@ -19,7 +19,7 @@ import numpy as np
 import pytest
 from session_fakes import make_session
 
-from fl_mcp import errors, sdk, sound_index, sound_model
+from fl_mcp import errors, sdk, sound_index, sound_model, stem_model
 from fl_mcp import sounds as sounds_mod
 from fl_mcp.fl import sound_search
 from fl_mcp.kernel import wire
@@ -297,7 +297,7 @@ def spec(monkeypatch):
     value = {
         "version": "t",
         "fl_build": "26.1",
-        "files": [{"name": "clap-text-int8.onnx", "url": "https://example.test/a", "sha256": hashlib.sha256(GOOD).hexdigest(), "size": len(GOOD)}],
+        "files": [{"name": "clap-text-int8.onnx", "for": "fl.sounds", "url": "https://example.test/a", "sha256": hashlib.sha256(GOOD).hexdigest(), "size": len(GOOD)}],
     }
     monkeypatch.setattr(sound_search, "manifest", lambda: value)
     return value
@@ -327,8 +327,9 @@ def test_the_shipped_manifest_pins_every_file_the_search_reads():
     shipped = json.loads(files("fl_mcp").joinpath("assets", "sound-search.json").read_text(encoding="utf-8"))
     names = [entry["name"] for entry in shipped["files"]]
 
-    assert sorted(names) == sorted([*sound_model.MODEL_FILES, sound_index.INDEX_FILE])
+    assert sorted(names) == sorted([*sound_model.MODEL_FILES, sound_index.INDEX_FILE, stem_model.MODEL_FILE])
     for entry in shipped["files"]:
+        assert entry["for"] in sound_search.WITHOUT
         assert len(entry["sha256"]) == 64 and int(entry["sha256"], 16) >= 0
         assert entry["url"].startswith("https://github.com/origami-research/fl-studio-agent/releases/download/")
         assert entry["size"] > 0
@@ -352,6 +353,18 @@ def test_a_model_and_index_not_published_yet_leave_the_install_finished(tmp_path
         raise urllib.error.URLError("no network")
 
     assert sound_search.install(tmp_path, fetch=offline).status == "WARN"
+
+
+def test_an_unpublished_stem_model_costs_fl_separate_only(tmp_path, spec):
+    """Each file says which call it is for, so the install says what is missing without it."""
+    stems = {"name": stem_model.MODEL_FILE, "for": "fl.separate", "url": "https://example.test/b"}
+    spec["files"].append(spec["files"][0] | stems)
+
+    step = sound_search.install(tmp_path, fetch=lambda url: GOOD if url.endswith("/a") else _not_found(url))
+
+    assert step.status == "OK"
+    assert step.detail == f"fl.separate cannot split audio: {stem_model.MODEL_FILE} not published for download"
+    assert (tmp_path / "clap-text-int8.onnx").read_bytes() == GOOD
 
 
 def test_fl_mcp_install_exits_zero_when_sound_search_is_not_published(tmp_path, monkeypatch, capsys, spec):

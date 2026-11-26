@@ -4,8 +4,9 @@ The kernel host bounds each run's wall time, fl calls included
 (kernel/host.py RUN_BUDGET_SECONDS), and serves every fl call under
 ``serving``. A call that plays in real time knows how long it will play before
 it starts, so it calls ``require`` first and is refused, with FL untouched, when
-it would run past the run's end. Outside a run (the dev session, unit tests of
-the session) nothing is bounded.
+it would run past the run's end; a long computation (stem_model.py) calls it
+between steps with its estimate of the rest. Outside a run (the dev session,
+unit tests of the session) nothing is bounded.
 """
 
 from __future__ import annotations
@@ -47,10 +48,11 @@ def serving(budget: RunBudget) -> Iterator[None]:
         _serving.reset(token)
 
 
-def require(seconds: float, what: str, split: str) -> None:
+def require(seconds: float, what: str, split: str, outcome: str = "so FL was not asked to start it") -> None:
     """Refuse ``what`` before it starts when it takes ``seconds`` and the run has less left.
 
-    ``split`` says how to make the work smaller, for the error's fix.
+    ``split`` says how to make the work smaller, for the error's fix; ``outcome`` what
+    the refusal left undone.
     """
     budget = _serving.get()
     if budget is None:
@@ -65,7 +67,7 @@ def require(seconds: float, what: str, split: str) -> None:
     raise errors.ToolError(
         "run_budget_exceeded",
         f"{what} takes about {seconds:.0f} s, but this run has {max(left, 0.0):.0f} s left of its "
-        f"{budget.seconds:g} s budget, so FL was not asked to start it.",
+        f"{budget.seconds:g} s budget, {outcome}.",
         fix,
     )
 

@@ -219,6 +219,7 @@ def doctor(session: FLSession, *, clock: Callable[[], float] = time.time) -> Doc
         project_file=project_file,
         bridge=bridge,
         sound_search=_sound_search(),
+        stem_split=_stem_split(),
     )
 
 
@@ -230,6 +231,15 @@ def _sound_search() -> str:
         return sounds.search_mode(sounds.library())
     except Exception as exc:  # noqa: BLE001 - doctor must report failed probes
         return f"sound search probe failed: {exc}"
+
+
+def _stem_split() -> str:
+    """Whether fl.separate can split audio on this machine."""
+    from fl_mcp import stem_model
+    from fl_mcp.fl.paths import sound_search_dir
+
+    problem = stem_model.model(sound_search_dir()).unavailable()
+    return "ready" if problem is None else f"unavailable: {problem}"
 
 
 def _bridge_install() -> BridgeInstall:

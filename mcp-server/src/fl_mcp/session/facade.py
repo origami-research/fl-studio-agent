@@ -18,7 +18,7 @@ from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from pathlib import Path
 
-from fl_mcp import errors, flp, scene
+from fl_mcp import errors, flp, scene, stem_model
 from fl_mcp import sounds as stock_sounds
 from fl_mcp.audio import decode_audio
 from fl_mcp.audio_stream import AudioChunk, AudioEndpoint
@@ -36,7 +36,7 @@ from fl_mcp.core.carriers.spool import SpoolCarrier
 from fl_mcp.core.carriers.udp import UdpCarrier
 from fl_mcp.core.carriers.wire import ControlUnavailable
 from fl_mcp.core.transport import Transport
-from fl_mcp.fl.paths import primary_settings_dir
+from fl_mcp.fl.paths import primary_settings_dir, sound_search_dir
 from fl_mcp.fl.process import bridge_pid
 from fl_mcp.observer import Observer
 from fl_mcp.ops import notes as ops_notes
@@ -629,6 +629,25 @@ class FLSession:
             )
         except ValueError as exc:
             raise errors.invalid_argument("fl.sounds", str(exc)) from None
+
+    def separate(self, audio: AudioBytes, output: Path) -> dict[str, Path]:
+        """Split an audio file the kernel read into stems, one WAV each named after
+        ``output`` (stem_model.py). The model runs here, where it is installed; FL is not
+        involved."""
+        model = stem_model.model(sound_search_dir())
+        if (problem := model.unavailable()) is not None:
+            raise errors.ToolError(
+                "unknown_target",
+                f"Stem separation is not available on this computer: {problem}.",
+                "Ask the user to run fl-mcp-install, which downloads the model.",
+            )
+        try:
+            samples, rate = decode_audio(audio)
+            paths = {stem: output.with_name(f"{output.stem}-{stem}.wav") for stem in stem_model.STEMS}
+            stem_model.write(samples, rate, model, paths)
+        except ValueError as exc:
+            raise errors.invalid_argument("fl.separate", str(exc)) from None
+        return paths
 
     def sound_file(self, sound: str) -> Path:
         """The file of a library sample or preset (a path from fl.sounds), for the run kernel

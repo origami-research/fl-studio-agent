@@ -336,6 +336,8 @@ class DoctorReport(BaseModel):
     # How fl.sounds ranks here: "by sound: ..." or "by name only: <why>". Not a plane: name
     # matching works without the sound model and index, so it never makes the engine not ready.
     sound_search: str
+    # Whether fl.separate can split audio here: "ready" or "unavailable: <why>". Not a plane either.
+    stem_split: str
 
 
 # -- spool wire (server <-> code inside FL) ----------------------------------
