@@ -195,8 +195,8 @@ def _selected_channel(link: ControlLink) -> int | None:
     getter for it (its heartbeat stamps chan=-1). The controller wire does:
     one ``channels.selectedChannel()`` round trip is the only channel-match
     evidence. Wire down or read refused -> None -> the file lane (correctness
-    beats liveness)."""
-    if link.hello() is None or link.control is None:
+    beats liveness). A controller the link refuses (``stale_controller``) is sent nothing."""
+    if link.hello() is None or link.control is None or link.stale_controller is not None:
         return None
     try:
         # A probe, read on every capability check: one attempt, never the

@@ -282,7 +282,7 @@ Run the doctor while FL Studio is open:
 
 It prints one JSON report of the control plane (controller script and MIDI ports), the note plane (the Bridge), and the agent project.
 Its `status` is `ok` only when all of them are connected, and `not_ready` otherwise, with a `fix` for each one that is not.
-The usual fixes: open `FLMCP Agent.flp` in FL Studio before your client starts the server (the doctor reports no running Bridge when another song is open, and rerunning step 2 when none is installed); after an upgrade rerun step 2 with `{PACKAGE}@latest` (a stale controller is reported); on Windows, keep loopMIDI running with both ports.
+The usual fixes: open `FLMCP Agent.flp` in FL Studio before your client starts the server (the doctor reports no running Bridge when another song is open, and rerunning step 2 when none is installed); after an upgrade rerun step 2 with `{PACKAGE}@latest` (until then the server refuses a stale controller and says so); on Windows, keep loopMIDI running with both ports.
 Using the FL Studio trial? Set `FLMCP_FL_LICENSE=trial` in the server's `env`, and answer **No** when FL asks to save `FLMCP Agent.flp`: the trial cannot reopen a song it saved. If it was saved, delete it and rerun step 2, which creates it again.
 `uvx --python {PYTHON} {PACKAGE} --version` prints the installed version.
 {END}"""

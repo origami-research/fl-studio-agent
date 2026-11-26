@@ -20,7 +20,9 @@ Each step prints `OK`, `WARN` (needs you), or `FAIL` (the command then exits non
 1. `agent_project`: creates `FLMCP Agent.flp` in FL's Projects folder from the packaged template, only if it is missing.
    It is the only project the agent modifies; your own work is never touched, and a backup is written before every change.
 2. `note_script` and `controller_script`: copies FL's piano-roll script and the FLMCP controller script into FL's Settings folder.
-   The server derives its expected controller version from the exact controller source this deploys, so to update, run `uvx --python 3.12 --from fl-studio-agent@latest fl-mcp-install` (`@latest` makes uvx fetch the newest release instead of reusing its cached one) and restart FL and your client; `fl-mcp-doctor` reports a stale controller.
+   The server derives its expected controller version from the exact controller source this deploys, so to update, run `uvx --python 3.12 --from fl-studio-agent@latest fl-mcp-install` (`@latest` makes uvx fetch the newest release instead of reusing its cached one) and restart FL and your client.
+   Until then the server sends a stale controller nothing: every live call says which version is installed and which it needs, and `fl-mcp-doctor` reports it.
+   A controller older than 0.2.9 could freeze FL.
 3. `midi_assignment`: assigns the controller to the `FLMCP Req` / `FLMCP Res` ports in FL's MIDI settings, in `reg.xml` on macOS (a `reg.xml.bak` is written before any change) or in `HKCU\Software\Image-Line\FL Studio <N>` on Windows.
    It refuses while FL is running, because FL rewrites these settings when it exits.
 4. `midi_ports` (Windows only): opens the two loopMIDI ports the way the server will.

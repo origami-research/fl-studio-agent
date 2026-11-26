@@ -25,6 +25,7 @@ from fl_mcp import errors, flp
 from fl_mcp.controller_version import CONTROLLER_PROTOCOL_VERSION
 from fl_mcp.schemas import ControlResponse
 from fl_mcp.session import FLSession, create_session
+from fl_mcp.session import detect as detect_mod
 from fl_mcp.session import lifecycle as lifecycle_mod
 from fl_mcp.session import link as link_mod
 from fl_mcp.session.link import ControlLink
@@ -143,6 +144,31 @@ def test_stale_controller_hello_warns_once(caplog):
     assert session._ensure_hello() is stale_hello
     assert caplog.text.count("controller protocol version mismatch") == 1
     assert CONTROLLER_PROTOCOL_VERSION in caplog.text
+
+
+def test_a_stale_controller_is_sent_nothing_until_a_matching_one_says_hello():
+    """Issue #320: a controller before 0.2.9 answered on FL's MIDI thread and froze FL (#328),
+    and an engine upgraded without rerunning fl-mcp-install kept driving it. A controller this
+    server does not match is sent nothing past the liveness ping, so the error names the fix;
+    once a matching controller says hello, requests go through again."""
+    stale_hello = HELLO.model_copy(update={"script_ver": "0.2.5"})
+    control = FakeControl(
+        hello=stale_hello,
+        handlers={"state.snapshot": lambda args: {}, "channels.selectedChannel": lambda args: 0},
+    )
+    session, _ = make_session(control=control)
+
+    assert session._ensure_hello() is stale_hello
+    with pytest.raises(errors.ToolError) as excinfo:
+        session.link.call("state.snapshot")
+    assert "version 0.2.5" in excinfo.value.message and CONTROLLER_PROTOCOL_VERSION in excinfo.value.message
+    assert "fl-mcp-install" in excinfo.value.fix
+    assert detect_mod._selected_channel(session.link) is None  # the note lane's probe too
+    assert [op for op, _ in control.calls] == ["ping", "ping"]
+
+    control.hello = HELLO
+    assert session._ensure_hello() is HELLO
+    assert session.link.call("state.snapshot") == {}
 
 
 def test_silent_wire_recycles_ports_when_fl_is_running(monkeypatch):

@@ -245,9 +245,10 @@ def test_a_sweep_fl_does_not_answer_also_says_fl_may_still_be_playing(song):
 def test_an_older_controller_is_refused_before_fl_plays(song):
     control = PlayingFL({1: [0.5]})
     control.hello = HELLO.model_copy(update={"script_ver": "0.2.4"})
-    with pytest.raises(errors.ToolError, match="older than this server") as excinfo:
+    with pytest.raises(errors.ToolError) as excinfo:
         seeded(control, FakeClock(), song).check(1, 1)
 
+    assert "controller script is version 0.2.4" in excinfo.value.message
     assert "fl-mcp-install" in excinfo.value.fix
     assert "transport.start" not in control.ops()
 

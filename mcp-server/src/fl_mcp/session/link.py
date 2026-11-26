@@ -153,6 +153,11 @@ class ControlLink:
         # refuse the first recycle on a host booted under the interval ago.
         self._last_recycle = float("-inf")
         self._warned_controller_versions: set[str] = set()
+        # The version of the last controller that announced itself, when this server does not
+        # match it: request() then sends it nothing (issue #320). A controller before 0.2.9
+        # answered on FL's MIDI thread and froze FL (#328), and an engine upgraded without
+        # rerunning fl-mcp-install keeps driving one; a hello re-decides it.
+        self.stale_controller: str | None = None
         # The FL process whose controller answered this link, and when it last did. A
         # recycle binds ports an FL missed at launch; it cannot revive an FL that answered
         # and then stopped (issue #290: FL froze mid-playback, and every later call spent
@@ -164,8 +169,11 @@ class ControlLink:
         self.stopped_answering = False
 
     def _check_controller_protocol(self, hello: HelloEvent) -> HelloEvent:
-        """Warn once for each incompatible controller that announces itself."""
-        if not controller_protocol_matches(hello.script_ver) and hello.script_ver not in self._warned_controller_versions:
+        """Record whether the controller that announced itself is the one this server installs;
+        warn once for each one that is not."""
+        stale = not controller_protocol_matches(hello.script_ver)
+        self.stale_controller = hello.script_ver if stale else None
+        if stale and hello.script_ver not in self._warned_controller_versions:
             self._warned_controller_versions.add(hello.script_ver)
             log.warning(
                 "controller protocol version mismatch: controller reports %s, server expects %s; "
@@ -320,7 +328,10 @@ class ControlLink:
         the request was never sent). A timeout is NOT retried: FL may have parked
         the call and apply it late (issue #47), so repeating it could apply twice.
         No wire raises control_plane_unavailable. A channel is always FL's global
-        index (GLOBAL_INDEX_FLAG_AT)."""
+        index (GLOBAL_INDEX_FLAG_AT). A controller this server does not match is sent
+        nothing (controller_mismatch)."""
+        if self.stale_controller is not None:
+            raise errors.controller_mismatch(self.stale_controller, CONTROLLER_PROTOCOL_VERSION)
         args = global_index_args(op, args)
         delays = list(TRANSIENT_RETRY_DELAYS)
         deadline = self._clock() + TRANSIENT_RETRY_WINDOW_SECONDS

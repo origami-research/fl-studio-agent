@@ -24,7 +24,6 @@ from collections.abc import Callable, Sequence
 from typing import TYPE_CHECKING
 
 from fl_mcp import budget, errors
-from fl_mcp.controller_version import controller_protocol_matches
 from fl_mcp.schemas import CHECK_MAX_BARS, Channel, ChannelCheck, CheckResult, MixerTrack, SessionState
 
 from . import controls, playback
@@ -62,17 +61,13 @@ def check(
         raise errors.invalid_argument("check", f"start_bar must be a whole number from 1, got {start_bar!r}")
     if isinstance(bars, bool) or not isinstance(bars, int) or not 1 <= bars <= CHECK_MAX_BARS:
         raise errors.invalid_argument("check", f"bars must be a whole number from 1 to {CHECK_MAX_BARS}, got {bars!r}")
-    hello = session._ensure_hello()
-    if hello is None:
+    if session._ensure_hello() is None:
         raise errors.fl_stopped_answering("nothing could be played") if session.link.stopped_answering else errors.ToolError(
             "control_plane_unavailable",
             "FL Studio is not answering, so nothing could be played.",
             "FL may still be starting. Retry the check in a moment.",
             retryable=True,
         )
-    if not controller_protocol_matches(hello.script_ver):
-        # An older controller has no state.peaks: refuse before FL plays, not on the first sweep.
-        raise errors.controller_outdated("state.peaks")
     link = session.link
     state = session.snapshot()
     if state.tempo_bpm is None or not state.ppq:

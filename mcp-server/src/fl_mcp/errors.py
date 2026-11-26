@@ -196,14 +196,30 @@ def fl_api_error(op: str, detail: str) -> ToolError:
     )
 
 
+_REINSTALL_CONTROLLER = (
+    "Close FL Studio, run `uvx --python 3.12 --from fl-studio-agent fl-mcp-install` again "
+    "(on Windows from a terminal opened as administrator), then reopen FL Studio."
+)
+
+
 def controller_outdated(op: str) -> ToolError:
     """FL's controller script answered that it has no such composite op: it was installed
     by an older release (the composites live in the script, docs/05)."""
     return ToolError(
         "fl_api_error",
         f"FL Studio's installed controller script has no '{op}': it is older than this server.",
-        "Close FL Studio, run `uvx --python 3.12 --from fl-studio-agent fl-mcp-install` again "
-        "(on Windows from a terminal opened as administrator), then reopen FL Studio.",
+        _REINSTALL_CONTROLLER,
+    )
+
+
+def controller_mismatch(installed: str, expected: str) -> ToolError:
+    """The controller FL runs is not the one this server installs, so nothing is sent to it:
+    one before 0.2.9 answers on FL's MIDI thread and can freeze FL (issues #320, #328)."""
+    return ToolError(
+        "fl_api_error",
+        f"FL Studio's installed controller script is version {installed}, but this server needs "
+        f"{expected}, so nothing was sent to FL.",
+        _REINSTALL_CONTROLLER,
     )
 
 
