@@ -29,6 +29,7 @@ After each window it checks the run's time budget and stops, writing nothing, wh
 
 ## Measurements
 
+All on one 2-vCPU Xeon 8375C machine with 8 GB, onnxruntime on the CPU, the engine's own `stem_model.write` writing 16-bit WAVs.
 The test mixes were made for this test and hold no recorded music: a formant-synthesised voice singing 4 s and resting 4 s at 120 BPM, a synthesised drum kit, a saw bass and plucked chords, each kept as its true stem.
 
 | Clip | Model load | Split | Whole process | Peak memory |
