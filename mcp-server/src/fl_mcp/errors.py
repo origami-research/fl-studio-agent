@@ -8,6 +8,8 @@ act on it instead of retrying blindly:
       "fix": "FL may be busy. Retry the write...",
       "retryable": true }
 
+An error raised in a run cell reaches the model as the traceback's last lines,
+``ToolError: <message>`` then ``Fix: <fix>`` (``ToolError.__str__``).
 ``message`` and ``fix`` are read by the model, so they speak about FL Studio,
 tracks and the song - never about the engine's internals (the Bridge, lanes,
 spools, the project file); those details go to the log. A test scans every
@@ -62,6 +64,14 @@ class ToolError(Exception):
         self.fix = fix
         self.retryable = retryable
         self.candidates = candidates
+
+    def __str__(self) -> str:
+        """The message, then its fix: a run cell's traceback prints this, and is all
+        the model reads of an error raised there. ``candidates`` is not repeated: each
+        error that has them lists them in its fix."""
+        if not self.fix or self.fix == self.message:
+            return self.message
+        return f"{self.message}\nFix: {self.fix}"
 
     def to_dict(self) -> dict[str, object]:
         payload: dict[str, object] = {

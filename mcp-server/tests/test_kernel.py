@@ -27,7 +27,7 @@ from sdk_fakes import DEFAULT_CHANNELS, FakeSession, started_ahead
 from fl_mcp import budget, errors
 from fl_mcp.errors import ToolError
 from fl_mcp.kernel import wire
-from fl_mcp.kernel.cell import expand_magics
+from fl_mcp.kernel.cell import expand_magics, new_namespace, run_cell
 from fl_mcp.kernel.host import KernelHost
 from fl_mcp.kernel.launch import KERNEL_SITE, PosixLauncher, Workspace
 from fl_mcp.kernel.null_device import share_null_device
@@ -510,6 +510,26 @@ def test_session_errors_reach_the_cell_as_catchable_tool_errors(host, session):
         "caught"
     )
     assert host.run(code).result == "('note_plane_unavailable', 'bridge asleep')"
+
+
+def test_an_uncaught_tool_error_shows_its_fix_in_the_traceback(host, session):
+    """The traceback is all a model reads of a failed cell, so the fix must be in it.
+
+    A live run on Windows read the controller refusal's message but never its fix
+    (rerun fl-mcp-install): the traceback printed only the message."""
+    refusal = errors.controller_mismatch("0.2.8", "0.2.10")
+    session.fail_next_write = refusal
+    result = host.run("fl.track('Kick').write([Note(key=36, start=0, length=1)])")
+    assert result.outcome == "error"
+    assert result.traceback.endswith(f"ToolError: {refusal.message}\nFix: {refusal.fix}\n"), result.traceback
+
+
+@pytest.mark.parametrize("fix", ["", "No pattern 'x'."])
+def test_a_tool_error_without_its_own_fix_shows_the_message_once(fix):
+    """No empty "Fix:" line, and no fix that only repeats the message."""
+    error = ToolError("unknown_target", "No pattern 'x'.", fix)
+    result = run_cell("raise error", {**new_namespace(None), "error": error})
+    assert result.traceback.endswith("ToolError: No pattern 'x'.\n"), result.traceback
 
 
 def test_renders_land_in_the_read_only_renders_folder(host, workspace):

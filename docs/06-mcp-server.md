@@ -100,6 +100,17 @@ Categories: `control_plane_unavailable`, `note_plane_unavailable`, `unknown_targ
 (the `run` kernel could not start or failed its boundary probe, docs/38), `unsupported_in_live_session`
 (the two walls, with template guidance), `render_failed`.
 
+This JSON is what a tool call that fails returns.
+An error raised inside a `run` cell is a Python exception instead, and the model reads it as the cell's traceback, which ends with the message and then its fix:
+
+```text
+fl_mcp.errors.ToolError: FL Studio's installed controller script is version 0.2.8, but this server needs 0.2.10, so nothing was sent to FL.
+Fix: Close FL Studio, run `uvx --python 3.12 --from fl-studio-agent fl-mcp-install` again (on Windows from a terminal opened as administrator), then reopen FL Studio.
+```
+
+There is no `Fix:` line when the fix is empty or only repeats the message.
+Candidates are not printed again: every error that has them lists them in its fix.
+
 ## Startup sequence
 
 1. Create/verify MIDI loopback ports (macOS: create; Windows: verify loopMIDI/WMS).
