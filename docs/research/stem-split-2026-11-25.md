@@ -41,6 +41,9 @@ That is about 10 s per minute of audio.
 Spleeter's own separation (TensorFlow) took 7.5 s and 35.2 s on the same clips, and its process peaked at 5.7 GB.
 On disk the model is 157 MB; onnxruntime was already installed for `fl.sounds`.
 
+Updated 2026-11-26, on a 2-vCPU, 8 GB Windows box with FL running beside it, on similar synthesised mixes: a 3 min track took 54 s (about 18 s per minute) and a 10 s loop 2.5 s, but the first call took 39 s, most of it loading the model from a disk just restored from a snapshot.
+The server process peaked at 1.1 GB.
+
 ## Quality, on the test mixes only
 
 | Check | 10 s loop | 3 min track |
@@ -66,5 +69,4 @@ Spleeter's default for 4stems, which drops everything above 11 kHz, gave the dru
 
 ## Not checked
 
-- Speed on a Windows arena box with FL running beside it.
 - How well it splits real music; no recorded music was downloaded for this test.

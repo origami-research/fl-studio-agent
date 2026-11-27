@@ -720,10 +720,12 @@ class FL:
         """Split a recording into four stems: vocals, drums, bass and other (everything
         else). ``audio`` is an audio file in your workspace, such as one the user attached
         or a render. Each stem is written as a WAV to the renders folder, named after
-        ``output`` (by default after ``audio``): "song-vocals.wav", "song-drums.wav" and so
-        on. Returns the stems' paths by name, {"vocals": Path, ...}, which fl.read_wav and
-        fl.load_sample take. The stems add back up to the input. Takes about 10 s per
-        minute of audio and leaves the song unchanged.
+        ``output``, a plain file name ending in .wav (by default after ``audio``):
+        "song.wav" gives "song-vocals.wav", "song-drums.wav" and so on. Returns the
+        stems' paths by name, {"vocals": Path, ...}, which fl.read_wav and
+        fl.load_sample take. The stems add back up to the input. Takes about 20 s per
+        minute of audio; the first call can take about 40 s more while the model loads.
+        The song is unchanged.
         """
         if not isinstance(audio, str | Path) or not Path(audio).is_file():
             raise errors.invalid_argument(
