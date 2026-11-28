@@ -140,11 +140,24 @@ jobs:
           path: dist/fl-studio-agent.mcpb
           if-no-files-found: error
 
+  # The publish refuses when public HEAD still carries a line docs/oss/private/history-redactions.txt
+  # removes (the 0.1.19 publish did, 2026-11-26). This is the same check, from the same script, on
+  # what main becomes after the merge, so such a change fails its pull request instead of the release.
+  public-head:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: astral-sh/setup-uv@v5
+      - run: git update-ref refs/heads/main HEAD
+      - run: OSS_PRIVATE_REMOTE="$PWD" scripts/oss/build-public-mirror.sh --check-head
+
   # The one check to require for merging: it passes when every job above passed or was
   # skipped because its area did not change, and fails when any failed or was cancelled.
   ci-ok:
     if: always()
-    needs: [changes, quality, macos-sandbox, windows-sandbox, install-surfaces]
+    needs: [changes, quality, macos-sandbox, windows-sandbox, install-surfaces, public-head]
     runs-on: ubuntu-latest
     steps:
       - if: contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')

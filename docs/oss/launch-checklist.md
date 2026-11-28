@@ -56,6 +56,7 @@ It never touches the private repository's refs.
 
 1. Paths: the history removal set goes first, then only the public allowlist stays.
 2. Public HEAD must already satisfy the history redactions; the build refuses otherwise, so the published `main` is exactly what was reviewed.
+   CI runs this same check (`build-public-mirror.sh --check-head`) on every pull request, so a change that would make the build refuse fails before it merges.
 3. File contents: the private product's name and links into its repository are rewritten in every file version.
 4. History redactions: every historical Markdown version loses the lines the redaction rules name (licensing analysis, hosting and cloud-infrastructure notes, FL Studio binary offsets and addresses).
 5. Commit messages: the private product's name is rewritten.

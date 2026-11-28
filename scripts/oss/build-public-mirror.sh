@@ -3,12 +3,14 @@ set -euo pipefail
 
 repo_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
 default_destination="$HOME/Documents/Code/fl-studio-mcp-public.git"
-destination=${1:-"$default_destination"}
 remote=${OSS_PRIVATE_REMOTE:-}
 
 usage() {
   echo "usage: $0 [destination-bare-mirror]" >&2
+  echo "       $0 --check-head" >&2
   echo "Set OSS_PRIVATE_REMOTE to override this checkout's origin URL." >&2
+  echo "--check-head runs only the build's first refusal (public HEAD carries no redacted line) and writes" >&2
+  echo "nothing; CI runs it on every pull request, so a change that would block the publish fails there." >&2
 }
 
 if [[ ${1:-} == "-h" || ${1:-} == "--help" ]]; then
@@ -16,33 +18,42 @@ if [[ ${1:-} == "-h" || ${1:-} == "--help" ]]; then
   exit 0
 fi
 
+check_head_only=false
+if [[ ${1:-} == "--check-head" ]]; then
+  check_head_only=true
+  shift
+fi
+destination=${1:-"$default_destination"}
+
 if [[ -z "$remote" ]]; then
   remote=$(git -C "$repo_dir" remote get-url origin)
 fi
 
-case "$destination" in
-  /*) ;;
-  *) destination="$PWD/$destination" ;;
-esac
-destination=$(cd "$(dirname "$destination")" && pwd)/$(basename "$destination")
-source_git_dir=$(git -C "$repo_dir" rev-parse --git-dir)
-source_git_dir=$(cd "$repo_dir/$source_git_dir" 2>/dev/null && pwd || cd "$source_git_dir" && pwd)
+if ! $check_head_only; then
+  case "$destination" in
+    /*) ;;
+    *) destination="$PWD/$destination" ;;
+  esac
+  destination=$(cd "$(dirname "$destination")" && pwd)/$(basename "$destination")
+  source_git_dir=$(git -C "$repo_dir" rev-parse --git-dir)
+  source_git_dir=$(cd "$repo_dir/$source_git_dir" 2>/dev/null && pwd || cd "$source_git_dir" && pwd)
 
-if [[ "$destination" == "$repo_dir" || "$destination" == "$source_git_dir" || "$destination" == "$repo_dir"/* ]]; then
-  echo "refusing to write the canonical checkout or anything inside it: $destination" >&2
-  exit 2
-fi
-if [[ $(basename "$destination") != *.git ]]; then
-  echo "destination must be a bare mirror path ending in .git: $destination" >&2
-  exit 2
-fi
-if [[ -e "$destination" && ! -d "$destination" ]]; then
-  echo "destination exists and is not a directory: $destination" >&2
-  exit 2
-fi
-if [[ -d "$destination" && $(git -C "$destination" rev-parse --is-bare-repository 2>/dev/null || true) != true ]]; then
-  echo "destination exists but is not a bare repository: $destination" >&2
-  exit 2
+  if [[ "$destination" == "$repo_dir" || "$destination" == "$source_git_dir" || "$destination" == "$repo_dir"/* ]]; then
+    echo "refusing to write the canonical checkout or anything inside it: $destination" >&2
+    exit 2
+  fi
+  if [[ $(basename "$destination") != *.git ]]; then
+    echo "destination must be a bare mirror path ending in .git: $destination" >&2
+    exit 2
+  fi
+  if [[ -e "$destination" && ! -d "$destination" ]]; then
+    echo "destination exists and is not a directory: $destination" >&2
+    exit 2
+  fi
+  if [[ -d "$destination" && $(git -C "$destination" rev-parse --is-bare-repository 2>/dev/null || true) != true ]]; then
+    echo "destination exists but is not a bare repository: $destination" >&2
+    exit 2
+  fi
 fi
 
 for file in docs/oss/public-allowlist.txt docs/oss/history-removal-set.txt docs/oss/private/message-replacements.txt \
@@ -59,7 +70,7 @@ filter_repo() {
 }
 
 parent_dir=$(dirname "$destination")
-mkdir -p "$parent_dir"
+$check_head_only || mkdir -p "$parent_dir"
 work_dir=$(mktemp -d "${TMPDIR:-/tmp}/fl-studio-mcp-public-mirror.XXXXXX")
 staging="$parent_dir/.$(basename "$destination").staging.$$"
 backup="$parent_dir/.$(basename "$destination").previous.$$"
@@ -94,6 +105,10 @@ if ((head_status == 1)); then
 elif ((head_status != 0)); then
   echo "refusing: could not scan public HEAD for redacted lines" >&2
   exit 2
+fi
+if $check_head_only; then
+  echo "public HEAD carries no line docs/oss/private/history-redactions.txt removes"
+  exit 0
 fi
 filter_repo --force --replace-text "$repo_dir/docs/oss/private/content-replacements.txt"
 FLMCP_OSS_SCRIPTS="$repo_dir/scripts/oss" FLMCP_REDACTIONS="$redactions" filter_repo --force --file-info-callback "$callback"

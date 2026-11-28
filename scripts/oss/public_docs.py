@@ -6,7 +6,7 @@ One module, three users:
   the lines docs/oss/private/history-redactions.txt names;
 - build-public-mirror.sh runs `check-ref` first: public HEAD must already be
   clean by hand, so the redaction only ever rewrites history, never what the
-  owner reviewed;
+  owner reviewed. CI runs that step alone (`--check-head`) on every pull request;
 - verify-public-mirror.sh runs `scan-history` and `dead-links` on the mirror.
 
 Exit codes: 0 clean, 1 findings (printed), 2 usage or scan error.
