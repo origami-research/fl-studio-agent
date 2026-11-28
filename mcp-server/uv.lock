@@ -721,7 +721,7 @@ wheels = [
 
 [[package]]
 name = "fl-studio-agent"
-version = "0.1.19"
+version = "0.1.20"
 source = { editable = "." }
 dependencies = [
     { name = "av", version = "18.1.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },
