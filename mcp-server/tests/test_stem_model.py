@@ -122,6 +122,26 @@ def test_a_split_that_would_outlast_the_run_stops_between_windows_and_leaves_no_
     assert list(tmp_path.iterdir()) == []
 
 
+def test_the_first_window_loading_the_model_does_not_refuse_a_split_that_fits():
+    """On a process's first split the first network call also loads the model (39 s from a
+    freshly restored disk, against about 3 s a window after it), so the estimate must not
+    extrapolate the rest from that window: a 4.5 min file was refused as needing 736 s
+    with 573 s left, and split in 77 s once the model was loaded (2026-11-27)."""
+    calls = []
+
+    def loads_then_fast(magnitude):
+        calls.append(1)
+        time.sleep(1.0 if len(calls) == 1 else 0.01)
+        return _random(magnitude)
+
+    six_windows = 5 * stem_model.STEP + CHUNK
+    enough = budget.RunBudget(60.0, time.monotonic() + 4.0)
+    with budget.serving(enough):
+        stems = _joined(_noise(six_windows), loads_then_fast)
+
+    assert len(calls) == 6 and stems.shape == (len(STEMS), six_windows, 2)
+
+
 def test_the_model_says_why_it_cannot_run(tmp_path, monkeypatch):
     model = stem_model.Model(tmp_path)
     assert "not installed" in model.unavailable()

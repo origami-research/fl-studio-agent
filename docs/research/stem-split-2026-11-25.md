@@ -25,7 +25,8 @@ On a random mix-like input, the ONNX outputs differ from TensorFlow's by at most
 `stem_model.py` reproduces Spleeter's STFT, ratio masks and inverse STFT in numpy.
 Above 16.5 kHz each stem takes the average of its mask below ("average", one of Spleeter's two settings), so the masks sum to one everywhere and the stems sum back to the mix.
 Spleeter cuts a long file into 11.9 s blocks with hard edges; `stem_model.py` uses 11.8 s windows that overlap by a quarter and crossfade, so memory stays at one window's.
-After each window it checks the run's time budget and stops, writing nothing, when the rest would not finish.
+After each window from the second on it checks the run's time budget and stops, writing nothing, when the rest would not finish.
+It estimates the rest from the windows after the first, because the first also loads the model on a server's first split: timing that window refused a first split of a 4.5 min file as needing 736 s, which then took 77 s with the model loaded (2026-11-27).
 
 ## Measurements
 

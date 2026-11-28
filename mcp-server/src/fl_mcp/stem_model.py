@@ -17,7 +17,8 @@ to one in every bin and the stems sum back to the mix.
 A sound longer than one window (CHUNK, 11.8 s) is split window by window: windows
 overlap by FADE and are crossfaded linearly, so memory stays at one window's and the
 stems still sum to the mix. A run's time budget (budget.py) is checked after every
-window, from the time the windows took so far.
+window from the second on, from the time the windows after the first took: the first
+also loads the model on a process's first split.
 """
 
 from __future__ import annotations
@@ -150,7 +151,7 @@ def split(samples: np.ndarray, net: Network) -> Iterator[np.ndarray]:
     starts = [0]
     while starts[-1] + CHUNK < n:
         starts.append(starts[-1] + STEP)
-    began = time.monotonic()
+    timed_from = None
     tail = None
     for k, start in enumerate(starts):
         out = _window(samples[start : start + CHUNK], net)
@@ -161,7 +162,13 @@ def split(samples: np.ndarray, net: Network) -> Iterator[np.ndarray]:
             return
         tail = out[:, -FADE:] * _RAMP_UP[::-1]
         yield out[:, :-FADE]
-        per_window = (time.monotonic() - began) / (k + 1)
+        # The first window also loads the model on this process's first split (39 s from a
+        # freshly restored disk, against about 3 s a window after it), so the rest is
+        # estimated from the windows after it; the load's time is already gone from the run.
+        if timed_from is None:
+            timed_from = time.monotonic()
+            continue
+        per_window = (time.monotonic() - timed_from) / k
         budget.require(
             per_window * (len(starts) - k - 1),
             "Splitting the rest of the audio",
